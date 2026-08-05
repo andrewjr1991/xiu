@@ -1,0 +1,84 @@
+export type JsonSchema = Record<string, unknown>;
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: JsonSchema;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface AssistantTurn {
+  text: string;
+  toolCalls: ToolCall[];
+  raw: unknown;
+  usage?: ModelUsage;
+}
+
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface AvailableModel {
+  id: string;
+  name?: string;
+  description?: string;
+  source: "api" | "builtin" | "current";
+}
+
+export interface ConversationMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  toolCallId?: string;
+  toolName?: string;
+  raw?: unknown;
+  toolCalls?: ToolCall[];
+}
+
+export interface ModelProvider {
+  complete(
+    system: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    signal?: AbortSignal,
+  ): Promise<AssistantTurn>;
+  listModels?(): Promise<AvailableModel[]>;
+  stream?(
+    system: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onTextDelta: (delta: string) => void,
+    signal?: AbortSignal,
+  ): Promise<AssistantTurn>;
+}
+
+export type ToolRisk = "read" | "write" | "execute" | "dangerous";
+
+export interface ApprovalRequest {
+  description: string;
+  risk: Exclude<ToolRisk, "read">;
+  preview?: string;
+}
+
+export interface ToolContext {
+  cwd: string;
+  approve: (request: ApprovalRequest) => Promise<boolean>;
+  signal?: AbortSignal;
+  reportProgress?: (message: string) => void;
+}
+
+export interface AgentTool extends ToolDefinition {
+  risk: ToolRisk | ((input: Record<string, unknown>) => ToolRisk);
+  describe(input: Record<string, unknown>): string;
+  validate?(input: Record<string, unknown>): void;
+  preview?(input: Record<string, unknown>, context: ToolContext): Promise<string>;
+  changesWorkspace?: boolean | ((input: Record<string, unknown>) => boolean);
+  isVerification?(input: Record<string, unknown>, result: string): boolean;
+  execute(input: Record<string, unknown>, context: ToolContext): Promise<string>;
+}

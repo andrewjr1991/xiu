@@ -1,0 +1,328 @@
+# Xiu
+
+中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)。
+
+Xiu is a small autonomous coding agent for the terminal. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
+
+Version 0.5 adds an extensibility layer: stdio MCP servers, namespaced external tools, user/project configuration, live reload, cancellation propagation, and permission-aware risk mapping. It also includes the streamed execution, persistent planning, checkpoints, resumable context, multimodal routing, and Skill system from earlier releases.
+
+## Features
+
+- OpenAI, Anthropic, and Agnes model adapters
+- Streaming text and tool-call assembly for OpenAI-compatible and Anthropic providers
+- Live task plans with persistent step status and a read-only planning mode
+- Session-scoped changed-file summaries, Git diffs, file checkpoints, and confirmed restore
+- Automatic retry for transient model failures before output begins
+- Repeated tool-failure detection and error attribution
+- Adaptive startup dashboard with quick-start tips, model, approval, workspace, and skill count
+- Compact prompt footer with model, context usage, plan mode, skill count, and workspace
+- Xiu-native project/global skills with Claude-compatible discovery and on-demand loading
+- Safe local or HTTPS Git skill installation with limits, symlink rejection, and recoverable replacement backups
+- Stdio MCP client with user/project configuration, tool discovery, live reload, cancellation, and clean shutdown
+- Namespaced MCP tools governed by the same read/write/execute/dangerous approvals and Plan-mode boundary
+- Provider-aware capability routing for text, vision, image generation, and video generation
+- Agnes Image 2.1 Flash text-to-image, image-to-image, and multi-image composition
+- Agnes Video V2.0 text-to-video, image-to-video, keyframes, progress polling, and MP4 download
+- Repository-aware system prompt with `AGENTS.md`, `XIU.md`, and `CLAUDE.md` support
+- Risk-aware tools for files, structured patches, project detection, verification, shell commands, and native Git inspection
+- Workspace path confinement to prevent file tools escaping the selected directory
+- Four-level permission policy: read, write, execute, and dangerous
+- Read-only operations run automatically; dangerous commands always require explicit approval
+- Structured `apply_patch` previews before focused file edits
+- Ctrl+C cancellation for active model and command work, plus clear command timeouts
+- Managed background commands for development servers, log inspection, and clean shutdown
+- Completion gate that requests verification after workspace changes
+- Tool loop with a configurable turn limit
+- Resumable, project-isolated JSONL sessions under `.xiu/sessions/`
+- Manual and automatic context compaction for long-running tasks
+- Project file index with automatic relevant-code retrieval
+- Automatic technology-stack, package-manager, test, lint, typecheck, and build detection
+- Token, elapsed-time, model-call, tool-call, context, and compaction statistics
+- Unit tests for workspace confinement, approvals, safe edits, and the agent loop
+
+## Install
+
+Requires Node.js 20 or newer.
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+Set one provider key:
+
+```bash
+# PowerShell
+$env:OPENAI_API_KEY = "..."
+# or
+$env:ANTHROPIC_API_KEY = "..."
+```
+
+For Agnes 2.5 Flash:
+
+```bash
+# PowerShell
+$env:AGNES_API_KEY = "..."
+$env:AGNES_PROXY = "http://127.0.0.1:12334" # only when a proxy is required
+```
+
+## Use
+
+Run against the current repository:
+
+```bash
+xiu "Find the cause of the failing login test, fix it, and run the tests"
+```
+
+Start a persistent interactive session (conversation context is retained between prompts):
+
+```bash
+xiu
+```
+
+Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/tasks`, `/diff`, `/status`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+
+Open an interactive picker for saved sessions in the current project after closing the terminal:
+
+```bash
+xiu --resume
+```
+
+Inside Xiu, `/resume` opens the same picker. It shows each session's first task, last update, model, and ID; use Up/Down and Enter to choose. Legacy sessions from `.forge/sessions/` and `.forge_sessions/` are also discovered during the Xiu rename transition.
+
+List session IDs or resume a specific one:
+
+```bash
+xiu --list-sessions
+xiu --resume 2026-08-05T12-00-00-000Z-ab12cd34
+```
+
+Sessions are stored inside each project's `.xiu/sessions/` directory, so histories from different projects cannot be selected by `--resume`.
+
+Interactive session commands:
+
+```text
+/history           recent conversation history
+/resume            choose and restore a project session
+/history sessions  resumable sessions in this project
+/compact           compact current context immediately
+/plan               show task plan and plan-mode state
+/plan on|off        toggle read-only plan mode
+/tasks              show live task statuses
+/diff               show session-touched files and Git diff
+/checkpoints        list file restore points
+/rewind             select and restore a file checkpoint
+/models             discover and choose a model with Up/Down and Enter
+/skills             browse installed skills
+/skills install ... install from a local path or HTTPS Git repository
+/mcp                show MCP server connections and tool counts
+/mcp reload         reload user and project MCP configuration
+/status             session id, context, tokens, calls, time, and index size
+/clear              start a separate new session
+/exit               close Xiu
+```
+
+Xiu estimates the active context continuously and compacts it into a continuation brief before the configured limit. The default threshold is 60,000 estimated tokens and can be changed with `--context-limit` or `XIU_CONTEXT_LIMIT`.
+
+The interactive prompt has a slash-command palette: typing `/` opens all commands immediately, further characters filter the list, Up/Down changes the highlighted command, Tab completes it, and Enter selects it.
+
+`/models` asks the active provider for its available model catalog, filters out obvious embedding, speech, image, video, and moderation-only endpoints, and opens a keyboard-driven picker. This works with OpenAI-compatible local gateways as well as cloud providers. If the provider does not implement model listing, Xiu falls back to its built-in default plus the model already active in the session. Model changes are persisted with the resumable session.
+
+## Skills
+
+Xiu discovers reusable workflows from three locations, with project definitions taking precedence over compatible and global definitions of the same name:
+
+```text
+<project>/.xiu/skills/<name>/SKILL.md     project
+<project>/.claude/skills/<name>/SKILL.md compatible
+~/.xiu/skills/<name>/SKILL.md            global
+```
+
+Only each skill's name and description enter the base prompt. When a workflow matches the task, the agent calls `read_skill` to load the complete `SKILL.md`, keeping startup context small even with many installed skills.
+
+Browse or install skills interactively:
+
+```text
+/skills
+/skills install D:\\my-skills\\code-review
+/skills install https://github.com/example/xiu-skills.git
+```
+
+Remote sources must use HTTPS Git URLs. Packages are limited to 20 MB and 1,000 files, symbolic links are rejected, and replacing an existing global skill requires confirmation. The old version is renamed to a timestamped backup instead of being deleted. Skills are executable instructions for the model, so install only packages you trust.
+
+## MCP servers
+
+Xiu loads stdio MCP servers after the workspace trust check. User configuration lives at `~/.xiu/mcp.json`; a project can add or override servers in `<project>/.xiu/mcp.json`. Project configuration wins when both files contain the same server name, and `"enabled": false` disables an inherited server.
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx.cmd",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": { "OPTIONAL_TOKEN": "${MY_MCP_TOKEN}" },
+      "risk": "read",
+      "toolRisks": {
+        "write_file": "write",
+        "edit_file": "write"
+      },
+      "toolChangesWorkspace": {
+        "write_file": true,
+        "edit_file": true
+      }
+    }
+  }
+}
+```
+
+On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, and `changesWorkspace` / `toolChangesWorkspace` hints for diff and verification tracking. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
+
+Discovered tools are exposed as `mcp__<server>__<tool>` to prevent collisions. The safe default is `execute`, which requires approval; mark a server or tool `read` only when it cannot change files or external state. Tool arguments are shown in the approval preview. Non-read MCP calls are blocked in Plan mode. Ctrl+C cancellation is forwarded to an active MCP request, binary result data is omitted from model context, text output is capped, and child processes are closed when Xiu exits. For one-shot use in a workspace that has never been trusted, user-level MCP servers still load but project-level MCP configuration is skipped.
+
+Use `/mcp` to inspect connection failures and tool counts after launch. Edit either configuration file and run `/mcp reload` to reconnect without restarting Xiu.
+
+## Real-time execution and planning
+
+Model text appears as it is generated instead of waiting for a full turn. Tool calls are assembled from streamed argument fragments and then pass through the same permission policy as before. A request that fails with a temporary network, rate-limit, or server error before emitting text is retried up to three times with exponential backoff; once text has appeared, Xiu never retries automatically and risk duplicating work.
+
+For multi-step tasks, the agent maintains a visible plan with `pending`, `in_progress`, `completed`, and `blocked` states. Plans are written to the session log and restored by `/resume`. Enable read-only planning when you want investigation and a proposed approach without changes:
+
+```text
+/plan on
+> Analyze the authentication architecture and propose a migration plan
+/tasks
+/plan off
+```
+
+In plan mode, the Agent boundary blocks every write, execution, and dangerous tool even if `--yes` is active.
+
+Before focused file writes and generated-media outputs, Xiu stores the previous file state under `.xiu/checkpoints/<session>/`. Use `/rewind` to select a checkpoint and explicitly confirm restoration. Shell commands can affect arbitrary external state, so they are included in Git diff inspection but are not advertised as precisely reversible.
+
+On the first interactive launch in a workspace, Xiu asks whether you trust that folder. Trusted workspace paths are stored outside the project in `~/.xiu/trusted-workspaces.json`.
+
+Use the built-in Agnes preset (model and Base URL are selected automatically):
+
+```bash
+xiu -p agnes "Inspect this repository and summarize its architecture"
+```
+
+You can also pass a proxy for one invocation:
+
+```bash
+xiu -p agnes --proxy http://127.0.0.1:12334 "Reply with: connection successful"
+```
+
+Or without installing the global command:
+
+```bash
+npm run dev -- "Add input validation to the user creation endpoint"
+```
+
+Useful options:
+
+```text
+-p, --provider <provider>   openai, anthropic, or agnes
+-m, --model <model>         model name
+-C, --cwd <directory>       workspace directory
+--base-url <url>            OpenAI-compatible endpoint
+--media-base-url <url>      media generation endpoint
+--proxy <url>               HTTP(S) proxy endpoint
+--vision-model <model>      image understanding model
+--image-model <model>       image generation/editing model
+--video-model <model>       video generation model
+--unified-model <model>     one model id for every capability
+--resume [session]          resume latest or selected project session
+--list-sessions             list sessions in this project
+--context-limit <tokens>    automatic compaction threshold (default: 60000)
+--max-turns <number>        safety limit (default: 30)
+-y, --yes                   approve writes/execution except dangerous actions
+```
+
+Examples:
+
+```bash
+xiu -p openai -m gpt-5 -C ../my-app "Fix the build"
+xiu -p anthropic -m claude-sonnet-4-20250514 "Review and improve error handling"
+xiu --base-url http://localhost:11434/v1 -m my-model "Explain this project"
+```
+
+## Multimodal routing
+
+Xiu reads the selected provider's capability profile automatically. No extra model-routing flag is needed for normal use:
+
+```text
+OpenAI     selected GPT model -> text + vision
+Anthropic  selected Claude model -> text + vision
+Agnes      selected text model + dedicated image/video models
+```
+
+Only supported tools are shown to the agent. For example, selecting Claude does not silently send an image-generation request to Agnes, and it does not advertise image/video generation APIs that the provider does not expose. New cloud or local providers can add their capability adapter without changing the Agent loop.
+
+With the Agnes preset, Xiu uses these routes by default:
+
+```text
+text + vision  agnes-2.5-flash
+image          agnes-image-2.1-flash
+video          agnes-video-v2.0
+```
+
+The agent chooses the route from the requested operation. For example:
+
+```bash
+xiu -p agnes --yes "Create a 2K 16:9 hero image for this app and save it as assets/hero.png"
+xiu -p agnes --yes "Analyze assets/hero.png, then use its generated URL to make a five-second video at assets/hero.mp4"
+```
+
+Override individual capability models when an API account exposes different names:
+
+```bash
+xiu -p agnes --vision-model vision-x --image-model image-x --video-model video-x
+```
+
+For an adapter whose API really exposes every capability through one model ID, it can be overridden explicitly (currently most useful for Agnes-compatible gateways):
+
+```bash
+xiu -p agnes --unified-model agnes-omni
+```
+
+The same settings are available as `XIU_VISION_MODEL`, `XIU_IMAGE_MODEL`, `XIU_VIDEO_MODEL`, and `XIU_UNIFIED_MODEL`. These are advanced adapter overrides, not normal requirements for Claude or GPT. `XIU_MEDIA_BASE_URL` can point media operations at a separate gateway. Local reference images are encoded as data URIs; video image inputs must currently be public HTTP(S) URLs as required by the Agnes video API.
+
+When `--yes` is absent, Xiu asks before writes and project execution. Read-only operations run automatically. With `--yes`, normal writes and execution are approved, but dangerous commands still require explicit confirmation. In a non-interactive process, unapproved actions are denied.
+
+## Architecture
+
+```text
+CLI -> Agent loop -> text provider
+          |              |
+       live plan     streamed output
+          |
+     Tool registry -> filesystem / shell / Git / MCP
+          |
+     checkpoints -> diff / confirmed restore
+          |
+     capability router -> vision / image / video APIs
+          |
+     JSONL session log
+```
+
+Key extension points are `ModelProvider` and `AgentTool` in `src/types.ts`. A provider translates the common conversation into a model API; a tool publishes JSON Schema and executes against a constrained workspace context.
+
+The project index scans up to 8,000 source and configuration files while ignoring dependencies, build output, coverage, Git metadata, and Xiu state. It stores bounded search terms rather than entire file contents, and returns short source excerpts only for the highest-scoring files. Workspace changes invalidate the cache automatically.
+
+## Development
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+## Current limitations
+
+- Shell commands rely on approval and the operating-system account rather than a container sandbox.
+- Precise checkpoint restore currently covers Xiu's focused file tools and generated outputs; arbitrary shell-command side effects require Git or project-specific recovery.
+- MCP v0.5 currently supports stdio transport; Streamable HTTP, OAuth discovery, resources, prompts, and sampling are future extensions.
+- Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
+
+These are the natural next milestones after validating the core loop.

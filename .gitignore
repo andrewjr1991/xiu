@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.forge/
+.xiu/*
+!.xiu/mcp.json
+!.xiu/skills/
+!.xiu/skills/**
+.env
+.env.*
+!.env.example
+*.log
+*.tgz
+coverage/
+.DS_Store
+Thumbs.db

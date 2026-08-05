@@ -1,0 +1,122 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { Agent } from "../src/agent.js";
+import type { AgentConfig } from "../src/config.js";
+import { listSessions, loadSession } from "../src/session.js";
+import type { ModelProvider } from "../src/types.js";
+
+function config(cwd: string): AgentConfig {
+  return { provider: "openai", model: "test-model", cwd, maxTurns: 5, autoApprove: true, contextLimit: 60_000 };
+}
+
+test("a closed session can be loaded and continued in the same project", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-resume-"));
+  const firstProvider: ModelProvider = {
+    async complete() { return { text: "first answer", toolCalls: [], raw: { role: "assistant", content: "first answer" }, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } }; },
+  };
+  await new Agent(config(cwd), firstProvider, [], async () => true).run("first task");
+  const sessions = await listSessions(cwd);
+  assert.equal(sessions.length, 1);
+  const restored = await loadSession(cwd);
+  assert.equal(restored.messages[0]?.content, "first task");
+  assert.equal(restored.stats.modelCalls, 1);
+
+  let sawPreviousAnswer = false;
+  const secondProvider: ModelProvider = {
+    async complete(_system, messages) {
+      sawPreviousAnswer = messages.some((message) => message.content === "first answer");
+      return { text: "continued", toolCalls: [], raw: { role: "assistant", content: "continued" } };
+    },
+  };
+  await new Agent(config(cwd), secondProvider, [], async () => true, {}, restored).run("continue task");
+  assert.equal(sawPreviousAnswer, true);
+  assert.equal((await listSessions(cwd)).length, 1);
+});
+
+test("sessions are isolated by workspace", async () => {
+  const first = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-a-"));
+  const second = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-b-"));
+  const provider: ModelProvider = { async complete() { return { text: "done", toolCalls: [], raw: {} }; } };
+  await new Agent(config(first), provider, [], async () => true).run("project A");
+  assert.equal((await listSessions(first)).length, 1);
+  assert.equal((await listSessions(second)).length, 0);
+  await assert.rejects(loadSession(second), /No Xiu sessions/);
+});
+
+test("manual compaction replaces long history with a continuation brief", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-compact-"));
+  const provider: ModelProvider = {
+    async complete(system) {
+      if (system.includes("compact coding-agent context")) {
+        return { text: "Goal: preserve the completed architecture and continue testing.", toolCalls: [], raw: {}, usage: { inputTokens: 100, outputTokens: 12, totalTokens: 112 } };
+      }
+      return { text: "A very detailed answer ".repeat(200), toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent(config(cwd), provider, [], async () => true);
+  await agent.run("Discuss the architecture in detail");
+  const before = agent.status().stats.estimatedTokens;
+  const result = await agent.compact();
+  assert.match(result, /Compacted context/);
+  assert.ok(agent.status().stats.estimatedTokens < before);
+  assert.equal(agent.status().stats.compactions, 1);
+  assert.match(agent.history(), /preserve the completed architecture/);
+});
+
+test("conversation compacts automatically before crossing the configured context budget", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-auto-compact-"));
+  let summaries = 0;
+  const provider: ModelProvider = {
+    async complete(system) {
+      if (system.includes("compact coding-agent context")) {
+        summaries++;
+        return { text: "Continue the second task with prior decisions preserved.", toolCalls: [], raw: {} };
+      }
+      return { text: "lengthy context ".repeat(80), toolCalls: [], raw: {} };
+    },
+  };
+  const tiny = { ...config(cwd), contextLimit: 100 };
+  const agent = new Agent(tiny, provider, [], async () => true);
+  await agent.run("first task");
+  await agent.run("second task");
+  assert.equal(summaries, 1);
+  assert.equal(agent.status().stats.compactions, 1);
+});
+
+test("an active interactive agent can switch to a selected persisted session", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-switch-session-"));
+  const provider: ModelProvider = { async complete() { return { text: "new answer", toolCalls: [], raw: {} }; } };
+  const agent = new Agent(config(cwd), provider, [], async () => true);
+  agent.restoreSession({
+    id: "chosen-session",
+    file: path.join(cwd, ".xiu", "sessions", "chosen-session.jsonl"),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    model: "restored-model",
+    messages: [{ role: "user", content: "restored task context" }],
+    stats: { modelCalls: 4, toolCalls: 7, inputTokens: 100, outputTokens: 20, estimatedTokens: 8, compactions: 1, activeMs: 5000 },
+  });
+  assert.equal(agent.status().sessionId, "chosen-session");
+  assert.equal(agent.status().model, "restored-model");
+  assert.match(agent.history(), /restored task context/);
+  assert.equal(agent.status().stats.toolCalls, 7);
+});
+
+test("session discovery includes legacy Forge session directories", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-legacy-session-"));
+  const legacyDirectory = path.join(cwd, ".forge", "sessions");
+  await fs.mkdir(legacyDirectory, { recursive: true });
+  await fs.writeFile(path.join(legacyDirectory, "legacy-123.jsonl"), [
+    JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "task", task: "legacy Forge task", config: { model: "agnes-old" } }),
+    JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "assistant", text: "legacy answer", toolCalls: [] }),
+  ].join("\n") + "\n");
+  const sessions = await listSessions(cwd);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]?.id, "legacy-123");
+  const restored = await loadSession(cwd, "legacy");
+  assert.equal(restored.model, "agnes-old");
+  assert.match(restored.messages[1]?.content ?? "", /legacy answer/);
+});
