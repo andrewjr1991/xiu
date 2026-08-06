@@ -16,6 +16,8 @@ Version 0.8.4 adds clipboard attachments. On Windows, `Ctrl+V` can import a clip
 
 Version 0.8.5 refines the terminal conversation experience. Final responses render common Markdown, transient working prompts no longer leak into scrollback, each turn has a clear Xiu response and completion receipt, file cards show compact key hunks, important execution and verification actions remain visible, and the startup dashboard reserves safe terminal width for Chinese text. `/language` persists Simplified Chinese or English in `~/.xiu/settings.json`; the selected language governs the UI, plans, progress narration, visible reasoning summaries, and model answers while leaving code, paths, commands, and tool names unchanged.
 
+Version 0.8.6 makes that language and identity contract deterministic. Built-in activity descriptions, retries, checkpoints, plans, and multi-agent status no longer leak English labels in Chinese mode. Blocking model questions become a highlighted “Xiu 需要你的回答” state followed by a `请回答> ` prompt. ASCII-compatible `xiu> ` and `补充> ` prompts avoid missing-glyph squares on Windows terminals. Explicit identity questions are guarded at runtime, so the underlying provider cannot rename Xiu or attribute it to Sapiens AI: Xiu is developed by 静然.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -67,7 +69,7 @@ Version 0.8.5 refines the terminal conversation experience. Final responses rend
 - Direction-key approval menus that default to deny
 - Bounded tool/Agent summaries with full output available through `/details`
 - Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
-- Editable transient `↳` prompt that steers the active goal without polluting terminal history
+- Editable transient `补充> ` / `steer> ` prompt that steers the active goal without polluting terminal history
 - Live current Turn, elapsed-time, tool activity, and `Ctrl+O` expanded progress
 - Explicit `/queue <task>` scheduling plus immediate `/queue`, `/clear-queue`, `/cancel`, and `/exit` controls
 - Successful-call cycle detection that stops stagnant repeated reads/searches without relying on an arbitrary turn cap
@@ -174,7 +176,7 @@ The interactive prompt has a slash-command palette: typing `/` opens all command
 
 The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
 
-While an Agent is running, a transient `↳` prompt accepts additional requirements without writing a fake prompt into scrollback. A normal submission adds requirements to the active goal and is injected before the next model turn. The primary task remains mandatory, and a steered task receives a final task-contract audit so the model cannot silently finish after answering only the newest request. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows the current Turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. Primary tasks have no Turn limit by default and continue until completion, cancellation, a genuine loop, or another explicit failure. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
+While an Agent is running, a transient `补充> ` / `steer> ` prompt accepts additional requirements without writing a fake prompt into scrollback. A normal submission adds requirements to the active goal and is injected before the next model turn. The primary task remains mandatory, and a steered task receives a final task-contract audit so the model cannot silently finish after answering only the newest request. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows the current Turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. Primary tasks have no Turn limit by default and continue until completion, cancellation, a genuine loop, or another explicit failure. `/details` performs the same toggle while working. If Xiu needs a blocking decision, it highlights the question and changes the next prompt to `请回答> ` / `answer> `. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
 
 ## Multi-agent orchestration
 

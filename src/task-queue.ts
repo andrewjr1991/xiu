@@ -9,6 +9,11 @@ export interface QueuedTaskInput {
   createdAt: string;
 }
 
+function isEnglishNarrative(value: string): boolean {
+  const words = value.replace(/`[^`]*`|(?:[A-Za-z]:)?[\\/][^\s]+|\b[\w.-]+\.(?:ts|tsx|js|jsx|json|md|html|css|py)\b/g, " ").match(/[A-Za-z]{2,}/g) ?? [];
+  return words.length >= 2 && !/[\u3400-\u9fff]/.test(value);
+}
+
 export type FailureRecoveryAction = "stop" | "retry" | "continue";
 
 type AutomaticStage = "analyzing" | "investigating" | "editing" | "verifying" | "finishing";
@@ -151,7 +156,7 @@ export class RunningTaskView {
       .replace(/[#*_`>]/g, "")
       .replace(/\s+/g, " ")
       .trim();
-    if (!normalized) return;
+    if (!normalized || (this.uiLanguage === "zh-CN" && isEnglishNarrative(normalized))) return;
     this.latestNarration = normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
   }
 
@@ -255,12 +260,18 @@ export class RunningTaskView {
       ? plan.steps
       : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 4);
     const lines = [`${localize(this.uiLanguage, "计划：", "Plan: ")}${completed}/${plan.steps.length} ${localize(this.uiLanguage, "已完成", "completed")}`];
-    for (const step of visible) lines.push(`  ${this.stepIcon(step.status)} ${step.title}${step.note ? ` - ${step.note}` : ""}`);
+    for (const step of visible) {
+      const title = this.uiLanguage === "zh-CN" && isEnglishNarrative(step.title) ? `步骤 ${step.id}` : step.title;
+      const note = step.note && !(this.uiLanguage === "zh-CN" && isEnglishNarrative(step.note)) ? ` - ${step.note}` : "";
+      lines.push(`  ${this.stepIcon(step.status)} ${title}${note}`);
+    }
     if (visible.length < plan.steps.length) lines.push(`  ... ${localize(this.uiLanguage, `另有 ${plan.steps.length - visible.length} 步`, `${plan.steps.length - visible.length} more step(s)`)}`);
     const current = currentIndex >= 0 ? plan.steps[currentIndex] : undefined;
     const next = nextIndex >= 0 ? plan.steps[nextIndex] : plan.steps.find((step) => step.status === "pending");
-    lines.push(`${localize(this.uiLanguage, "当前：", "Now: ")}${current?.title ?? (completed === plan.steps.length ? localize(this.uiLanguage, "最终复核", "Final review") : this.currentPhase)}`);
-    if (next) lines.push(`${localize(this.uiLanguage, "下一步：", "Next: ")}${next.title}`);
+    const currentTitle = current && this.uiLanguage === "zh-CN" && isEnglishNarrative(current.title) ? `步骤 ${current.id}` : current?.title;
+    const nextTitle = next && this.uiLanguage === "zh-CN" && isEnglishNarrative(next.title) ? `步骤 ${next.id}` : next?.title;
+    lines.push(`${localize(this.uiLanguage, "当前：", "Now: ")}${currentTitle ?? (completed === plan.steps.length ? localize(this.uiLanguage, "最终复核", "Final review") : this.currentPhase)}`);
+    if (nextTitle) lines.push(`${localize(this.uiLanguage, "下一步：", "Next: ")}${nextTitle}`);
     return lines;
   }
 

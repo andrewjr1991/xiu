@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { Agent } from "./agent.js";
 import { listBackgroundProcesses, stopAllBackgroundProcesses } from "./background.js";
 import { ActivityLog } from "./activity.js";
+import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig } from "./config.js";
@@ -26,6 +27,7 @@ import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
+import { localizeToolDescription, localizeToolProgress } from "./tool-display.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools } from "./tools.js";
@@ -262,6 +264,12 @@ async function main(): Promise<void> {
       }
       console.log();
     };
+    const printUserQuestion = (question: string): void => {
+      const title = localize(language, " Xiu 需要你的回答 ", " Xiu needs your answer ");
+      console.log(chalk.bgYellow.black.bold(title));
+      console.log(chalk.yellow.bold(`? ${question}`));
+      console.log(chalk.dim(localize(language, "请在下方输入答案；当前会话和任务上下文会继续保留。\n", "Type your answer below; the current session and task context are preserved.\n")));
+    };
     const startPhase = (value: string): void => {
       if (runningTaskView) {
         status.stop();
@@ -324,9 +332,9 @@ async function main(): Promise<void> {
           approveRequest,
           {
             onModelStart: (turn) => context.reportProgress(localize(language, `思考中 - 第 ${turn} 轮`, `Thinking - turn ${turn}`)),
-            onToolStart: (name, description) => context.reportProgress(`${name}: ${description}`),
-            onToolProgress: (name, message) => context.reportProgress(`${name}: ${message}`),
-            onRetry: (message) => context.reportProgress(message),
+            onToolStart: (name, description) => context.reportProgress(`${name}: ${localizeToolDescription(name, description, language)}`),
+            onToolProgress: (name, message) => context.reportProgress(`${name}: ${localizeToolProgress(message, language)}`),
+            onRetry: (message) => context.reportProgress(localizeToolProgress(message, language)),
           },
           undefined,
           childIndex,
@@ -378,9 +386,14 @@ async function main(): Promise<void> {
           activities.progress(activityId, task.progress ?? task.status);
           if (["completed", "failed", "cancelled", "blocked"].includes(task.status)) activities.finish(activityId, task.result ?? task.error ?? task.status, task.status !== "completed");
           const color = task.status === "completed" ? chalk.green : task.status === "failed" || task.status === "blocked" ? chalk.red : chalk.cyan;
-          emitLine(`${color(`[agent ${task.id}] ${task.status}`)} ${chalk.dim(`${task.role} - ${task.title}`)}`);
+          const displayStatus = localize(language, ({ pending: "等待中", running: "运行中", completed: "已完成", failed: "失败", cancelled: "已取消", blocked: "已阻塞", interrupted: "已中断" } as Record<string, string>)[task.status] ?? task.status, task.status);
+          const displayRole = localize(language, ({ explorer: "调查", implementer: "实现", reviewer: "审查", tester: "测试" } as Record<string, string>)[task.role] ?? task.role, task.role);
+          emitLine(`${color(`[Agent ${task.id}] ${displayStatus}`)} ${chalk.dim(`${displayRole} - ${task.title}`)}`);
         },
-        onRunUpdate: (run) => emitLine(chalk.cyan(`Multi-agent run ${run.id} ${run.status}.`)),
+        onRunUpdate: (run) => {
+          const displayStatus = localize(language, ({ pending: "等待中", running: "运行中", completed: "已完成", failed: "失败", cancelled: "已取消", blocked: "已阻塞", interrupted: "已中断" } as Record<string, string>)[run.status] ?? run.status, run.status);
+          emitLine(chalk.cyan(localize(language, `多 Agent 任务 ${run.id}：${displayStatus}。`, `Multi-agent run ${run.id} ${run.status}.`)));
+        },
       },
       config.agentConcurrency,
     );
@@ -414,16 +427,18 @@ async function main(): Promise<void> {
           if (hasToolCalls) runningTaskView?.narrate(text);
         },
         onToolStart: (name, description, details) => {
-          activeToolActivity = activities.start("tool", name, description);
-          activeToolDetails = { name, description, verification: details.verification, risk: details.risk };
-          runningTaskView?.beginTool(name, description, details.changesWorkspace, details.verification);
-          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(description)}`);
-          startPhase(`Running ${name}`);
+          const displayDescription = localizeToolDescription(name, description, language);
+          activeToolActivity = activities.start("tool", name, displayDescription);
+          activeToolDetails = { name, description: displayDescription, verification: details.verification, risk: details.risk };
+          runningTaskView?.beginTool(name, displayDescription, details.changesWorkspace, details.verification);
+          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(displayDescription)}`);
+          startPhase(localize(language, `正在运行 ${name}`, `Running ${name}`));
         },
         onToolProgress: (name, message) => {
-          if (activeToolActivity) activities.progress(activeToolActivity, message);
-          runningTaskView?.activity(`${name}: ${message}`);
-          startPhase(`${name}: ${message}`);
+          const displayMessage = localizeToolProgress(message, language);
+          if (activeToolActivity) activities.progress(activeToolActivity, displayMessage);
+          runningTaskView?.activity(`${name}: ${displayMessage}`);
+          startPhase(`${name}: ${displayMessage}`);
         },
         onToolEnd: (_name, result) => {
           stopPhase();
@@ -431,8 +446,8 @@ async function main(): Promise<void> {
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
-          runningTaskView?.activity(`${_name}: ${failed ? "failed" : "finished"} - ${summary.slice(0, 100)}`);
-          emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... (/details for full output)` : summary)}\n`);
+          runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
+          emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
           if (!failed && activeToolDetails) {
             if (activeToolDetails.verification) runningTaskView?.recordImportantAction(localize(language, `验证通过：${activeToolDetails.description}`, `Verified: ${activeToolDetails.description}`));
             else if (activeToolDetails.risk === "execute" || activeToolDetails.risk === "dangerous") runningTaskView?.recordImportantAction(localize(language, `已执行：${activeToolDetails.description}`, `Ran: ${activeToolDetails.description}`));
@@ -441,7 +456,7 @@ async function main(): Promise<void> {
         },
         onCompletionGate: () => emitLine(chalk.yellow(localize(language, "完成前需要验证。\n", "Verification required before completion.\n"))),
         onCompaction: (message) => startPhase(message),
-        onRetry: (message) => startPhase(message),
+        onRetry: (message) => startPhase(localizeToolProgress(message, language)),
         onFailure: (message) => {
           stopPhase();
           runningTaskView?.activity(`${localize(language, "失败", "Failure")}: ${message}`);
@@ -490,6 +505,7 @@ async function main(): Promise<void> {
 
     console.log(chalk.dim(localize(language, "交互模式 · 输入 / 查看命令 · Ctrl+C 或 /exit 退出\n", "Interactive mode · type / for commands · Ctrl+C or /exit to quit\n")));
     const inputHistory: string[] = [];
+    let awaitingReply: { question: string; originalTask: string } | undefined;
     const promptFooter = (): string => {
       const dashboard = agent.status();
       const agentRuns = coordinator.list();
@@ -537,7 +553,7 @@ async function main(): Promise<void> {
           activeQueuedInputController = inputController;
           let cancelledFromKeyboard = false;
           const queuedDraft = await draftStore.load();
-          const followUp = (await readInteractiveInput("\u21B3 ", slashCommands(language), inputHistory, () => (
+          const followUp = (await readInteractiveInput(localize(language, "补充> ", "steer> "), slashCommands(language), inputHistory, () => (
             formatRunningInputFooter(view, queue.size, agent.status().pendingSteering, promptFooter())
           ), {
             paths: projectIndex.paths("", 1_000),
@@ -623,7 +639,7 @@ async function main(): Promise<void> {
           }
 
           if (!settled && agent.steer(followUp)) {
-            view.activity(`User steering accepted: ${followUp.slice(0, 100)}`);
+            view.activity(localize(language, `已接受用户补充：${followUp.slice(0, 100)}`, `User steering accepted: ${followUp.slice(0, 100)}`));
             console.log(chalk.green(localize(language, `\u21B3 已补充当前任务：${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`, `\u21B3 Steering current task: ${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`)));
           } else {
             try {
@@ -645,10 +661,17 @@ async function main(): Promise<void> {
         view.discard();
         const receipts = view.receiptLines();
         if (receipts.length) console.log(`${chalk.cyan(localize(language, "关键操作", "Key actions"))}\n${receipts.map((line) => chalk.green(line)).join("\n")}\n`);
+        const interaction = parseAssistantInteraction(finalResponse, language);
+        finalResponse = interaction.text;
         if (finalResponse.trim()) console.log(`${chalk.cyan.bold("Xiu")}\n${renderTerminalMarkdown(finalResponse)}\n`);
+        awaitingReply = interaction.question ? { question: interaction.question, originalTask: current.text } : undefined;
+        if (interaction.question) printUserQuestion(interaction.question);
         const completion = view.completionSummary();
-        if (completion) {
+        if (completion && !interaction.question) {
           console.log(completion.success ? chalk.green(completion.message) : chalk.yellow(completion.message));
+          console.log(chalk.dim("─".repeat(Math.max(20, Math.min((process.stdout.columns || 100) - 2, 120)))));
+        } else if (interaction.question) {
+          console.log(chalk.yellow(localize(language, "等待你的回答 · 当前上下文已保存", "Waiting for your answer · current context saved")));
           console.log(chalk.dim("─".repeat(Math.max(20, Math.min((process.stdout.columns || 100) - 2, 120)))));
         }
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
@@ -669,7 +692,7 @@ async function main(): Promise<void> {
     };
 
     while (true) {
-      const task = (await readInteractiveInput("\u276F ", slashCommands(language), inputHistory, promptFooter, {
+      const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
         onChange: (value) => { void draftStore.save(value); },
@@ -686,12 +709,14 @@ async function main(): Promise<void> {
         if (!selected) console.log(chalk.dim(localize(language, "未选择会话。\n", "No session selected.\n")));
         else {
           agent.restoreSession(selected);
+          awaitingReply = undefined;
           console.log(chalk.green(localize(language, `已恢复会话 ${selected.id}`, `Resumed session ${selected.id}`)), chalk.dim(localize(language, `（${selected.messages.length} 条消息，${selected.model ?? agent.status().model}）\n`, `(${selected.messages.length} messages, ${selected.model ?? agent.status().model})\n`)));
         }
         continue;
       }
       if (task === "/clear") {
         agent.clearConversation();
+        awaitingReply = undefined;
         console.log(chalk.dim(localize(language, "对话上下文已清空。\n", "Conversation context cleared.\n")));
         continue;
       }
@@ -968,7 +993,10 @@ async function main(): Promise<void> {
         continue;
       }
       try {
-        if (await runTaskSequence(task)) break;
+        const pendingQuestion = awaitingReply;
+        awaitingReply = undefined;
+        const continuedTask = pendingQuestion ? continueTaskAfterAnswer(pendingQuestion.originalTask, pendingQuestion.question, task, language) : task;
+        if (await runTaskSequence(continuedTask)) break;
         restoredDraft = await draftStore.load();
       } catch (error) {
         status.stop();

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
 import { refreshModelContext } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { canonicalXiuIdentity, isXiuIdentityQuestion } from "./identity.js";
 import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlan, TaskPlanManager } from "./plan.js";
 import type { CheckpointManager } from "./checkpoint.js";
@@ -136,6 +137,7 @@ export class Agent {
 
   private async runWithSignal(task: string, signal: AbortSignal): Promise<string> {
     const startedAt = Date.now();
+    const identityQuestion = isXiuIdentityQuestion(task);
     const relevant = this.projectIndex ? await this.projectIndex.search(task, 6) : "No relevant files found.";
     const profile = this.projectIndex?.profile();
     const automaticContext = [
@@ -196,11 +198,19 @@ export class Agent {
       let response;
       let streamed = false;
       try {
-        const requested = await this.requestModel(signal);
+        const requested = await this.requestModel(signal, !identityQuestion);
         response = requested.response;
         streamed = requested.streamed;
       } finally {
         this.events.onModelEnd?.();
+      }
+      if (identityQuestion) {
+        response = {
+          ...response,
+          text: canonicalXiuIdentity(this.config.language ?? "en-US"),
+          toolCalls: [],
+          raw: undefined,
+        };
       }
       this.recordUsage(response.usage, response.text);
       if (response.text && !streamed) this.events.onText?.(response.text);
@@ -288,7 +298,7 @@ export class Agent {
                   const checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
                   if (checkpoint) {
                     await this.log(this.sessionPath!, { type: "checkpoint", checkpoint });
-                    this.events.onCheckpoint?.(`Checkpoint ${checkpoint.id} saved for ${checkpoint.files.map((file) => file.path).join(", ")}`);
+                    this.events.onCheckpoint?.(localize(this.config.language ?? "en-US", `已保存恢复点 ${checkpoint.id}：${checkpoint.files.map((file) => file.path).join(", ")}`, `Checkpoint ${checkpoint.id} saved for ${checkpoint.files.map((file) => file.path).join(", ")}`));
                   }
                 }
                 return approved;
@@ -625,12 +635,12 @@ export class Agent {
     ).join("\n");
   }
 
-  private async requestModel(signal: AbortSignal): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
+  private async requestModel(signal: AbortSignal, allowStreaming = true): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let emitted = false;
       try {
-        if (this.provider.stream && this.events.onTextDelta) {
+        if (allowStreaming && this.provider.stream && this.events.onTextDelta) {
           const response = await this.provider.stream(this.system!, this.messages, this.tools, (delta) => {
             emitted = true;
             this.events.onTextDelta?.(delta);
@@ -640,11 +650,11 @@ export class Agent {
         return { response: await this.provider.complete(this.system!, this.messages, this.tools, signal), streamed: false };
       } catch (error) {
         if (signal.aborted || emitted || attempt === maxAttempts || !this.isTransientError(error)) {
-          this.events.onFailure?.(`Model request failed: ${error instanceof Error ? error.message : String(error)}`);
+          this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
           throw error;
         }
         const delayMs = 500 * 2 ** (attempt - 1);
-        this.events.onRetry?.(`Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`);
+        this.events.onRetry?.(localize(this.config.language ?? "en-US", `模型暂时出错；${delayMs}ms 后重试 ${attempt + 1}/${maxAttempts}`, `Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`));
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, delayMs);
           signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Task cancelled.")); }, { once: true });

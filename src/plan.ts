@@ -16,6 +16,12 @@ export interface TaskPlan {
   updatedAt: string;
 }
 
+function looksLikeEnglishNaturalLanguage(value: string): boolean {
+  const withoutTechnical = value.replace(/`[^`]*`|(?:[A-Za-z]:)?[\\/][^\s]+|--?[\w-]+|\b[\w.-]+\.(?:ts|tsx|js|jsx|json|md|html|css|py)\b/g, " ");
+  const words = withoutTechnical.match(/[A-Za-z]{2,}/g) ?? [];
+  return words.length >= 2 && !/[\u3400-\u9fff]/.test(withoutTechnical);
+}
+
 export class TaskPlanManager {
   private current?: TaskPlan;
   private planMode = false;
@@ -34,6 +40,10 @@ export class TaskPlanManager {
       if (ids.has(step.id)) throw new Error(`duplicate plan step id: ${step.id}`);
       ids.add(step.id);
     }
+    if (this.language === "zh-CN") {
+      const untranslated = [goal, ...steps.flatMap((step) => [step.title, step.note ?? ""])].find(looksLikeEnglishNaturalLanguage);
+      if (untranslated) throw new Error(`中文模式下，任务目标、步骤标题和说明必须使用简体中文：${untranslated}`);
+    }
     if (steps.filter((step) => step.status === "in_progress").length > 1) throw new Error("only one plan step may be in progress");
     this.current = { goal: goal.trim(), steps, updatedAt: new Date().toISOString() };
     return this.current;
@@ -46,6 +56,7 @@ export class TaskPlanManager {
 
   setMode(enabled: boolean): void { this.planMode = enabled; }
   setLanguage(language: UiLanguage): void { this.language = language; }
+  getLanguage(): UiLanguage { return this.language; }
   mode(): boolean { return this.planMode; }
   snapshot(): TaskPlan | undefined { return this.current ? structuredClone(this.current) : undefined; }
 
@@ -54,8 +65,12 @@ export class TaskPlanManager {
     const icon: Record<PlanStepStatus, string> = { pending: "○", in_progress: "→", completed: "√", blocked: "!" };
     return [
       `${localize(this.language, "规划模式", "Plan mode")}: ${this.planMode ? localize(this.language, "开启（只读）", "ON (read-only)") : localize(this.language, "关闭", "OFF")}`,
-      `${localize(this.language, "目标", "Goal")}: ${this.current.goal}`,
-      ...this.current.steps.map((step) => `${icon[step.status]} ${step.id} ${step.title}${step.note ? ` - ${step.note}` : ""}`),
+      `${localize(this.language, "目标", "Goal")}: ${this.language === "zh-CN" && looksLikeEnglishNaturalLanguage(this.current.goal) ? "当前任务" : this.current.goal}`,
+      ...this.current.steps.map((step) => {
+        const title = this.language === "zh-CN" && looksLikeEnglishNaturalLanguage(step.title) ? `步骤 ${step.id}` : step.title;
+        const note = step.note && !(this.language === "zh-CN" && looksLikeEnglishNaturalLanguage(step.note)) ? ` - ${step.note}` : "";
+        return `${icon[step.status]} ${step.id} ${title}${note}`;
+      }),
     ].join("\n");
   }
 }

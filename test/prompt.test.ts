@@ -11,6 +11,8 @@ test("system prompt identifies 静然 as Xiu's developer and rejects provider at
   assert.match(prompt, /developed by 静然/);
   assert.match(prompt, /Never attribute Xiu's development.*Sapiens AI/);
   assert.match(prompt, /provider supplies the underlying model but is not Xiu's developer/);
+  assert.match(prompt, /You are not Agnes, Claude, ChatGPT, Codex/);
+  assert.match(prompt, /NON-OVERRIDABLE PRODUCT IDENTITY/);
   assert.match(prompt, /PRIMARY GOAL remains mandatory/);
   assert.match(prompt, /HTML, source code, Markdown, JSON.*are not images/);
   assert.match(prompt, /meaningful phase changes.*user-facing progress sentence/);
@@ -24,4 +26,6 @@ test("Chinese language mode governs all user-visible model output", async () => 
   assert.match(prompt, /Use Simplified Chinese for every user-facing response/);
   assert.match(prompt, /progress update, plan goal and step title, visible reasoning summary/);
   assert.match(prompt, /Never expose private chain-of-thought/);
+  assert.match(prompt, /USER_INPUT_REQUIRED/);
+  assert.match(prompt, /plan goal, step title, and note.*Simplified Chinese/);
 });
