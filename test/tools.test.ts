@@ -33,6 +33,33 @@ test("replace_text refuses ambiguous edits", async () => {
   assert.equal(await fs.readFile(path.join(cwd, "file.txt"), "utf8"), "same\nsame\n");
 });
 
+test("read_file returns a bounded line page with an explicit continuation hint", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-read-page-"));
+  await fs.writeFile(path.join(cwd, "large.txt"), Array.from({ length: 260 }, (_, index) => `line-${index + 1}`).join("\n"), "utf8");
+  const tool = builtinTools.find((candidate) => candidate.name === "read_file")!;
+  const first = await executeTool(tool, { path: "large.txt" }, { cwd, approve: async () => false });
+  assert.match(first, /^Lines 1-200 of 260/m);
+  assert.match(first, /200: line-200/);
+  assert.doesNotMatch(first, /201: line-201/);
+  assert.match(first, /PARTIAL view.*start_line=201/i);
+
+  const second = await executeTool(tool, { path: "large.txt", start_line: 201 }, { cwd, approve: async () => false });
+  assert.match(second, /^Lines 201-260 of 260/m);
+  assert.match(second, /260: line-260/);
+});
+
+test("read_file can page through a giant single-line file by character offset", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-read-character-"));
+  const content = "A".repeat(70_000) + "TAIL-MARKER";
+  await fs.writeFile(path.join(cwd, "case.html"), content, "utf8");
+  const tool = builtinTools.find((candidate) => candidate.name === "read_file")!;
+  const first = await executeTool(tool, { path: "case.html", start_character: 0, max_characters: 1_000 }, { cwd, approve: async () => false });
+  assert.match(first, /^Characters 0-999 of 70011/m);
+  assert.match(first, /PARTIAL view.*start_character=1000/i);
+  const tail = await executeTool(tool, { path: "case.html", start_character: 70_000, max_characters: 100 }, { cwd, approve: async () => false });
+  assert.match(tail, /TAIL-MARKER/);
+});
+
 test("apply_patch shows a preview and applies all changes atomically", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-patch-"));
   await fs.writeFile(path.join(cwd, "file.txt"), "alpha\nbeta\n", "utf8");

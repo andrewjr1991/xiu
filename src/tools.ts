@@ -9,6 +9,8 @@ import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 60_000;
+const DEFAULT_READ_LINES = 200;
+const DEFAULT_READ_CHARACTERS = 20_000;
 
 function stringArg(input: Record<string, unknown>, name: string): string {
   const value = input[name];
@@ -27,7 +29,12 @@ export function resolveWorkspacePath(cwd: string, requested: string): string {
 }
 
 function truncate(value: string): string {
-  return value.length <= MAX_OUTPUT ? value : `${value.slice(0, MAX_OUTPUT)}\n... [output truncated]`;
+  if (value.length <= MAX_OUTPUT) return value;
+  const marker = `\n... [output truncated; ${value.length.toLocaleString()} characters total; middle omitted] ...\n`;
+  const available = MAX_OUTPUT - marker.length;
+  const head = Math.ceil(available / 2);
+  const tail = Math.floor(available / 2);
+  return `${value.slice(0, head)}${marker}${value.slice(value.length - tail)}`;
 }
 
 async function windowsConsoleEncoding(): Promise<string> {
@@ -143,13 +150,15 @@ export const builtinTools: AgentTool[] = [
   {
     name: "read_file",
     risk: "read",
-    description: "Read a UTF-8 text file, optionally selecting an inclusive line range.",
+    description: "Read a bounded UTF-8 text-file window. Defaults to 200 lines. Use line paging for normal files or character paging for minified and giant single-line files.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         start_line: { type: "integer", minimum: 1 },
         end_line: { type: "integer", minimum: 1 },
+        start_character: { type: "integer", minimum: 0, description: "Zero-based character offset for minified or giant single-line files." },
+        max_characters: { type: "integer", minimum: 1, maximum: 60000, description: "Character window size; defaults to 20000 when character paging is used." },
       },
       required: ["path"], additionalProperties: false,
     },
@@ -157,10 +166,30 @@ export const builtinTools: AgentTool[] = [
     async execute(input, context) {
       const target = resolveWorkspacePath(context.cwd, stringArg(input, "path"));
       const content = await fs.readFile(target, "utf8");
+      const characterMode = typeof input.start_character === "number" || typeof input.max_characters === "number";
+      if (characterMode) {
+        const start = typeof input.start_character === "number" ? Math.max(0, Math.floor(input.start_character)) : 0;
+        const requested = typeof input.max_characters === "number" ? Math.floor(input.max_characters) : DEFAULT_READ_CHARACTERS;
+        const size = Math.max(1, Math.min(MAX_OUTPUT - 500, requested));
+        if (start >= content.length && content.length > 0) throw new Error(`start_character ${start} exceeds file length ${content.length}`);
+        const endExclusive = Math.min(content.length, start + size);
+        const body = content.slice(start, endExclusive);
+        const notice = endExclusive < content.length
+          ? `\n[PARTIAL view: characters ${start}-${endExclusive - 1} of ${content.length}; continue with start_character=${endExclusive}]`
+          : "";
+        return `Characters ${start}-${Math.max(start, endExclusive - 1)} of ${content.length}\n${body}${notice}`;
+      }
       const lines = content.split(/\r?\n/);
       const start = typeof input.start_line === "number" ? Math.max(1, input.start_line) : 1;
-      const end = typeof input.end_line === "number" ? Math.min(lines.length, input.end_line) : lines.length;
-      return truncate(lines.slice(start - 1, end).map((line, index) => `${start + index}: ${line}`).join("\n"));
+      if (start > lines.length) throw new Error(`start_line ${start} exceeds file length ${lines.length} lines`);
+      const end = typeof input.end_line === "number"
+        ? Math.min(lines.length, Math.max(start, input.end_line))
+        : Math.min(lines.length, start + DEFAULT_READ_LINES - 1);
+      const body = lines.slice(start - 1, end).map((line, index) => `${start + index}: ${line}`).join("\n");
+      const notices: string[] = [];
+      if (end < lines.length) notices.push(`[PARTIAL view: lines ${start}-${end} of ${lines.length}; continue with start_line=${end + 1}]`);
+      if (body.length > MAX_OUTPUT - 500) notices.push("[This line window is very large. For minified or giant single-line files, use start_character and max_characters to page precisely.]");
+      return truncate(`Lines ${start}-${end} of ${lines.length}\n${body}${notices.length ? `\n${notices.join("\n")}` : ""}`);
     },
   },
   {

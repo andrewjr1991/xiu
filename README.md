@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.4 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, preserves the original task across additive steering, performs a task-contract audit before finishing, and limits loop blocking to recent stagnant call sequences instead of accumulating repeated reads across an entire long task. It reserves `/queue <task>` for explicit independent work, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.8 starts Xiu's large-project intelligence work with a reliability-first context engine. Compaction now creates a structured checkpoint while deterministically preserving the authoritative primary goal, additive steering, and current plan. The next model resumes from recorded evidence and the next action instead of restarting discovery. Large text files are read in bounded line pages, while minified or giant single-line HTML/JSON can be paged by character offset with explicit continuation hints. It retains the professional terminal UI, multi-agent, MCP, planning, checkpoint, resumable-session, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -13,6 +13,8 @@ Version 0.7 establishes Xiu's professional terminal interaction foundation. The 
 - Live task plans with persistent step status and a read-only planning mode
 - Session-scoped changed-file summaries, Git diffs, file checkpoints, and confirmed restore
 - Automatic retry for transient model failures before output begins
+- Structured context-checkpoint compaction that preserves the active task contract and continuation state
+- Bounded line and character paging for large, minified, or single-line text files
 - Repeated tool-failure detection and error attribution
 - Adaptive startup dashboard with quick-start tips, model, approval, workspace, and skill count
 - Compact prompt footer with model, context usage, plan mode, skill count, and workspace
@@ -374,6 +376,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
-- v0.7.4 provides live inline progress, primary-goal-preserving steering, task-contract completion audits, progress-aware loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
+- v0.8.0 adds authoritative context checkpoints and bounded large-file windows. Incremental AST/symbol indexing, a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, persistent pending queues, and themes remain future work.
 
 These are the natural next milestones after validating the core loop.

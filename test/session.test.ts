@@ -63,7 +63,10 @@ test("manual compaction replaces long history with a continuation brief", async 
   assert.match(result, /Compacted context/);
   assert.ok(agent.status().stats.estimatedTokens < before);
   assert.equal(agent.status().stats.compactions, 1);
-  assert.match(agent.history(), /preserve the completed architecture/);
+  assert.match(agent.history(), /ACTIVE TASK CONTRACT/);
+  assert.match(agent.history(), /Discuss the architecture in detail/);
+  const restored = await loadSession(cwd);
+  assert.match(restored.messages[0]?.content ?? "", /preserve the completed architecture/);
 });
 
 test("conversation compacts automatically before crossing the configured context budget", async () => {
@@ -84,6 +87,35 @@ test("conversation compacts automatically before crossing the configured context
   await agent.run("second task");
   assert.equal(summaries, 1);
   assert.equal(agent.status().stats.compactions, 1);
+});
+
+test("automatic compaction preserves the active primary task for the next model turn", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-active-contract-"));
+  const primaryTask = "Annotate 001.html and 002.html, then produce the final online table.";
+  let normalCalls = 0;
+  let continuation = "";
+  const provider: ModelProvider = {
+    async complete(system, messages) {
+      if (system.includes("CONTEXT CHECKPOINT COMPACTION")) {
+        return { text: "Current progress: inspected the rules. Next action: process 001.html.", toolCalls: [], raw: {} };
+      }
+      normalCalls++;
+      if (normalCalls === 1) {
+        return {
+          text: "Investigation notes ".repeat(120),
+          toolCalls: [{ id: "missing-1", name: "missing_tool", input: {} }],
+          raw: {},
+        };
+      }
+      continuation = messages.map((message) => message.content).join("\n");
+      return { text: "completed", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ ...config(cwd), contextLimit: 300 }, provider, [], async () => true);
+  await agent.run(primaryTask);
+  assert.match(continuation, /ACTIVE TASK CONTRACT/);
+  assert.match(continuation, new RegExp(primaryTask.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(continuation, /Next action: process 001\.html/);
 });
 
 test("an active interactive agent can switch to a selected persisted session", async () => {

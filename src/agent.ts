@@ -431,6 +431,22 @@ export class Agent {
     if (this.messages.length < 2) return "Conversation is already compact.";
     const before = estimateConversationTokens(this.messages);
     this.events.onCompaction?.(`Compacting ${before.toLocaleString()} estimated tokens (${reason})`);
+    const primaryGoal = this.primaryTask?.trim() || this.recentUserGoals()[0] || "Continue the most recent user task.";
+    const additionalRequirements = this.steeringHistory.length
+      ? this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")
+      : "None recorded.";
+    const currentPlan = this.planManager?.snapshot() ? this.planManager.format() : "No explicit task plan recorded.";
+    const taskContract = [
+      "ACTIVE TASK CONTRACT (authoritative; must survive compaction)",
+      "PRIMARY GOAL:",
+      primaryGoal,
+      "",
+      "ADDITIONAL REQUIREMENTS:",
+      additionalRequirements,
+      "",
+      "CURRENT PLAN:",
+      currentPlan,
+    ].join("\n");
     const transcript = this.messages.map((message) => {
       const label = message.role === "tool" ? `tool:${message.toolName ?? "unknown"}` : message.role;
       return `[${label}]\n${message.content}`;
@@ -439,27 +455,60 @@ export class Agent {
     let usage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
     try {
       const response = await this.provider.complete(
-        "You compact coding-agent context. Produce a dense, factual continuation brief. Preserve the user's goals, decisions, architecture, files changed, exact commands and errors, pending work, verification results, and safety constraints. Do not call tools. Do not add commentary.",
-        [{ role: "user", content: transcript }],
+        "You are performing a CONTEXT CHECKPOINT COMPACTION for a coding agent; in other words, you compact coding-agent context. Produce a concise, factual handoff for the next model. Use these headings: Current progress; Completed evidence; Key findings and decisions; Failed approaches (do not repeat); Files and exact commands; Next action; Verification status; Constraints. Never replace or weaken the authoritative task contract. Distinguish completed facts from intended work. Do not call tools or add conversational commentary.",
+        [{ role: "user", content: `${taskContract}\n\nFULL TRANSCRIPT TO COMPACT:\n${transcript}` }],
         [],
         signal,
       );
-      summary = response.text;
+      summary = this.boundCheckpointSummary(response.text);
       usage = response.usage;
       this.recordUsage(response.usage, response.text);
     } catch (error) {
       if (signal.aborted) throw error;
-      const userGoals = this.messages.filter((message) => message.role === "user").slice(-8)
-        .map((message) => message.content.slice(0, 2500));
+      const userGoals = this.recentUserGoals().slice(0, 8).map((message) => message.slice(0, 2500));
       const recent = this.messages.slice(-12).map((message) => `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content.slice(0, 2500)}`);
-      summary = `Model-assisted compaction failed (${error instanceof Error ? error.message : String(error)}). Local continuation brief:\nRecent user goals:\n${userGoals.join("\n---\n")}\n\nRecent activity:\n${recent.join("\n\n")}`.slice(0, 32_000);
+      summary = this.boundCheckpointSummary(`Model-assisted compaction failed (${error instanceof Error ? error.message : String(error)}). Local continuation brief:\nRecent user goals:\n${userGoals.join("\n---\n")}\n\nRecent activity:\n${recent.join("\n\n")}`);
     }
-    const context = `Compacted session context (${new Date().toISOString()}):\n${summary}`;
+    const context = [
+      taskContract,
+      "",
+      `CONTEXT CHECKPOINT (${new Date().toISOString()}):`,
+      summary,
+      "",
+      "CONTINUATION RULES:",
+      "1. Resume from the recorded Next action; do not restart discovery or reread files already covered by Completed evidence unless the evidence is missing or stale.",
+      "2. The PRIMARY GOAL remains mandatory. ADDITIONAL REQUIREMENTS supplement it and never replace it.",
+      "3. Verify concrete outputs before declaring completion.",
+    ].join("\n");
     this.messages = [{ role: "user", content: context }];
     this.stats.compactions++;
     this.stats.estimatedTokens = estimateConversationTokens(this.messages);
     if (this.sessionPath) await this.log(this.sessionPath, { type: "compact", reason, beforeTokens: before, afterTokens: this.stats.estimatedTokens, context, usage });
     return `Compacted context from about ${before.toLocaleString()} to ${this.stats.estimatedTokens.toLocaleString()} tokens.`;
+  }
+
+  private recentUserGoals(): string[] {
+    const internalPrefixes = [
+      "Compacted session context",
+      "ACTIVE TASK CONTRACT",
+      "User steering received while the task was running",
+      "Task-contract completion audit",
+      "Completion gate:",
+      "Plan gate:",
+    ];
+    return this.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content.trim())
+      .filter((content) => content && !internalPrefixes.some((prefix) => content.startsWith(prefix)))
+      .reverse();
+  }
+
+  private boundCheckpointSummary(summary: string): string {
+    const normalized = summary.trim();
+    const limit = 24_000;
+    if (normalized.length <= limit) return normalized;
+    const marker = "\n\n[Checkpoint summary middle omitted to stay within the context budget.]\n\n";
+    return `${normalized.slice(0, 16_000)}${marker}${normalized.slice(-8_000)}`;
   }
 
   private async requestModel(signal: AbortSignal): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
