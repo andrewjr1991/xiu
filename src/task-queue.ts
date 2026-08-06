@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TaskPlan, PlanStepStatus } from "./plan.js";
+import type { WorkspaceChangeNotice } from "./change-summary.js";
 
 export interface QueuedTaskInput {
   id: string;
@@ -8,12 +9,6 @@ export interface QueuedTaskInput {
 }
 
 export type FailureRecoveryAction = "stop" | "retry" | "continue";
-
-export interface WorkspaceChangeNotice {
-  tool: string;
-  paths: string[];
-  description: string;
-}
 
 type AutomaticStage = "analyzing" | "investigating" | "editing" | "verifying" | "finishing";
 
@@ -89,6 +84,7 @@ export class RunningTaskView {
   private currentPlan?: TaskPlan;
   private automaticStage: AutomaticStage = "analyzing";
   private changes: Array<{ timestamp: number; text: string }> = [];
+  private pendingChanges: WorkspaceChangeNotice[] = [];
   private latestNarration = "";
   private completion?: { message: string; success: boolean };
 
@@ -126,6 +122,11 @@ export class RunningTaskView {
     if (!text || this.changes.at(-1)?.text === text) return;
     this.changes.push({ timestamp: Date.now(), text });
     if (this.changes.length > 12) this.changes.shift();
+    this.pendingChanges.push(structuredClone(change));
+  }
+
+  drainWorkspaceChanges(): WorkspaceChangeNotice[] {
+    return this.pendingChanges.splice(0).map((change) => structuredClone(change));
   }
 
   narrate(text: string): void {

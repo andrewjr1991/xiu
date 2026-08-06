@@ -95,7 +95,12 @@ test("running task summary shows explicit plan, current and next steps, and file
       { id: "test", title: "Run regression tests", status: "pending" },
     ],
   });
-  view.recordWorkspaceChange({ tool: "apply_patch", paths: ["src/task-queue.ts"], description: "patch progress UI" });
+  view.recordWorkspaceChange({
+    tool: "apply_patch",
+    paths: ["src/task-queue.ts"],
+    description: "patch progress UI",
+    files: [{ path: "src/task-queue.ts", kind: "modified", additions: 3, deletions: 1, bytesBefore: 100, bytesAfter: 120, preview: ["- old", "+ new"] }],
+  });
   const summary = view.progressLines().join("\n");
   assert.match(summary, /Plan: 1\/3 completed/);
   assert.match(summary, /√ Inspect current UI/);
@@ -103,6 +108,10 @@ test("running task summary shows explicit plan, current and next steps, and file
   assert.match(summary, /Now: Implement progress panel/);
   assert.match(summary, /Next: Run regression tests/);
   assert.match(summary, /Changed: Modified: src\/task-queue\.ts/);
+  const pending = view.drainWorkspaceChanges();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.files[0]?.additions, 3);
+  assert.deepEqual(view.drainWorkspaceChanges(), []);
 });
 
 test("running task summary keeps concise narration while hidden logs can be discarded", () => {

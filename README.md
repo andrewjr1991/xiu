@@ -10,6 +10,8 @@ Version 0.8.1 recognizes successful project-specific verifier scripts such as `v
 
 Version 0.8.2 uses unambiguous `√`, `→`, and `○` progress symbols, surfaces concise model phase updates during long tasks, and keeps hidden tool logs hidden when a task ends. Its completion gate includes deterministic `verify_output` checks for generated HTML, JSON, Markdown, and CSV artifacts; a zero exit code containing explicit failure evidence is not accepted as a pass. It also recognizes Agnes 2.5 Flash's official 512K context window, compacts automatically at a model-aware 80% threshold, preserves recent user requirements verbatim beside the structured checkpoint, and estimates Chinese context more conservatively.
 
+Version 0.8.3 makes successful file changes permanent terminal output instead of transient footer state. Each change card identifies created, modified, or deleted files, shows bounded `+added/-removed` line counts and a short colored preview, and falls back to byte-size summaries for large or binary files. The live input is safely redrawn after each card, and pending cards are flushed before the final answer.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters

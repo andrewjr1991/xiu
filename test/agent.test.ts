@@ -37,12 +37,16 @@ test("agent executes tools and continues until the model finishes", async () => 
   const provider = new ScriptedProvider();
   const events: string[] = [];
   const changedPaths: string[] = [];
+  const changes: Array<{ additions?: number; deletions?: number; preview: string[] }> = [];
   const narratedTurns: string[] = [];
   let outcome = "";
   const agent = new Agent(config, provider, builtinTools, async () => true, {
     onToolStart: (name) => events.push(name),
     onAssistantTurn: (text, hasToolCalls) => { if (hasToolCalls) narratedTurns.push(text); },
-    onWorkspaceChange: (change) => changedPaths.push(...change.paths),
+    onWorkspaceChange: (change) => {
+      changedPaths.push(...change.paths);
+      changes.push(...change.files);
+    },
     onTaskComplete: (summary) => { outcome = summary.outcome; },
   });
   const result = await agent.run("Create answer.txt");
@@ -51,6 +55,9 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.deepEqual(events, ["write_file"]);
   assert.deepEqual(narratedTurns, ["I will create the file."]);
   assert.deepEqual(changedPaths, ["answer.txt"]);
+  assert.equal(changes[0]?.additions, 1);
+  assert.equal(changes[0]?.deletions, 0);
+  assert.deepEqual(changes[0]?.preview, ["+ done"]);
   assert.equal(outcome, "unverified");
   assert.equal(agent.status().outcome, "unverified");
   const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));

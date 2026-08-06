@@ -14,6 +14,7 @@ import type { SkillRegistry } from "./skills.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
 import { executeTool, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
+import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -30,7 +31,7 @@ export interface AgentEvents {
   onRetry?: (message: string) => void;
   onFailure?: (message: string) => void;
   onPlanUpdate?: (plan: TaskPlan) => void;
-  onWorkspaceChange?: (change: { tool: string; paths: string[]; description: string }) => void;
+  onWorkspaceChange?: (change: WorkspaceChangeNotice) => void;
   onCheckpoint?: (message: string) => void;
   onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number }) => void;
 }
@@ -261,6 +262,8 @@ export class Agent {
           const changesWorkspace = typeof tool.changesWorkspace === "function"
             ? tool.changesWorkspace(call.input)
             : tool.changesWorkspace;
+          const workspacePaths = changesWorkspace ? this.workspacePaths(call.input) : [];
+          const workspaceBefore = workspacePaths.length ? await captureWorkspaceFiles(this.config.cwd, workspacePaths) : new Map();
           this.events.onToolStart?.(call.name, description, {
             changesWorkspace: Boolean(changesWorkspace),
             verification: this.isVerificationAttempt(call.name, call.input),
@@ -307,8 +310,11 @@ export class Agent {
             verifiedAfterChange = false;
             loopGuard.reset();
             this.projectIndex?.invalidate();
-            const paths = this.workspacePaths(call.input);
-            if (paths.length) this.events.onWorkspaceChange?.({ tool: call.name, paths, description });
+            if (workspacePaths.length) {
+              const workspaceAfter = await captureWorkspaceFiles(this.config.cwd, workspacePaths);
+              const change = buildWorkspaceChangeNotice(call.name, description, workspacePaths, workspaceBefore, workspaceAfter);
+              if (change) this.events.onWorkspaceChange?.(change);
+            }
           }
           if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;

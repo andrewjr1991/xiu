@@ -23,6 +23,7 @@ import { listSessions, loadSession } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
+import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
@@ -213,6 +214,25 @@ async function main(): Promise<void> {
       if (runningTaskView) runningTaskView.write(value);
       else process.stdout.write(value);
     };
+    const formatByteSize = (bytes: number): string => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+    const printWorkspaceChanges = (notices: WorkspaceChangeNotice[]): void => {
+      if (!notices.length) return;
+      console.log(chalk.cyan("File changes"));
+      for (const notice of notices) {
+        for (const file of notice.files) {
+          const label = ({ created: "Created", modified: "Modified", deleted: "Deleted" } as const)[file.kind];
+          const counts = file.additions !== undefined && file.deletions !== undefined
+            ? ` ${chalk.green(`+${file.additions}`)} ${chalk.red(`-${file.deletions}`)}`
+            : ` ${chalk.dim(`${formatByteSize(file.bytesBefore)} → ${formatByteSize(file.bytesAfter)}`)}`;
+          console.log(`  ${chalk.green("√")} ${label} ${chalk.bold(file.path)}${counts}`);
+          for (const line of file.preview) {
+            const color = line.startsWith("+") ? chalk.green : line.startsWith("-") ? chalk.red : chalk.dim;
+            console.log(`      ${color(line)}`);
+          }
+        }
+      }
+      console.log();
+    };
     const startPhase = (value: string): void => {
       if (runningTaskView) {
         status.stop();
@@ -395,7 +415,12 @@ async function main(): Promise<void> {
           runningTaskView?.setPlan(plan);
           emitLine(`${chalk.cyan("Task plan updated")}\n${chalk.dim(planManager.format())}\n`);
         },
-        onWorkspaceChange: (change) => runningTaskView?.recordWorkspaceChange(change),
+        onWorkspaceChange: (change) => {
+          if (runningTaskView) {
+            runningTaskView.recordWorkspaceChange(change);
+            activeQueuedInputController?.abort();
+          } else printWorkspaceChanges([change]);
+        },
         onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
         onTaskComplete: (summary) => {
           runningTaskView?.markFinishing();
@@ -488,6 +513,7 @@ async function main(): Promise<void> {
             refreshMs: 250,
           })).trim();
           if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
+          printWorkspaceChanges(view.drainWorkspaceChanges());
           await draftStore.flush();
           await activeApproval;
           if (cancelledFromKeyboard) {
@@ -562,6 +588,7 @@ async function main(): Promise<void> {
           activeQueuedInputController = undefined;
         }
         runningTaskView = undefined;
+        printWorkspaceChanges(view.drainWorkspaceChanges());
         view.discard();
         if (finalResponse.trim()) console.log(`${finalResponse.trim()}\n`);
         const completion = view.completionSummary();
