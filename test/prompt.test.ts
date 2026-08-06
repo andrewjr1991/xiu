@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { buildSystemPrompt } from "../src/prompt.js";
+
+test("system prompt identifies 静然 as Xiu's developer and rejects provider attribution", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-prompt-identity-"));
+  const prompt = await buildSystemPrompt(cwd);
+  assert.match(prompt, /developed by 静然/);
+  assert.match(prompt, /Never attribute Xiu's development.*Sapiens AI/);
+  assert.match(prompt, /provider supplies the underlying model but is not Xiu's developer/);
+});

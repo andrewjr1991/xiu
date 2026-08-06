@@ -2,7 +2,7 @@
 
 中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)。
 
-Xiu is a small autonomous coding agent for the terminal. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
+Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
 Version 0.6 adds goal-oriented multi-agent orchestration: validated dependency graphs, parallel specialist agents, isolated Git Worktrees for implementation, per-agent cancellation and retry, persisted recovery, status and token reporting, and conflict-checked integration. It retains the MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
