@@ -50,7 +50,7 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.equal(sessions.length, 1);
 });
 
-test("steering submitted during a model call amends the active task on the next turn", async () => {
+test("steering amends the active task without replacing its primary goal", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-steer-"));
   await fs.writeFile(path.join(cwd, "input.txt"), "data");
   let release!: () => void;
@@ -66,8 +66,18 @@ test("steering submitted during a model call amends the active task on the next 
         await blocked;
         return { text: "inspect", toolCalls: [{ id: "read-1", name: "read_file", input: { path: "input.txt" } }], raw: {} };
       }
-      assert.ok(messages.some((message) => message.role === "user" && /amendment to the current goal/.test(message.content) && /also create JSONL/.test(message.content)));
-      return { text: "steered", toolCalls: [], raw: {} };
+      if (calls === 2) {
+        const steering = messages.at(-1)?.content ?? "";
+        assert.match(steering, /PRIMARY GOAL \(still mandatory\)/);
+        assert.match(steering, /process input/);
+        assert.match(steering, /also create JSONL/);
+        return { text: "I only answered the added request.", toolCalls: [], raw: {} };
+      }
+      const audit = messages.at(-1)?.content ?? "";
+      assert.match(audit, /Task-contract completion audit/);
+      assert.match(audit, /process input/);
+      assert.match(audit, /also create JSONL/);
+      return { text: "primary goal and steering complete", toolCalls: [], raw: {} };
     },
   };
   const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
@@ -75,7 +85,8 @@ test("steering submitted during a model call amends the active task on the next 
   await started;
   assert.equal(agent.steer("also create JSONL"), true);
   unblock();
-  assert.equal(await running, "steered");
+  assert.equal(await running, "primary goal and steering complete");
+  assert.equal(calls, 3);
   assert.equal(agent.status().outcome, "completed");
 });
 

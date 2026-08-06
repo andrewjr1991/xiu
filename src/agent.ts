@@ -43,6 +43,8 @@ export class Agent {
   private sessionId?: string;
   private repeatedFailures = new Map<string, number>();
   private pendingSteering: string[] = [];
+  private steeringHistory: string[] = [];
+  private primaryTask?: string;
   private lastRunOutcome: AgentRunOutcome = "idle";
   private currentTurn = 0;
 
@@ -76,6 +78,8 @@ export class Agent {
     this.lastRunOutcome = "running";
     this.currentTurn = 0;
     this.repeatedFailures.clear();
+    this.primaryTask = task.trim();
+    this.steeringHistory = [];
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
@@ -91,6 +95,8 @@ export class Agent {
       if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
       if (this.activeController === controller) this.activeController = undefined;
       this.pendingSteering = [];
+      this.primaryTask = undefined;
+      this.steeringHistory = [];
     }
   }
 
@@ -105,6 +111,7 @@ export class Agent {
     if (!normalized || !this.activeController || this.activeController.signal.aborted) return false;
     if (this.pendingSteering.length >= 20) return false;
     this.pendingSteering.push(normalized);
+    this.steeringHistory.push(normalized);
     return true;
   }
 
@@ -155,6 +162,7 @@ export class Agent {
     let verifiedAfterChange = false;
     let verificationAttempted = false;
     let completionReminderSent = false;
+    let auditedSteeringCount = 0;
     let planReminderSent = false;
     let toolCallCount = 0;
     const loopGuard = new ToolLoopGuard();
@@ -190,6 +198,14 @@ export class Agent {
           await this.log(this.sessionPath, { type: "plan_gate", turn, message: reminder });
           this.events.onCompletionGate?.(reminder);
           planReminderSent = true;
+          continue;
+        }
+        if (this.steeringHistory.length > auditedSteeringCount) {
+          const gate = `Task-contract completion audit: do not finish merely because you answered the latest steering. Re-check every required outcome below against concrete evidence. If any item is incomplete, continue using tools now. Only finish after the PRIMARY GOAL and all ADDITIONAL REQUIREMENTS are complete.\n\nPRIMARY GOAL (still mandatory):\n${this.primaryTask}\n\nADDITIONAL REQUIREMENTS:\n${this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
+          this.messages.push({ role: "user", content: gate });
+          await this.log(this.sessionPath, { type: "task_contract_gate", turn, message: gate });
+          this.events.onCompletionGate?.(gate);
+          auditedSteeringCount = this.steeringHistory.length;
           continue;
         }
         if (workspaceChanged && !verifiedAfterChange && !completionReminderSent) {
@@ -289,6 +305,8 @@ export class Agent {
     this.lastRunOutcome = "idle";
     this.currentTurn = 0;
     this.pendingSteering = [];
+    this.steeringHistory = [];
+    this.primaryTask = undefined;
     this.planManager?.restore(undefined, false);
     this.checkpointManager?.clearSession();
   }
@@ -353,6 +371,8 @@ export class Agent {
     this.lastRunOutcome = "idle";
     this.currentTurn = 0;
     this.pendingSteering = [];
+    this.steeringHistory = [];
+    this.primaryTask = undefined;
     if (restored.model) this.setModelInMemory(restored.model);
     this.planManager?.restore(restored.plan, restored.planMode);
     this.checkpointManager?.setSession(restored.id);
@@ -391,7 +411,7 @@ export class Agent {
   private async applyPendingSteering(turn: number): Promise<boolean> {
     if (!this.pendingSteering.length) return false;
     const items = this.pendingSteering.splice(0);
-    const content = `User steering received while the task was running. Treat this as an amendment to the current goal, not as an unrelated new task:\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
+    const content = `User steering received while the task was running. It adds requirements but NEVER replaces or lowers the priority of the primary goal. Do not stop after answering only the steering. Continue until both sections are complete.\n\nPRIMARY GOAL (still mandatory):\n${this.primaryTask}\n\nADDITIONAL REQUIREMENTS:\n${this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nNEWLY RECEIVED IN THIS TURN:\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
     this.messages.push({ role: "user", content });
     if (this.sessionPath) await this.log(this.sessionPath, { type: "steering", turn, items });
     return true;

@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.2 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, injects normal running-time input as steering for the active goal, reserves `/queue <task>` for explicit independent work, blocks repeated tool-call loops, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.3 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, injects normal running-time input as additive steering, preserves the original task as a mandatory primary goal, performs a task-contract audit before finishing a steered task, reserves `/queue <task>` for explicit independent work, blocks repeated tool-call loops, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -155,7 +155,7 @@ The interactive prompt has a slash-command palette: typing `/` opens all command
 
 The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
 
-While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission amends the active goal and is injected before the next model turn. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows Turn/max-turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
+While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission adds requirements to the active goal and is injected before the next model turn. The primary task remains mandatory, and a steered task receives a final task-contract audit so the model cannot silently finish after answering only the newest request. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows Turn/max-turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
 
 ## Multi-agent orchestration
 
@@ -374,6 +374,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
-- v0.7.2 provides live inline progress, steering, loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
+- v0.7.3 provides live inline progress, primary-goal-preserving steering, task-contract completion audits, loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
 
 These are the natural next milestones after validating the core loop.
