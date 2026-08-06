@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveContextProfile, type ContextWindowSource } from "./context.js";
 
 export type ProviderName = "openai" | "anthropic" | "agnes";
 
@@ -22,6 +23,9 @@ export interface AgentConfig {
   proxy?: string;
   capabilities?: CapabilityModels;
   contextLimit?: number;
+  contextWindow?: number;
+  contextWindowSource?: ContextWindowSource;
+  contextLimitMode?: "automatic" | "configured";
   agentConcurrency?: number;
   /** Internal session-log namespace. CLI user sessions use the default `sessions`. */
   sessionNamespace?: string;
@@ -41,6 +45,7 @@ export function resolveConfig(options: {
   videoModel?: string;
   unifiedModel?: string;
   contextLimit?: string;
+  contextWindow?: string;
   agentConcurrency?: string;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
@@ -57,10 +62,6 @@ export function resolveConfig(options: {
   const maxTurns = configuredMaxTurns === undefined ? undefined : Number(configuredMaxTurns);
   if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1)) {
     throw new Error("max-turns must be a positive integer when provided");
-  }
-  const contextLimit = Number(options.contextLimit ?? process.env.XIU_CONTEXT_LIMIT ?? 60_000);
-  if (!Number.isInteger(contextLimit) || contextLimit < 4_000) {
-    throw new Error("context-limit must be an integer of at least 4000 tokens");
   }
   const agentConcurrency = Number(options.agentConcurrency ?? process.env.XIU_AGENT_CONCURRENCY ?? 3);
   if (!Number.isInteger(agentConcurrency) || agentConcurrency < 1 || agentConcurrency > 8) {
@@ -93,6 +94,12 @@ export function resolveConfig(options: {
         ...(options.imageModel ?? process.env.XIU_IMAGE_MODEL ? { image: options.imageModel ?? process.env.XIU_IMAGE_MODEL } : {}),
         ...(options.videoModel ?? process.env.XIU_VIDEO_MODEL ? { video: options.videoModel ?? process.env.XIU_VIDEO_MODEL } : {}),
       };
+  const context = resolveContextProfile({
+    provider,
+    model: capabilities.text,
+    contextWindow: options.contextWindow ?? process.env.XIU_CONTEXT_WINDOW,
+    contextLimit: options.contextLimit ?? process.env.XIU_CONTEXT_LIMIT,
+  });
 
   const baseURL = options.baseURL
     ?? (provider === "agnes" ? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1" : process.env.OPENAI_BASE_URL);
@@ -109,7 +116,7 @@ export function resolveConfig(options: {
       ?? (provider === "agnes" ? baseURL : process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1"),
     proxy,
     capabilities,
-    contextLimit,
+    ...context,
     agentConcurrency,
   };
 }

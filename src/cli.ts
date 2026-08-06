@@ -75,7 +75,8 @@ const program = new Command()
   .option("--unified-model <model>", "use one model for text, vision, image, and video capabilities")
   .option("-r, --resume [session]", "choose a workspace session to resume, or resume a specific session id")
   .option("--list-sessions", "list resumable sessions in this workspace")
-  .option("--context-limit <tokens>", "estimated context tokens before automatic compaction", "60000")
+  .option("--context-window <tokens>", "override the model context window when provider metadata is unavailable")
+  .option("--context-limit <tokens>", "override the automatic compaction threshold (maximum 90% of the window)")
   .option("--max-turns <number>", "optional user-selected agent turn limit (unlimited by default)")
   .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
@@ -618,8 +619,9 @@ async function main(): Promise<void> {
           : "No saved sessions.\n");
         continue;
       }
-      if (task === "/compact") {
-        try { console.log(chalk.green(`${await agent.compact()}\n`)); }
+      if (task === "/compact" || task.startsWith("/compact ")) {
+        const focus = task.slice("/compact".length).trim();
+        try { console.log(chalk.green(`${await agent.compact(focus || undefined)}\n`)); }
         catch (error) { status.stop(); console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}\n`)); }
         finally { status.stop(); }
         continue;
@@ -821,7 +823,9 @@ async function main(): Promise<void> {
           `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`,
           `Pending steering: ${current.pendingSteering}`,
           `Messages: ${current.messages}`,
-          `Context: ~${current.stats.estimatedTokens.toLocaleString()} / ${current.contextLimit.toLocaleString()} tokens`,
+          `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`,
+          `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${current.contextLimitMode})`,
+          `Model window: ${current.contextWindow.toLocaleString()} tokens (${current.contextWindowSource})`,
           `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
           `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`,
           `Compactions: ${current.stats.compactions}`,
@@ -835,7 +839,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse activity; toggle live progress while working\n/status             Show session, token, call, time, and index stats\n/queue              Show explicitly scheduled next tasks\n/queue <task>       Schedule an independent task to run next\n/clear-queue        Clear scheduled tasks\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact [focus]   Compress context, optionally naming what to preserve\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse activity; toggle live progress while working\n/status             Show session, token, call, time, and index stats\n/queue              Show explicitly scheduled next tasks\n/queue <task>       Schedule an independent task to run next\n/clear-queue        Clear scheduled tasks\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {

@@ -56,7 +56,7 @@ test("prompt dashboard remains within a narrow terminal with all status segments
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 55 });
   try {
     const line = formatPromptDashboard({
-      model: "agnes-2.5-flash", contextTokens: 30_000, contextLimit: 60_000, skills: 14,
+      model: "agnes-2.5-flash", contextTokens: 30_000, contextLimit: 409_600, skills: 14,
       cwd: "D:\\QoderWork Project\\a-very-long-project-name", planMode: false, mcpTools: 8,
       agents: 3, backgroundTasks: 2, phase: "in_progress:Implement professional terminal UI",
     });

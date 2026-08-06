@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
+import { refreshModelContext } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
 import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlan, TaskPlanManager } from "./plan.js";
@@ -185,7 +186,7 @@ export class Agent {
       this.currentTurn = turn;
       if (signal.aborted) throw new Error("Task cancelled.");
       await this.applyPendingSteering(turn);
-      if (estimateConversationTokens(this.messages) >= (this.config.contextLimit ?? 60_000)) {
+      if (estimateConversationTokens(this.messages) >= (this.config.contextLimit ?? 102_400)) {
         await this.compactWithSignal(signal, "automatic context limit");
         loopGuard.reset();
       }
@@ -345,11 +346,11 @@ export class Agent {
     this.checkpointManager?.clearSession();
   }
 
-  async compact(): Promise<string> {
+  async compact(focus?: string): Promise<string> {
     if (!this.messages.length) return "No conversation context to compact.";
     const controller = new AbortController();
     this.activeController = controller;
-    try { return await this.compactWithSignal(controller.signal, "manual request"); }
+    try { return await this.compactWithSignal(controller.signal, "manual request", focus); }
     finally { if (this.activeController === controller) this.activeController = undefined; }
   }
 
@@ -362,13 +363,16 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
       messages: this.messages.length,
       stats: { ...this.stats, estimatedTokens: estimateConversationTokens(this.messages) },
-      contextLimit: this.config.contextLimit ?? 60_000,
+      contextLimit: this.config.contextLimit ?? 102_400,
+      contextWindow: this.config.contextWindow ?? 128_000,
+      contextWindowSource: this.config.contextWindowSource ?? "fallback",
+      contextLimitMode: this.config.contextLimitMode ?? "automatic",
       index: this.projectIndex?.status(),
       planMode: this.planManager?.mode() ?? false,
       outcome: this.lastRunOutcome,
@@ -429,6 +433,7 @@ export class Agent {
 
   private setModelInMemory(model: string): void {
     const previous = this.config.model;
+    refreshModelContext(this.config, model);
     this.config.model = model;
     if (this.config.capabilities) {
       this.config.capabilities.text = model;
@@ -464,7 +469,7 @@ export class Agent {
     return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))].slice(0, 6);
   }
 
-  private async compactWithSignal(signal: AbortSignal, reason: string): Promise<string> {
+  private async compactWithSignal(signal: AbortSignal, reason: string, focus?: string): Promise<string> {
     if (this.messages.length < 2) return "Conversation is already compact.";
     const before = estimateConversationTokens(this.messages);
     this.events.onCompaction?.(`Compacting ${before.toLocaleString()} estimated tokens (${reason})`);
@@ -473,6 +478,7 @@ export class Agent {
       ? this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")
       : "None recorded.";
     const currentPlan = this.planManager?.snapshot() ? this.planManager.format() : "No explicit task plan recorded.";
+    const recentRequirements = this.recentUserRequirements();
     const taskContract = [
       "ACTIVE TASK CONTRACT (authoritative; must survive compaction)",
       "PRIMARY GOAL:",
@@ -483,6 +489,12 @@ export class Agent {
       "",
       "CURRENT PLAN:",
       currentPlan,
+      "",
+      "RECENT USER REQUIREMENTS (verbatim; preserve exact nuance):",
+      recentRequirements,
+      "",
+      "COMPACTION FOCUS:",
+      focus?.trim() || "Preserve decisions, code changes, verification evidence, unresolved risks, and the exact next action.",
       "",
       "TOOL EVIDENCE LEDGER (program-recorded; do not repeat completed calls without a concrete reason):",
       this.formatToolEvidence(),
@@ -541,6 +553,20 @@ export class Agent {
       .map((message) => message.content.trim())
       .filter((content) => content && !internalPrefixes.some((prefix) => content.startsWith(prefix)))
       .reverse();
+  }
+
+  private recentUserRequirements(): string {
+    const selected: string[] = [];
+    let tokens = 0;
+    for (const message of this.recentUserGoals()) {
+      const bounded = message.length > 24_000 ? `${message.slice(0, 16_000)}\n...[middle omitted]...\n${message.slice(-8_000)}` : message;
+      const estimated = estimateConversationTokens([{ role: "user", content: bounded }]);
+      if (selected.length && tokens + estimated > 16_000) break;
+      selected.push(bounded);
+      tokens += estimated;
+      if (tokens >= 16_000 || selected.length >= 6) break;
+    }
+    return selected.reverse().map((message, index) => `[User requirement ${index + 1}]\n${message}`).join("\n\n") || "None recorded.";
   }
 
   private boundCheckpointSummary(summary: string): string {

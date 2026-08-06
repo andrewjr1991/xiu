@@ -96,6 +96,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
   const session = [
     "Session",
     `Model     ${config.provider}/${config.model}`,
+    `Context   ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · compact at ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
     `Auth      ${authState(config)}`,
     `Approval  ${config.autoApprove ? "automatic except dangerous" : "risk-based prompts"}`,
     `Skills    ${skillCount} installed`,

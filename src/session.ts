@@ -137,5 +137,24 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
 }
 
 export function estimateConversationTokens(messages: ConversationMessage[]): number {
-  return Math.ceil(messages.reduce((sum, message) => sum + message.content.length + JSON.stringify(message.raw ?? "").length, 0) / 4);
+  return messages.reduce((sum, message) => {
+    const contentTokens = estimateTextTokens(message.content);
+    const rawTokens = message.raw === undefined ? 0 : estimateTextTokens(JSON.stringify(message.raw));
+    return sum + Math.max(contentTokens, rawTokens) + 4;
+  }, 0);
+}
+
+export function estimateTextTokens(value: string): number {
+  let ascii = 0;
+  let nonAscii = 0;
+  let astral = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x7f) ascii++;
+    else {
+      nonAscii++;
+      if (codePoint > 0xffff) astral++;
+    }
+  }
+  return Math.ceil(ascii / 4 + nonAscii + astral);
 }

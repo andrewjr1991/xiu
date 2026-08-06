@@ -8,7 +8,7 @@ Version 0.8 starts Xiu's large-project intelligence work with a reliability-firs
 
 Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate. While a task runs, the input area now keeps a visible progress summary with completed/current/pending steps, the current and next action, and the latest changed file. `Ctrl+O` switches that summary to detailed tool activity.
 
-Version 0.8.2 uses unambiguous `√`, `→`, and `○` progress symbols, surfaces concise model phase updates during long tasks, recognizes Chinese inline validation commands, and keeps hidden tool logs hidden when a task ends. The terminal now closes with only the final answer and completion summary; detailed evidence remains available through Xiu's activity and session logs.
+Version 0.8.2 uses unambiguous `√`, `→`, and `○` progress symbols, surfaces concise model phase updates during long tasks, recognizes Chinese inline validation commands, and keeps hidden tool logs hidden when a task ends. It also recognizes Agnes 2.5 Flash's official 512K context window, compacts automatically at a model-aware 80% threshold, preserves recent user requirements verbatim beside the structured checkpoint, and estimates Chinese context more conservatively.
 
 ## Features
 
@@ -131,7 +131,7 @@ Interactive session commands:
 /history           recent conversation history
 /resume            choose and restore a project session
 /history sessions  resumable sessions in this project
-/compact           compact current context immediately
+/compact [focus]   compact context and optionally name what to preserve
 /plan               show task plan and plan-mode state
 /plan on|off        toggle read-only plan mode
 /tasks              show live task statuses
@@ -158,7 +158,7 @@ Interactive session commands:
 /exit               close Xiu
 ```
 
-Xiu estimates the active context continuously and compacts it into a continuation brief before the configured limit. The default threshold is 60,000 estimated tokens and can be changed with `--context-limit` or `XIU_CONTEXT_LIMIT`.
+Xiu estimates the active context continuously and compacts it into a continuation checkpoint before the model-aware limit. Agnes 2.5 Flash uses its official 512K window and an automatic 409,600-token threshold (80%), leaving room for output, system instructions, and tools. Unknown models use a clearly labelled 128K fallback until `--context-window` or `XIU_CONTEXT_WINDOW` supplies provider metadata. `--context-limit` remains an optional override capped at 90% of the effective window.
 
 The interactive prompt has a slash-command palette: typing `/` opens all commands immediately, further characters filter the list, Up/Down changes the highlighted command, Tab completes it, and Enter selects it.
 
@@ -289,7 +289,8 @@ Useful options:
 --unified-model <model>     one model id for every capability
 --resume [session]          resume latest or selected project session
 --list-sessions             list sessions in this project
---context-limit <tokens>    automatic compaction threshold (default: 60000)
+--context-window <tokens>   model window override when metadata is unavailable
+--context-limit <tokens>    automatic compaction override (maximum: 90% of window)
 --max-turns <number>        optional user-selected limit (unlimited by default)
 --agent-concurrency <n>     concurrent specialist limit, 1-8 (default: 3)
 -y, --yes                   approve writes/execution except dangerous actions

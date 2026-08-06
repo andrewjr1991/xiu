@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
-import { listSessions, loadSession } from "../src/session.js";
+import { estimateConversationTokens, listSessions, loadSession } from "../src/session.js";
 import type { ModelProvider } from "../src/types.js";
 
 function config(cwd: string): AgentConfig {
@@ -59,7 +59,7 @@ test("manual compaction replaces long history with a continuation brief", async 
   const agent = new Agent(config(cwd), provider, [], async () => true);
   await agent.run("Discuss the architecture in detail");
   const before = agent.status().stats.estimatedTokens;
-  const result = await agent.compact();
+  const result = await agent.compact("Focus on exact test output and code changes.");
   assert.match(result, /Compacted context/);
   assert.ok(agent.status().stats.estimatedTokens < before);
   assert.equal(agent.status().stats.compactions, 1);
@@ -67,6 +67,14 @@ test("manual compaction replaces long history with a continuation brief", async 
   assert.match(agent.history(), /Discuss the architecture in detail/);
   const restored = await loadSession(cwd);
   assert.match(restored.messages[0]?.content ?? "", /preserve the completed architecture/);
+  assert.match(restored.messages[0]?.content ?? "", /Focus on exact test output and code changes/);
+  assert.match(restored.messages[0]?.content ?? "", /RECENT USER REQUIREMENTS/);
+});
+
+test("context estimation treats Chinese text more conservatively than ASCII", () => {
+  const chinese = estimateConversationTokens([{ role: "user", content: "这是一个需要保留的中文任务要求" }]);
+  const ascii = estimateConversationTokens([{ role: "user", content: "abcdefghijklmn" }]);
+  assert.ok(chinese > ascii);
 });
 
 test("conversation compacts automatically before crossing the configured context budget", async () => {
