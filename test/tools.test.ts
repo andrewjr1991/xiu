@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { builtinTools, classifyCommand, executeTool, looksLikeVerification, resolveWorkspacePath } from "../src/tools.js";
+import { builtinTools, classifyCommand, executeTool, looksLikeVerification, resolveWorkspacePath, verificationCommandPassed } from "../src/tools.js";
 
 test("resolveWorkspacePath blocks traversal", () => {
   const root = path.resolve("workspace");
@@ -22,6 +22,32 @@ test("custom verifier scripts count as verification commands", () => {
   const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
   assert.equal(tool.isVerification?.({ command: "python test/verify_prelabel.py" }, "Exit code: 0\nVerification passed."), true);
   assert.equal(tool.isVerification?.({ command: "python test/verify_prelabel.py" }, "Exit code: 1\nVerification failed."), false);
+  assert.equal(verificationCommandPassed("Exit code: 0\nHTML验证失败: invalid XML"), false);
+  assert.equal(verificationCommandPassed("Exit code: 0\nVerification: false"), false);
+});
+
+test("verify_output proves generated artifacts with deterministic expectations", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-verify-output-"));
+  const content = "<!DOCTYPE html><html><body><table><tr><td>001</td><td>002</td></tr></table><script>function copyAllData(){}</script></body></html>";
+  await fs.writeFile(path.join(cwd, "result.html"), content, "utf8");
+  const tool = builtinTools.find((candidate) => candidate.name === "verify_output")!;
+  const input = {
+    path: "result.html",
+    required_substrings: ["<!DOCTYPE html>", "<table>", "001", "002", "copyAllData"],
+    forbidden_substrings: ["验证失败"],
+    min_bytes: 100,
+  };
+  const passed = await executeTool(tool, input, { cwd, approve: async () => false });
+  assert.match(passed, /^Verification passed:/);
+  assert.equal(tool.isVerification?.(input, passed), true);
+
+  const failedInput = { path: "result.html", required_substrings: ["missing-sample-003"] };
+  const failed = await executeTool(tool, failedInput, { cwd, approve: async () => false });
+  assert.match(failed, /^Verification failed:/);
+  assert.equal(tool.isVerification?.(failedInput, failed), false);
+
+  const invalid = await executeTool(tool, { path: "result.html" }, { cwd, approve: async () => false });
+  assert.match(invalid, /^Tool error:.*at least one substring or byte-size expectation/);
 });
 
 test("write_file requires approval and writes inside workspace", async () => {

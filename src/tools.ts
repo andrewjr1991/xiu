@@ -19,6 +19,15 @@ function stringArg(input: Record<string, unknown>, name: string): string {
   return value;
 }
 
+function optionalStringArray(input: Record<string, unknown>, name: string): string[] {
+  const value = input[name];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50 || value.some((item) => typeof item !== "string" || !item.length || item.length > 1_000)) {
+    throw new Error(`${name} must be an array of at most 50 non-empty strings, each no longer than 1000 characters`);
+  }
+  return value as string[];
+}
+
 export function resolveWorkspacePath(cwd: string, requested: string): string {
   const root = path.resolve(cwd);
   const target = path.resolve(root, requested);
@@ -93,6 +102,17 @@ export function looksLikeVerification(command: string): boolean {
   const verifierScript = /(?:^|[\\/\s])(?:test|tests|check|verify|validate)(?:[_-][^\\/\s]+)?\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command)
     || /(?:^|[\\/\s])[^\\/\s]+[_-](?:test|tests|check|verify|validate)\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command);
   return namedCheck || verifierScript;
+}
+
+export function verificationCommandPassed(result: string): boolean {
+  if (!/^Exit code: 0\b/.test(result)) return false;
+  const negativeEvidence = [
+    /(?:验证|校验)(?:失败|未通过|错误)/i,
+    /\b(?:verification|validation|check)\s*(?::|result\s*:?)?\s*(?:false|failed|failure|error)\b/im,
+    /^\s*(?:false|failed|failure|error)\s*$/im,
+    /\b[1-9]\d*\s+(?:failed|failures|errors)\b/i,
+  ];
+  return !negativeEvidence.some((pattern) => pattern.test(result));
 }
 
 function patchArray(input: Record<string, unknown>): Array<{ old_text: string; new_text: string }> {
@@ -194,6 +214,54 @@ export const builtinTools: AgentTool[] = [
       if (end < lines.length) notices.push(`[PARTIAL view: lines ${start}-${end} of ${lines.length}; continue with start_line=${end + 1}]`);
       if (body.length > MAX_OUTPUT - 500) notices.push("[This line window is very large. For minified or giant single-line files, use start_character and max_characters to page precisely.]");
       return truncate(`Lines ${start}-${end} of ${lines.length}\n${body}${notices.length ? `\n${notices.join("\n")}` : ""}`);
+    },
+  },
+  {
+    name: "verify_output",
+    risk: "read",
+    description: "Deterministically verify a generated UTF-8 text artifact. Declare required and forbidden substrings and optional byte-size bounds. Any unmet condition returns Verification failed, so use this for HTML, JSON, Markdown, CSV, and other deliverables without a project test suite.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        required_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
+        forbidden_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
+        min_bytes: { type: "integer", minimum: 0 },
+        max_bytes: { type: "integer", minimum: 1 },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    describe: (input) => `verify generated output ${String(input.path)}`,
+    validate(input) {
+      const required = optionalStringArray(input, "required_substrings");
+      const forbidden = optionalStringArray(input, "forbidden_substrings");
+      const hasMinimum = typeof input.min_bytes === "number";
+      const hasMaximum = typeof input.max_bytes === "number";
+      if (!required.length && !forbidden.length && !hasMinimum && !hasMaximum) {
+        throw new Error("verify_output requires at least one substring or byte-size expectation");
+      }
+      if (hasMinimum && (!Number.isInteger(input.min_bytes) || Number(input.min_bytes) < 0)) throw new Error("min_bytes must be a non-negative integer");
+      if (hasMaximum && (!Number.isInteger(input.max_bytes) || Number(input.max_bytes) < 1)) throw new Error("max_bytes must be a positive integer");
+      if (hasMinimum && hasMaximum && Number(input.min_bytes) > Number(input.max_bytes)) throw new Error("min_bytes must not exceed max_bytes");
+    },
+    isVerification: (_input, result) => result.startsWith("Verification passed:"),
+    async execute(input, context) {
+      const requested = stringArg(input, "path");
+      const target = resolveWorkspacePath(context.cwd, requested);
+      const content = await fs.readFile(target, "utf8");
+      const bytes = Buffer.byteLength(content, "utf8");
+      const required = optionalStringArray(input, "required_substrings");
+      const forbidden = optionalStringArray(input, "forbidden_substrings");
+      const missing = required.filter((value) => !content.includes(value));
+      const present = forbidden.filter((value) => content.includes(value));
+      const failures: string[] = [];
+      if (missing.length) failures.push(`missing required substring(s): ${missing.map((value) => JSON.stringify(value)).join(", ")}`);
+      if (present.length) failures.push(`found forbidden substring(s): ${present.map((value) => JSON.stringify(value)).join(", ")}`);
+      if (typeof input.min_bytes === "number" && bytes < input.min_bytes) failures.push(`size ${bytes} bytes is below minimum ${input.min_bytes}`);
+      if (typeof input.max_bytes === "number" && bytes > input.max_bytes) failures.push(`size ${bytes} bytes exceeds maximum ${input.max_bytes}`);
+      if (failures.length) return `Verification failed: ${requested}\n- ${failures.join("\n- ")}`;
+      return `Verification passed: ${requested}\n- size: ${bytes} bytes\n- required substrings: ${required.length}/${required.length}\n- forbidden substrings absent: ${forbidden.length}/${forbidden.length}`;
     },
   },
   {
@@ -326,7 +394,7 @@ export const builtinTools: AgentTool[] = [
       required: ["command"], additionalProperties: false,
     },
     describe: (input) => `run: ${String(input.command)}`,
-    isVerification: (input, result) => looksLikeVerification(String(input.command)) && /^Exit code: 0\b/.test(result),
+    isVerification: (input, result) => looksLikeVerification(String(input.command)) && verificationCommandPassed(result),
     validate(input) {
       const command = stringArg(input, "command");
       if (process.platform === "win32" && (/&&|\|\||\/dev\/null/.test(unquotedText(command)))) {

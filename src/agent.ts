@@ -227,7 +227,7 @@ export class Agent {
           continue;
         }
         if (workspaceChanged && !verifiedAfterChange && !completionReminderSent) {
-          const gate = `Completion gate: files changed but no verification has passed${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or explicit output validation now. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
+          const gate = `Completion gate: files changed but no verification has passed${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
           this.messages.push({ role: "user", content: gate });
           await this.log(this.sessionPath, { type: "completion_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
@@ -293,7 +293,7 @@ export class Agent {
             });
           }
           this.events.onToolEnd?.(call.name, result);
-          if (/^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification timed out|Verification unavailable)/i.test(result)) {
+          if (/^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result)) {
             this.repeatedFailures.set(failureKey, (this.repeatedFailures.get(failureKey) ?? 0) + 1);
             this.events.onFailure?.(`${call.name}: ${result.split(/\r?\n/, 1)[0]}`);
           } else this.repeatedFailures.delete(failureKey);
@@ -458,7 +458,7 @@ export class Agent {
   }
 
   private isVerificationAttempt(toolName: string, input: Record<string, unknown>): boolean {
-    if (toolName === "verify_project") return true;
+    if (toolName === "verify_output" || toolName === "validate_project") return true;
     if (toolName !== "run_command") return false;
     return looksLikeVerification(String(input.command ?? ""));
   }

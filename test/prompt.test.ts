@@ -14,4 +14,5 @@ test("system prompt identifies 静然 as Xiu's developer and rejects provider at
   assert.match(prompt, /PRIMARY GOAL remains mandatory/);
   assert.match(prompt, /HTML, source code, Markdown, JSON.*are not images/);
   assert.match(prompt, /meaningful phase changes.*user-facing progress sentence/);
+  assert.match(prompt, /use verify_output with explicit required and forbidden content/);
 });

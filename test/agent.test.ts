@@ -57,6 +57,37 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.equal(sessions.length, 1);
 });
 
+test("agent completes a generated artifact after verify_output passes", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-artifact-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (calls === 1) {
+        return {
+          text: "Generating the table.",
+          toolCalls: [{ id: "write-html", name: "write_file", input: { path: "result.html", content: "<!DOCTYPE html><table><tr><td>001</td><td>002</td></tr></table>" } }],
+          raw: {},
+        };
+      }
+      if (calls === 2) {
+        assert.match(messages.at(-1)?.content ?? "", /Wrote/);
+        return {
+          text: "Checking the deliverable.",
+          toolCalls: [{ id: "verify-html", name: "verify_output", input: { path: "result.html", required_substrings: ["<!DOCTYPE html>", "<table>", "001", "002"] } }],
+          raw: {},
+        };
+      }
+      assert.match(messages.at(-1)?.content ?? "", /^Verification passed:/);
+      return { text: "The verified table is ready.", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
+  assert.equal(await agent.run("Create a prelabel table"), "The verified table is ready.");
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "completed");
+});
+
 test("steering amends the active task without replacing its primary goal", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-steer-"));
   await fs.writeFile(path.join(cwd, "input.txt"), "data");
