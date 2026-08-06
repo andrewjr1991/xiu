@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import chalk from "chalk";
+import { localize, type UiLanguage } from "./i18n.js";
 
 export interface SlashCommand {
   name: string;
@@ -21,6 +22,8 @@ export interface InteractiveInputOptions {
   onPaste?: () => Promise<{ insertText: string; notice?: string }>;
   signal?: AbortSignal;
   refreshMs?: number;
+  language?: UiLanguage;
+  persistPrompt?: boolean;
 }
 
 export interface EditorState {
@@ -147,7 +150,7 @@ function activePathReference(state: EditorState): { start: number; end: number; 
   return { start, end, query: value.slice(start + 1, state.cursor).join("").replace(/\\/g, "/").toLowerCase() };
 }
 
-export function pathCandidates(state: EditorState, paths: string[], limit = 8): InputCandidate[] {
+export function pathCandidates(state: EditorState, paths: string[], limit = 8, language: UiLanguage = "en-US"): InputCandidate[] {
   const reference = activePathReference(state);
   if (!reference) return [];
   return paths.filter((file) => !reference.query || file.toLowerCase().includes(reference.query))
@@ -155,7 +158,7 @@ export function pathCandidates(state: EditorState, paths: string[], limit = 8): 
       const ap = a.toLowerCase().startsWith(reference.query) ? 0 : 1;
       const bp = b.toLowerCase().startsWith(reference.query) ? 0 : 1;
       return ap - bp || a.length - b.length || a.localeCompare(b);
-    }).slice(0, limit).map((file) => ({ kind: "path", label: `@${file}`, description: "project file", replacement: `@${file}`, replaceStart: reference.start, replaceEnd: reference.end }));
+    }).slice(0, limit).map((file) => ({ kind: "path", label: `@${file}`, description: localize(language, "项目文件", "project file"), replacement: `@${file}`, replaceStart: reference.start, replaceEnd: reference.end }));
 }
 
 export function acceptCandidate(state: EditorState, candidate: InputCandidate): EditorState {
@@ -165,10 +168,10 @@ export function acceptCandidate(state: EditorState, candidate: InputCandidate): 
   return { value: value.join(""), cursor: candidate.replaceStart + replacement.length };
 }
 
-export function historyCandidates(query: string, history: string[], limit = 8): InputCandidate[] {
+export function historyCandidates(query: string, history: string[], limit = 8, language: UiLanguage = "en-US"): InputCandidate[] {
   const normalized = query.toLowerCase();
   return [...new Set([...history].reverse())].filter((item) => !normalized || item.toLowerCase().includes(normalized)).slice(0, limit)
-    .map((item) => ({ kind: "history", label: item.replace(/\s+/g, " "), description: "history", replacement: item, replaceStart: 0, replaceEnd: Number.MAX_SAFE_INTEGER }));
+    .map((item) => ({ kind: "history", label: item.replace(/\s+/g, " "), description: localize(language, "历史记录", "history"), replacement: item, replaceStart: 0, replaceEnd: Number.MAX_SAFE_INTEGER }));
 }
 
 function editorInputLines(prompt: string, state: EditorState, columns: number): { lines: string[]; cursorRow: number; cursorColumn: number } {
@@ -226,10 +229,10 @@ export function editorFrameLines(
     for (const footerLine of footer.split("\n")) {
       const clipped = truncateDisplay(stripAnsi(footerLine), lineWidth);
       if (/^\s*√/.test(clipped)) lines.push(chalk.green(clipped));
-      else if (/^\s*→|^Now:|^Update:/.test(clipped)) lines.push(chalk.cyan(clipped));
+      else if (/^\s*→|^(?:Now|Update|当前|进展)[:：]/.test(clipped)) lines.push(chalk.cyan(clipped));
       else if (/^\s*!/.test(clipped)) lines.push(chalk.red(clipped));
-      else if (/^Changed:/.test(clipped)) lines.push(chalk.yellow(clipped));
-      else if (/^(?:Plan|Progress):/.test(clipped)) lines.push(chalk.white(clipped));
+      else if (/^(?:Changed|变更)[:：]/.test(clipped)) lines.push(chalk.yellow(clipped));
+      else if (/^(?:Plan|Progress|计划|进度)[:：]/.test(clipped)) lines.push(chalk.white(clipped));
       else lines.push(chalk.dim(clipped));
     }
   }
@@ -270,6 +273,7 @@ export function terminalOptionFrameLines<T>(
   selected: number,
   visibleCount = 10,
   columns = process.stdout.columns || 100,
+  language: UiLanguage = "en-US",
 ): string[] {
   const lineWidth = Math.max(19, columns - 1);
   const start = Math.min(Math.max(0, selected - visibleCount + 1), Math.max(0, options.length - visibleCount));
@@ -291,7 +295,7 @@ export function terminalOptionFrameLines<T>(
     const description = truncateDisplay(option.description, descriptionWidth);
     lines.push(`${pointer} ${label}  ${chalk.dim(description)}`.trimEnd());
   }
-  lines.push(chalk.dim(truncateDisplay("Up/Down navigate - Enter select - Esc cancel", lineWidth)));
+  lines.push(chalk.dim(truncateDisplay(localize(language, "↑/↓ 选择 · Enter 确认 · Esc 取消", "Up/Down navigate - Enter select - Esc cancel"), lineWidth)));
   return lines;
 }
 
@@ -336,6 +340,7 @@ export async function readInteractiveInput(
   }
 
   return await new Promise<string>((resolve) => {
+    const language = options.language ?? "en-US";
     let state: EditorState = { value: options.initialValue ?? "", cursor: characters(options.initialValue ?? "").length };
     let selected = 0;
     let historyIndex = inputHistory.length;
@@ -351,8 +356,8 @@ export async function readInteractiveInput(
 
     const suggestions = (): InputCandidate[] => {
       if (dismissed) return [];
-      if (searchQuery !== undefined) return historyCandidates(searchQuery, inputHistory);
-      const paths = pathCandidates(state, options.paths ?? []);
+      if (searchQuery !== undefined) return historyCandidates(searchQuery, inputHistory, 8, language);
+      const paths = pathCandidates(state, options.paths ?? [], 8, language);
       if (paths.length || activePathReference(state)) return paths;
       return matchingCommands(state.value, commands).slice(0, 8).map((command) => ({
         kind: "command" as const, label: command.name, description: command.description, replacement: command.name,
@@ -382,7 +387,7 @@ export async function readInteractiveInput(
       options.signal?.removeEventListener("abort", abortInput);
       if (refreshTimer) clearInterval(refreshTimer);
       if (submitted) options.onChange?.("");
-      process.stdout.write(`${chalk.cyan(prompt)}${result}\n`);
+      if (options.persistPrompt !== false) process.stdout.write(`${chalk.cyan(prompt)}${result}\n`);
       resolve(result);
     };
     const abortInput = (): void => finish("", false);
@@ -409,7 +414,7 @@ export async function readInteractiveInput(
       if (key.ctrl && key.name === "v" && options.onPaste) {
         if (pasteInFlight) return;
         pasteInFlight = true;
-        pasteNotice = "Reading clipboard...";
+        pasteNotice = localize(language, "正在读取剪贴板……", "Reading clipboard...");
         render();
         void options.onPaste().then((result) => {
           if (finished) return;
@@ -417,10 +422,10 @@ export async function readInteractiveInput(
             state = insertEditorText(state, result.insertText);
             changed();
           }
-          pasteNotice = result.notice ?? "Clipboard pasted.";
+          pasteNotice = result.notice ?? localize(language, "剪贴板内容已粘贴。", "Clipboard pasted.");
           dismissed = true;
         }).catch((error) => {
-          if (!finished) pasteNotice = `Clipboard paste failed: ${error instanceof Error ? error.message : String(error)}`;
+          if (!finished) pasteNotice = `${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}`;
         }).finally(() => {
           pasteInFlight = false;
           if (!finished) render();
@@ -505,7 +510,7 @@ export async function readInteractiveInput(
   });
 }
 
-export async function selectTerminalOption<T>(title: string, options: SelectOption<T>[]): Promise<T | undefined> {
+export async function selectTerminalOption<T>(title: string, options: SelectOption<T>[], language: UiLanguage = "en-US"): Promise<T | undefined> {
   if (!options.length) return undefined;
   if (!process.stdin.isTTY || !process.stdout.isTTY) return options[0]?.value;
   return await new Promise<T | undefined>((resolve) => {
@@ -515,7 +520,7 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
 
     const render = (): void => {
       clearRenderedLines(renderedLines);
-      const lines = terminalOptionFrameLines(title, options, selected, visibleCount);
+      const lines = terminalOptionFrameLines(title, options, selected, visibleCount, process.stdout.columns || 100, language);
       process.stdout.write(lines.join("\n"));
       renderedLines = lines.length;
       readline.moveCursor(process.stdout, 0, -(renderedLines - 1));

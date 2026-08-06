@@ -6,13 +6,12 @@ function snapshot(path: string, content: string | undefined, exists = true): Wor
   return { path, exists, bytes: content === undefined ? 2_000_000 : Buffer.byteLength(content), content };
 }
 
-test("change summary reports created file lines and a bounded preview", () => {
+test("change summary reports a created file without dumping its boilerplate", () => {
   const change = summarizeTextChange("result.html", snapshot("result.html", "", false), snapshot("result.html", "<!doctype html>\n<table>\n001\n002\n</table>\n<script>\nmore"));
   assert.equal(change?.kind, "created");
   assert.equal(change?.additions, 7);
   assert.equal(change?.deletions, 0);
-  assert.equal(change?.preview.length, 6);
-  assert.match(change?.preview[0] ?? "", /^\+ <!doctype html>/);
+  assert.equal(change?.preview.length, 0);
 });
 
 test("change summary reports actual added and removed lines for a modification", () => {
@@ -23,6 +22,7 @@ test("change summary reports actual added and removed lines for a modification",
   assert.equal(change?.additions, 2);
   assert.equal(change?.deletions, 1);
   assert.deepEqual(change?.preview, ["- const oldValue = 2;", "+ const newValue = 3;", "+ const extra = true;"]);
+  assert.equal(change?.hunk, "@@ -2 +2 @@");
 });
 
 test("workspace notice omits paths whose content did not change", () => {

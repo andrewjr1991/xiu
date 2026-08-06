@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentTool, ApprovalRequest } from "./types.js";
 import { WorktreeManager, type WorktreeInfo } from "./worktree.js";
+import { localize, type UiLanguage } from "./i18n.js";
 
 export type SubagentRole = "explorer" | "implementer" | "reviewer" | "tester";
 export type SubagentMode = "shared_readonly" | "worktree";
@@ -394,19 +395,19 @@ function taskSchema(): Record<string, unknown> {
   };
 }
 
-export function formatAgentRun(run: SubagentRun): string {
+export function formatAgentRun(run: SubagentRun, language: UiLanguage = "en-US"): string {
   const totals = run.tasks.reduce((sum, task) => ({
     tokens: sum.tokens + (task.stats?.inputTokens ?? 0) + (task.stats?.outputTokens ?? 0),
     activeMs: sum.activeMs + (task.stats?.activeMs ?? 0),
   }), { tokens: 0, activeMs: 0 });
   return [
-    `Run ${run.id} - ${run.status} - ${run.goal}`,
+    `${localize(language, "运行", "Run")} ${run.id} - ${run.status} - ${run.goal}`,
     ...run.tasks.map((task) => {
       const elapsed = task.startedAt ? ((new Date(task.completedAt ?? now()).getTime() - new Date(task.startedAt).getTime()) / 1000).toFixed(1) : "0.0";
       const tokens = (task.stats?.inputTokens ?? 0) + (task.stats?.outputTokens ?? 0);
       return `[${task.status}] ${task.id} (${task.role}, ${task.mode}) ${task.title} - ${elapsed}s, ${tokens} tokens${task.progress ? ` - ${task.progress}` : ""}${task.error ? ` - ${task.error}` : ""}`;
     }),
-    `Total: ${totals.tokens} tokens, ${(totals.activeMs / 1000).toFixed(1)}s agent time`,
+    localize(language, `总计：${totals.tokens} tokens，${(totals.activeMs / 1000).toFixed(1)} 秒 Agent 时间`, `Total: ${totals.tokens} tokens, ${(totals.activeMs / 1000).toFixed(1)}s agent time`),
   ].join("\n");
 }
 
@@ -442,7 +443,7 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
       async execute(input) {
         if (typeof input.run_id === "string") return formatAgentRun(coordinator.get(input.run_id));
         const runs = coordinator.list();
-        return runs.length ? runs.map(formatAgentRun).join("\n\n") : "No multi-agent runs.";
+        return runs.length ? runs.map((run) => formatAgentRun(run)).join("\n\n") : "No multi-agent runs.";
       },
     },
     {

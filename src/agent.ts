@@ -11,6 +11,7 @@ import { selectableModels } from "./model-catalog.js";
 import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
+import { localize } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
 import { executeTool, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
@@ -23,7 +24,7 @@ export interface AgentEvents {
   onTextDelta?: (text: string) => void;
   onTextStreamEnd?: () => void;
   onAssistantTurn?: (text: string, hasToolCalls: boolean) => void;
-  onToolStart?: (name: string, description: string, details: { changesWorkspace: boolean; verification: boolean }) => void;
+  onToolStart?: (name: string, description: string, details: { changesWorkspace: boolean; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" }) => void;
   onToolProgress?: (name: string, message: string) => void;
   onToolEnd?: (name: string, result: string) => void;
   onCompletionGate?: (message: string) => void;
@@ -147,7 +148,7 @@ export class Agent {
     const prepared = [automaticContext ? `Automatically prepared project context:\n${automaticContext}` : "", planModeContext].filter(Boolean).join("\n\n");
     const contextualTask = prepared ? `${task}\n\n${prepared}` : task;
     this.messages.push({ role: "user", content: contextualTask });
-    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog());
+    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US");
     if (!this.sessionPath) {
       this.sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
       const namespace = this.config.sessionNamespace ?? "sessions";
@@ -267,6 +268,7 @@ export class Agent {
           this.events.onToolStart?.(call.name, description, {
             changesWorkspace: Boolean(changesWorkspace),
             verification: this.isVerificationAttempt(call.name, call.input),
+            risk,
           });
           const failureKey = `${call.name}:${JSON.stringify(call.input)}`;
           const loop = loopGuard.observe(call.name, call.input);
@@ -353,7 +355,7 @@ export class Agent {
   }
 
   async compact(focus?: string): Promise<string> {
-    if (!this.messages.length) return "No conversation context to compact.";
+    if (!this.messages.length) return localize(this.config.language ?? "en-US", "没有可压缩的对话上下文。", "No conversation context to compact.");
     const controller = new AbortController();
     this.activeController = controller;
     try { return await this.compactWithSignal(controller.signal, "manual request", focus); }
@@ -362,10 +364,12 @@ export class Agent {
 
   history(limit = 20): string {
     const visible = this.messages.filter((message) => message.role !== "tool").slice(-limit);
-    if (!visible.length) return "No conversation history.";
+    const language = this.config.language ?? "en-US";
+    if (!visible.length) return localize(language, "没有对话历史。", "No conversation history.");
     return visible.map((message) => {
       const content = message.content.replace(/\s+/g, " ").trim();
-      return `${message.role}: ${content.length > 240 ? `${content.slice(0, 240)}...` : content}`;
+      const role = message.role === "user" ? localize(language, "用户", "user") : message.role === "assistant" ? "Xiu" : localize(language, "工具", "tool");
+      return `${role}: ${content.length > 240 ? `${content.slice(0, 240)}...` : content}`;
     }).join("\n");
   }
 
@@ -402,7 +406,7 @@ export class Agent {
       try { discovered = await this.provider.listModels(); }
       catch (error) { discoveryError = error instanceof Error ? error.message : String(error); }
     }
-    return { models: selectableModels(this.config.provider, this.config.model, discovered), discoveryError };
+    return { models: selectableModels(this.config.provider, this.config.model, discovered, this.config.language), discoveryError };
   }
 
   restoreSession(restored: RestoredSession): void {
@@ -430,7 +434,7 @@ export class Agent {
   }
 
   plan(): string {
-    return this.planManager?.format() ?? "Plan manager is unavailable.";
+    return this.planManager?.format() ?? localize(this.config.language ?? "en-US", "任务计划管理器不可用。", "Plan manager is unavailable.");
   }
 
   reloadInstructions(): void {
@@ -476,9 +480,9 @@ export class Agent {
   }
 
   private async compactWithSignal(signal: AbortSignal, reason: string, focus?: string): Promise<string> {
-    if (this.messages.length < 2) return "Conversation is already compact.";
+    if (this.messages.length < 2) return localize(this.config.language ?? "en-US", "当前对话已经足够精简。", "Conversation is already compact.");
     const before = estimateConversationTokens(this.messages);
-    this.events.onCompaction?.(`Compacting ${before.toLocaleString()} estimated tokens (${reason})`);
+    this.events.onCompaction?.(localize(this.config.language ?? "en-US", `正在压缩约 ${before.toLocaleString()} tokens（${reason}）`, `Compacting ${before.toLocaleString()} estimated tokens (${reason})`));
     const primaryGoal = this.primaryTask?.trim() || this.recentUserGoals()[0] || "Continue the most recent user task.";
     const additionalRequirements = this.steeringHistory.length
       ? this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")
@@ -542,7 +546,7 @@ export class Agent {
     this.stats.compactions++;
     this.stats.estimatedTokens = estimateConversationTokens(this.messages);
     if (this.sessionPath) await this.log(this.sessionPath, { type: "compact", reason, beforeTokens: before, afterTokens: this.stats.estimatedTokens, context, usage });
-    return `Compacted context from about ${before.toLocaleString()} to ${this.stats.estimatedTokens.toLocaleString()} tokens.`;
+    return localize(this.config.language ?? "en-US", `上下文已从约 ${before.toLocaleString()} tokens 压缩到 ${this.stats.estimatedTokens.toLocaleString()} tokens。`, `Compacted context from about ${before.toLocaleString()} to ${this.stats.estimatedTokens.toLocaleString()} tokens.`);
   }
 
   private recentUserGoals(): string[] {

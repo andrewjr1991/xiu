@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { TaskPlan, PlanStepStatus } from "./plan.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
+import { localize, type UiLanguage } from "./i18n.js";
 
 export interface QueuedTaskInput {
   id: string;
@@ -12,19 +13,21 @@ export type FailureRecoveryAction = "stop" | "retry" | "continue";
 
 type AutomaticStage = "analyzing" | "investigating" | "editing" | "verifying" | "finishing";
 
-const AUTOMATIC_STEPS: Array<{ stage: AutomaticStage; title: string }> = [
-  { stage: "analyzing", title: "Understand the task" },
-  { stage: "investigating", title: "Inspect relevant files" },
-  { stage: "editing", title: "Implement changes" },
-  { stage: "verifying", title: "Verify the result" },
-  { stage: "finishing", title: "Review and finish" },
-];
-
-export function failureRecoveryOptions(queued: number): Array<{ label: string; description: string; value: FailureRecoveryAction }> {
+function automaticSteps(language: UiLanguage): Array<{ stage: AutomaticStage; title: string }> {
   return [
-    { label: "Stop and return", description: "Clear scheduled tasks and return to the normal prompt", value: "stop" },
-    { label: "Retry unfinished task", description: "Continue from the current conversation without restarting investigation", value: "retry" },
-    ...(queued ? [{ label: "Skip and run scheduled tasks", description: `Continue with ${queued} explicitly scheduled task(s)`, value: "continue" as const }] : []),
+    { stage: "analyzing", title: localize(language, "理解任务", "Understand the task") },
+    { stage: "investigating", title: localize(language, "检查相关文件", "Inspect relevant files") },
+    { stage: "editing", title: localize(language, "实施修改", "Implement changes") },
+    { stage: "verifying", title: localize(language, "验证结果", "Verify the result") },
+    { stage: "finishing", title: localize(language, "复核并完成", "Review and finish") },
+  ];
+}
+
+export function failureRecoveryOptions(queued: number, language: UiLanguage = "en-US"): Array<{ label: string; description: string; value: FailureRecoveryAction }> {
+  return [
+    { label: localize(language, "停止并返回", "Stop and return"), description: localize(language, "清空后续任务并返回输入框", "Clear scheduled tasks and return to the normal prompt"), value: "stop" },
+    { label: localize(language, "继续未完成任务", "Retry unfinished task"), description: localize(language, "沿用当前证据继续，不重新调查", "Continue from the current conversation without restarting investigation"), value: "retry" },
+    ...(queued ? [{ label: localize(language, "跳过并运行排队任务", "Skip and run scheduled tasks"), description: localize(language, `继续运行 ${queued} 个已安排任务`, `Continue with ${queued} explicitly scheduled task(s)`), value: "continue" as const }] : []),
   ];
 }
 
@@ -75,7 +78,7 @@ export class TaskInputQueue {
 export class RunningTaskView {
   private buffer = "";
   private truncated = false;
-  private currentPhase = "Starting";
+  private currentPhase: string;
   private currentTurn = 0;
   private maximumTurns = 0;
   private readonly startedAt = Date.now();
@@ -87,13 +90,15 @@ export class RunningTaskView {
   private pendingChanges: WorkspaceChangeNotice[] = [];
   private latestNarration = "";
   private completion?: { message: string; success: boolean };
+  private importantActions: string[] = [];
 
-  constructor(private readonly maxCharacters = 256_000) {
+  constructor(private readonly maxCharacters = 256_000, private readonly uiLanguage: UiLanguage = "en-US") {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new Error("Running task output limit must be a positive integer.");
+    this.currentPhase = localize(uiLanguage, "正在启动", "Starting");
   }
 
   setPhase(phase: string): void {
-    this.currentPhase = phase.replace(/\s+/g, " ").trim() || "Working";
+    this.currentPhase = phase.replace(/\s+/g, " ").trim() || localize(this.uiLanguage, "处理中", "Working");
   }
 
   setTurn(turn: number, maximum?: number): void {
@@ -114,15 +119,26 @@ export class RunningTaskView {
 
   recordWorkspaceChange(change: WorkspaceChangeNotice): void {
     const paths = change.paths.length ? change.paths.join(", ") : change.description;
-    const action = change.tool === "write_file" ? "Wrote"
-      : change.tool === "replace_text" || change.tool === "apply_patch" ? "Modified"
-      : /^generate_(?:image|video)$/.test(change.tool) ? "Created"
-      : "Workspace operation";
+    const action = change.tool === "write_file" ? localize(this.uiLanguage, "已写入", "Wrote")
+      : change.tool === "replace_text" || change.tool === "apply_patch" ? localize(this.uiLanguage, "已修改", "Modified")
+      : /^generate_(?:image|video)$/.test(change.tool) ? localize(this.uiLanguage, "已创建", "Created")
+      : localize(this.uiLanguage, "工作区操作", "Workspace operation");
     const text = `${action}: ${paths}`.replace(/\s+/g, " ").trim();
     if (!text || this.changes.at(-1)?.text === text) return;
     this.changes.push({ timestamp: Date.now(), text });
     if (this.changes.length > 12) this.changes.shift();
     this.pendingChanges.push(structuredClone(change));
+  }
+
+  recordImportantAction(action: string): void {
+    const normalized = action.replace(/\s+/g, " ").trim();
+    if (!normalized || this.importantActions.at(-1) === normalized) return;
+    this.importantActions.push(normalized);
+    if (this.importantActions.length > 8) this.importantActions.shift();
+  }
+
+  receiptLines(): string[] {
+    return this.importantActions.map((action) => `  √ ${action}`);
   }
 
   drainWorkspaceChanges(): WorkspaceChangeNotice[] {
@@ -187,6 +203,10 @@ export class RunningTaskView {
     return this.currentPhase;
   }
 
+  language(): UiLanguage {
+    return this.uiLanguage;
+  }
+
   write(value: string): void {
     if (!value) return;
     this.buffer += value;
@@ -201,7 +221,7 @@ export class RunningTaskView {
   }
 
   drain(): string {
-    const output = `${this.truncated ? "[Earlier live output was truncated; complete tool output remains available in /details.]\n" : ""}${this.buffer}`;
+    const output = `${this.truncated ? localize(this.uiLanguage, "[较早的实时输出已截断；完整工具输出仍可在 /details 中查看。]\n", "[Earlier live output was truncated; complete tool output remains available in /details.]\n") : ""}${this.buffer}`;
     this.buffer = "";
     this.truncated = false;
     return output;
@@ -213,16 +233,17 @@ export class RunningTaskView {
   }
 
   private advanceAutomaticStage(stage: AutomaticStage): void {
-    const currentIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === this.automaticStage);
-    const nextIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === stage);
+    const steps = automaticSteps(this.uiLanguage);
+    const currentIndex = steps.findIndex((step) => step.stage === this.automaticStage);
+    const nextIndex = steps.findIndex((step) => step.stage === stage);
     if (nextIndex > currentIndex) this.automaticStage = stage;
   }
 
   private summaryLines(): string[] {
     const lines = this.currentPlan ? this.planSummaryLines(this.currentPlan) : this.automaticSummaryLines();
-    if (this.latestNarration) lines.push(`Update: ${this.latestNarration}`);
+    if (this.latestNarration) lines.push(`${localize(this.uiLanguage, "进展：", "Update: ")}${this.latestNarration}`);
     const latestChange = this.changes.at(-1)?.text;
-    if (latestChange) lines.push(`Changed: ${latestChange}`);
+    if (latestChange) lines.push(`${localize(this.uiLanguage, "变更：", "Changed: ")}${latestChange}`);
     return lines;
   }
 
@@ -233,26 +254,27 @@ export class RunningTaskView {
     const visible = plan.steps.length <= 6
       ? plan.steps
       : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 4);
-    const lines = [`Plan: ${completed}/${plan.steps.length} completed`];
+    const lines = [`${localize(this.uiLanguage, "计划：", "Plan: ")}${completed}/${plan.steps.length} ${localize(this.uiLanguage, "已完成", "completed")}`];
     for (const step of visible) lines.push(`  ${this.stepIcon(step.status)} ${step.title}${step.note ? ` - ${step.note}` : ""}`);
-    if (visible.length < plan.steps.length) lines.push(`  ... ${plan.steps.length - visible.length} more step(s)`);
+    if (visible.length < plan.steps.length) lines.push(`  ... ${localize(this.uiLanguage, `另有 ${plan.steps.length - visible.length} 步`, `${plan.steps.length - visible.length} more step(s)`)}`);
     const current = currentIndex >= 0 ? plan.steps[currentIndex] : undefined;
     const next = nextIndex >= 0 ? plan.steps[nextIndex] : plan.steps.find((step) => step.status === "pending");
-    lines.push(`Now: ${current?.title ?? (completed === plan.steps.length ? "Final review" : this.currentPhase)}`);
-    if (next) lines.push(`Next: ${next.title}`);
+    lines.push(`${localize(this.uiLanguage, "当前：", "Now: ")}${current?.title ?? (completed === plan.steps.length ? localize(this.uiLanguage, "最终复核", "Final review") : this.currentPhase)}`);
+    if (next) lines.push(`${localize(this.uiLanguage, "下一步：", "Next: ")}${next.title}`);
     return lines;
   }
 
   private automaticSummaryLines(): string[] {
-    const currentIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === this.automaticStage);
-    const lines = [`Progress: automatic ${currentIndex}/${AUTOMATIC_STEPS.length} completed`];
-    for (const [index, step] of AUTOMATIC_STEPS.entries()) {
+    const steps = automaticSteps(this.uiLanguage);
+    const currentIndex = steps.findIndex((step) => step.stage === this.automaticStage);
+    const lines = [`${localize(this.uiLanguage, "进度：", "Progress: ")}${localize(this.uiLanguage, "自动", "automatic")} ${currentIndex}/${steps.length} ${localize(this.uiLanguage, "已完成", "completed")}`];
+    for (const [index, step] of steps.entries()) {
       const status: PlanStepStatus = index < currentIndex ? "completed" : index === currentIndex ? "in_progress" : "pending";
       lines.push(`  ${this.stepIcon(status)} ${step.title}`);
     }
-    lines.push(`Now: ${this.currentPhase}`);
-    const next = AUTOMATIC_STEPS[currentIndex + 1];
-    if (next) lines.push(`Next: ${next.title}`);
+    lines.push(`${localize(this.uiLanguage, "当前：", "Now: ")}${this.currentPhase}`);
+    const next = steps[currentIndex + 1];
+    if (next) lines.push(`${localize(this.uiLanguage, "下一步：", "Next: ")}${next.title}`);
     return lines;
   }
 
@@ -264,10 +286,11 @@ export class RunningTaskView {
 export function formatRunningInputFooter(view: RunningTaskView, queued: number, steering: number, baseFooter: string): string {
   const turn = view.turn();
   const elapsed = Math.floor(view.elapsedMs() / 1000);
-  const queue = queued ? `${queued} queued` : "queue empty";
-  const steeringState = steering ? `${steering} steering` : "no steering";
-  const details = view.detailsVisible() ? "Ctrl+O hide details" : "Ctrl+O show details";
+  const language = view.language();
+  const queue = queued ? localize(language, `${queued} 个排队任务`, `${queued} queued`) : localize(language, "队列为空", "queue empty");
+  const steeringState = steering ? localize(language, `${steering} 条补充要求`, `${steering} steering`) : localize(language, "无补充要求", "no steering");
+  const details = view.detailsVisible() ? localize(language, "Ctrl+O 隐藏详情", "Ctrl+O hide details") : localize(language, "Ctrl+O 显示详情", "Ctrl+O show details");
   const turnLabel = turn.maximum ? `${turn.current || "-"}/${turn.maximum}` : `${turn.current || "-"}`;
-  const headline = `Working: Turn ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
-  return [headline, ...view.progressLines(), `${details} | Enter steers current | /queue <task> schedules next | Ctrl+C cancels`, baseFooter].join("\n");
+  const headline = `${localize(language, "运行中：", "Working: ")}${localize(language, "轮次", "Turn")} ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
+  return [headline, ...view.progressLines(), `${details} | ${localize(language, "Enter 补充当前任务 | /queue <任务> 安排下一项 | Ctrl+C 取消", "Enter steers current | /queue <task> schedules next | Ctrl+C cancels")}`, baseFooter].join("\n");
 }

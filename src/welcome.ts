@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { AgentConfig } from "./config.js";
+import { localize, type UiLanguage } from "./i18n.js";
 
 const LOGO = [
   "__  __  _       ",
@@ -59,9 +60,10 @@ function fit(value: string, width: number): string {
 
 function box(title: string, rows: string[], width: number): string[] {
   const innerWidth = width - 2;
+  const titleRule = Math.max(1, width - textWidth(title) - 5);
   return [
-    `+- ${title} ${"-".repeat(Math.max(1, width - title.length - 5))}+`,
-    ...rows.map((row) => `|${fit(` ${row}`, innerWidth).padEnd(innerWidth)}|`),
+    `+- ${title} ${"-".repeat(titleRule)}+`,
+    ...rows.map((row) => `|${padVisible(fit(` ${row}`, innerWidth), innerWidth)}|`),
     `+${"-".repeat(innerWidth)}+`,
   ];
 }
@@ -85,27 +87,28 @@ function printSideBySide(left: string[], right: string[], leftWidth: number, gap
 
 export function renderWelcome(config: AgentConfig, version: string, skillCount = 0): void {
   console.log();
+  const language = config.language ?? "en-US";
   const columns = process.stdout.columns || 100;
-  const width = Math.max(30, Math.min(120, columns - 2));
+  const width = Math.max(30, Math.min(118, columns - 3));
   const tips = [
-    "1. Type / to open the command palette",
-    "2. Use @path or Ctrl+V to attach files and images",
-    "3. Use /plan on to investigate safely",
-    "4. Use /skills to browse installed workflows",
+    localize(language, "1. 输入 / 打开命令面板", "1. Type / to open the command palette"),
+    localize(language, "2. 使用 @路径 或 Ctrl+V 引用文件和图片", "2. Use @path or Ctrl+V to attach files and images"),
+    localize(language, "3. 使用 /plan on 进行只读调查", "3. Use /plan on to investigate safely"),
+    localize(language, "4. 使用 /skills 浏览已安装工作流", "4. Use /skills to browse installed workflows"),
   ];
   const session = [
-    "Session",
-    `Model     ${config.provider}/${config.model}`,
-    `Context   ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · compact at ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
-    `Auth      ${authState(config)}`,
-    `Approval  ${config.autoApprove ? "automatic except dangerous" : "risk-based prompts"}`,
-    `Skills    ${skillCount} installed`,
+    localize(language, "当前会话", "Session"),
+    `${localize(language, "模型", "Model")}      ${config.provider}/${config.model}`,
+    `${localize(language, "上下文", "Context")}    ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · ${localize(language, "压缩点", "compact at")} ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
+    `${localize(language, "认证", "Auth")}      ${authState(config) === "configured" ? localize(language, "已配置", "configured") : localize(language, "缺少 API Key", "missing API key")}`,
+    `${localize(language, "审批", "Approval")}      ${config.autoApprove ? localize(language, "自动，危险操作除外", "automatic except dangerous") : localize(language, "按风险询问", "risk-based prompts")}`,
+    `${localize(language, "技能", "Skills")}      ${skillCount} ${localize(language, "个已安装", "installed")}`,
   ];
 
   const brand = [
     ...LOGO.map((line) => chalk.cyan.bold(line)),
-    `${chalk.bold(`Xiu ${version}`)} ${chalk.dim("- Build. Fix. Verify.")}`,
-    chalk.dim("修代码，也修工程。"),
+    `${chalk.bold(`Xiu ${version}`)} ${chalk.dim(localize(language, "- 构建 · 修复 · 验证", "- Build. Fix. Verify."))}`,
+    chalk.dim(localize(language, "修代码，也修工程。", "Build code. Fix systems.")),
     chalk.dim(fit(config.cwd, 38)),
   ];
   const panelRows = [...tips, "", ...session];
@@ -114,16 +117,16 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     const gap = 3;
     const leftWidth = Math.max(30, Math.min(38, Math.floor(width * 0.32)));
     const panelWidth = width - leftWidth - gap;
-    printSideBySide(brand, box("Quick start", panelRows, panelWidth), leftWidth, gap);
+    printSideBySide(brand, box(localize(language, "快速开始", "Quick start"), panelRows, panelWidth), leftWidth, gap);
   } else {
     for (const line of brand) console.log(line);
     console.log();
-    for (const line of box("Quick start", panelRows, width)) console.log(line);
+    for (const line of box(localize(language, "快速开始", "Quick start"), panelRows, width)) console.log(line);
   }
 
-  console.log(chalk.green("Tips"));
-  console.log(chalk.dim("  /help commands  |  /status stats  |  /compact context  |  /exit quit"));
-  console.log(chalk.dim("  Add AGENTS.md or XIU.md to teach Xiu your project conventions.\n"));
+  console.log(chalk.green(localize(language, "提示", "Tips")));
+  console.log(chalk.dim(localize(language, "  /help 命令  |  /status 状态  |  /compact 压缩  |  /exit 退出", "  /help commands  |  /status stats  |  /compact context  |  /exit quit")));
+  console.log(chalk.dim(localize(language, "  添加 AGENTS.md 或 XIU.md，告诉 Xiu 项目规范。\n", "  Add AGENTS.md or XIU.md to teach Xiu your project conventions.\n")));
 }
 
 export function formatPromptDashboard(input: {
@@ -137,7 +140,9 @@ export function formatPromptDashboard(input: {
   agents?: number;
   backgroundTasks?: number;
   phase?: string;
+  language?: UiLanguage;
 }): string {
+  const language = input.language ?? "en-US";
   const columns = process.stdout.columns || 100;
   const ratio = Math.min(1, input.contextTokens / Math.max(1, input.contextLimit));
   const filled = Math.round(ratio * 12);
@@ -147,7 +152,7 @@ export function formatPromptDashboard(input: {
   const agents = input.agents ? ` | ${input.agents} agents` : "";
   const background = input.backgroundTasks ? ` | ${input.backgroundTasks} bg` : "";
   const phase = input.phase ? ` | ${input.phase}` : "";
-  const left = `${input.planMode ? "Plan" : "Auto"} | ${input.model} | ctx [${bar}] ${percent} | ${input.skills} skills${mcp}${agents}${background}${phase}`;
+  const left = `${input.planMode ? localize(language, "规划", "Plan") : localize(language, "自动", "Auto")} | ${input.model} | ${localize(language, "上下文", "ctx")} [${bar}] ${percent} | ${input.skills} ${localize(language, "技能", "skills")}${mcp}${agents}${background}${phase}`;
   const fittedLeft = fit(left, Math.max(20, Math.floor(columns * 0.72)));
   const available = Math.max(8, columns - textWidth(fittedLeft) - 3);
   return chalk.dim(`${fittedLeft} | ${fit(input.cwd, available)}`);

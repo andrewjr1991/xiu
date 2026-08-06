@@ -124,3 +124,16 @@ test("running task summary keeps concise narration while hidden logs can be disc
   assert.equal(view.drain(), "");
   assert.deepEqual(view.completionSummary(), { message: "Done - verified", success: true });
 });
+
+test("Chinese task view localizes progress, actions, and footer controls", () => {
+  const view = new RunningTaskView(256_000, "zh-CN");
+  view.setTurn(3);
+  view.setPhase("思考中");
+  view.recordImportantAction("验证通过：npm test");
+  const footer = formatRunningInputFooter(view, 0, 0, "自动 | model");
+  assert.match(footer, /运行中：轮次 3/);
+  assert.match(footer, /进度：自动/);
+  assert.match(footer, /当前：思考中/);
+  assert.match(footer, /Ctrl\+O 显示详情/);
+  assert.deepEqual(view.receiptLines(), ["  √ 验证通过：npm test"]);
+});

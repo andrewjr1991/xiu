@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { localize, type UiLanguage } from "./i18n.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -331,11 +332,11 @@ export class McpManager {
   tools(): AgentTool[] { return [...this.activeTools]; }
   status(): McpServerStatus[] { return this.serverStatuses.map((item) => ({ ...item })); }
 
-  summary(): string {
-    if (!this.serverStatuses.length) return "No MCP servers configured.";
+  summary(language: UiLanguage = "en-US"): string {
+    if (!this.serverStatuses.length) return localize(language, "未配置 MCP 服务器。", "No MCP servers configured.");
     return this.serverStatuses.map((server) => server.state === "connected"
-      ? `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`
-      : `${server.name}: failed - ${server.error}`).join("\n");
+      ? localize(language, `${server.name}：已连接（${server.tools} 个工具）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`)
+      : localize(language, `${server.name}：连接失败 - ${server.error}`, `${server.name}: failed - ${server.error}`)).join("\n");
   }
 
   async close(): Promise<void> {

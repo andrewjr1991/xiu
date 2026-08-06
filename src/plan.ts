@@ -1,4 +1,5 @@
 import type { AgentTool } from "./types.js";
+import { localize, type UiLanguage } from "./i18n.js";
 
 export type PlanStepStatus = "pending" | "in_progress" | "completed" | "blocked";
 
@@ -19,7 +20,7 @@ export class TaskPlanManager {
   private current?: TaskPlan;
   private planMode = false;
 
-  constructor(initial?: TaskPlan, planMode = false) {
+  constructor(initial?: TaskPlan, planMode = false, private language: UiLanguage = "en-US") {
     this.current = initial;
     this.planMode = planMode;
   }
@@ -44,15 +45,16 @@ export class TaskPlanManager {
   }
 
   setMode(enabled: boolean): void { this.planMode = enabled; }
+  setLanguage(language: UiLanguage): void { this.language = language; }
   mode(): boolean { return this.planMode; }
   snapshot(): TaskPlan | undefined { return this.current ? structuredClone(this.current) : undefined; }
 
   format(): string {
-    if (!this.current) return `${this.planMode ? "Plan mode: ON" : "Plan mode: OFF"}\nNo task plan yet.`;
-    const icon: Record<PlanStepStatus, string> = { pending: "[ ]", in_progress: "[>]", completed: "[x]", blocked: "[!]" };
+    if (!this.current) return `${localize(this.language, "规划模式", "Plan mode")}: ${this.planMode ? localize(this.language, "开启", "ON") : localize(this.language, "关闭", "OFF")}\n${localize(this.language, "尚无任务计划。", "No task plan yet.")}`;
+    const icon: Record<PlanStepStatus, string> = { pending: "○", in_progress: "→", completed: "√", blocked: "!" };
     return [
-      `Plan mode: ${this.planMode ? "ON (read-only)" : "OFF"}`,
-      `Goal: ${this.current.goal}`,
+      `${localize(this.language, "规划模式", "Plan mode")}: ${this.planMode ? localize(this.language, "开启（只读）", "ON (read-only)") : localize(this.language, "关闭", "OFF")}`,
+      `${localize(this.language, "目标", "Goal")}: ${this.current.goal}`,
       ...this.current.steps.map((step) => `${icon[step.status]} ${step.id} ${step.title}${step.note ? ` - ${step.note}` : ""}`),
     ].join("\n");
   }

@@ -65,3 +65,22 @@ test("prompt dashboard remains within a narrow terminal with all status segments
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
   }
 });
+
+test("Chinese startup screen is localized and never reaches the terminal wrap column", () => {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalColumns = process.stdout.columns;
+  console.log = (...values: unknown[]) => lines.push(values.join(" "));
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value: 120 });
+  try {
+    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\中文项目", autoApprove: true, language: "zh-CN" }, "0.8.5", 14);
+  } finally {
+    console.log = originalLog;
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+  }
+  const output = lines.join("\n");
+  assert.match(output, /快速开始/);
+  assert.match(output, /当前会话/);
+  assert.match(output, /自动，危险操作除外/);
+  for (const line of lines) assert.ok(terminalDisplayWidth(line) <= 117, `line may wrap at terminal edge: ${line}`);
+});

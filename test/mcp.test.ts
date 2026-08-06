@@ -39,6 +39,7 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
     controller.abort();
     await assert.rejects(pending, /cancelled/);
     assert.match(manager.summary(), /test: connected \(2 tools\)/);
+    assert.match(manager.summary("zh-CN"), /test：已连接（2 个工具）/);
   } finally {
     await manager.close();
     await fs.rm(workspace, { recursive: true, force: true });

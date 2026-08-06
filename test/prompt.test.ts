@@ -17,3 +17,11 @@ test("system prompt identifies 静然 as Xiu's developer and rejects provider at
   assert.match(prompt, /use verify_output with explicit required and forbidden content/);
   assert.match(prompt, /Treat @\.xiu\/attachments references as user-provided attachments/);
 });
+
+test("Chinese language mode governs all user-visible model output", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-prompt-language-"));
+  const prompt = await buildSystemPrompt(cwd, undefined, "zh-CN");
+  assert.match(prompt, /Use Simplified Chinese for every user-facing response/);
+  assert.match(prompt, /progress update, plan goal and step title, visible reasoning summary/);
+  assert.match(prompt, /Never expose private chain-of-thought/);
+});

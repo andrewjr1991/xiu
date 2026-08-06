@@ -57,7 +57,7 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.deepEqual(changedPaths, ["answer.txt"]);
   assert.equal(changes[0]?.additions, 1);
   assert.equal(changes[0]?.deletions, 0);
-  assert.deepEqual(changes[0]?.preview, ["+ done"]);
+  assert.deepEqual(changes[0]?.preview, []);
   assert.equal(outcome, "unverified");
   assert.equal(agent.status().outcome, "unverified");
   const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const MAX_TEXT_DETAIL_BYTES = 1_000_000;
-const MAX_PREVIEW_LINES = 6;
+const MAX_PREVIEW_LINES = 4;
 const MAX_PREVIEW_WIDTH = 140;
 
 export type WorkspaceFileChangeKind = "created" | "modified" | "deleted";
@@ -22,6 +22,7 @@ export interface WorkspaceFileChange {
   bytesBefore: number;
   bytesAfter: number;
   preview: string[];
+  hunk?: string;
 }
 
 export interface WorkspaceChangeNotice {
@@ -80,15 +81,14 @@ export function summarizeTextChange(pathname: string, before: WorkspaceFileSnaps
   let additions: number | undefined;
   let deletions: number | undefined;
   let preview: string[] = [];
+  let hunk: string | undefined;
 
   if (!before.exists && newLines) {
     additions = newLines.length;
     deletions = 0;
-    preview = newLines.slice(0, MAX_PREVIEW_LINES).map((line) => clippedLine("+", line));
   } else if (!after.exists && oldLines) {
     additions = 0;
     deletions = oldLines.length;
-    preview = oldLines.slice(0, MAX_PREVIEW_LINES).map((line) => clippedLine("-", line));
   } else if (oldLines && newLines) {
     const removed = unmatchedLines(oldLines, newLines);
     const added = unmatchedLines(newLines, oldLines);
@@ -98,10 +98,13 @@ export function summarizeTextChange(pathname: string, before: WorkspaceFileSnaps
       ...removed.slice(0, Math.ceil(MAX_PREVIEW_LINES / 2)).map((line) => clippedLine("-", line)),
       ...added.slice(0, Math.floor(MAX_PREVIEW_LINES / 2)).map((line) => clippedLine("+", line)),
     ];
+    const oldStart = removed.length ? oldLines.indexOf(removed[0]!) + 1 : 0;
+    const newStart = added.length ? newLines.indexOf(added[0]!) + 1 : 0;
+    if (oldStart || newStart) hunk = `@@ -${oldStart || oldLines.length} +${newStart || newLines.length} @@`;
     if (!preview.length && before.content !== after.content) preview = [clippedLine("~", "content order or line endings changed")];
   }
 
-  return { path: pathname, kind, additions, deletions, bytesBefore: before.bytes, bytesAfter: after.bytes, preview };
+  return { path: pathname, kind, additions, deletions, bytesBefore: before.bytes, bytesAfter: after.bytes, preview, ...(hunk ? { hunk } : {}) };
 }
 
 export async function captureWorkspaceFiles(cwd: string, paths: string[]): Promise<Map<string, WorkspaceFileSnapshot>> {

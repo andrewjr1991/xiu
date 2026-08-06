@@ -24,3 +24,8 @@ test("model catalog de-duplicates provider and built-in model ids", () => {
   assert.equal(models.filter((model) => model.id === "agnes-2.5-flash").length, 1);
   assert.equal(models[0]?.source, "current");
 });
+
+test("model catalog localizes the current-model description", () => {
+  const models = selectableModels("agnes", "agnes-2.5-flash", [], "zh-CN");
+  assert.equal(models[0]?.description, "当前会话模型");
+});

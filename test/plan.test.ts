@@ -15,8 +15,8 @@ test("task plan validates and formats live step state", async () => {
     { id: "stream", title: "Add streaming", status: "completed" },
     { id: "plan", title: "Add plan mode", status: "in_progress" },
   ]);
-  assert.match(manager.format(), /\[x\] stream/);
-  assert.match(manager.format(), /\[>\] plan/);
+  assert.match(manager.format(), /√ stream/);
+  assert.match(manager.format(), /→ plan/);
   assert.throws(() => manager.update("bad", [
     { id: "a", title: "A", status: "in_progress" },
     { id: "b", title: "B", status: "in_progress" },

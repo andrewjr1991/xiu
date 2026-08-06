@@ -1,4 +1,5 @@
 import type { ProviderName } from "./config.js";
+import { localize, type UiLanguage } from "./i18n.js";
 import type { AvailableModel } from "./types.js";
 
 const BUILTIN_MODELS: Record<ProviderName, AvailableModel[]> = {
@@ -9,10 +10,10 @@ const BUILTIN_MODELS: Record<ProviderName, AvailableModel[]> = {
 
 const NON_CHAT_MODEL = /embedding|moderation|whisper|transcri|speech|tts|dall-e|image|video|sora|rerank/i;
 
-export function selectableModels(provider: ProviderName, current: string, discovered: AvailableModel[] = []): AvailableModel[] {
+export function selectableModels(provider: ProviderName, current: string, discovered: AvailableModel[] = [], language: UiLanguage = "en-US"): AvailableModel[] {
   const candidates = discovered.filter((model) => model.id && !NON_CHAT_MODEL.test(model.id));
   const combined: AvailableModel[] = [
-    { id: current, name: current, description: "Current session model", source: "current" },
+    { id: current, name: current, description: localize(language, "当前会话模型", "Current session model"), source: "current" },
     ...candidates,
     ...BUILTIN_MODELS[provider],
   ];

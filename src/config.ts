@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveContextProfile, type ContextWindowSource } from "./context.js";
+import { defaultLanguage, normalizeLanguage, type UiLanguage } from "./i18n.js";
 
 export type ProviderName = "openai" | "anthropic" | "agnes";
 
@@ -29,6 +30,7 @@ export interface AgentConfig {
   agentConcurrency?: number;
   /** Internal session-log namespace. CLI user sessions use the default `sessions`. */
   sessionNamespace?: string;
+  language?: UiLanguage;
 }
 
 export function resolveConfig(options: {
@@ -47,6 +49,7 @@ export function resolveConfig(options: {
   contextLimit?: string;
   contextWindow?: string;
   agentConcurrency?: string;
+  language?: string;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
   if (provider !== "openai" && provider !== "anthropic" && provider !== "agnes") {
@@ -103,6 +106,7 @@ export function resolveConfig(options: {
 
   const baseURL = options.baseURL
     ?? (provider === "agnes" ? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1" : process.env.OPENAI_BASE_URL);
+  const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE) ?? defaultLanguage();
 
   return {
     provider,
@@ -118,5 +122,6 @@ export function resolveConfig(options: {
     capabilities,
     ...context,
     agentConcurrency,
+    language,
   };
 }
