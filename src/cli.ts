@@ -13,6 +13,7 @@ import { resolveConfig } from "./config.js";
 import { createProvider } from "./providers.js";
 import { createMediaTools } from "./media-tools.js";
 import { McpManager } from "./mcp.js";
+import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
@@ -40,6 +41,10 @@ const slashCommands: SlashCommand[] = [
   { name: "/skills install", description: "Install a local or HTTPS Git skill package" },
   { name: "/mcp", description: "Show connected MCP servers and tools" },
   { name: "/mcp reload", description: "Reload user and project MCP configuration" },
+  { name: "/agents", description: "Show multi-agent runs and task status" },
+  { name: "/agents cancel", description: "Cancel one agent task" },
+  { name: "/agents retry", description: "Retry one interrupted or failed agent" },
+  { name: "/agents integrate", description: "Review and integrate a Worktree agent" },
   { name: "/status", description: "Show tokens, calls, time, and index stats" },
   { name: "/clear", description: "Start a new conversation session" },
   { name: "/help", description: "Show all commands" },
@@ -65,6 +70,7 @@ const program = new Command()
   .option("--list-sessions", "list resumable sessions in this workspace")
   .option("--context-limit <tokens>", "estimated context tokens before automatic compaction", "60000")
   .option("--max-turns <number>", "agent loop safety limit", "30")
+  .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
   .parse();
@@ -186,15 +192,13 @@ async function main(): Promise<void> {
 
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
-    const baseTools = [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(config)];
-    const tools = [...baseTools, ...mcpManager.tools()];
-    const provider = createProvider(config);
-
-    const agent = new Agent(
-      config,
-      provider,
-      tools,
-      async (request) => {
+    let approvalQueue = Promise.resolve();
+    const approveRequest = async (request: Parameters<ConstructorParameters<typeof Agent>[3]>[0]): Promise<boolean> => {
+      let release!: () => void;
+      const previous = approvalQueue;
+      approvalQueue = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
         if (config.autoApprove && request.risk !== "dangerous") return true;
         status.stop();
         if (!process.stdin.isTTY) return false;
@@ -205,10 +209,99 @@ async function main(): Promise<void> {
             : chalk.magenta("[execute]");
         if (request.preview) console.log(`${chalk.dim("Proposed change:")}\n${request.preview}\n`);
         const answer = await askQuestion(`${riskLabel} Allow Xiu to ${request.description}? [y/N] `);
-        const approved = /^(y|yes)$/i.test(answer.trim());
-        if (approved) status.start(`Running ${request.description}`);
-        return approved;
+        return /^(y|yes)$/i.test(answer.trim());
+      } finally {
+        release();
+      }
+    };
+
+    const visibleAgentStates = new Map<string, string>();
+    const coordinator = new MultiAgentCoordinator(
+      config.cwd,
+      async (task: SubagentTask, context) => {
+        const childConfig = {
+          ...config,
+          cwd: context.cwd,
+          maxTurns: task.maxTurns ?? config.maxTurns,
+          capabilities: config.capabilities ? { ...config.capabilities } : undefined,
+          sessionNamespace: "agent-sessions",
+        };
+        const childIndex = new ProjectIndex(context.cwd);
+        await childIndex.initialize();
+        const childPlan = new TaskPlanManager(undefined, task.mode === "shared_readonly");
+        const childCheckpoint = new CheckpointManager(context.cwd);
+        const candidateTools = [...builtinTools, ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)];
+        const childTools = selectSubagentTools(candidateTools, task.mode);
+        const childAgent = new Agent(
+          childConfig,
+          createProvider(childConfig),
+          childTools,
+          approveRequest,
+          {
+            onModelStart: (turn) => context.reportProgress(`Thinking - turn ${turn}`),
+            onToolStart: (name, description) => context.reportProgress(`${name}: ${description}`),
+            onToolProgress: (name, message) => context.reportProgress(`${name}: ${message}`),
+            onRetry: (message) => context.reportProgress(message),
+          },
+          undefined,
+          childIndex,
+          childPlan,
+          childCheckpoint,
+          skillRegistry,
+        );
+        const cancel = () => childAgent.cancel();
+        context.signal.addEventListener("abort", cancel, { once: true });
+        try {
+          const dependencyContext = context.dependencyResults.length
+            ? `\n\nCompleted dependency results:\n${context.dependencyResults.map((item) => `[${item.id}]\n${item.result}`).join("\n\n")}`
+            : "";
+          const roleGuidance = task.role === "explorer"
+            ? "Investigate only. Return concrete file paths, evidence, risks, and a recommended approach. Do not modify files."
+            : task.role === "reviewer"
+              ? "Review critically. Find correctness, safety, regression, and test gaps. Do not modify files."
+              : task.role === "tester"
+                ? "Analyze verification needs and use only the tools available under your safety mode. Report exact evidence and limitations."
+                : "Implement the scoped change only inside your isolated Worktree. Run relevant verification and summarize every changed file.";
+          const result = await childAgent.run(`You are the ${task.role} specialist for a parent Xiu agent.\nGoal: ${task.title}\n\n${task.instructions}\n\nRole requirements: ${roleGuidance}${dependencyContext}`);
+          const childStatus = childAgent.status();
+          return {
+            result,
+            stats: {
+              modelCalls: childStatus.stats.modelCalls,
+              toolCalls: childStatus.stats.toolCalls,
+              inputTokens: childStatus.stats.inputTokens,
+              outputTokens: childStatus.stats.outputTokens,
+              activeMs: childStatus.stats.activeMs,
+            },
+          };
+        } finally {
+          context.signal.removeEventListener("abort", cancel);
+        }
       },
+      {
+        onTaskUpdate: (run, task) => {
+          const key = `${run.id}:${task.id}`;
+          if (visibleAgentStates.get(key) === task.status) return;
+          visibleAgentStates.set(key, task.status);
+          status.stop();
+          const color = task.status === "completed" ? chalk.green : task.status === "failed" || task.status === "blocked" ? chalk.red : chalk.cyan;
+          console.log(color(`[agent ${task.id}] ${task.status}`), chalk.dim(`${task.role} - ${task.title}`));
+        },
+        onRunUpdate: (run) => console.log(chalk.cyan(`Multi-agent run ${run.id} ${run.status}.\n`)),
+      },
+      config.agentConcurrency,
+    );
+    await coordinator.initialize();
+    const coordinatorTools = createMultiAgentTools(coordinator);
+    const baseTools = [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(config), ...coordinatorTools];
+    const tools = [...baseTools, ...mcpManager.tools()];
+    const provider = createProvider(config);
+
+    const agent = new Agent(
+      config,
+      provider,
+      tools,
+      approveRequest,
       {
         onModelStart: (turn) => status.start(`Thinking - turn ${turn}`),
         onModelEnd: () => status.stop(),
@@ -440,6 +533,36 @@ async function main(): Promise<void> {
         }
         continue;
       }
+      if (task === "/agents" || task.startsWith("/agents ")) {
+        const parts = task.split(/\s+/);
+        try {
+          if (parts.length === 1) {
+            const runs = coordinator.list();
+            console.log(runs.length ? `${runs.map(formatAgentRun).join("\n\n")}\n` : chalk.dim("No multi-agent runs.\n"));
+          } else if (parts[1] === "cancel" && parts[2] && parts[3]) {
+            const cancelled = await coordinator.cancel(parts[2], parts[3]);
+            console.log(chalk.yellow(`Agent ${cancelled.id} is ${cancelled.status}.\n`));
+          } else if (parts[1] === "retry" && parts[2] && parts[3]) {
+            console.log(`${formatAgentRun(await coordinator.retry(parts[2], parts[3]))}\n`);
+          } else if (parts[1] === "integrate" && parts[2] && parts[3]) {
+            const preview = await coordinator.diff(parts[2], parts[3]);
+            console.log(`${chalk.dim("Proposed Agent patch:")}\n${preview}\n`);
+            const answer = await askQuestion(chalk.yellow("[write]") + ` Integrate this Agent patch into ${config.cwd}? [y/N] `);
+            if (!/^(y|yes)$/i.test(answer.trim())) console.log(chalk.dim("Agent integration cancelled.\n"));
+            else {
+              console.log(chalk.green(`${await coordinator.integrate(parts[2], parts[3])}\n`));
+              projectIndex.invalidate();
+            }
+          } else if (parts.length === 2) {
+            console.log(`${formatAgentRun(coordinator.get(parts[1]))}\n`);
+          } else {
+            console.log(chalk.yellow("Usage: /agents [run-id] | /agents cancel|retry|integrate <run-id> <task-id>\n"));
+          }
+        } catch (error) {
+          console.error(chalk.red(`Agent command failed: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
       if (task === "/model" || task.startsWith("/model ")) {
         console.log(chalk.dim(`Use /models to choose a model. Current: ${agent.status().model}\n`));
         continue;
@@ -458,11 +581,12 @@ async function main(): Promise<void> {
           `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,
           `Index: ${current.index?.files ?? 0} files${current.index?.truncated ? " (truncated)" : ""}`,
           `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
+          `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`,
         ].join("\n") + "\n");
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/status             Show session, token, call, time, and index stats\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/status             Show session, token, call, time, and index stats\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {

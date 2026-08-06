@@ -4,7 +4,7 @@
 
 Xiu is a small autonomous coding agent for the terminal. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.5 adds an extensibility layer: stdio MCP servers, namespaced external tools, user/project configuration, live reload, cancellation propagation, and permission-aware risk mapping. It also includes the streamed execution, persistent planning, checkpoints, resumable context, multimodal routing, and Skill system from earlier releases.
+Version 0.6 adds goal-oriented multi-agent orchestration: validated dependency graphs, parallel specialist agents, isolated Git Worktrees for implementation, per-agent cancellation and retry, persisted recovery, status and token reporting, and conflict-checked integration. It retains the MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -39,6 +39,11 @@ Version 0.5 adds an extensibility layer: stdio MCP servers, namespaced external 
 - Automatic technology-stack, package-manager, test, lint, typecheck, and build detection
 - Token, elapsed-time, model-call, tool-call, context, and compaction statistics
 - Unit tests for workspace confinement, approvals, safe edits, and the agent loop
+- Explorer, Implementer, Reviewer, and Tester specialist roles with independent context and budgets
+- Dependency-aware scheduling with up to eight concurrent agents (three by default)
+- Read-only shared-workspace agents that cannot access write, execute, dangerous, or dynamic-risk tools
+- Git Worktree isolation for implementation agents, with Diff preview and `git apply --check` integration
+- Persisted multi-agent state, interrupted-task recovery, individual cancellation/retry, elapsed time, and Token statistics
 
 ## Install
 
@@ -81,7 +86,7 @@ Start a persistent interactive session (conversation context is retained between
 xiu
 ```
 
-Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/tasks`, `/diff`, `/status`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/status`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
 
 Open an interactive picker for saved sessions in the current project after closing the terminal:
 
@@ -118,6 +123,11 @@ Interactive session commands:
 /skills install ... install from a local path or HTTPS Git repository
 /mcp                show MCP server connections and tool counts
 /mcp reload         reload user and project MCP configuration
+/agents             show all saved multi-agent runs
+/agents <run>       show one run and every specialist task
+/agents cancel ...  cancel one task without stopping unrelated agents
+/agents retry ...   retry a failed, cancelled, blocked, or interrupted task
+/agents integrate ... preview and integrate a completed Worktree task
 /status             session id, context, tokens, calls, time, and index size
 /clear              start a separate new session
 /exit               close Xiu
@@ -126,6 +136,22 @@ Interactive session commands:
 Xiu estimates the active context continuously and compacts it into a continuation brief before the configured limit. The default threshold is 60,000 estimated tokens and can be changed with `--context-limit` or `XIU_CONTEXT_LIMIT`.
 
 The interactive prompt has a slash-command palette: typing `/` opens all commands immediately, further characters filter the list, Up/Down changes the highlighted command, Tab completes it, and Enter selects it.
+
+## Multi-agent orchestration
+
+For goals with genuinely independent investigation, implementation, review, or test work, Xiu can create a dependency graph of specialist agents. Each agent receives a bounded task, its own conversation context, turn budget, elapsed-time counter, and Token statistics. Independent tasks run concurrently; dependent tasks start only after their prerequisites complete.
+
+Explorer and Reviewer tasks use `shared_readonly` mode by default. Their tool registry contains only tools declared statically read-only, and Plan mode adds a second enforcement boundary. Implementer tasks use `worktree` mode by default. Xiu creates them under `.xiu/worktrees/` on a dedicated `xiu/agent-*` Git branch, so their edits cannot overwrite the main workspace or another agent.
+
+Use `/agents` after or between tasks to inspect persisted runs. A completed implementation is not merged automatically. Xiu or the user must review its Diff and explicitly integrate it:
+
+```text
+/agents
+/agents <run-id>
+/agents integrate <run-id> <task-id>
+```
+
+Integration first runs `git apply --check`; conflicts leave the main workspace untouched and preserve the Worktree. Xiu never automatically deletes Agent Worktrees in v0.6. After integration, the parent Agent still reviews the result and runs normal project verification. If Xiu exits while agents are running, their persisted state becomes `interrupted`; use `/agents retry <run-id> <task-id>` to continue that task.
 
 `/models` asks the active provider for its available model catalog, filters out obvious embedding, speech, image, video, and moderation-only endpoints, and opens a keyboard-driven picker. This works with OpenAI-compatible local gateways as well as cloud providers. If the provider does not implement model listing, Xiu falls back to its built-in default plus the model already active in the session. Model changes are persisted with the resumable session.
 
@@ -236,6 +262,7 @@ Useful options:
 --list-sessions             list sessions in this project
 --context-limit <tokens>    automatic compaction threshold (default: 60000)
 --max-turns <number>        safety limit (default: 30)
+--agent-concurrency <n>     concurrent specialist limit, 1-8 (default: 3)
 -y, --yes                   approve writes/execution except dangerous actions
 ```
 
@@ -293,17 +320,18 @@ When `--yes` is absent, Xiu asks before writes and project execution. Read-only 
 ## Architecture
 
 ```text
-CLI -> Agent loop -> text provider
-          |              |
-       live plan     streamed output
-          |
+CLI -> Parent Agent -> task graph -> specialist Agents
+          |                            |-- shared read-only workspace
+          |                            `-- isolated Git Worktrees
+       live plan                                |
+          |                              reviewed integration
      Tool registry -> filesystem / shell / Git / MCP
+          |                 |
+     checkpoints       capability router
+          |                 |
+     JSONL session     vision / image / video
           |
-     checkpoints -> diff / confirmed restore
-          |
-     capability router -> vision / image / video APIs
-          |
-     JSONL session log
+   persisted Agent runs
 ```
 
 Key extension points are `ModelProvider` and `AgentTool` in `src/types.ts`. A provider translates the common conversation into a model API; a tool publishes JSON Schema and executes against a constrained workspace context.
@@ -324,5 +352,7 @@ npm run build
 - Precise checkpoint restore currently covers Xiu's focused file tools and generated outputs; arbitrary shell-command side effects require Git or project-specific recovery.
 - MCP v0.5 currently supports stdio transport; Streamable HTTP, OAuth discovery, resources, prompts, and sampling are future extensions.
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
+- Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
+- v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
 
 These are the natural next milestones after validating the core loop.

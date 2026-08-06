@@ -21,6 +21,9 @@ export interface AgentConfig {
   proxy?: string;
   capabilities?: CapabilityModels;
   contextLimit?: number;
+  agentConcurrency?: number;
+  /** Internal session-log namespace. CLI user sessions use the default `sessions`. */
+  sessionNamespace?: string;
 }
 
 export function resolveConfig(options: {
@@ -37,6 +40,7 @@ export function resolveConfig(options: {
   videoModel?: string;
   unifiedModel?: string;
   contextLimit?: string;
+  agentConcurrency?: string;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
   if (provider !== "openai" && provider !== "anthropic" && provider !== "agnes") {
@@ -55,6 +59,10 @@ export function resolveConfig(options: {
   const contextLimit = Number(options.contextLimit ?? process.env.XIU_CONTEXT_LIMIT ?? 60_000);
   if (!Number.isInteger(contextLimit) || contextLimit < 4_000) {
     throw new Error("context-limit must be an integer of at least 4000 tokens");
+  }
+  const agentConcurrency = Number(options.agentConcurrency ?? process.env.XIU_AGENT_CONCURRENCY ?? 3);
+  if (!Number.isInteger(agentConcurrency) || agentConcurrency < 1 || agentConcurrency > 8) {
+    throw new Error("agent-concurrency must be an integer from 1 to 8");
   }
 
   const proxy = options.proxy ?? (provider === "agnes" ? process.env.AGNES_PROXY : undefined);
@@ -100,5 +108,6 @@ export function resolveConfig(options: {
     proxy,
     capabilities,
     contextLimit,
+    agentConcurrency,
   };
 }

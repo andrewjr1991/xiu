@@ -20,6 +20,7 @@ Xiu 是一个运行在终端中的 AI 编码 Agent。你可以用自然语言告
 - 分析图片，或使用支持的模型生成图片和视频。
 - 安装 Skills，为特定工作流增加指导。
 - 接入 MCP Server，扩展外部工具。
+- 把复杂目标拆给多个 Explorer、Implementer、Reviewer 和 Tester Agent 并行处理。
 
 Xiu 不是完全隔离的云端沙箱。它使用当前操作系统账号访问文件和运行命令，因此必须认真阅读权限提示，只在可信项目中使用。
 
@@ -273,6 +274,59 @@ xiu --yes
 ```text
 /plan off
 ```
+
+### 10.1 多 Agent 并行任务
+
+遇到可以独立推进的调查、实现、审查或测试工作时，Xiu 的主 Agent 会按需要建立任务依赖图。不要为了一个简单问题强行使用多个 Agent；并行最适合三个以上互不依赖的代码区域、需要独立审查，或调查和实现可以明确分工的任务。
+
+四种角色的默认行为：
+
+| 角色 | 默认隔离 | 用途 |
+| --- | --- | --- |
+| Explorer | 共享工作区，只读 | 定位文件、理解架构、收集证据 |
+| Reviewer | 共享工作区，只读 | 检查正确性、安全、回归和测试缺口 |
+| Tester | 共享工作区，只读 | 分析验证范围和报告证据；执行受安全模式限制 |
+| Implementer | 独立 Git Worktree | 修改代码并运行相关验证 |
+
+查看全部多 Agent 运行：
+
+```text
+/agents
+```
+
+查看一个运行的角色、状态、耗时、Token、错误和结果：
+
+```text
+/agents <运行ID>
+```
+
+只取消一个任务，不影响其他 Agent：
+
+```text
+/agents cancel <运行ID> <任务ID>
+```
+
+重试失败、取消、阻塞或终端关闭时中断的任务：
+
+```text
+/agents retry <运行ID> <任务ID>
+```
+
+Implementer 的改动不会自动进入主工作区。审查 Diff 并确认集成：
+
+```text
+/agents integrate <运行ID> <任务ID>
+```
+
+集成前 Xiu 会显示完整补丁并运行冲突检查。冲突时主工作区不会发生部分修改，Worktree 会保留在 `.xiu/worktrees/` 中用于人工处理。v0.6 不自动删除 Worktree 或分支。集成成功后仍要运行测试并人工审查。
+
+默认最多同时运行 3 个 Agent，可在启动时设置 1 到 8：
+
+```powershell
+xiu --agent-concurrency 4
+```
+
+也可使用环境变量 `XIU_AGENT_CONCURRENCY`。所有子 Agent 继承主 Agent 的审批策略；只读 Agent 无法看到写入、执行、dangerous 或动态风险工具，`--yes` 仍不会自动批准 dangerous 操作。
 
 ## 十一、会话、历史和上下文
 
@@ -556,6 +610,11 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `/skills install ...` | 安装本地或 HTTPS Git Skill |
 | `/mcp` | 查看 MCP 连接与工具数 |
 | `/mcp reload` | 重载 MCP 配置 |
+| `/agents` | 查看所有多 Agent 运行 |
+| `/agents <运行ID>` | 查看一个运行的详细状态 |
+| `/agents cancel <运行ID> <任务ID>` | 单独取消一个 Agent |
+| `/agents retry <运行ID> <任务ID>` | 重试可恢复任务 |
+| `/agents integrate <运行ID> <任务ID>` | 审查并集成 Worktree 修改 |
 | `/status` | 查看模型、Token、调用和耗时 |
 | `/clear` | 开始新会话 |
 | `/help` | 显示帮助 |
@@ -579,6 +638,7 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `--list-sessions` | 列出工作区会话 |
 | `--context-limit <Token>` | 自动压缩阈值，默认 60000 |
 | `--max-turns <次数>` | 单任务最大 Agent 轮数，默认 30 |
+| `--agent-concurrency <数量>` | 并发子 Agent 上限，1 到 8，默认 3 |
 | `-y, --yes` | 自动批准非危险写入和执行 |
 | `--version` | 显示版本 |
 | `--help` | 显示命令行帮助 |

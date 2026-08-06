@@ -69,3 +69,9 @@ test("context limit is configurable and validated", () => {
   assert.equal(resolveConfig({ contextLimit: "12000" }).contextLimit, 12000);
   assert.throws(() => resolveConfig({ contextLimit: "3999" }), /at least 4000/);
 });
+
+test("multi-agent concurrency is bounded", () => {
+  assert.equal(resolveConfig({ provider: "openai", agentConcurrency: "4" }).agentConcurrency, 4);
+  assert.throws(() => resolveConfig({ provider: "openai", agentConcurrency: "0" }), /agent-concurrency/);
+  assert.throws(() => resolveConfig({ provider: "openai", agentConcurrency: "9" }), /agent-concurrency/);
+});

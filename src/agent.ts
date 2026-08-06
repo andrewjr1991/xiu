@@ -107,7 +107,9 @@ export class Agent {
     this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog());
     if (!this.sessionPath) {
       this.sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
-      this.sessionPath = path.join(this.config.cwd, ".xiu", "sessions", `${this.sessionId}.jsonl`);
+      const namespace = this.config.sessionNamespace ?? "sessions";
+      if (!/^[a-zA-Z0-9_-]+$/.test(namespace)) throw new Error("Invalid session namespace.");
+      this.sessionPath = path.join(this.config.cwd, ".xiu", namespace, `${this.sessionId}.jsonl`);
     }
     this.checkpointManager?.setSession(this.sessionId!);
     await fs.mkdir(path.dirname(this.sessionPath), { recursive: true });

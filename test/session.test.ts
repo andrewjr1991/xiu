@@ -120,3 +120,12 @@ test("session discovery includes legacy Forge session directories", async () => 
   assert.equal(restored.model, "agnes-old");
   assert.match(restored.messages[1]?.content ?? "", /legacy answer/);
 });
+
+test("internal subagent sessions do not appear in the user resume list", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-subagent-session-"));
+  const provider: ModelProvider = { async complete() { return { text: "internal", toolCalls: [], raw: {} }; } };
+  await new Agent({ ...config(cwd), sessionNamespace: "agent-sessions" }, provider, [], async () => true).run("internal task");
+  assert.equal((await listSessions(cwd)).length, 0);
+  const internal = await fs.readdir(path.join(cwd, ".xiu", "agent-sessions"));
+  assert.equal(internal.length, 1);
+});
