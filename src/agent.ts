@@ -20,6 +20,7 @@ export interface AgentEvents {
   onText?: (text: string) => void;
   onTextDelta?: (text: string) => void;
   onTextStreamEnd?: () => void;
+  onAssistantTurn?: (text: string, hasToolCalls: boolean) => void;
   onToolStart?: (name: string, description: string, details: { changesWorkspace: boolean; verification: boolean }) => void;
   onToolProgress?: (name: string, message: string) => void;
   onToolEnd?: (name: string, result: string) => void;
@@ -201,6 +202,7 @@ export class Agent {
       this.recordUsage(response.usage, response.text);
       if (response.text && !streamed) this.events.onText?.(response.text);
       if (streamed && response.text) this.events.onTextStreamEnd?.();
+      if (response.text) this.events.onAssistantTurn?.(response.text, response.toolCalls.length > 0);
       this.messages.push({ role: "assistant", content: response.text, raw: response.raw, toolCalls: response.toolCalls });
       await this.log(this.sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, usage: response.usage });
 

@@ -88,7 +88,8 @@ export function classifyCommand(command: string): ToolRisk {
 
 export function looksLikeVerification(command: string): boolean {
   const namedCheck = /(^|\s)(test|tests|lint|check|typecheck|build|verify|validate)(\s|$|:)/i.test(command)
-    || /\b(tsc\b|pytest\b|vitest\b|jest\b|eslint\b|cargo\s+test\b|go\s+test\b)/i.test(command);
+    || /\b(tsc\b|pytest\b|vitest\b|jest\b|eslint\b|cargo\s+test\b|go\s+test\b)/i.test(command)
+    || /验证|校验/.test(command);
   const verifierScript = /(?:^|[\\/\s])(?:test|tests|check|verify|validate)(?:[_-][^\\/\s]+)?\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command)
     || /(?:^|[\\/\s])[^\\/\s]+[_-](?:test|tests|check|verify|validate)\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command);
   return namedCheck || verifierScript;

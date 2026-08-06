@@ -8,6 +8,8 @@ Version 0.8 starts Xiu's large-project intelligence work with a reliability-firs
 
 Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate. While a task runs, the input area now keeps a visible progress summary with completed/current/pending steps, the current and next action, and the latest changed file. `Ctrl+O` switches that summary to detailed tool activity.
 
+Version 0.8.2 uses unambiguous `√`, `→`, and `○` progress symbols, surfaces concise model phase updates during long tasks, recognizes Chinese inline validation commands, and keeps hidden tool logs hidden when a task ends. The terminal now closes with only the final answer and completion summary; detailed evidence remains available through Xiu's activity and session logs.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters

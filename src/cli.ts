@@ -235,8 +235,7 @@ async function main(): Promise<void> {
         activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
         status.stop();
         activeQueuedInputController?.abort();
-        const buffered = runningTaskView?.drain();
-        if (buffered) process.stdout.write(buffered.endsWith("\n") ? buffered : `${buffered}\n`);
+        runningTaskView?.discard();
         if (!process.stdin.isTTY) return false;
         if (request.preview) console.log(`${chalk.dim("Proposed change:")}\n${request.preview}\n`);
         const selected = await selectTerminalOption(`${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`, [
@@ -360,6 +359,9 @@ async function main(): Promise<void> {
           emitWrite(text);
         },
         onTextStreamEnd: () => emitWrite("\n\n"),
+        onAssistantTurn: (text, hasToolCalls) => {
+          if (hasToolCalls) runningTaskView?.narrate(text);
+        },
         onToolStart: (name, description, details) => {
           activeToolActivity = activities.start("tool", name, description);
           runningTaskView?.beginTool(name, description, details.changesWorkspace, details.verification);
@@ -398,7 +400,8 @@ async function main(): Promise<void> {
           runningTaskView?.markFinishing();
           const verification = summary.changed ? (summary.verified ? "verified" : "verification noted") : "no changes";
           const message = `${summary.outcome === "completed" ? "Done" : "Stopped unverified"} - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`;
-          emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
+          if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
+          else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
       },
       restored,
@@ -455,7 +458,9 @@ async function main(): Promise<void> {
         runningTaskView = view;
         let settled = false;
         let failure: unknown;
+        let finalResponse = "";
         const runPromise = agent.run(current.text)
+          .then((response) => { finalResponse = response; })
           .catch((error) => { failure = error; })
           .finally(() => {
             settled = true;
@@ -556,8 +561,10 @@ async function main(): Promise<void> {
           activeQueuedInputController = undefined;
         }
         runningTaskView = undefined;
-        const transcript = view.drain();
-        if (transcript) process.stdout.write(transcript.endsWith("\n") ? transcript : `${transcript}\n`);
+        view.discard();
+        if (finalResponse.trim()) console.log(`${finalResponse.trim()}\n`);
+        const completion = view.completionSummary();
+        if (completion) console.log(completion.success ? chalk.green(completion.message) : chalk.yellow(completion.message));
         if (!failure && agent.status().outcome === "unverified") failure = new Error("The task changed files but no verification passed.");
         if (failure && !exitRequested) {
           console.error(chalk.red(`Task stopped: ${failure instanceof Error ? failure.message : String(failure)}\n`));

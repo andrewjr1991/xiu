@@ -37,9 +37,11 @@ test("agent executes tools and continues until the model finishes", async () => 
   const provider = new ScriptedProvider();
   const events: string[] = [];
   const changedPaths: string[] = [];
+  const narratedTurns: string[] = [];
   let outcome = "";
   const agent = new Agent(config, provider, builtinTools, async () => true, {
     onToolStart: (name) => events.push(name),
+    onAssistantTurn: (text, hasToolCalls) => { if (hasToolCalls) narratedTurns.push(text); },
     onWorkspaceChange: (change) => changedPaths.push(...change.paths),
     onTaskComplete: (summary) => { outcome = summary.outcome; },
   });
@@ -47,6 +49,7 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.equal(result, "Completed after reviewing verification limits.");
   assert.equal(await fs.readFile(path.join(cwd, "answer.txt"), "utf8"), "done");
   assert.deepEqual(events, ["write_file"]);
+  assert.deepEqual(narratedTurns, ["I will create the file."]);
   assert.deepEqual(changedPaths, ["answer.txt"]);
   assert.equal(outcome, "unverified");
   assert.equal(agent.status().outcome, "unverified");

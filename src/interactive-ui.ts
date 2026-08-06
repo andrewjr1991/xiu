@@ -224,9 +224,9 @@ export function editorFrameLines(
     lines.push(chalk.dim("-".repeat(Math.max(19, Math.min(lineWidth, 120)))));
     for (const footerLine of footer.split("\n")) {
       const clipped = truncateDisplay(stripAnsi(footerLine), lineWidth);
-      if (/^\s*\[x\]/.test(clipped)) lines.push(chalk.green(clipped));
-      else if (/^\s*\[>\]|^Now:/.test(clipped)) lines.push(chalk.cyan(clipped));
-      else if (/^\s*\[!\]/.test(clipped)) lines.push(chalk.red(clipped));
+      if (/^\s*√/.test(clipped)) lines.push(chalk.green(clipped));
+      else if (/^\s*→|^Now:|^Update:/.test(clipped)) lines.push(chalk.cyan(clipped));
+      else if (/^\s*!/.test(clipped)) lines.push(chalk.red(clipped));
       else if (/^Changed:/.test(clipped)) lines.push(chalk.yellow(clipped));
       else if (/^(?:Plan|Progress):/.test(clipped)) lines.push(chalk.white(clipped));
       else lines.push(chalk.dim(clipped));

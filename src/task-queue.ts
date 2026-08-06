@@ -89,6 +89,8 @@ export class RunningTaskView {
   private currentPlan?: TaskPlan;
   private automaticStage: AutomaticStage = "analyzing";
   private changes: Array<{ timestamp: number; text: string }> = [];
+  private latestNarration = "";
+  private completion?: { message: string; success: boolean };
 
   constructor(private readonly maxCharacters = 256_000) {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new Error("Running task output limit must be a positive integer.");
@@ -124,6 +126,24 @@ export class RunningTaskView {
     if (!text || this.changes.at(-1)?.text === text) return;
     this.changes.push({ timestamp: Date.now(), text });
     if (this.changes.length > 12) this.changes.shift();
+  }
+
+  narrate(text: string): void {
+    const normalized = text
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/[#*_`>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return;
+    this.latestNarration = normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+  }
+
+  setCompletion(message: string, success: boolean): void {
+    this.completion = { message: message.trim(), success };
+  }
+
+  completionSummary(): { message: string; success: boolean } | undefined {
+    return this.completion ? { ...this.completion } : undefined;
   }
 
   markFinishing(): void {
@@ -186,6 +206,11 @@ export class RunningTaskView {
     return output;
   }
 
+  discard(): void {
+    this.buffer = "";
+    this.truncated = false;
+  }
+
   private advanceAutomaticStage(stage: AutomaticStage): void {
     const currentIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === this.automaticStage);
     const nextIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === stage);
@@ -194,6 +219,7 @@ export class RunningTaskView {
 
   private summaryLines(): string[] {
     const lines = this.currentPlan ? this.planSummaryLines(this.currentPlan) : this.automaticSummaryLines();
+    if (this.latestNarration) lines.push(`Update: ${this.latestNarration}`);
     const latestChange = this.changes.at(-1)?.text;
     if (latestChange) lines.push(`Changed: ${latestChange}`);
     return lines;
@@ -230,7 +256,7 @@ export class RunningTaskView {
   }
 
   private stepIcon(status: PlanStepStatus): string {
-    return ({ pending: "[ ]", in_progress: "[>]", completed: "[x]", blocked: "[!]" } as const)[status];
+    return ({ pending: "○", in_progress: "→", completed: "√", blocked: "!" } as const)[status];
   }
 }
 

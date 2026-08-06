@@ -62,7 +62,7 @@ test("running input footer exposes phase, queue, and cancellation semantics", ()
   assert.match(footer, /3 queued/);
   assert.match(footer, /1 steering/);
   assert.match(footer, /Ctrl\+O show details/);
-  assert.match(footer, /\[>\] Inspect relevant files/);
+  assert.match(footer, /→ Inspect relevant files/);
   assert.match(footer, /Next: Implement changes/);
   assert.match(footer, /Auto \| model/);
 });
@@ -98,9 +98,20 @@ test("running task summary shows explicit plan, current and next steps, and file
   view.recordWorkspaceChange({ tool: "apply_patch", paths: ["src/task-queue.ts"], description: "patch progress UI" });
   const summary = view.progressLines().join("\n");
   assert.match(summary, /Plan: 1\/3 completed/);
-  assert.match(summary, /\[x\] Inspect current UI/);
-  assert.match(summary, /\[>\] Implement progress panel/);
+  assert.match(summary, /√ Inspect current UI/);
+  assert.match(summary, /→ Implement progress panel/);
   assert.match(summary, /Now: Implement progress panel/);
   assert.match(summary, /Next: Run regression tests/);
   assert.match(summary, /Changed: Modified: src\/task-queue\.ts/);
+});
+
+test("running task summary keeps concise narration while hidden logs can be discarded", () => {
+  const view = new RunningTaskView();
+  view.write("hidden tool log\n");
+  view.narrate("**已定位问题。** 接下来修改渲染逻辑。\n");
+  view.setCompletion("Done - verified", true);
+  assert.match(view.progressLines().join("\n"), /Update: 已定位问题。 接下来修改渲染逻辑。/);
+  view.discard();
+  assert.equal(view.drain(), "");
+  assert.deepEqual(view.completionSummary(), { message: "Done - verified", success: true });
 });

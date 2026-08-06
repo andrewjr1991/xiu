@@ -16,6 +16,7 @@ test("custom verifier scripts count as verification commands", () => {
   assert.equal(looksLikeVerification("python test/verify_prelabel.py"), true);
   assert.equal(looksLikeVerification("node scripts/check-output.js"), true);
   assert.equal(looksLikeVerification("python scripts/output_validate.py"), true);
+  assert.equal(looksLikeVerification("python -c \"print('验证结果: PASS')\""), true);
   assert.equal(looksLikeVerification("python prelabel_v4.py"), false);
 
   const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
