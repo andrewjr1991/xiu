@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.7 establishes Xiu's professional terminal interaction foundation: multiline Unicode editing, cursor navigation, `@` project-file completion, reverse history search, crash-safe draft recovery, responsive Resize rendering, keyboard approval menus, bounded activity summaries, and `/details` for full tool output. The v0.7.1 update keeps the editor available while an Agent works, queues follow-up requests in order, and safely suspends input for approvals. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.2 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, injects normal running-time input as steering for the active goal, reserves `/queue <task>` for explicit independent work, blocks repeated tool-call loops, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -50,8 +50,11 @@ Version 0.7 establishes Xiu's professional terminal interaction foundation: mult
 - Direction-key approval menus that default to deny
 - Bounded tool/Agent summaries with full output available through `/details`
 - Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
-- Editable `xiu[working]>` prompt with a bounded, ordered follow-up queue during active tasks
-- Immediate `/queue`, `/clear-queue`, `/cancel`, and `/exit` controls while an Agent is working
+- Editable `xiu[working]>` prompt that steers the active goal without waiting for completion
+- Live Turn/max-turn, elapsed-time, tool activity, and `Ctrl+O` expanded progress
+- Explicit `/queue <task>` scheduling plus immediate `/queue`, `/clear-queue`, `/cancel`, and `/exit` controls
+- Successful-call cycle detection that stops repeated reads/searches before the turn limit
+- Explicit completed, unverified, failed, and cancelled outcomes with failure-paused scheduling
 
 ## Install
 
@@ -138,9 +141,10 @@ Interactive session commands:
 /agents integrate ... preview and integrate a completed Worktree task
 /details            browse complete tool and Agent activity output
 /status             session id, context, tokens, calls, time, and index size
-/queue              show follow-ups queued during the active task
-/clear-queue        clear follow-ups that have not started
-/cancel             cancel the active task and preserve queued follow-ups
+/queue              show explicitly scheduled next tasks
+/queue <task>       schedule an independent task to run next
+/clear-queue        clear scheduled tasks that have not started
+/cancel             cancel the active task; choose what happens next
 /clear              start a separate new session
 /exit               close Xiu
 ```
@@ -151,7 +155,7 @@ The interactive prompt has a slash-command palette: typing `/` opens all command
 
 The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
 
-While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission is queued as the next request in the same conversation. The footer shows the active phase and queue length. `/queue` lists pending requests, `/clear-queue` removes pending requests, and `/cancel` or Ctrl+C cancels only the current request while preserving the queue. `/exit` cancels the current request and clears the queue before exiting. If an approval is needed, Xiu suspends and clears the working editor before showing the default-deny menu, then restores the draft afterward. The queue is process-local in v0.7.1; an unsubmitted draft and the active session survive restart, but pending queue items do not yet claim crash recovery.
+While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission amends the active goal and is injected before the next model turn. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows Turn/max-turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
 
 ## Multi-agent orchestration
 
@@ -370,6 +374,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
-- v0.7.1 provides queued input during an active Agent; fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
+- v0.7.2 provides live inline progress, steering, loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
 
 These are the natural next milestones after validating the core loop.

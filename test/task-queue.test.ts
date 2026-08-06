@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "../src/task-queue.js";
+import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "../src/task-queue.js";
 
 test("task input queue preserves order and returns defensive snapshots", () => {
   const queue = new TaskInputQueue(3);
@@ -13,12 +13,25 @@ test("task input queue preserves order and returns defensive snapshots", () => {
   assert.equal(queue.size, 0);
 });
 
+test("task input queue can prepend a retry ahead of existing work", () => {
+  const queue = new TaskInputQueue(3);
+  queue.enqueue("later");
+  queue.prepend("retry now");
+  assert.deepEqual(queue.list().map((item) => item.text), ["retry now", "later"]);
+});
+
 test("task input queue rejects empty and bounded overflow", () => {
   const queue = new TaskInputQueue(1);
   assert.throws(() => queue.enqueue("  "), /cannot be empty/i);
   queue.enqueue("one");
   assert.throws(() => queue.enqueue("two"), /full \(1\)/i);
   assert.equal(queue.clear(), 1);
+});
+
+test("failure recovery defaults to stopping and only offers continue for an explicit queue", () => {
+  assert.equal(failureRecoveryOptions(0)[0]?.value, "stop");
+  assert.deepEqual(failureRecoveryOptions(0).map((option) => option.value), ["stop", "retry"]);
+  assert.deepEqual(failureRecoveryOptions(2).map((option) => option.value), ["stop", "retry", "continue"]);
 });
 
 test("running task view buffers output and drains it exactly once", () => {
@@ -40,9 +53,24 @@ test("running task view bounds long output and explains truncation", () => {
 });
 
 test("running input footer exposes phase, queue, and cancellation semantics", () => {
-  const footer = formatRunningInputFooter("Thinking - turn 2", 3, "Auto | model");
-  assert.match(footer, /Thinking - turn 2/);
+  const view = new RunningTaskView();
+  view.setTurn(2, 30);
+  view.setPhase("Thinking");
+  view.activity("read_file rules.md");
+  const footer = formatRunningInputFooter(view, 3, 1, "Auto | model");
+  assert.match(footer, /Turn 2\/30/);
   assert.match(footer, /3 queued/);
-  assert.match(footer, /Ctrl\+C cancels current/);
+  assert.match(footer, /1 steering/);
+  assert.match(footer, /Ctrl\+O show progress/);
+  assert.match(footer, /read_file rules\.md/);
   assert.match(footer, /Auto \| model/);
+});
+
+test("running task details toggle expands recent activity", () => {
+  const view = new RunningTaskView();
+  view.activity("one");
+  view.activity("two");
+  assert.deepEqual(view.progressLines().map((line) => line.split(" ").at(-1)), ["two"]);
+  assert.equal(view.toggleDetails(), true);
+  assert.equal(view.progressLines().length, 2);
 });

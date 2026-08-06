@@ -17,6 +17,7 @@ export interface InteractiveInputOptions {
   initialValue?: string;
   onChange?: (value: string) => void;
   onCancel?: () => void;
+  onToggleDetails?: () => void;
   signal?: AbortSignal;
   refreshMs?: number;
 }
@@ -385,6 +386,11 @@ export async function readInteractiveInput(
         searchQuery = searchQuery ?? "";
         dismissed = false;
         selected = 0;
+        render();
+        return;
+      }
+      if (key.ctrl && key.name === "o") {
+        options.onToggleDetails?.();
         render();
         return;
       }

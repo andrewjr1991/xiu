@@ -35,13 +35,64 @@ test("agent executes tools and continues until the model finishes", async () => 
   const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
   const provider = new ScriptedProvider();
   const events: string[] = [];
-  const agent = new Agent(config, provider, builtinTools, async () => true, { onToolStart: (name) => events.push(name) });
+  let outcome = "";
+  const agent = new Agent(config, provider, builtinTools, async () => true, {
+    onToolStart: (name) => events.push(name),
+    onTaskComplete: (summary) => { outcome = summary.outcome; },
+  });
   const result = await agent.run("Create answer.txt");
   assert.equal(result, "Completed after reviewing verification limits.");
   assert.equal(await fs.readFile(path.join(cwd, "answer.txt"), "utf8"), "done");
   assert.deepEqual(events, ["write_file"]);
+  assert.equal(outcome, "unverified");
+  assert.equal(agent.status().outcome, "unverified");
   const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));
   assert.equal(sessions.length, 1);
+});
+
+test("steering submitted during a model call amends the active task on the next turn", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-steer-"));
+  await fs.writeFile(path.join(cwd, "input.txt"), "data");
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { release = resolve; });
+  let unblock!: () => void;
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (calls === 1) {
+        release();
+        await blocked;
+        return { text: "inspect", toolCalls: [{ id: "read-1", name: "read_file", input: { path: "input.txt" } }], raw: {} };
+      }
+      assert.ok(messages.some((message) => message.role === "user" && /amendment to the current goal/.test(message.content) && /also create JSONL/.test(message.content)));
+      return { text: "steered", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
+  const running = agent.run("process input");
+  await started;
+  assert.equal(agent.steer("also create JSONL"), true);
+  unblock();
+  assert.equal(await running, "steered");
+  assert.equal(agent.status().outcome, "completed");
+});
+
+test("agent stops a repeated successful tool-call loop before the turn limit", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-loop-"));
+  await fs.writeFile(path.join(cwd, "same.txt"), "same");
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls++;
+      return { text: "read again", toolCalls: [{ id: `read-${calls}`, name: "read_file", input: { path: "same.txt" } }], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 20, autoApprove: true }, provider, builtinTools, async () => true);
+  await assert.rejects(agent.run("inspect without looping"), /repeatedly revisiting/i);
+  assert.ok(calls < 20);
+  assert.equal(agent.status().outcome, "failed");
 });
 
 test("agent cancellation aborts an in-flight model request", async () => {

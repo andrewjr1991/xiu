@@ -7,6 +7,7 @@ import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlanManager } from "./plan.js";
 import type { CheckpointManager } from "./checkpoint.js";
 import { selectableModels } from "./model-catalog.js";
+import { ToolLoopGuard } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
@@ -28,8 +29,10 @@ export interface AgentEvents {
   onFailure?: (message: string) => void;
   onPlanUpdate?: (plan: string) => void;
   onCheckpoint?: (message: string) => void;
-  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; durationMs: number }) => void;
+  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number }) => void;
 }
+
+export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled";
 
 export class Agent {
   private messages: ConversationMessage[] = [];
@@ -39,6 +42,9 @@ export class Agent {
   private stats: SessionStats = emptySessionStats();
   private sessionId?: string;
   private repeatedFailures = new Map<string, number>();
+  private pendingSteering: string[] = [];
+  private lastRunOutcome: AgentRunOutcome = "idle";
+  private currentTurn = 0;
 
   constructor(
     private config: AgentConfig,
@@ -67,22 +73,38 @@ export class Agent {
     const startedAt = Date.now();
     const controller = new AbortController();
     this.activeController = controller;
+    this.lastRunOutcome = "running";
+    this.currentTurn = 0;
+    this.repeatedFailures.clear();
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
-      if (controller.signal.aborted) throw new Error("Task cancelled.");
+      if (controller.signal.aborted) {
+        this.lastRunOutcome = "cancelled";
+        throw new Error("Task cancelled.");
+      }
+      this.lastRunOutcome = "failed";
       throw error;
     } finally {
       this.stats.activeMs += Date.now() - startedAt;
       this.stats.estimatedTokens = estimateConversationTokens(this.messages);
       if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
       if (this.activeController === controller) this.activeController = undefined;
+      this.pendingSteering = [];
     }
   }
 
   cancel(): boolean {
     if (!this.activeController) return false;
     this.activeController.abort();
+    return true;
+  }
+
+  steer(text: string): boolean {
+    const normalized = text.trim();
+    if (!normalized || !this.activeController || this.activeController.signal.aborted) return false;
+    if (this.pendingSteering.length >= 20) return false;
+    this.pendingSteering.push(normalized);
     return true;
   }
 
@@ -135,8 +157,11 @@ export class Agent {
     let completionReminderSent = false;
     let planReminderSent = false;
     let toolCallCount = 0;
+    const loopGuard = new ToolLoopGuard();
     for (let turn = 1; turn <= this.config.maxTurns; turn++) {
+      this.currentTurn = turn;
       if (signal.aborted) throw new Error("Task cancelled.");
+      await this.applyPendingSteering(turn);
       if (estimateConversationTokens(this.messages) >= (this.config.contextLimit ?? 60_000)) {
         await this.compactWithSignal(signal, "automatic context limit");
       }
@@ -157,6 +182,7 @@ export class Agent {
       await this.log(this.sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, usage: response.usage });
 
       if (response.toolCalls.length === 0) {
+        if (await this.applyPendingSteering(turn)) continue;
         const unfinishedPlan = this.planManager?.snapshot()?.steps.some((step) => step.status === "pending" || step.status === "in_progress");
         if (unfinishedPlan && !this.planManager?.mode() && !planReminderSent) {
           const reminder = "Plan gate: the visible task plan still has pending or in-progress steps. Complete the work or update blocked steps with an explanation before finishing.";
@@ -166,19 +192,22 @@ export class Agent {
           planReminderSent = true;
           continue;
         }
-        if (workspaceChanged && !verificationAttempted && !completionReminderSent) {
-          const gate = "Completion gate: files changed but no verification has been attempted. Run a relevant test, typecheck, lint, or build now. If no automated check exists, inspect the diff and explicitly explain the limitation before finishing.";
+        if (workspaceChanged && !verifiedAfterChange && !completionReminderSent) {
+          const gate = `Completion gate: files changed but no verification has passed${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or explicit output validation now. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
           this.messages.push({ role: "user", content: gate });
           await this.log(this.sessionPath, { type: "completion_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
           completionReminderSent = true;
           continue;
         }
+        const outcome = workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
+        this.lastRunOutcome = outcome;
         this.events.onTaskComplete?.({
           turns: turn,
           toolCalls: toolCallCount,
           changed: workspaceChanged,
           verified: verifiedAfterChange,
+          outcome,
           durationMs: Date.now() - startedAt,
         });
         return response.text;
@@ -189,6 +218,7 @@ export class Agent {
         this.stats.toolCalls++;
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         let result: string;
+        let abortForLoop = false;
         if (!tool) {
           result = `Unknown tool: ${call.name}`;
         } else {
@@ -198,7 +228,11 @@ export class Agent {
             ? tool.changesWorkspace(call.input)
             : tool.changesWorkspace;
           const failureKey = `${call.name}:${JSON.stringify(call.input)}`;
-          if (this.planManager?.mode() && risk !== "read") {
+          const loop = loopGuard.observe(call.name, call.input);
+          abortForLoop = loop.abort;
+          if (loop.blocked) {
+            result = `Tool error: ${loop.reason}`;
+          } else if (this.planManager?.mode() && risk !== "read") {
             result = `Tool execution denied: plan mode is read-only. Update the plan or ask the user to turn plan mode off.`;
           } else if ((this.repeatedFailures.get(failureKey) ?? 0) >= 3) {
             result = "Tool error: the same operation already failed three times. Diagnose the cause or choose a different approach.";
@@ -236,10 +270,11 @@ export class Agent {
             this.projectIndex?.invalidate();
           }
           if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
-          if (tool.isVerification) verificationAttempted = true;
+          if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
         }
         this.messages.push({ role: "tool", content: result, toolCallId: call.id, toolName: call.name });
         await this.log(this.sessionPath, { type: "tool", turn, id: call.id, name: call.name, input: call.input, result });
+        if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
     }
     throw new Error(`Agent reached the ${this.config.maxTurns}-turn safety limit before completing the task.`);
@@ -251,6 +286,9 @@ export class Agent {
     this.sessionPath = undefined;
     this.sessionId = undefined;
     this.stats = emptySessionStats();
+    this.lastRunOutcome = "idle";
+    this.currentTurn = 0;
+    this.pendingSteering = [];
     this.planManager?.restore(undefined, false);
     this.checkpointManager?.clearSession();
   }
@@ -272,7 +310,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns: number; pendingSteering: number } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
@@ -281,6 +319,10 @@ export class Agent {
       contextLimit: this.config.contextLimit ?? 60_000,
       index: this.projectIndex?.status(),
       planMode: this.planManager?.mode() ?? false,
+      outcome: this.lastRunOutcome,
+      turn: this.currentTurn,
+      maxTurns: this.config.maxTurns,
+      pendingSteering: this.pendingSteering.length,
     };
   }
 
@@ -308,6 +350,9 @@ export class Agent {
     this.sessionId = restored.id;
     this.stats = restored.stats;
     this.system = undefined;
+    this.lastRunOutcome = "idle";
+    this.currentTurn = 0;
+    this.pendingSteering = [];
     if (restored.model) this.setModelInMemory(restored.model);
     this.planManager?.restore(restored.plan, restored.planMode);
     this.checkpointManager?.setSession(restored.id);
@@ -341,6 +386,23 @@ export class Agent {
     this.stats.inputTokens += usage?.inputTokens ?? estimateConversationTokens(this.messages);
     this.stats.outputTokens += usage?.outputTokens ?? Math.ceil(text.length / 4);
     this.stats.estimatedTokens = estimateConversationTokens(this.messages);
+  }
+
+  private async applyPendingSteering(turn: number): Promise<boolean> {
+    if (!this.pendingSteering.length) return false;
+    const items = this.pendingSteering.splice(0);
+    const content = `User steering received while the task was running. Treat this as an amendment to the current goal, not as an unrelated new task:\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
+    this.messages.push({ role: "user", content });
+    if (this.sessionPath) await this.log(this.sessionPath, { type: "steering", turn, items });
+    return true;
+  }
+
+  private isVerificationAttempt(toolName: string, input: Record<string, unknown>): boolean {
+    if (toolName === "verify_project") return true;
+    if (toolName !== "run_command") return false;
+    const command = String(input.command ?? "");
+    return /(?:^|\s)(?:test|typecheck|lint|build|check|verify|pytest|jest|vitest|tsc|eslint|cargo\s+test|go\s+test)(?:\s|$)/i.test(command)
+      || /npm(?:\.cmd)?\s+(?:run\s+)?(?:test|typecheck|lint|build|check|verify)\b/i.test(command);
   }
 
   private async compactWithSignal(signal: AbortSignal, reason: string): Promise<string> {

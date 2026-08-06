@@ -22,7 +22,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { listSessions, loadSession } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
-import { formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
+import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
@@ -50,7 +50,7 @@ const slashCommands: SlashCommand[] = [
   { name: "/agents integrate", description: "Review and integrate a Worktree agent" },
   { name: "/details", description: "Browse complete tool and Agent activity details" },
   { name: "/status", description: "Show tokens, calls, time, and index stats" },
-  { name: "/queue", description: "Show follow-ups queued while a task is running" },
+  { name: "/queue", description: "Show scheduled tasks; use /queue <task> to run one next" },
   { name: "/clear-queue", description: "Clear queued follow-ups while a task is running" },
   { name: "/cancel", description: "Cancel the task that is currently running" },
   { name: "/clear", description: "Start a new conversation session" },
@@ -300,6 +300,7 @@ async function main(): Promise<void> {
                 : "Implement the scoped change only inside your isolated Worktree. Run relevant verification and summarize every changed file.";
           const result = await childAgent.run(`You are the ${task.role} specialist for a parent Xiu agent.\nGoal: ${task.title}\n\n${task.instructions}\n\nRole requirements: ${roleGuidance}${dependencyContext}`);
           const childStatus = childAgent.status();
+          if (childStatus.outcome === "unverified") throw new Error(`Agent ${task.id} changed files but no verification passed.`);
           return {
             result,
             stats: {
@@ -347,7 +348,11 @@ async function main(): Promise<void> {
       tools,
       approveRequest,
       {
-        onModelStart: (turn) => startPhase(`Thinking - turn ${turn}`),
+        onModelStart: (turn) => {
+          runningTaskView?.setTurn(turn, config.maxTurns);
+          runningTaskView?.activity(`Model turn ${turn}/${config.maxTurns} started`);
+          startPhase("Thinking");
+        },
         onModelEnd: () => stopPhase(),
         onText: (text) => emitLine(`${text}\n`),
         onTextDelta: (text) => {
@@ -357,11 +362,13 @@ async function main(): Promise<void> {
         onTextStreamEnd: () => emitWrite("\n\n"),
         onToolStart: (name, description) => {
           activeToolActivity = activities.start("tool", name, description);
+          runningTaskView?.activity(`${name}: ${description}`);
           emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(description)}`);
           startPhase(`Running ${name}`);
         },
         onToolProgress: (name, message) => {
           if (activeToolActivity) activities.progress(activeToolActivity, message);
+          runningTaskView?.activity(`${name}: ${message}`);
           startPhase(`${name}: ${message}`);
         },
         onToolEnd: (_name, result) => {
@@ -370,6 +377,7 @@ async function main(): Promise<void> {
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
+          runningTaskView?.activity(`${_name}: ${failed ? "failed" : "finished"} - ${summary.slice(0, 100)}`);
           emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... (/details for full output)` : summary)}\n`);
         },
         onCompletionGate: () => emitLine(chalk.yellow("Verification required before completion.\n")),
@@ -377,13 +385,15 @@ async function main(): Promise<void> {
         onRetry: (message) => startPhase(message),
         onFailure: (message) => {
           stopPhase();
+          runningTaskView?.activity(`Failure: ${message}`);
           emitLine(chalk.red(`${message}\n`));
         },
         onPlanUpdate: (plan) => emitLine(`${chalk.cyan("Task plan updated")}\n${chalk.dim(plan)}\n`),
         onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
         onTaskComplete: (summary) => {
           const verification = summary.changed ? (summary.verified ? "verified" : "verification noted") : "no changes";
-          emitLine(chalk.green(`Done - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`));
+          const message = `${summary.outcome === "completed" ? "Done" : "Stopped unverified"} - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`;
+          emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
       },
       restored,
@@ -402,6 +412,7 @@ async function main(): Promise<void> {
 
     if (initialTask) {
       await agent.run(initialTask);
+      if (agent.status().outcome === "unverified") process.exitCode = 2;
       return;
     }
 
@@ -450,7 +461,7 @@ async function main(): Promise<void> {
           let cancelledFromKeyboard = false;
           const queuedDraft = await draftStore.load();
           const followUp = (await readInteractiveInput("xiu[working]> ", slashCommands, inputHistory, () => (
-            formatRunningInputFooter(view.phase(), queue.size, promptFooter())
+            formatRunningInputFooter(view, queue.size, agent.status().pendingSteering, promptFooter())
           ), {
             paths: projectIndex.paths("", 1_000),
             initialValue: queuedDraft,
@@ -459,17 +470,18 @@ async function main(): Promise<void> {
               cancelledFromKeyboard = true;
               agent.cancel();
             },
+            onToggleDetails: () => { view.toggleDetails(); },
             signal: inputController.signal,
             refreshMs: 250,
           })).trim();
           if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
           await draftStore.flush();
           await activeApproval;
-          if (settled) break;
           if (cancelledFromKeyboard) {
             console.log(chalk.yellow("Cancelling current task. Queued follow-ups are preserved.\n"));
             break;
           }
+          if (!followUp && settled) break;
           if (!followUp) continue;
           inputHistory.push(followUp);
 
@@ -492,6 +504,15 @@ async function main(): Promise<void> {
               : chalk.dim("The follow-up queue is empty.\n"));
             continue;
           }
+          if (followUp.startsWith("/queue ")) {
+            try {
+              const queued = queue.enqueue(followUp.slice("/queue ".length));
+              console.log(chalk.green(`Scheduled next ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`));
+            } catch (error) {
+              console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
+            }
+            continue;
+          }
           if (followUp === "/clear-queue") {
             const cleared = queue.clear();
             console.log(chalk.dim(`Cleared ${cleared} queued follow-up(s).\n`));
@@ -499,15 +520,25 @@ async function main(): Promise<void> {
           }
           if (followUp === "/status") {
             const currentStatus = agent.status();
-            console.log(chalk.dim(`Working: ${view.phase()} | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
+            console.log(chalk.dim(`Working: turn ${currentStatus.turn}/${currentStatus.maxTurns} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
+            continue;
+          }
+          if (followUp === "/details") {
+            const visible = view.toggleDetails();
+            console.log(chalk.dim(`Live progress ${visible ? "expanded" : "collapsed"}. Ctrl+O toggles it without submitting the prompt.\n`));
             continue;
           }
 
-          try {
-            const queued = queue.enqueue(followUp);
-            console.log(chalk.green(`Queued ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`));
-          } catch (error) {
-            console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
+          if (!settled && agent.steer(followUp)) {
+            view.activity(`User steering accepted: ${followUp.slice(0, 100)}`);
+            console.log(chalk.green(`Steering current task: ${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`));
+          } else {
+            try {
+              const queued = queue.enqueue(followUp);
+              console.log(chalk.green(`Current task already ended; scheduled ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`));
+            } catch (error) {
+              console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
+            }
           }
         }
 
@@ -519,8 +550,19 @@ async function main(): Promise<void> {
         runningTaskView = undefined;
         const transcript = view.drain();
         if (transcript) process.stdout.write(transcript.endsWith("\n") ? transcript : `${transcript}\n`);
-        if (failure) console.error(chalk.red(`Error: ${failure instanceof Error ? failure.message : String(failure)}\n`));
-        if (queue.size && !exitRequested) console.log(chalk.cyan(`Continuing with ${queue.size} queued follow-up(s).\n`));
+        if (!failure && agent.status().outcome === "unverified") failure = new Error("The task changed files but no verification passed.");
+        if (failure && !exitRequested) {
+          console.error(chalk.red(`Task stopped: ${failure instanceof Error ? failure.message : String(failure)}\n`));
+          const action = await selectTerminalOption("The current task did not complete. What next?", failureRecoveryOptions(queue.size));
+          if (action === "retry") {
+            queue.prepend(`Continue the unfinished task from the existing evidence. Do not restart the investigation or repeat successful reads. Original goal: ${current.text}`);
+          } else if (action !== "continue") {
+            const cleared = queue.clear();
+            if (cleared) console.log(chalk.dim(`Cleared ${cleared} scheduled task(s).\n`));
+          }
+        } else if (queue.size && !exitRequested) {
+          console.log(chalk.cyan(`Continuing with ${queue.size} explicitly scheduled task(s).\n`));
+        }
       }
       return exitRequested;
     };
@@ -760,6 +802,9 @@ async function main(): Promise<void> {
           `Session: ${current.sessionId ?? "not started"}`,
           `Model: ${current.model}`,
           `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`,
+          `Last outcome: ${current.outcome}`,
+          `Turn: ${current.turn || "-"}/${current.maxTurns}`,
+          `Pending steering: ${current.pendingSteering}`,
           `Messages: ${current.messages}`,
           `Context: ~${current.stats.estimatedTokens.toLocaleString()} / ${current.contextLimit.toLocaleString()} tokens`,
           `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
@@ -775,7 +820,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse complete tool and Agent activity output\n/status             Show session, token, call, time, and index stats\n/queue              Show follow-ups queued during the current task\n/clear-queue        Clear queued follow-ups\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse activity; toggle live progress while working\n/status             Show session, token, call, time, and index stats\n/queue              Show explicitly scheduled next tasks\n/queue <task>       Schedule an independent task to run next\n/clear-queue        Clear scheduled tasks\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {
