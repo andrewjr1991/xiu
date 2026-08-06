@@ -116,6 +116,8 @@ test("automatic compaction preserves the active primary task for the next model 
   assert.match(continuation, /ACTIVE TASK CONTRACT/);
   assert.match(continuation, new RegExp(primaryTask.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(continuation, /Next action: process 001\.html/);
+  assert.match(continuation, /TOOL EVIDENCE LEDGER/);
+  assert.match(continuation, /missing_tool/);
 });
 
 test("an active interactive agent can switch to a selected persisted session", async () => {

@@ -114,7 +114,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
       raw: event.raw,
       toolCalls: Array.isArray(event.toolCalls) ? event.toolCalls as ConversationMessage["toolCalls"] : undefined,
     });
-    else if (event.type === "tool") messages.push({ role: "tool", content: String(event.result ?? ""), toolCallId: String(event.id ?? ""), toolName: String(event.name ?? "") });
+    else if (event.type === "tool") messages.push({ role: "tool", content: String(event.contextResult ?? event.result ?? ""), toolCallId: String(event.id ?? ""), toolName: String(event.name ?? "") });
     else if (event.type === "completion_gate") messages.push({ role: "user", content: String(event.message ?? "") });
     else if (event.type === "compact") messages = [{ role: "user", content: String(event.context ?? event.summary ?? "") }];
     else if (event.type === "stats" && event.stats) stats = { ...stats, ...event.stats as Partial<SessionStats> };

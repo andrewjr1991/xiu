@@ -15,6 +15,8 @@ Version 0.8 starts Xiu's large-project intelligence work with a reliability-firs
 - Automatic retry for transient model failures before output begins
 - Structured context-checkpoint compaction that preserves the active task contract and continuation state
 - Bounded line and character paging for large, minified, or single-line text files
+- Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
+- UTF-8 Python child-process output on Windows PowerShell
 - Repeated tool-failure detection and error attribution
 - Adaptive startup dashboard with quick-start tips, model, approval, workspace, and skill count
 - Compact prompt footer with model, context usage, plan mode, skill count, and workspace

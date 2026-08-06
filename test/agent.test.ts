@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
+import { loadSession } from "../src/session.js";
 import { builtinTools } from "../src/tools.js";
-import type { AssistantTurn, ConversationMessage, ModelProvider, ToolDefinition } from "../src/types.js";
+import type { AgentTool, AssistantTurn, ConversationMessage, ModelProvider, ToolDefinition } from "../src/types.js";
 
 class ScriptedProvider implements ModelProvider {
   calls = 0;
@@ -122,6 +123,42 @@ test("agent can continue beyond 30 model turns when no explicit limit is configu
   assert.equal(await agent.run("finish a long task"), "completed after turn 30");
   assert.equal(calls, 31);
   assert.equal(agent.status().maxTurns, undefined);
+});
+
+test("agent keeps complete tool logs out of the model context after a bounded head and tail", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-tool-context-"));
+  const largeResult = `HEAD-${"A".repeat(40_000)}-${"B".repeat(40_000)}-TAIL`;
+  const tool: AgentTool = {
+    name: "large_result",
+    description: "Return a large diagnostic result.",
+    risk: "read",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    describe: () => "return large result",
+    async execute() { return largeResult; },
+  };
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (calls === 1) return { text: "inspect", toolCalls: [{ id: "large-1", name: "large_result", input: {} }], raw: {} };
+      const toolResult = messages.at(-1)?.content ?? "";
+      assert.ok(toolResult.length <= 33_000);
+      assert.match(toolResult, /^HEAD-/);
+      assert.match(toolResult, /tool output middle omitted/i);
+      assert.match(toolResult, /-TAIL$/);
+      return { text: "done", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
+  assert.equal(await agent.run("inspect a large result"), "done");
+  const restored = await loadSession(cwd);
+  const restoredTool = restored.messages.find((message) => message.role === "tool");
+  assert.ok((restoredTool?.content.length ?? 0) <= 33_000);
+  const sessionFile = (await fs.readdir(path.join(cwd, ".xiu", "sessions"))).at(0)!;
+  const events = (await fs.readFile(path.join(cwd, ".xiu", "sessions", sessionFile), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+  const toolEvent = events.find((event) => event.type === "tool");
+  assert.equal(toolEvent?.result, largeResult);
+  assert.equal(toolEvent?.contextResult, restoredTool?.content);
 });
 
 test("agent cancellation aborts an in-flight model request", async () => {

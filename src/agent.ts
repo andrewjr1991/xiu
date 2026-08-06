@@ -7,7 +7,7 @@ import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlanManager } from "./plan.js";
 import type { CheckpointManager } from "./checkpoint.js";
 import { selectableModels } from "./model-catalog.js";
-import { ToolLoopGuard } from "./loop-guard.js";
+import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
@@ -34,6 +34,14 @@ export interface AgentEvents {
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled";
 
+interface ToolEvidenceEntry {
+  signature: string;
+  name: string;
+  input: string;
+  outcome: string;
+  count: number;
+}
+
 export class Agent {
   private messages: ConversationMessage[] = [];
   private system?: string;
@@ -45,6 +53,7 @@ export class Agent {
   private pendingSteering: string[] = [];
   private steeringHistory: string[] = [];
   private primaryTask?: string;
+  private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private currentTurn = 0;
 
@@ -80,6 +89,7 @@ export class Agent {
     this.repeatedFailures.clear();
     this.primaryTask = task.trim();
     this.steeringHistory = [];
+    this.toolEvidence = [];
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
@@ -293,8 +303,18 @@ export class Agent {
           if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
         }
-        this.messages.push({ role: "tool", content: result, toolCallId: call.id, toolName: call.name });
-        await this.log(this.sessionPath, { type: "tool", turn, id: call.id, name: call.name, input: call.input, result });
+        this.recordToolEvidence(call.name, call.input, result);
+        const contextResult = this.boundToolContext(result);
+        this.messages.push({ role: "tool", content: contextResult, toolCallId: call.id, toolName: call.name });
+        await this.log(this.sessionPath, {
+          type: "tool",
+          turn,
+          id: call.id,
+          name: call.name,
+          input: call.input,
+          result,
+          ...(contextResult === result ? {} : { contextResult }),
+        });
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
     }
@@ -311,6 +331,7 @@ export class Agent {
     this.pendingSteering = [];
     this.steeringHistory = [];
     this.primaryTask = undefined;
+    this.toolEvidence = [];
     this.planManager?.restore(undefined, false);
     this.checkpointManager?.clearSession();
   }
@@ -377,6 +398,7 @@ export class Agent {
     this.pendingSteering = [];
     this.steeringHistory = [];
     this.primaryTask = undefined;
+    this.toolEvidence = [];
     if (restored.model) this.setModelInMemory(restored.model);
     this.planManager?.restore(restored.plan, restored.planMode);
     this.checkpointManager?.setSession(restored.id);
@@ -448,6 +470,9 @@ export class Agent {
       "",
       "CURRENT PLAN:",
       currentPlan,
+      "",
+      "TOOL EVIDENCE LEDGER (program-recorded; do not repeat completed calls without a concrete reason):",
+      this.formatToolEvidence(),
     ].join("\n");
     const transcript = this.messages.map((message) => {
       const label = message.role === "tool" ? `tool:${message.toolName ?? "unknown"}` : message.role;
@@ -511,6 +536,44 @@ export class Agent {
     if (normalized.length <= limit) return normalized;
     const marker = "\n\n[Checkpoint summary middle omitted to stay within the context budget.]\n\n";
     return `${normalized.slice(0, 16_000)}${marker}${normalized.slice(-8_000)}`;
+  }
+
+  private boundToolContext(result: string): string {
+    const limit = 32_000;
+    if (result.length <= limit) return result;
+    const marker = `\n\n[Tool output middle omitted from model context: ${result.length.toLocaleString()} characters total. Full output remains in the session log.]\n\n`;
+    const available = limit - marker.length;
+    const head = Math.ceil(available * 0.6);
+    const tail = available - head;
+    return `${result.slice(0, head)}${marker}${result.slice(-tail)}`;
+  }
+
+  private recordToolEvidence(name: string, input: Record<string, unknown>, result: string): void {
+    const signature = toolCallSignature(name, input);
+    const existingIndex = this.toolEvidence.findIndex((entry) => entry.signature === signature);
+    const safeInput = Object.fromEntries(Object.entries(input).map(([key, value]) => {
+      if (["content", "old_text", "new_text"].includes(key) && typeof value === "string") return [key, `<${value.length} characters>`];
+      return [key, value];
+    }));
+    const serialized = JSON.stringify(safeInput);
+    const outcome = result.replace(/\s+/g, " ").trim().slice(0, 240) || "empty result";
+    const entry: ToolEvidenceEntry = {
+      signature,
+      name,
+      input: serialized.length > 800 ? `${serialized.slice(0, 800)}...` : serialized,
+      outcome,
+      count: existingIndex >= 0 ? this.toolEvidence[existingIndex]!.count + 1 : 1,
+    };
+    if (existingIndex >= 0) this.toolEvidence.splice(existingIndex, 1);
+    this.toolEvidence.push(entry);
+    if (this.toolEvidence.length > 60) this.toolEvidence.shift();
+  }
+
+  private formatToolEvidence(): string {
+    if (!this.toolEvidence.length) return "No tool evidence recorded yet.";
+    return this.toolEvidence.slice(-40).map((entry) =>
+      `- ${entry.name} ${entry.input} => ${entry.outcome}${entry.count > 1 ? ` (completed ${entry.count} times)` : ""}`
+    ).join("\n");
   }
 
   private async requestModel(signal: AbortSignal): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {

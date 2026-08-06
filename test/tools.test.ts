@@ -48,6 +48,17 @@ test("read_file returns a bounded line page with an explicit continuation hint",
   assert.match(second, /260: line-260/);
 });
 
+test("read_file cannot bypass the bounded line window with a huge explicit end line", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-read-explicit-page-"));
+  await fs.writeFile(path.join(cwd, "huge.txt"), Array.from({ length: 900 }, (_, index) => `line-${index + 1}`).join("\n"), "utf8");
+  const tool = builtinTools.find((candidate) => candidate.name === "read_file")!;
+  const result = await executeTool(tool, { path: "huge.txt", start_line: 100, end_line: 900 }, { cwd, approve: async () => false });
+  assert.match(result, /^Lines 100-599 of 900/m);
+  assert.match(result, /599: line-599/);
+  assert.doesNotMatch(result, /600: line-600/);
+  assert.match(result, /start_line=600/);
+});
+
 test("read_file can page through a giant single-line file by character offset", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-read-character-"));
   const content = "A".repeat(70_000) + "TAIL-MARKER";
@@ -141,6 +152,15 @@ test("run_command preserves UTF-8 output from a Node child process", async (t) =
   const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
   const result = await executeTool(tool, { command: "node -e \"console.log('节点编码正常')\"" }, { cwd, approve: async () => true });
   assert.match(result, /节点编码正常/);
+});
+
+test("run_command forces UTF-8 output for Python children on Windows", async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-specific behavior");
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-python-encoding-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
+  const result = await executeTool(tool, { command: "python -c \"print('中文输出正常')\"" }, { cwd, approve: async () => true });
+  assert.match(result, /中文输出正常/);
+  assert.doesNotMatch(result, /UnicodeEncodeError/);
 });
 
 test("run_command allows operators inside a quoted JavaScript program", async (t) => {

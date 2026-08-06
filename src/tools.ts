@@ -10,6 +10,7 @@ import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 60_000;
 const DEFAULT_READ_LINES = 200;
+const MAX_READ_LINES = 500;
 const DEFAULT_READ_CHARACTERS = 20_000;
 
 function stringArg(input: Record<string, unknown>, name: string): string {
@@ -158,7 +159,7 @@ export const builtinTools: AgentTool[] = [
         start_line: { type: "integer", minimum: 1 },
         end_line: { type: "integer", minimum: 1 },
         start_character: { type: "integer", minimum: 0, description: "Zero-based character offset for minified or giant single-line files." },
-        max_characters: { type: "integer", minimum: 1, maximum: 60000, description: "Character window size; defaults to 20000 when character paging is used." },
+        max_characters: { type: "integer", minimum: 1, maximum: 20000, description: "Character window size; defaults to and cannot exceed 20000." },
       },
       required: ["path"], additionalProperties: false,
     },
@@ -170,7 +171,7 @@ export const builtinTools: AgentTool[] = [
       if (characterMode) {
         const start = typeof input.start_character === "number" ? Math.max(0, Math.floor(input.start_character)) : 0;
         const requested = typeof input.max_characters === "number" ? Math.floor(input.max_characters) : DEFAULT_READ_CHARACTERS;
-        const size = Math.max(1, Math.min(MAX_OUTPUT - 500, requested));
+        const size = Math.max(1, Math.min(DEFAULT_READ_CHARACTERS, requested));
         if (start >= content.length && content.length > 0) throw new Error(`start_character ${start} exceeds file length ${content.length}`);
         const endExclusive = Math.min(content.length, start + size);
         const body = content.slice(start, endExclusive);
@@ -182,9 +183,8 @@ export const builtinTools: AgentTool[] = [
       const lines = content.split(/\r?\n/);
       const start = typeof input.start_line === "number" ? Math.max(1, input.start_line) : 1;
       if (start > lines.length) throw new Error(`start_line ${start} exceeds file length ${lines.length} lines`);
-      const end = typeof input.end_line === "number"
-        ? Math.min(lines.length, Math.max(start, input.end_line))
-        : Math.min(lines.length, start + DEFAULT_READ_LINES - 1);
+      const requestedEnd = typeof input.end_line === "number" ? Math.max(start, input.end_line) : start + DEFAULT_READ_LINES - 1;
+      const end = Math.min(lines.length, requestedEnd, start + MAX_READ_LINES - 1);
       const body = lines.slice(start - 1, end).map((line, index) => `${start + index}: ${line}`).join("\n");
       const notices: string[] = [];
       if (end < lines.length) notices.push(`[PARTIAL view: lines ${start}-${end} of ${lines.length}; continue with start_line=${end + 1}]`);
@@ -337,7 +337,7 @@ export const builtinTools: AgentTool[] = [
       const args = isWindows ? ["-NoProfile", "-NonInteractive", "-Command", command] : ["-lc", command];
       const outputEncoding = isWindows ? await windowsConsoleEncoding() : "utf8";
       try {
-        const result = await execFileAsync(executable, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal });
+        const result = await execFileAsync(executable, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
         const stdout = decodeOutput(result.stdout, outputEncoding);
         const stderr = decodeOutput(result.stderr, outputEncoding);
         return truncate(`Exit code: 0\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
@@ -494,7 +494,7 @@ export const builtinTools: AgentTool[] = [
       const timeout = typeof input.timeout_ms === "number" ? input.timeout_ms : 120_000;
       const outputEncoding = process.platform === "win32" ? await windowsConsoleEncoding() : "utf8";
       try {
-        const result = await execFileAsync(executable, ["run", check], { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal });
+        const result = await execFileAsync(executable, ["run", check], { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
         return truncate(`Exit code: 0\n${decodeOutput(result.stdout, outputEncoding)}${result.stderr.length ? `\nSTDERR:\n${decodeOutput(result.stderr, outputEncoding)}` : ""}`.trim());
       } catch (error) {
         const failure = error as Error & { code?: string | number; stdout?: string | Buffer; stderr?: string | Buffer; killed?: boolean };
