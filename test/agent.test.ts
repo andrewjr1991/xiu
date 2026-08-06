@@ -36,15 +36,18 @@ test("agent executes tools and continues until the model finishes", async () => 
   const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
   const provider = new ScriptedProvider();
   const events: string[] = [];
+  const changedPaths: string[] = [];
   let outcome = "";
   const agent = new Agent(config, provider, builtinTools, async () => true, {
     onToolStart: (name) => events.push(name),
+    onWorkspaceChange: (change) => changedPaths.push(...change.paths),
     onTaskComplete: (summary) => { outcome = summary.outcome; },
   });
   const result = await agent.run("Create answer.txt");
   assert.equal(result, "Completed after reviewing verification limits.");
   assert.equal(await fs.readFile(path.join(cwd, "answer.txt"), "utf8"), "done");
   assert.deepEqual(events, ["write_file"]);
+  assert.deepEqual(changedPaths, ["answer.txt"]);
   assert.equal(outcome, "unverified");
   assert.equal(agent.status().outcome, "unverified");
   const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));

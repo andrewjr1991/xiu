@@ -360,9 +360,9 @@ async function main(): Promise<void> {
           emitWrite(text);
         },
         onTextStreamEnd: () => emitWrite("\n\n"),
-        onToolStart: (name, description) => {
+        onToolStart: (name, description, details) => {
           activeToolActivity = activities.start("tool", name, description);
-          runningTaskView?.activity(`${name}: ${description}`);
+          runningTaskView?.beginTool(name, description, details.changesWorkspace, details.verification);
           emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(description)}`);
           startPhase(`Running ${name}`);
         },
@@ -388,9 +388,14 @@ async function main(): Promise<void> {
           runningTaskView?.activity(`Failure: ${message}`);
           emitLine(chalk.red(`${message}\n`));
         },
-        onPlanUpdate: (plan) => emitLine(`${chalk.cyan("Task plan updated")}\n${chalk.dim(plan)}\n`),
+        onPlanUpdate: (plan) => {
+          runningTaskView?.setPlan(plan);
+          emitLine(`${chalk.cyan("Task plan updated")}\n${chalk.dim(planManager.format())}\n`);
+        },
+        onWorkspaceChange: (change) => runningTaskView?.recordWorkspaceChange(change),
         onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
         onTaskComplete: (summary) => {
+          runningTaskView?.markFinishing();
           const verification = summary.changed ? (summary.verified ? "verified" : "verification noted") : "no changes";
           const message = `${summary.outcome === "completed" ? "Done" : "Stopped unverified"} - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`;
           emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
@@ -445,6 +450,8 @@ async function main(): Promise<void> {
       while (queue.size && !exitRequested) {
         const current = queue.dequeue()!;
         const view = new RunningTaskView();
+        const existingPlan = planManager.snapshot();
+        view.setPlan(existingPlan?.steps.some((step) => step.status !== "completed") ? existingPlan : undefined);
         runningTaskView = view;
         let settled = false;
         let failure: unknown;
@@ -526,7 +533,7 @@ async function main(): Promise<void> {
           }
           if (followUp === "/details") {
             const visible = view.toggleDetails();
-            console.log(chalk.dim(`Live progress ${visible ? "expanded" : "collapsed"}. Ctrl+O toggles it without submitting the prompt.\n`));
+            console.log(chalk.dim(`Live view switched to ${visible ? "detailed tool activity" : "task step summary"}. Ctrl+O toggles it without submitting the prompt.\n`));
             continue;
           }
 

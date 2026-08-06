@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { TaskPlan, PlanStepStatus } from "./plan.js";
 
 export interface QueuedTaskInput {
   id: string;
@@ -7,6 +8,22 @@ export interface QueuedTaskInput {
 }
 
 export type FailureRecoveryAction = "stop" | "retry" | "continue";
+
+export interface WorkspaceChangeNotice {
+  tool: string;
+  paths: string[];
+  description: string;
+}
+
+type AutomaticStage = "analyzing" | "investigating" | "editing" | "verifying" | "finishing";
+
+const AUTOMATIC_STEPS: Array<{ stage: AutomaticStage; title: string }> = [
+  { stage: "analyzing", title: "Understand the task" },
+  { stage: "investigating", title: "Inspect relevant files" },
+  { stage: "editing", title: "Implement changes" },
+  { stage: "verifying", title: "Verify the result" },
+  { stage: "finishing", title: "Review and finish" },
+];
 
 export function failureRecoveryOptions(queued: number): Array<{ label: string; description: string; value: FailureRecoveryAction }> {
   return [
@@ -69,6 +86,9 @@ export class RunningTaskView {
   private readonly startedAt = Date.now();
   private detailed = false;
   private activities: Array<{ timestamp: number; text: string }> = [];
+  private currentPlan?: TaskPlan;
+  private automaticStage: AutomaticStage = "analyzing";
+  private changes: Array<{ timestamp: number; text: string }> = [];
 
   constructor(private readonly maxCharacters = 256_000) {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new Error("Running task output limit must be a positive integer.");
@@ -81,6 +101,33 @@ export class RunningTaskView {
   setTurn(turn: number, maximum?: number): void {
     this.currentTurn = turn;
     this.maximumTurns = maximum ?? 0;
+  }
+
+  setPlan(plan?: TaskPlan): void {
+    this.currentPlan = plan ? structuredClone(plan) : undefined;
+  }
+
+  beginTool(name: string, description: string, changesWorkspace = false, verification = false): void {
+    if (verification) this.advanceAutomaticStage("verifying");
+    else if (changesWorkspace) this.advanceAutomaticStage("editing");
+    else if (/^(?:read_file|list_files|search_text|project_info|git_status|git_diff|git_log|vision_analyze)/.test(name)) this.advanceAutomaticStage("investigating");
+    this.activity(`${name}: ${description}`);
+  }
+
+  recordWorkspaceChange(change: WorkspaceChangeNotice): void {
+    const paths = change.paths.length ? change.paths.join(", ") : change.description;
+    const action = change.tool === "write_file" ? "Wrote"
+      : change.tool === "replace_text" || change.tool === "apply_patch" ? "Modified"
+      : /^generate_(?:image|video)$/.test(change.tool) ? "Created"
+      : "Workspace operation";
+    const text = `${action}: ${paths}`.replace(/\s+/g, " ").trim();
+    if (!text || this.changes.at(-1)?.text === text) return;
+    this.changes.push({ timestamp: Date.now(), text });
+    if (this.changes.length > 12) this.changes.shift();
+  }
+
+  markFinishing(): void {
+    this.advanceAutomaticStage("finishing");
   }
 
   activity(text: string): void {
@@ -100,8 +147,8 @@ export class RunningTaskView {
   }
 
   progressLines(): string[] {
-    const count = this.detailed ? 8 : 1;
-    return this.activities.slice(-count).map((item) => {
+    if (!this.detailed) return this.summaryLines();
+    return this.activities.slice(-8).map((item) => {
       const elapsed = Math.max(0, Math.floor((item.timestamp - this.startedAt) / 1000));
       return `  +${elapsed}s ${item.text}`;
     });
@@ -138,6 +185,53 @@ export class RunningTaskView {
     this.truncated = false;
     return output;
   }
+
+  private advanceAutomaticStage(stage: AutomaticStage): void {
+    const currentIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === this.automaticStage);
+    const nextIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === stage);
+    if (nextIndex > currentIndex) this.automaticStage = stage;
+  }
+
+  private summaryLines(): string[] {
+    const lines = this.currentPlan ? this.planSummaryLines(this.currentPlan) : this.automaticSummaryLines();
+    const latestChange = this.changes.at(-1)?.text;
+    if (latestChange) lines.push(`Changed: ${latestChange}`);
+    return lines;
+  }
+
+  private planSummaryLines(plan: TaskPlan): string[] {
+    const completed = plan.steps.filter((step) => step.status === "completed").length;
+    const currentIndex = plan.steps.findIndex((step) => step.status === "in_progress");
+    const nextIndex = plan.steps.findIndex((step, index) => index > currentIndex && step.status === "pending");
+    const visible = plan.steps.length <= 6
+      ? plan.steps
+      : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 4);
+    const lines = [`Plan: ${completed}/${plan.steps.length} completed`];
+    for (const step of visible) lines.push(`  ${this.stepIcon(step.status)} ${step.title}${step.note ? ` - ${step.note}` : ""}`);
+    if (visible.length < plan.steps.length) lines.push(`  ... ${plan.steps.length - visible.length} more step(s)`);
+    const current = currentIndex >= 0 ? plan.steps[currentIndex] : undefined;
+    const next = nextIndex >= 0 ? plan.steps[nextIndex] : plan.steps.find((step) => step.status === "pending");
+    lines.push(`Now: ${current?.title ?? (completed === plan.steps.length ? "Final review" : this.currentPhase)}`);
+    if (next) lines.push(`Next: ${next.title}`);
+    return lines;
+  }
+
+  private automaticSummaryLines(): string[] {
+    const currentIndex = AUTOMATIC_STEPS.findIndex((step) => step.stage === this.automaticStage);
+    const lines = [`Progress: automatic ${currentIndex}/${AUTOMATIC_STEPS.length} completed`];
+    for (const [index, step] of AUTOMATIC_STEPS.entries()) {
+      const status: PlanStepStatus = index < currentIndex ? "completed" : index === currentIndex ? "in_progress" : "pending";
+      lines.push(`  ${this.stepIcon(status)} ${step.title}`);
+    }
+    lines.push(`Now: ${this.currentPhase}`);
+    const next = AUTOMATIC_STEPS[currentIndex + 1];
+    if (next) lines.push(`Next: ${next.title}`);
+    return lines;
+  }
+
+  private stepIcon(status: PlanStepStatus): string {
+    return ({ pending: "[ ]", in_progress: "[>]", completed: "[x]", blocked: "[!]" } as const)[status];
+  }
 }
 
 export function formatRunningInputFooter(view: RunningTaskView, queued: number, steering: number, baseFooter: string): string {
@@ -145,7 +239,7 @@ export function formatRunningInputFooter(view: RunningTaskView, queued: number, 
   const elapsed = Math.floor(view.elapsedMs() / 1000);
   const queue = queued ? `${queued} queued` : "queue empty";
   const steeringState = steering ? `${steering} steering` : "no steering";
-  const details = view.detailsVisible() ? "Ctrl+O hide progress" : "Ctrl+O show progress";
+  const details = view.detailsVisible() ? "Ctrl+O hide details" : "Ctrl+O show details";
   const turnLabel = turn.maximum ? `${turn.current || "-"}/${turn.maximum}` : `${turn.current || "-"}`;
   const headline = `Working: Turn ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
   return [headline, ...view.progressLines(), `${details} | Enter steers current | /queue <task> schedules next | Ctrl+C cancels`, baseFooter].join("\n");

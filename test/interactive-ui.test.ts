@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { acceptCandidate, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
   { name: "/resume", description: "resume" },
@@ -82,6 +83,25 @@ test("editor frame counts and clips every physical line in a multiline running f
   assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 35));
   assert.match(frame.lines.at(-2) ?? "", /\.\.\./);
   assert.match(frame.lines.at(-1) ?? "", /Auto/);
+});
+
+test("persistent task progress remains bounded in a narrow terminal", () => {
+  const view = new RunningTaskView();
+  view.setPlan({
+    goal: "Improve progress visibility",
+    updatedAt: new Date().toISOString(),
+    steps: [
+      { id: "inspect", title: "Inspect the current terminal rendering implementation", status: "completed" },
+      { id: "implement", title: "Implement a persistent progress summary", status: "in_progress" },
+      { id: "verify", title: "Verify narrow terminal rendering", status: "pending" },
+    ],
+  });
+  view.recordWorkspaceChange({ tool: "apply_patch", paths: ["src/interactive-ui.ts"], description: "patch UI" });
+  const footer = formatRunningInputFooter(view, 0, 0, "Auto | model");
+  const frame = editorFrameLines("xiu[working]> ", { value: "", cursor: 0 }, [], 0, footer, 38);
+  assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 37));
+  assert.ok(frame.lines.some((line) => /Plan: 1\/3/.test(line)));
+  assert.ok(frame.lines.some((line) => /Now: Implement/.test(line)));
 });
 
 test("path completion replaces only the active @ reference", () => {

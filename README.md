@@ -6,7 +6,7 @@ Xiu is an open-source autonomous coding agent for the terminal, developed by 静
 
 Version 0.8 starts Xiu's large-project intelligence work with a reliability-first context engine. Compaction now creates a structured checkpoint while deterministically preserving the authoritative primary goal, additive steering, and current plan. The next model resumes from recorded evidence and the next action instead of restarting discovery. Large text files are read in bounded line pages, while minified or giant single-line HTML/JSON can be paged by character offset with explicit continuation hints. It retains the professional terminal UI, multi-agent, MCP, planning, checkpoint, resumable-session, multimodal, and Skill systems from earlier releases.
 
-Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate.
+Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate. While a task runs, the input area now keeps a visible progress summary with completed/current/pending steps, the current and next action, and the latest changed file. `Ctrl+O` switches that summary to detailed tool activity.
 
 ## Features
 
@@ -20,6 +20,7 @@ Version 0.8.1 recognizes successful project-specific verifier scripts such as `v
 - Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
 - UTF-8 Python child-process output on Windows PowerShell
 - Repeated tool-failure detection and error attribution
+- Persistent live task progress with checked steps, current/next actions, and recent file changes
 - Adaptive startup dashboard with quick-start tips, model, approval, workspace, and skill count
 - Compact prompt footer with model, context usage, plan mode, skill count, and workspace
 - Xiu-native project/global skills with Claude-compatible discovery and on-demand loading

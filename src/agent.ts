@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
 import { buildSystemPrompt } from "./prompt.js";
 import type { ProjectIndex } from "./project-index.js";
-import type { TaskPlanManager } from "./plan.js";
+import type { TaskPlan, TaskPlanManager } from "./plan.js";
 import type { CheckpointManager } from "./checkpoint.js";
 import { selectableModels } from "./model-catalog.js";
 import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
@@ -20,14 +20,15 @@ export interface AgentEvents {
   onText?: (text: string) => void;
   onTextDelta?: (text: string) => void;
   onTextStreamEnd?: () => void;
-  onToolStart?: (name: string, description: string) => void;
+  onToolStart?: (name: string, description: string, details: { changesWorkspace: boolean; verification: boolean }) => void;
   onToolProgress?: (name: string, message: string) => void;
   onToolEnd?: (name: string, result: string) => void;
   onCompletionGate?: (message: string) => void;
   onCompaction?: (message: string) => void;
   onRetry?: (message: string) => void;
   onFailure?: (message: string) => void;
-  onPlanUpdate?: (plan: string) => void;
+  onPlanUpdate?: (plan: TaskPlan) => void;
+  onWorkspaceChange?: (change: { tool: string; paths: string[]; description: string }) => void;
   onCheckpoint?: (message: string) => void;
   onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number }) => void;
 }
@@ -252,11 +253,15 @@ export class Agent {
         if (!tool) {
           result = `Unknown tool: ${call.name}`;
         } else {
-          this.events.onToolStart?.(call.name, tool.describe(call.input));
+          const description = tool.describe(call.input);
           const risk = typeof tool.risk === "function" ? tool.risk(call.input) : tool.risk;
           const changesWorkspace = typeof tool.changesWorkspace === "function"
             ? tool.changesWorkspace(call.input)
             : tool.changesWorkspace;
+          this.events.onToolStart?.(call.name, description, {
+            changesWorkspace: Boolean(changesWorkspace),
+            verification: this.isVerificationAttempt(call.name, call.input),
+          });
           const failureKey = `${call.name}:${JSON.stringify(call.input)}`;
           const loop = loopGuard.observe(call.name, call.input);
           abortForLoop = loop.abort;
@@ -292,13 +297,15 @@ export class Agent {
           if (call.name === "update_task_plan" && !/^Tool error:/.test(result)) {
             const plan = this.planManager?.snapshot();
             if (plan) await this.log(this.sessionPath, { type: "plan", plan });
-            this.events.onPlanUpdate?.(result);
+            if (plan) this.events.onPlanUpdate?.(plan);
           }
           if (changesWorkspace && !/^Tool (error|execution denied)/.test(result)) {
             workspaceChanged = true;
             verifiedAfterChange = false;
             loopGuard.reset();
             this.projectIndex?.invalidate();
+            const paths = this.workspacePaths(call.input);
+            if (paths.length) this.events.onWorkspaceChange?.({ tool: call.name, paths, description });
           }
           if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
@@ -447,6 +454,12 @@ export class Agent {
     if (toolName === "verify_project") return true;
     if (toolName !== "run_command") return false;
     return looksLikeVerification(String(input.command ?? ""));
+  }
+
+  private workspacePaths(input: Record<string, unknown>): string[] {
+    const values = [input.path, input.output_path, input.destination, input.file];
+    if (Array.isArray(input.paths)) values.push(...input.paths);
+    return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))].slice(0, 6);
   }
 
   private async compactWithSignal(signal: AbortSignal, reason: string): Promise<string> {
