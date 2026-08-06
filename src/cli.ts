@@ -7,9 +7,11 @@ import process from "node:process";
 import chalk from "chalk";
 import { Command } from "commander";
 import { Agent } from "./agent.js";
-import { stopAllBackgroundProcesses } from "./background.js";
+import { listBackgroundProcesses, stopAllBackgroundProcesses } from "./background.js";
+import { ActivityLog } from "./activity.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { resolveConfig } from "./config.js";
+import { DraftStore } from "./draft.js";
 import { createProvider } from "./providers.js";
 import { createMediaTools } from "./media-tools.js";
 import { McpManager } from "./mcp.js";
@@ -45,6 +47,7 @@ const slashCommands: SlashCommand[] = [
   { name: "/agents cancel", description: "Cancel one agent task" },
   { name: "/agents retry", description: "Retry one interrupted or failed agent" },
   { name: "/agents integrate", description: "Review and integrate a Worktree agent" },
+  { name: "/details", description: "Browse complete tool and Agent activity details" },
   { name: "/status", description: "Show tokens, calls, time, and index stats" },
   { name: "/clear", description: "Start a new conversation session" },
   { name: "/help", description: "Show all commands" },
@@ -115,6 +118,7 @@ async function main(): Promise<void> {
   if (!stat?.isDirectory()) throw new Error(`Workspace does not exist: ${config.cwd}`);
 
   const status = new StatusLine();
+  const activities = new ActivityLog();
   const mcpManager = new McpManager(config.cwd);
   try {
     if (options.listSessions) {
@@ -187,6 +191,8 @@ async function main(): Promise<void> {
     status.start("Indexing project");
     const projectIndex = new ProjectIndex(config.cwd);
     await projectIndex.initialize();
+    const draftStore = new DraftStore(config.cwd);
+    let restoredDraft = await draftStore.load();
     status.stop();
     if (restored) console.log(chalk.green(`Resumed session ${restored.id}`), chalk.dim(`(${restored.messages.length} messages)\n`));
 
@@ -202,20 +208,19 @@ async function main(): Promise<void> {
         if (config.autoApprove && request.risk !== "dangerous") return true;
         status.stop();
         if (!process.stdin.isTTY) return false;
-        const riskLabel = request.risk === "dangerous"
-          ? chalk.bgRed.white.bold(" DANGEROUS ")
-          : request.risk === "write"
-            ? chalk.yellow("[write]")
-            : chalk.magenta("[execute]");
         if (request.preview) console.log(`${chalk.dim("Proposed change:")}\n${request.preview}\n`);
-        const answer = await askQuestion(`${riskLabel} Allow Xiu to ${request.description}? [y/N] `);
-        return /^(y|yes)$/i.test(answer.trim());
+        const selected = await selectTerminalOption(`${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`, [
+          { label: "No, deny", description: "Do not run this operation", value: false },
+          { label: "Yes, allow once", description: request.description, value: true },
+        ]);
+        return selected === true;
       } finally {
         release();
       }
     };
 
     const visibleAgentStates = new Map<string, string>();
+    const agentActivities = new Map<string, string>();
     const coordinator = new MultiAgentCoordinator(
       config.cwd,
       async (task: SubagentTask, context) => {
@@ -284,6 +289,13 @@ async function main(): Promise<void> {
           if (visibleAgentStates.get(key) === task.status) return;
           visibleAgentStates.set(key, task.status);
           status.stop();
+          let activityId = agentActivities.get(key);
+          if (!activityId) {
+            activityId = activities.start("agent", `${task.role}:${task.id}`, task.title);
+            agentActivities.set(key, activityId);
+          }
+          activities.progress(activityId, task.progress ?? task.status);
+          if (["completed", "failed", "cancelled", "blocked"].includes(task.status)) activities.finish(activityId, task.result ?? task.error ?? task.status, task.status !== "completed");
           const color = task.status === "completed" ? chalk.green : task.status === "failed" || task.status === "blocked" ? chalk.red : chalk.cyan;
           console.log(color(`[agent ${task.id}] ${task.status}`), chalk.dim(`${task.role} - ${task.title}`));
         },
@@ -297,6 +309,7 @@ async function main(): Promise<void> {
     const tools = [...baseTools, ...mcpManager.tools()];
     const provider = createProvider(config);
 
+    let activeToolActivity: string | undefined;
     const agent = new Agent(
       config,
       provider,
@@ -312,13 +325,21 @@ async function main(): Promise<void> {
         },
         onTextStreamEnd: () => process.stdout.write("\n\n"),
         onToolStart: (name, description) => {
+          activeToolActivity = activities.start("tool", name, description);
           console.log(chalk.cyan(`> ${name}`), chalk.dim(description));
           status.start(`Running ${name}`);
         },
-        onToolProgress: (name, message) => status.start(`${name}: ${message}`),
+        onToolProgress: (name, message) => {
+          if (activeToolActivity) activities.progress(activeToolActivity, message);
+          status.start(`${name}: ${message}`);
+        },
         onToolEnd: (_name, result) => {
           status.stop();
-          console.log(chalk.dim(result.length > 500 ? `${result.slice(0, 500)}...` : result), "\n");
+          const failed = /^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification timed out|Verification unavailable)/i.test(result);
+          if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
+          activeToolActivity = undefined;
+          const summary = result.replace(/\s+/g, " ").trim();
+          console.log(chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... (/details for full output)` : summary), "\n");
         },
         onCompletionGate: () => console.log(chalk.yellow("Verification required before completion.\n")),
         onCompaction: (message) => status.start(message),
@@ -357,6 +378,9 @@ async function main(): Promise<void> {
     const inputHistory: string[] = [];
     while (true) {
       const dashboard = agent.status();
+      const agentRuns = coordinator.list();
+      const plan = planManager.snapshot();
+      const activeStep = plan?.steps.find((step) => step.status === "in_progress") ?? plan?.steps.find((step) => step.status === "pending");
       const footer = formatPromptDashboard({
         model: dashboard.model,
         contextTokens: dashboard.stats.estimatedTokens,
@@ -365,8 +389,17 @@ async function main(): Promise<void> {
         cwd: config.cwd,
         planMode: dashboard.planMode,
         mcpTools: mcpManager.tools().length,
+        agents: agentRuns.reduce((count, run) => count + run.tasks.filter((task) => task.status === "running").length, 0),
+        backgroundTasks: listBackgroundProcesses().filter((item) => item.running).length,
+        phase: activeStep ? `${activeStep.status}:${activeStep.title}` : undefined,
       });
-      const task = (await readInteractiveInput("xiu> ", slashCommands, inputHistory, footer)).trim();
+      const task = (await readInteractiveInput("xiu> ", slashCommands, inputHistory, footer, {
+        paths: projectIndex.paths("", 1_000),
+        initialValue: restoredDraft,
+        onChange: (value) => { void draftStore.save(value); },
+      })).trim();
+      await draftStore.flush();
+      restoredDraft = await draftStore.load();
       if (!task) continue;
       inputHistory.push(task);
       if (task === "/exit" || task === "/quit") break;
@@ -567,6 +600,23 @@ async function main(): Promise<void> {
         console.log(chalk.dim(`Use /models to choose a model. Current: ${agent.status().model}\n`));
         continue;
       }
+      if (task === "/details") {
+        const records = activities.list();
+        if (!records.length) {
+          console.log(chalk.dim("No tool or Agent activity has been recorded yet.\n"));
+          continue;
+        }
+        const selected = await selectTerminalOption("Activity details", records.map((record) => ({
+          label: `${record.state} ${record.title}`,
+          description: `${new Date(record.startedAt).toLocaleTimeString()}  ${record.description}`,
+          value: record.id,
+        })));
+        if (selected) {
+          const record = activities.get(selected)!;
+          console.log(`${chalk.cyan(`${record.kind} ${record.title}`)} ${chalk.dim(`[${record.state}]`)}\n${record.description}\n\n${record.detail ?? record.summary ?? "No detail yet."}\n`);
+        }
+        continue;
+      }
       if (task === "/status") {
         const current = agent.status();
         console.log([
@@ -582,11 +632,13 @@ async function main(): Promise<void> {
           `Index: ${current.index?.files ?? 0} files${current.index?.truncated ? " (truncated)" : ""}`,
           `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
           `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`,
+          `Background: ${listBackgroundProcesses().filter((item) => item.running).length} running`,
+          `Activities: ${activities.list().length} recorded (/details)`,
         ].join("\n") + "\n");
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/status             Show session, token, call, time, and index stats\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse complete tool and Agent activity output\n/status             Show session, token, call, time, and index stats\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {

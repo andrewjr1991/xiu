@@ -155,6 +155,20 @@ export class ProjectIndex {
     return { files: this.data.files.length, generatedAt: this.data.generatedAt, truncated: this.data.truncated };
   }
 
+  paths(query = "", limit = 200): string[] {
+    if (!this.data) return [];
+    const normalized = query.toLowerCase().replace(/\\/g, "/");
+    return this.data.files
+      .map((file) => file.path)
+      .filter((file) => !normalized || file.toLowerCase().includes(normalized))
+      .sort((a, b) => {
+        const aPrefix = a.toLowerCase().startsWith(normalized) ? 0 : 1;
+        const bPrefix = b.toLowerCase().startsWith(normalized) ? 0 : 1;
+        return aPrefix - bPrefix || a.length - b.length || a.localeCompare(b);
+      })
+      .slice(0, Math.max(1, Math.min(limit, 1_000)));
+  }
+
   async search(query: string, limit = 8): Promise<string> {
     if (!this.data) await this.initialize();
     const terms = tokenize(query).filter((term) => term.length >= 2);

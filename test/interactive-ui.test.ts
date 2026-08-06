@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { interactiveFrameLines, matchingCommands, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { acceptCandidate, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
 
 const commands: SlashCommand[] = [
   { name: "/resume", description: "resume" },
@@ -51,4 +51,39 @@ test("terminal selector clips long skill descriptions so Esc can clear every phy
 test("interactive input and command palette stay within terminal width", () => {
   const lines = interactiveFrameLines("xiu> ", "这是一个非常长的中文输入".repeat(8), commands, 0, undefined, 50);
   assert.ok(lines.every((line) => terminalDisplayWidth(line) <= 49));
+});
+
+test("multiline editor moves and deletes Chinese and emoji by Unicode character", () => {
+  let state = { value: "你好🙂\nworld", cursor: 3 };
+  state = moveEditorCursor(state, "left");
+  assert.equal(state.cursor, 2);
+  state = deleteEditorBackward(state);
+  assert.equal(state.value, "你🙂\nworld");
+  state = insertEditorText(state, "好");
+  assert.equal(state.value, "你好🙂\nworld");
+  state = moveEditorCursor(state, "end");
+  assert.equal(state.cursor, 3);
+  state = deleteEditorForward(state);
+  assert.equal(state.value, "你好🙂world");
+});
+
+test("editor frame wraps multiline Chinese input and returns a valid cursor position", () => {
+  const state = { value: `第一行🙂\n${"很长的中文".repeat(8)}`, cursor: 6 };
+  const frame = editorFrameLines("xiu> ", state, [], 0, "Auto | model", 30);
+  assert.ok(frame.lines.length > 3);
+  assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 29));
+  assert.ok(frame.cursorRow >= 1);
+  assert.ok(frame.cursorColumn >= 2 && frame.cursorColumn <= 29);
+});
+
+test("path completion replaces only the active @ reference", () => {
+  const state = { value: "检查 @src/int 然后测试", cursor: [..."检查 @src/int"].length };
+  const candidates = pathCandidates(state, ["src/agent.ts", "src/interactive-ui.ts", "test/interactive-ui.test.ts"]);
+  assert.equal(candidates[0]?.label, "@src/interactive-ui.ts");
+  assert.equal(acceptCandidate(state, candidates[0]!).value, "检查 @src/interactive-ui.ts 然后测试");
+});
+
+test("history search is newest-first and de-duplicates entries", () => {
+  const matches = historyCandidates("fix", ["fix login", "build", "fix login", "fix tests"]);
+  assert.deepEqual(matches.map((item) => item.replacement), ["fix tests", "fix login"]);
 });

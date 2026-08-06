@@ -133,6 +133,9 @@ export function formatPromptDashboard(input: {
   cwd: string;
   planMode: boolean;
   mcpTools?: number;
+  agents?: number;
+  backgroundTasks?: number;
+  phase?: string;
 }): string {
   const columns = process.stdout.columns || 100;
   const ratio = Math.min(1, input.contextTokens / Math.max(1, input.contextLimit));
@@ -140,9 +143,13 @@ export function formatPromptDashboard(input: {
   const bar = `${"#".repeat(filled)}${"-".repeat(12 - filled)}`;
   const percent = `${Math.round(ratio * 100)}%`;
   const mcp = input.mcpTools ? ` | ${input.mcpTools} mcp` : "";
-  const left = `${input.planMode ? "Plan" : "Auto"} | ${input.model} | ctx [${bar}] ${percent} | ${input.skills} skills${mcp}`;
-  const available = Math.max(12, columns - left.length - 3);
-  return chalk.dim(`${left} | ${fit(input.cwd, available)}`);
+  const agents = input.agents ? ` | ${input.agents} agents` : "";
+  const background = input.backgroundTasks ? ` | ${input.backgroundTasks} bg` : "";
+  const phase = input.phase ? ` | ${input.phase}` : "";
+  const left = `${input.planMode ? "Plan" : "Auto"} | ${input.model} | ctx [${bar}] ${percent} | ${input.skills} skills${mcp}${agents}${background}${phase}`;
+  const fittedLeft = fit(left, Math.max(20, Math.floor(columns * 0.72)));
+  const available = Math.max(8, columns - textWidth(fittedLeft) - 3);
+  return chalk.dim(`${fittedLeft} | ${fit(input.cwd, available)}`);
 }
 
 export function renderPromptDashboard(input: Parameters<typeof formatPromptDashboard>[0]): void {

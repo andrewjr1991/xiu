@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.6 adds goal-oriented multi-agent orchestration: validated dependency graphs, parallel specialist agents, isolated Git Worktrees for implementation, per-agent cancellation and retry, persisted recovery, status and token reporting, and conflict-checked integration. It retains the MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.7 establishes Xiu's professional terminal interaction foundation: multiline Unicode editing, cursor navigation, `@` project-file completion, reverse history search, crash-safe draft recovery, responsive Resize rendering, keyboard approval menus, bounded activity summaries, and `/details` for full tool output. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -44,6 +44,12 @@ Version 0.6 adds goal-oriented multi-agent orchestration: validated dependency g
 - Read-only shared-workspace agents that cannot access write, execute, dangerous, or dynamic-risk tools
 - Git Worktree isolation for implementation agents, with Diff preview and `git apply --check` integration
 - Persisted multi-agent state, interrupted-task recovery, individual cancellation/retry, elapsed time, and Token statistics
+- Multiline input with `Ctrl+J`, Unicode-safe cursor editing, Home/End, Delete, and Backspace
+- Project-index-backed `@path` completion plus `Ctrl+R` reverse history search
+- Per-project draft recovery under `.xiu/draft.json` and responsive terminal Resize reflow
+- Direction-key approval menus that default to deny
+- Bounded tool/Agent summaries with full output available through `/details`
+- Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
 
 ## Install
 
@@ -128,6 +134,7 @@ Interactive session commands:
 /agents cancel ...  cancel one task without stopping unrelated agents
 /agents retry ...   retry a failed, cancelled, blocked, or interrupted task
 /agents integrate ... preview and integrate a completed Worktree task
+/details            browse complete tool and Agent activity output
 /status             session id, context, tokens, calls, time, and index size
 /clear              start a separate new session
 /exit               close Xiu
@@ -136,6 +143,8 @@ Interactive session commands:
 Xiu estimates the active context continuously and compacts it into a continuation brief before the configured limit. The default threshold is 60,000 estimated tokens and can be changed with `--context-limit` or `XIU_CONTEXT_LIMIT`.
 
 The interactive prompt has a slash-command palette: typing `/` opens all commands immediately, further characters filter the list, Up/Down changes the highlighted command, Tab completes it, and Enter selects it.
+
+The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
 
 ## Multi-agent orchestration
 
@@ -354,5 +363,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
+- v0.7.0 provides the terminal state and editor foundation; queued input during an active Agent, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, and themes remain v0.7.x work.
 
 These are the natural next milestones after validating the core loop.

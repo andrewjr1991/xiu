@@ -41,3 +41,14 @@ test("project index detects stack, checks, and relevant source files", async () 
   assert.match(receivedContext, /Detected project: Node\.js, TypeScript, React, Vite/);
   assert.match(receivedContext, /src\/authentication\.ts/);
 });
+
+test("project index exposes bounded paths for @ completion", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-paths-"));
+  await fs.mkdir(path.join(cwd, "src"));
+  await fs.writeFile(path.join(cwd, "src", "agent.ts"), "export const agent = true;\n");
+  await fs.writeFile(path.join(cwd, "src", "activity.ts"), "export const activity = true;\n");
+  const index = new ProjectIndex(cwd);
+  await index.initialize();
+  assert.deepEqual(index.paths("agent"), ["src/agent.ts"]);
+  assert.equal(index.paths("src", 1).length, 1);
+});

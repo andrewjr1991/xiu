@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderWelcome } from "../src/welcome.js";
+import { formatPromptDashboard, renderWelcome } from "../src/welcome.js";
+import { terminalDisplayWidth } from "../src/interactive-ui.js";
 
 test("startup screen includes quick start, session details, and skill count", () => {
   const lines: string[] = [];
@@ -48,4 +49,19 @@ test("narrow startup screen falls back to stacked layout", () => {
   }
   assert.doesNotMatch(lines[1] ?? "", /Quick start/);
   assert.ok(lines.some((line) => line.includes("Quick start")));
+});
+
+test("prompt dashboard remains within a narrow terminal with all status segments", () => {
+  const originalColumns = process.stdout.columns;
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value: 55 });
+  try {
+    const line = formatPromptDashboard({
+      model: "agnes-2.5-flash", contextTokens: 30_000, contextLimit: 60_000, skills: 14,
+      cwd: "D:\\QoderWork Project\\a-very-long-project-name", planMode: false, mcpTools: 8,
+      agents: 3, backgroundTasks: 2, phase: "in_progress:Implement professional terminal UI",
+    });
+    assert.ok(terminalDisplayWidth(line) <= 55);
+  } finally {
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+  }
 });
