@@ -89,7 +89,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
   const width = Math.max(30, Math.min(120, columns - 2));
   const tips = [
     "1. Type / to open the command palette",
-    "2. Use @path/to/file to point at code",
+    "2. Use @path or Ctrl+V to attach files and images",
     "3. Use /plan on to investigate safely",
     "4. Use /skills to browse installed workflows",
   ];

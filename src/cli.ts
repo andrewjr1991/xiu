@@ -10,6 +10,7 @@ import { Agent } from "./agent.js";
 import { listBackgroundProcesses, stopAllBackgroundProcesses } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { CheckpointManager } from "./checkpoint.js";
+import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig } from "./config.js";
 import { DraftStore } from "./draft.js";
 import { createProvider } from "./providers.js";
@@ -38,6 +39,7 @@ const slashCommands: SlashCommand[] = [
   { name: "/plan", description: "Show plan or toggle read-only plan mode" },
   { name: "/tasks", description: "Show the live task plan" },
   { name: "/diff", description: "Show files and Git diff changed this session" },
+  { name: "/paste", description: "Paste clipboard text, image, or copied files" },
   { name: "/checkpoints", description: "List safe file restore points" },
   { name: "/rewind", description: "Choose a checkpoint to restore" },
   { name: "/models", description: "Discover and choose an available model" },
@@ -198,6 +200,7 @@ async function main(): Promise<void> {
     const projectIndex = new ProjectIndex(config.cwd);
     await projectIndex.initialize();
     const draftStore = new DraftStore(config.cwd);
+    const clipboard = new ClipboardAttachmentManager(config.cwd);
     let restoredDraft = await draftStore.load();
     status.stop();
     if (restored) console.log(chalk.green(`Resumed session ${restored.id}`), chalk.dim(`(${restored.messages.length} messages)\n`));
@@ -509,6 +512,7 @@ async function main(): Promise<void> {
               agent.cancel();
             },
             onToggleDetails: () => { view.toggleDetails(); },
+            onPaste: () => clipboard.paste(),
             signal: inputController.signal,
             refreshMs: 250,
           })).trim();
@@ -563,6 +567,17 @@ async function main(): Promise<void> {
             console.log(chalk.dim(`Working: turn ${turnStatus} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
             continue;
           }
+          if (followUp === "/paste") {
+            try {
+              const pasted = await clipboard.paste();
+              await draftStore.save(pasted.insertText);
+              await draftStore.flush();
+              console.log(chalk.green(`${pasted.notice ?? "Clipboard content added to the input draft."}\n`));
+            } catch (error) {
+              console.error(chalk.red(`Clipboard paste failed: ${error instanceof Error ? error.message : String(error)}\n`));
+            }
+            continue;
+          }
           if (followUp === "/details") {
             const visible = view.toggleDetails();
             console.log(chalk.dim(`Live view switched to ${visible ? "detailed tool activity" : "task step summary"}. Ctrl+O toggles it without submitting the prompt.\n`));
@@ -615,6 +630,7 @@ async function main(): Promise<void> {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
         onChange: (value) => { void draftStore.save(value); },
+        onPaste: () => clipboard.paste(),
       })).trim();
       await draftStore.flush();
       restoredDraft = await draftStore.load();
@@ -665,6 +681,18 @@ async function main(): Promise<void> {
       }
       if (task === "/diff") {
         console.log(`${await checkpointManager.diff()}\n`);
+        continue;
+      }
+      if (task === "/paste") {
+        try {
+          const pasted = await clipboard.paste();
+          restoredDraft = pasted.insertText;
+          await draftStore.save(restoredDraft);
+          await draftStore.flush();
+          console.log(chalk.green(`${pasted.notice ?? "Clipboard content added to the input draft."}\n`));
+        } catch (error) {
+          console.error(chalk.red(`Clipboard paste failed: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
         continue;
       }
       if (task === "/checkpoints") {
@@ -866,7 +894,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact [focus]   Compress context, optionally naming what to preserve\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse activity; toggle live progress while working\n/status             Show session, token, call, time, and index stats\n/queue              Show explicitly scheduled next tasks\n/queue <task>       Schedule an independent task to run next\n/clear-queue        Clear scheduled tasks\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact [focus]   Compress context, optionally naming what to preserve\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/paste              Paste clipboard text, image, or copied files\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse activity; toggle live progress while working\n/status             Show session, token, call, time, and index stats\n/queue              Show explicitly scheduled next tasks\n/queue <task>       Schedule an independent task to run next\n/clear-queue        Clear scheduled tasks\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {

@@ -12,6 +12,8 @@ Version 0.8.2 uses unambiguous `√`, `→`, and `○` progress symbols, surface
 
 Version 0.8.3 makes successful file changes permanent terminal output instead of transient footer state. Each change card identifies created, modified, or deleted files, shows bounded `+added/-removed` line counts and a short colored preview, and falls back to byte-size summaries for large or binary files. The live input is safely redrawn after each card, and pending cards are flushed before the final answer.
 
+Version 0.8.4 adds clipboard attachments. On Windows, `Ctrl+V` can import a clipboard screenshot as PNG or copied Explorer files into the trusted workspace and insert `@.xiu/attachments/...` references at the cursor; ordinary text remains ordinary pasted text. `/paste` provides a fallback when the terminal intercepts the shortcut. Attachments are bounded by count and size, directories and symbolic links are rejected, and pasted files are never executed automatically.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -57,6 +59,7 @@ Version 0.8.3 makes successful file changes permanent terminal output instead of
 - Persisted multi-agent state, interrupted-task recovery, individual cancellation/retry, elapsed time, and Token statistics
 - Multiline input with `Ctrl+J`, Unicode-safe cursor editing, Home/End, Delete, and Backspace
 - Project-index-backed `@path` completion plus `Ctrl+R` reverse history search
+- Windows clipboard screenshots and copied-file attachments through `Ctrl+V` or `/paste`
 - Per-project draft recovery under `.xiu/draft.json` and responsive terminal Resize reflow
 - Direction-key approval menus that default to deny
 - Bounded tool/Agent summaries with full output available through `/details`

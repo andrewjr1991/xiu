@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/cli",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A safe terminal coding agent with risk-aware tools and multi-provider support.",
   "type": "module",
   "bin": {
@@ -19,7 +19,8 @@
     "V0.7.3_DESIGN.zh-CN.md",
     "V0.7.4_DESIGN.zh-CN.md",
     "V0.8_CONTEXT_DESIGN.zh-CN.md",
-    "V0.8.3_DESIGN.zh-CN.md"
+    "V0.8.3_DESIGN.zh-CN.md",
+    "V0.8.4_DESIGN.zh-CN.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

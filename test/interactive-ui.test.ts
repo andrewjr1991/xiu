@@ -8,12 +8,14 @@ const commands: SlashCommand[] = [
   { name: "/history", description: "history" },
   { name: "/history sessions", description: "sessions" },
   { name: "/status", description: "status" },
+  { name: "/paste", description: "paste attachment" },
 ];
 
 test("slash command matching opens for slash and filters as the user types", () => {
-  assert.equal(matchingCommands("/", commands).length, 4);
+  assert.equal(matchingCommands("/", commands).length, 5);
   assert.deepEqual(matchingCommands("/res", commands).map((item) => item.name), ["/resume"]);
   assert.deepEqual(matchingCommands("/sta", commands).map((item) => item.name), ["/status"]);
+  assert.deepEqual(matchingCommands("/pas", commands).map((item) => item.name), ["/paste"]);
 });
 
 test("exact command is ranked before its longer subcommand", () => {

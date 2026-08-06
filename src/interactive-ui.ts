@@ -18,6 +18,7 @@ export interface InteractiveInputOptions {
   onChange?: (value: string) => void;
   onCancel?: () => void;
   onToggleDetails?: () => void;
+  onPaste?: () => Promise<{ insertText: string; notice?: string }>;
   signal?: AbortSignal;
   refreshMs?: number;
 }
@@ -345,6 +346,8 @@ export async function readInteractiveInput(
     let finished = false;
     let cleanupInput = (): void => {};
     let refreshTimer: NodeJS.Timeout | undefined;
+    let pasteNotice = "";
+    let pasteInFlight = false;
 
     const suggestions = (): InputCandidate[] => {
       if (dismissed) return [];
@@ -358,7 +361,8 @@ export async function readInteractiveInput(
     };
     const render = (): void => {
       clearRenderedFrame(renderedLines, cursorRow);
-      const currentFooter = typeof footer === "function" ? footer() : footer;
+      const baseFooter = typeof footer === "function" ? footer() : footer;
+      const currentFooter = [pasteNotice, baseFooter].filter(Boolean).join("\n");
       const frame = editorFrameLines(prompt, state, suggestions(), selected, currentFooter, process.stdout.columns || 100, searchQuery);
       process.stdout.write(frame.lines.join("\n"));
       renderedLines = frame.lines.length;
@@ -400,6 +404,27 @@ export async function readInteractiveInput(
       if (key.ctrl && key.name === "o") {
         options.onToggleDetails?.();
         render();
+        return;
+      }
+      if (key.ctrl && key.name === "v" && options.onPaste) {
+        if (pasteInFlight) return;
+        pasteInFlight = true;
+        pasteNotice = "Reading clipboard...";
+        render();
+        void options.onPaste().then((result) => {
+          if (finished) return;
+          if (result.insertText) {
+            state = insertEditorText(state, result.insertText);
+            changed();
+          }
+          pasteNotice = result.notice ?? "Clipboard pasted.";
+          dismissed = true;
+        }).catch((error) => {
+          if (!finished) pasteNotice = `Clipboard paste failed: ${error instanceof Error ? error.message : String(error)}`;
+        }).finally(() => {
+          pasteInFlight = false;
+          if (!finished) render();
+        });
         return;
       }
       if (key.ctrl && (key.name === "j" || key.name === "linefeed")) {
