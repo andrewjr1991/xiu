@@ -526,6 +526,40 @@ async function main(): Promise<void> {
       });
     };
 
+    const chooseRuntimeLanguage = async (command: string): Promise<UiLanguage | undefined> => {
+      const requested = command.slice("/language".length).trim();
+      if (requested) {
+        try { return normalizeLanguage(requested); }
+        catch (error) {
+          console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
+          return undefined;
+        }
+      }
+      return await selectTerminalOption(localize(language, "选择界面与会话语言", "Choose interface and conversation language"), [
+        { label: "简体中文", description: localize(language, "界面、进展、计划和模型回复使用中文", "Use Chinese for UI, progress, plans, and model responses"), value: "zh-CN" as const },
+        { label: "English", description: localize(language, "界面、进展、计划和模型回复使用英文", "Use English for UI, progress, plans, and model responses"), value: "en-US" as const },
+      ], language);
+    };
+
+    const applyRuntimeLanguage = async (selected: UiLanguage, redrawScreen: boolean): Promise<void> => {
+      language = selected;
+      agent.setLanguage(selected);
+      if (runningTaskView) {
+        runningTaskView.setLanguage(selected);
+        agent.steer(localize(selected,
+          "运行时语言已切换为简体中文。继续原始任务，并确保后续所有用户可见的进展、问题和最终回答使用简体中文。",
+          "The runtime language changed to English. Continue the original task and use English for all subsequent user-visible progress, questions, and the final answer."));
+      }
+      settings.language = selected;
+      await settingsStore.save(settings);
+      if (redrawScreen) {
+        if (process.stdout.isTTY) console.clear();
+        renderWelcome(config, packageJson.version, skillRegistry.list().length);
+        console.log(chalk.dim(localize(language, "交互模式 · 输入 / 查看命令 · Ctrl+C 或 /exit 退出\n", "Interactive mode · type / for commands · Ctrl+C or /exit to quit\n")));
+      }
+      console.log(chalk.green(localize(language, `语言已立即切换为${languageName(selected, language)}。当前界面、进度、命令和下一次模型调用均已更新。\n`, `Language switched immediately to ${languageName(selected, language)}. The current UI, progress, commands, and next model call are updated.\n`)));
+    };
+
     const runTaskSequence = async (firstTask: string): Promise<boolean> => {
       const queue = new TaskInputQueue();
       queue.enqueue(firstTask);
@@ -613,6 +647,12 @@ async function main(): Promise<void> {
           if (followUp === "/clear-queue") {
             const cleared = queue.clear();
             console.log(chalk.dim(localize(language, `已清空 ${cleared} 个排队任务。\n`, `Cleared ${cleared} queued follow-up(s).\n`)));
+            continue;
+          }
+          if (followUp === "/language" || followUp.startsWith("/language ")) {
+            const selected = await chooseRuntimeLanguage(followUp);
+            if (!selected) console.log(chalk.dim(localize(language, "已取消语言选择。\n", "Language selection cancelled.\n")));
+            else await applyRuntimeLanguage(selected, false);
             continue;
           }
           if (followUp === "/status") {
@@ -815,27 +855,12 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/language" || task.startsWith("/language ")) {
-        let selected: UiLanguage | undefined;
-        const requested = task.slice("/language".length).trim();
-        if (requested) {
-          try { selected = normalizeLanguage(requested); }
-          catch (error) { console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`)); continue; }
-        } else {
-          selected = await selectTerminalOption(localize(language, "选择界面与会话语言", "Choose interface and conversation language"), [
-            { label: "简体中文", description: "界面、进展、计划和模型回复使用中文", value: "zh-CN" as const },
-            { label: "English", description: "Use English for UI, progress, plans, and model responses", value: "en-US" as const },
-          ], language);
-        }
+        const selected = await chooseRuntimeLanguage(task);
         if (!selected) {
           console.log(chalk.dim(localize(language, "已取消语言选择。\n", "Language selection cancelled.\n")));
           continue;
         }
-        language = selected;
-        config.language = selected;
-        planManager.setLanguage(selected);
-        await settingsStore.save({ ...settings, language: selected });
-        agent.reloadInstructions();
-        console.log(chalk.green(localize(language, `语言已设置为${languageName(selected, language)}，后续界面与模型回复将使用该语言。\n`, `Language set to ${languageName(selected, language)}. Future UI and model responses will use it.\n`)));
+        await applyRuntimeLanguage(selected, true);
         continue;
       }
       if (task === "/skills") {

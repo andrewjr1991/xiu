@@ -95,6 +95,25 @@ test("agent completes a generated artifact after verify_output passes", async ()
   assert.equal(agent.status().outcome, "completed");
 });
 
+test("agent rebuilds its language contract immediately after a runtime switch", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-language-switch-"));
+  const systems: string[] = [];
+  const provider: ModelProvider = {
+    async complete(system) {
+      systems.push(system);
+      return { text: "done", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true, language: "en-US" }, provider, [], async () => true);
+
+  await agent.run("first task");
+  agent.setLanguage("zh-CN");
+  await agent.run("第二个任务");
+
+  assert.match(systems[0] ?? "", /Language contract: Use English/);
+  assert.match(systems[1] ?? "", /Use Simplified Chinese/);
+});
+
 test("steering amends the active task without replacing its primary goal", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-steer-"));
   await fs.writeFile(path.join(cwd, "input.txt"), "data");

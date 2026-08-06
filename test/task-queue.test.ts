@@ -138,6 +138,19 @@ test("Chinese task view localizes progress, actions, and footer controls", () =>
   assert.deepEqual(view.receiptLines(), ["  √ 验证通过：npm test"]);
 });
 
+test("running task view changes language without recreating the active task", () => {
+  const view = new RunningTaskView(256_000, "en-US");
+  view.setTurn(2);
+  assert.match(formatRunningInputFooter(view, 0, 0, "Auto | model"), /Working: Turn 2/);
+
+  view.setLanguage("zh-CN");
+  const switched = formatRunningInputFooter(view, 0, 0, "自动 | model");
+  assert.equal(view.language(), "zh-CN");
+  assert.match(switched, /运行中：轮次 2/);
+  assert.match(switched, /当前：处理中/);
+  assert.doesNotMatch(switched, /Working|Understand the task/);
+});
+
 test("Chinese task view suppresses untranslated model narration and old English plan titles", () => {
   const view = new RunningTaskView(256_000, "zh-CN");
   view.narrate("I am inspecting the current implementation and preparing the next change.");

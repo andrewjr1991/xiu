@@ -97,7 +97,7 @@ export class RunningTaskView {
   private completion?: { message: string; success: boolean };
   private importantActions: string[] = [];
 
-  constructor(private readonly maxCharacters = 256_000, private readonly uiLanguage: UiLanguage = "en-US") {
+  constructor(private readonly maxCharacters = 256_000, private uiLanguage: UiLanguage = "en-US") {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new Error("Running task output limit must be a positive integer.");
     this.currentPhase = localize(uiLanguage, "正在启动", "Starting");
   }
@@ -210,6 +210,16 @@ export class RunningTaskView {
 
   language(): UiLanguage {
     return this.uiLanguage;
+  }
+
+  setLanguage(language: UiLanguage): void {
+    if (language === this.uiLanguage) return;
+    this.uiLanguage = language;
+    this.currentPhase = localize(language, "处理中", "Working");
+    this.latestNarration = "";
+    this.activities = [];
+    this.changes = [];
+    this.importantActions = [];
   }
 
   write(value: string): void {

@@ -13,6 +13,7 @@ import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
 import { localize } from "./i18n.js";
+import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
 import { executeTool, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
@@ -449,6 +450,12 @@ export class Agent {
 
   reloadInstructions(): void {
     this.system = undefined;
+  }
+
+  setLanguage(language: UiLanguage): void {
+    this.config.language = language;
+    this.planManager?.setLanguage(language);
+    this.reloadInstructions();
   }
 
   private setModelInMemory(model: string): void {
