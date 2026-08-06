@@ -66,6 +66,14 @@ test("running input footer exposes phase, queue, and cancellation semantics", ()
   assert.match(footer, /Auto \| model/);
 });
 
+test("running input footer shows only the current turn when no limit is configured", () => {
+  const view = new RunningTaskView();
+  view.setTurn(31);
+  const footer = formatRunningInputFooter(view, 0, 0, "Auto | model");
+  assert.match(footer, /Turn 31 \|/);
+  assert.doesNotMatch(footer, /31\//);
+});
+
 test("running task details toggle expands recent activity", () => {
   const view = new RunningTaskView();
   view.activity("one");

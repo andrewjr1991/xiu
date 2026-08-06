@@ -76,7 +76,7 @@ const program = new Command()
   .option("-r, --resume [session]", "choose a workspace session to resume, or resume a specific session id")
   .option("--list-sessions", "list resumable sessions in this workspace")
   .option("--context-limit <tokens>", "estimated context tokens before automatic compaction", "60000")
-  .option("--max-turns <number>", "agent loop safety limit", "30")
+  .option("--max-turns <number>", "optional user-selected agent turn limit (unlimited by default)")
   .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
@@ -350,7 +350,7 @@ async function main(): Promise<void> {
       {
         onModelStart: (turn) => {
           runningTaskView?.setTurn(turn, config.maxTurns);
-          runningTaskView?.activity(`Model turn ${turn}/${config.maxTurns} started`);
+          runningTaskView?.activity(`Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`);
           startPhase("Thinking");
         },
         onModelEnd: () => stopPhase(),
@@ -520,7 +520,8 @@ async function main(): Promise<void> {
           }
           if (followUp === "/status") {
             const currentStatus = agent.status();
-            console.log(chalk.dim(`Working: turn ${currentStatus.turn}/${currentStatus.maxTurns} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
+            const turnStatus = currentStatus.maxTurns ? `${currentStatus.turn}/${currentStatus.maxTurns}` : `${currentStatus.turn}`;
+            console.log(chalk.dim(`Working: turn ${turnStatus} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
             continue;
           }
           if (followUp === "/details") {
@@ -803,7 +804,7 @@ async function main(): Promise<void> {
           `Model: ${current.model}`,
           `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`,
           `Last outcome: ${current.outcome}`,
-          `Turn: ${current.turn || "-"}/${current.maxTurns}`,
+          `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`,
           `Pending steering: ${current.pendingSteering}`,
           `Messages: ${current.messages}`,
           `Context: ~${current.stats.estimatedTokens.toLocaleString()} / ${current.contextLimit.toLocaleString()} tokens`,

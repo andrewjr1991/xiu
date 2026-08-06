@@ -106,6 +106,24 @@ test("agent stops a repeated successful tool-call loop before the turn limit", a
   assert.equal(agent.status().outcome, "failed");
 });
 
+test("agent can continue beyond 30 model turns when no explicit limit is configured", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-unlimited-turns-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls++;
+      if (calls <= 30) {
+        return { text: `working ${calls}`, toolCalls: [{ id: `missing-${calls}`, name: `missing_tool_${calls}`, input: {} }], raw: {} };
+      }
+      return { text: "completed after turn 30", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true }, provider, [], async () => true);
+  assert.equal(await agent.run("finish a long task"), "completed after turn 30");
+  assert.equal(calls, 31);
+  assert.equal(agent.status().maxTurns, undefined);
+});
+
 test("agent cancellation aborts an in-flight model request", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-cancel-"));
   const provider: ModelProvider = {

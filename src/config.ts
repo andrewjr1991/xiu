@@ -14,7 +14,8 @@ export interface AgentConfig {
   provider: ProviderName;
   model: string;
   cwd: string;
-  maxTurns: number;
+  /** Optional user-selected cap. Undefined means the primary agent may continue until completion or cancellation. */
+  maxTurns?: number;
   autoApprove: boolean;
   baseURL?: string;
   mediaBaseURL?: string;
@@ -52,9 +53,10 @@ export function resolveConfig(options: {
     : provider === "agnes"
       ? "agnes-2.5-flash"
       : "gpt-5";
-  const maxTurns = Number(options.maxTurns ?? process.env.XIU_MAX_TURNS ?? 30);
-  if (!Number.isInteger(maxTurns) || maxTurns < 1) {
-    throw new Error("max-turns must be a positive integer");
+  const configuredMaxTurns = options.maxTurns ?? process.env.XIU_MAX_TURNS;
+  const maxTurns = configuredMaxTurns === undefined ? undefined : Number(configuredMaxTurns);
+  if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1)) {
+    throw new Error("max-turns must be a positive integer when provided");
   }
   const contextLimit = Number(options.contextLimit ?? process.env.XIU_CONTEXT_LIMIT ?? 60_000);
   if (!Number.isInteger(contextLimit) || contextLimit < 4_000) {

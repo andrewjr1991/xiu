@@ -166,7 +166,10 @@ export class Agent {
     let planReminderSent = false;
     let toolCallCount = 0;
     const loopGuard = new ToolLoopGuard();
-    for (let turn = 1; turn <= this.config.maxTurns; turn++) {
+    for (let turn = 1; ; turn++) {
+      if (this.config.maxTurns !== undefined && turn > this.config.maxTurns) {
+        throw new Error(`Agent reached the user-configured ${this.config.maxTurns}-turn limit before completing the task.`);
+      }
       this.currentTurn = turn;
       if (signal.aborted) throw new Error("Task cancelled.");
       await this.applyPendingSteering(turn);
@@ -295,7 +298,6 @@ export class Agent {
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
     }
-    throw new Error(`Agent reached the ${this.config.maxTurns}-turn safety limit before completing the task.`);
   }
 
   clearConversation(): void {
@@ -330,7 +332,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns: number; pendingSteering: number } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,

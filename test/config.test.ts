@@ -70,6 +70,12 @@ test("context limit is configurable and validated", () => {
   assert.throws(() => resolveConfig({ contextLimit: "3999" }), /at least 4000/);
 });
 
+test("primary agent has no turn limit unless the user explicitly sets one", () => {
+  assert.equal(resolveConfig({ provider: "openai" }).maxTurns, undefined);
+  assert.equal(resolveConfig({ provider: "openai", maxTurns: "45" }).maxTurns, 45);
+  assert.throws(() => resolveConfig({ provider: "openai", maxTurns: "0" }), /max-turns/);
+});
+
 test("multi-agent concurrency is bounded", () => {
   assert.equal(resolveConfig({ provider: "openai", agentConcurrency: "4" }).agentConcurrency, 4);
   assert.throws(() => resolveConfig({ provider: "openai", agentConcurrency: "0" }), /agent-concurrency/);

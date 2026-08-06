@@ -78,9 +78,9 @@ export class RunningTaskView {
     this.currentPhase = phase.replace(/\s+/g, " ").trim() || "Working";
   }
 
-  setTurn(turn: number, maximum: number): void {
+  setTurn(turn: number, maximum?: number): void {
     this.currentTurn = turn;
-    this.maximumTurns = maximum;
+    this.maximumTurns = maximum ?? 0;
   }
 
   activity(text: string): void {
@@ -146,6 +146,7 @@ export function formatRunningInputFooter(view: RunningTaskView, queued: number, 
   const queue = queued ? `${queued} queued` : "queue empty";
   const steeringState = steering ? `${steering} steering` : "no steering";
   const details = view.detailsVisible() ? "Ctrl+O hide progress" : "Ctrl+O show progress";
-  const headline = `Working: Turn ${turn.current || "-"}/${turn.maximum || "-"} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
+  const turnLabel = turn.maximum ? `${turn.current || "-"}/${turn.maximum}` : `${turn.current || "-"}`;
+  const headline = `Working: Turn ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
   return [headline, ...view.progressLines(), `${details} | Enter steers current | /queue <task> schedules next | Ctrl+C cancels`, baseFooter].join("\n");
 }

@@ -53,9 +53,9 @@ Version 0.8 starts Xiu's large-project intelligence work with a reliability-firs
 - Bounded tool/Agent summaries with full output available through `/details`
 - Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
 - Editable `xiu[working]>` prompt that steers the active goal without waiting for completion
-- Live Turn/max-turn, elapsed-time, tool activity, and `Ctrl+O` expanded progress
+- Live current Turn, elapsed-time, tool activity, and `Ctrl+O` expanded progress
 - Explicit `/queue <task>` scheduling plus immediate `/queue`, `/clear-queue`, `/cancel`, and `/exit` controls
-- Successful-call cycle detection that stops repeated reads/searches before the turn limit
+- Successful-call cycle detection that stops stagnant repeated reads/searches without relying on an arbitrary turn cap
 - Explicit completed, unverified, failed, and cancelled outcomes with failure-paused scheduling
 
 ## Install
@@ -157,11 +157,11 @@ The interactive prompt has a slash-command palette: typing `/` opens all command
 
 The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
 
-While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission adds requirements to the active goal and is injected before the next model turn. The primary task remains mandatory, and a steered task receives a final task-contract audit so the model cannot silently finish after answering only the newest request. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows Turn/max-turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
+While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission adds requirements to the active goal and is injected before the next model turn. The primary task remains mandatory, and a steered task receives a final task-contract audit so the model cannot silently finish after answering only the newest request. Use `/queue <task>` only when the text is a genuinely independent task that should run afterward. The footer shows the current Turn, phase, elapsed time, steering count, explicit queue length, and the latest activity; `Ctrl+O` expands or collapses the last eight activities without submitting the draft. Primary tasks have no Turn limit by default and continue until completion, cancellation, a genuine loop, or another explicit failure. `/details` performs the same toggle while working. If the current task fails, is cancelled, reaches a loop guard, or changes files without passing verification, Xiu pauses and asks whether to stop, retry from existing evidence, or explicitly skip to scheduled tasks. The safe default is stop. Approval still suspends the editor and defaults to deny. Pending scheduled tasks are process-local and do not yet claim crash recovery.
 
 ## Multi-agent orchestration
 
-For goals with genuinely independent investigation, implementation, review, or test work, Xiu can create a dependency graph of specialist agents. Each agent receives a bounded task, its own conversation context, turn budget, elapsed-time counter, and Token statistics. Independent tasks run concurrently; dependent tasks start only after their prerequisites complete.
+For goals with genuinely independent investigation, implementation, review, or test work, Xiu can create a dependency graph of specialist agents. Each agent receives a bounded task, its own conversation context, an optional explicit turn budget, elapsed-time counter, and Token statistics. Independent tasks run concurrently; dependent tasks start only after their prerequisites complete.
 
 Explorer and Reviewer tasks use `shared_readonly` mode by default. Their tool registry contains only tools declared statically read-only, and Plan mode adds a second enforcement boundary. Implementer tasks use `worktree` mode by default. Xiu creates them under `.xiu/worktrees/` on a dedicated `xiu/agent-*` Git branch, so their edits cannot overwrite the main workspace or another agent.
 
@@ -283,7 +283,7 @@ Useful options:
 --resume [session]          resume latest or selected project session
 --list-sessions             list sessions in this project
 --context-limit <tokens>    automatic compaction threshold (default: 60000)
---max-turns <number>        safety limit (default: 30)
+--max-turns <number>        optional user-selected limit (unlimited by default)
 --agent-concurrency <n>     concurrent specialist limit, 1-8 (default: 3)
 -y, --yes                   approve writes/execution except dangerous actions
 ```
