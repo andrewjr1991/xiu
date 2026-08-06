@@ -314,15 +314,20 @@ function clearRenderedFrame(lines: number, cursorRow: number): void {
   clearRenderedLines(lines);
 }
 
-function beginRawInput(onKeypress: (text: string, key: readline.Key) => void): () => void {
-  readline.emitKeypressEvents(process.stdin);
-  process.stdin.setRawMode?.(true);
-  process.stdin.resume();
-  process.stdin.on("keypress", onKeypress);
+export function beginRawInput(
+  onKeypress: (text: string, key: readline.Key) => void,
+  input: NodeJS.ReadStream = process.stdin,
+): () => void {
+  readline.emitKeypressEvents(input);
+  input.setRawMode?.(true);
+  input.resume();
+  input.on("keypress", onKeypress);
   return () => {
-    process.stdin.off("keypress", onKeypress);
-    process.stdin.setRawMode?.(false);
-    process.stdin.pause();
+    input.off("keypress", onKeypress);
+    input.setRawMode?.(false);
+    // Xiu immediately swaps from the running-task editor to the normal editor.
+    // Pausing shared stdin during that hand-off can leave Windows ConPTY in a
+    // half-resumed state where the first submitted line is not redrawn.
   };
 }
 

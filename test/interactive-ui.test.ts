@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -10,6 +11,36 @@ const commands: SlashCommand[] = [
   { name: "/status", description: "status" },
   { name: "/paste", description: "paste attachment" },
 ];
+
+test("raw input hand-off keeps stdin flowing between consecutive prompts", () => {
+  const input = new PassThrough() as PassThrough & {
+    setRawMode: (enabled: boolean) => void;
+    isRaw: boolean;
+  };
+  let pauseCalls = 0;
+  const originalPause = input.pause.bind(input);
+  input.pause = () => {
+    pauseCalls += 1;
+    return originalPause();
+  };
+  input.isRaw = false;
+  input.setRawMode = (enabled) => { input.isRaw = enabled; };
+
+  let firstKeys = 0;
+  const releaseFirst = beginRawInput(() => { firstKeys += 1; }, input as unknown as NodeJS.ReadStream);
+  input.emit("keypress", "a", { name: "a" });
+  releaseFirst();
+
+  let secondKeys = 0;
+  const releaseSecond = beginRawInput(() => { secondKeys += 1; }, input as unknown as NodeJS.ReadStream);
+  input.emit("keypress", "b", { name: "b" });
+  releaseSecond();
+
+  assert.equal(firstKeys, 1);
+  assert.equal(secondKeys, 1);
+  assert.equal(pauseCalls, 0);
+  assert.equal(input.isRaw, false);
+});
 
 test("slash command matching opens for slash and filters as the user types", () => {
   assert.equal(matchingCommands("/", commands).length, 5);
