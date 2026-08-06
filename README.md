@@ -6,6 +6,8 @@ Xiu is an open-source autonomous coding agent for the terminal, developed by 静
 
 Version 0.8 starts Xiu's large-project intelligence work with a reliability-first context engine. Compaction now creates a structured checkpoint while deterministically preserving the authoritative primary goal, additive steering, and current plan. The next model resumes from recorded evidence and the next action instead of restarting discovery. Large text files are read in bounded line pages, while minified or giant single-line HTML/JSON can be paged by character offset with explicit continuation hints. It retains the professional terminal UI, multi-agent, MCP, planning, checkpoint, resumable-session, multimodal, and Skill systems from earlier releases.
 
+Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters

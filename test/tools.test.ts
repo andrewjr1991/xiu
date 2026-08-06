@@ -3,13 +3,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { builtinTools, classifyCommand, executeTool, resolveWorkspacePath } from "../src/tools.js";
+import { builtinTools, classifyCommand, executeTool, looksLikeVerification, resolveWorkspacePath } from "../src/tools.js";
 
 test("resolveWorkspacePath blocks traversal", () => {
   const root = path.resolve("workspace");
   assert.equal(resolveWorkspacePath(root, "src/index.ts"), path.join(root, "src/index.ts"));
   assert.throws(() => resolveWorkspacePath(root, "../secret.txt"), /escapes workspace/);
   assert.throws(() => resolveWorkspacePath(root, path.parse(root).root), /escapes workspace/);
+});
+
+test("custom verifier scripts count as verification commands", () => {
+  assert.equal(looksLikeVerification("python test/verify_prelabel.py"), true);
+  assert.equal(looksLikeVerification("node scripts/check-output.js"), true);
+  assert.equal(looksLikeVerification("python scripts/output_validate.py"), true);
+  assert.equal(looksLikeVerification("python prelabel_v4.py"), false);
+
+  const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
+  assert.equal(tool.isVerification?.({ command: "python test/verify_prelabel.py" }, "Exit code: 0\nVerification passed."), true);
+  assert.equal(tool.isVerification?.({ command: "python test/verify_prelabel.py" }, "Exit code: 1\nVerification failed."), false);
 });
 
 test("write_file requires approval and writes inside workspace", async () => {

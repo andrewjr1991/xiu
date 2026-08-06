@@ -11,7 +11,7 @@ import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
-import { executeTool } from "./tools.js";
+import { executeTool, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 
 export interface AgentEvents {
@@ -446,9 +446,7 @@ export class Agent {
   private isVerificationAttempt(toolName: string, input: Record<string, unknown>): boolean {
     if (toolName === "verify_project") return true;
     if (toolName !== "run_command") return false;
-    const command = String(input.command ?? "");
-    return /(?:^|\s)(?:test|typecheck|lint|build|check|verify|pytest|jest|vitest|tsc|eslint|cargo\s+test|go\s+test)(?:\s|$)/i.test(command)
-      || /npm(?:\.cmd)?\s+(?:run\s+)?(?:test|typecheck|lint|build|check|verify)\b/i.test(command);
+    return looksLikeVerification(String(input.command ?? ""));
   }
 
   private async compactWithSignal(signal: AbortSignal, reason: string): Promise<string> {

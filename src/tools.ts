@@ -86,9 +86,12 @@ export function classifyCommand(command: string): ToolRisk {
   return readOnly.some((pattern) => pattern.test(shell)) ? "read" : "execute";
 }
 
-function looksLikeVerification(command: string): boolean {
-  return /(^|\s)(test|tests|lint|check|typecheck|build|verify)(\s|$|:)/i.test(command)
+export function looksLikeVerification(command: string): boolean {
+  const namedCheck = /(^|\s)(test|tests|lint|check|typecheck|build|verify|validate)(\s|$|:)/i.test(command)
     || /\b(tsc\b|pytest\b|vitest\b|jest\b|eslint\b|cargo\s+test\b|go\s+test\b)/i.test(command);
+  const verifierScript = /(?:^|[\\/\s])(?:test|tests|check|verify|validate)(?:[_-][^\\/\s]+)?\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command)
+    || /(?:^|[\\/\s])[^\\/\s]+[_-](?:test|tests|check|verify|validate)\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command);
+  return namedCheck || verifierScript;
 }
 
 function patchArray(input: Record<string, unknown>): Array<{ old_text: string; new_text: string }> {
