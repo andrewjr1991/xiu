@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.3 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, injects normal running-time input as additive steering, preserves the original task as a mandatory primary goal, performs a task-contract audit before finishing a steered task, reserves `/queue <task>` for explicit independent work, blocks repeated tool-call loops, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.7 establishes Xiu's professional terminal interaction foundation. The v0.7.4 reliability update adds live Turn/tool/elapsed progress with `Ctrl+O`, preserves the original task across additive steering, performs a task-contract audit before finishing, and limits loop blocking to recent stagnant call sequences instead of accumulating repeated reads across an entire long task. It reserves `/queue <task>` for explicit independent work, pauses after failure, and refuses to show a green success state for unverified changes. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -374,6 +374,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
-- v0.7.3 provides live inline progress, primary-goal-preserving steering, task-contract completion audits, loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
+- v0.7.4 provides live inline progress, primary-goal-preserving steering, task-contract completion audits, progress-aware loop detection, failure-paused scheduling, and unverified outcomes; a scrollable full transcript viewer, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
 
 These are the natural next milestones after validating the core loop.

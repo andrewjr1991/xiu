@@ -20,21 +20,31 @@ export interface LoopObservation {
 
 export class ToolLoopGuard {
   private history: string[] = [];
-  private counts = new Map<string, number>();
   private blocks = 0;
+  private usefulCallsSinceBlock = 0;
+
+  reset(): void {
+    this.history = [];
+    this.blocks = 0;
+    this.usefulCallsSinceBlock = 0;
+  }
 
   observe(name: string, input: Record<string, unknown>): LoopObservation {
     const signature = toolCallSignature(name, input);
-    const count = (this.counts.get(signature) ?? 0) + 1;
-    this.counts.set(signature, count);
     this.history.push(signature);
     if (this.history.length > 24) this.history.shift();
 
-    const repeatedCall = count >= 3;
+    const repeatedCall = this.history.length >= 3
+      && this.history.slice(-3).every((item) => item === signature);
     const repeatedCycle = this.hasRepeatedCycle();
-    if (!repeatedCall && !repeatedCycle) return { blocked: false, abort: false };
+    if (!repeatedCall && !repeatedCycle) {
+      this.usefulCallsSinceBlock++;
+      if (this.usefulCallsSinceBlock >= 4) this.blocks = 0;
+      return { blocked: false, abort: false };
+    }
 
     this.blocks++;
+    this.usefulCallsSinceBlock = 0;
     const pattern = repeatedCycle ? "the same tool-call cycle" : "the same tool call";
     return {
       blocked: true,

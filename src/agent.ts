@@ -172,6 +172,7 @@ export class Agent {
       await this.applyPendingSteering(turn);
       if (estimateConversationTokens(this.messages) >= (this.config.contextLimit ?? 60_000)) {
         await this.compactWithSignal(signal, "automatic context limit");
+        loopGuard.reset();
       }
       this.events.onModelStart?.(turn);
       let response;
@@ -283,6 +284,7 @@ export class Agent {
           if (changesWorkspace && !/^Tool (error|execution denied)/.test(result)) {
             workspaceChanged = true;
             verifiedAfterChange = false;
+            loopGuard.reset();
             this.projectIndex?.invalidate();
           }
           if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
