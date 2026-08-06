@@ -16,6 +16,9 @@ export interface InteractiveInputOptions {
   paths?: string[];
   initialValue?: string;
   onChange?: (value: string) => void;
+  onCancel?: () => void;
+  signal?: AbortSignal;
+  refreshMs?: number;
 }
 
 export interface EditorState {
@@ -218,7 +221,7 @@ export function editorFrameLines(
   }
   if (footer) {
     lines.push(chalk.dim("-".repeat(Math.max(19, Math.min(lineWidth, 120)))));
-    lines.push(footer);
+    for (const footerLine of footer.split("\n")) lines.push(chalk.dim(truncateDisplay(stripAnsi(footerLine), lineWidth)));
   }
   return { lines, cursorRow: input.cursorRow, cursorColumn: input.cursorColumn };
 }
@@ -313,7 +316,7 @@ export async function readInteractiveInput(
   prompt: string,
   commands: SlashCommand[],
   inputHistory: string[] = [],
-  footer?: string,
+  footer?: string | (() => string),
   options: InteractiveInputOptions = {},
 ): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -330,6 +333,9 @@ export async function readInteractiveInput(
     let cursorRow = 0;
     let dismissed = false;
     let searchQuery: string | undefined;
+    let finished = false;
+    let cleanupInput = (): void => {};
+    let refreshTimer: NodeJS.Timeout | undefined;
 
     const suggestions = (): InputCandidate[] => {
       if (dismissed) return [];
@@ -343,7 +349,8 @@ export async function readInteractiveInput(
     };
     const render = (): void => {
       clearRenderedFrame(renderedLines, cursorRow);
-      const frame = editorFrameLines(prompt, state, suggestions(), selected, footer, process.stdout.columns || 100, searchQuery);
+      const currentFooter = typeof footer === "function" ? footer() : footer;
+      const frame = editorFrameLines(prompt, state, suggestions(), selected, currentFooter, process.stdout.columns || 100, searchQuery);
       process.stdout.write(frame.lines.join("\n"));
       renderedLines = frame.lines.length;
       const lastRow = frame.lines.length - 1;
@@ -354,17 +361,25 @@ export async function readInteractiveInput(
 
     const changed = (): void => { options.onChange?.(state.value); };
     const finish = (result: string, submitted = true): void => {
+      if (finished) return;
+      finished = true;
       clearRenderedFrame(renderedLines, cursorRow);
-      cleanup();
+      cleanupInput();
       process.stdout.off("resize", render);
+      options.signal?.removeEventListener("abort", abortInput);
+      if (refreshTimer) clearInterval(refreshTimer);
       if (submitted) options.onChange?.("");
       process.stdout.write(`${chalk.cyan(prompt)}${result}\n`);
       resolve(result);
     };
+    const abortInput = (): void => finish("", false);
 
     const onKeypress = (text: string, key: readline.Key): void => {
       const matches = suggestions();
-      if (key.ctrl && key.name === "c") return finish("", false);
+      if (key.ctrl && key.name === "c") {
+        options.onCancel?.();
+        return finish("", false);
+      }
       if (key.ctrl && key.name === "d") return finish("/exit");
       if (key.ctrl && key.name === "r") {
         searchQuery = searchQuery ?? "";
@@ -439,9 +454,15 @@ export async function readInteractiveInput(
       render();
     };
 
-    const cleanup = beginRawInput(onKeypress);
+    cleanupInput = beginRawInput(onKeypress);
     process.stdout.on("resize", render);
+    options.signal?.addEventListener("abort", abortInput, { once: true });
+    if (options.refreshMs && options.refreshMs > 0) {
+      refreshTimer = setInterval(render, Math.max(100, options.refreshMs));
+      refreshTimer.unref();
+    }
     render();
+    if (options.signal?.aborted) abortInput();
   });
 }
 

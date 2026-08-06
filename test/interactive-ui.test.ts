@@ -76,6 +76,14 @@ test("editor frame wraps multiline Chinese input and returns a valid cursor posi
   assert.ok(frame.cursorColumn >= 2 && frame.cursorColumn <= 29);
 });
 
+test("editor frame counts and clips every physical line in a multiline running footer", () => {
+  const frame = editorFrameLines("xiu[working]> ", { value: "继续修复", cursor: 4 }, [], 0, "Working: Running a very long verification command | 2 queued\nAuto | model | D:\\long\\workspace", 36);
+  assert.equal(frame.lines.length, 4);
+  assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 35));
+  assert.match(frame.lines.at(-2) ?? "", /\.\.\./);
+  assert.match(frame.lines.at(-1) ?? "", /Auto/);
+});
+
 test("path completion replaces only the active @ reference", () => {
   const state = { value: "检查 @src/int 然后测试", cursor: [..."检查 @src/int"].length };
   const candidates = pathCandidates(state, ["src/agent.ts", "src/interactive-ui.ts", "test/interactive-ui.test.ts"]);

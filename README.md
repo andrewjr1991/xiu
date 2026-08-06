@@ -4,7 +4,7 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
-Version 0.7 establishes Xiu's professional terminal interaction foundation: multiline Unicode editing, cursor navigation, `@` project-file completion, reverse history search, crash-safe draft recovery, responsive Resize rendering, keyboard approval menus, bounded activity summaries, and `/details` for full tool output. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
+Version 0.7 establishes Xiu's professional terminal interaction foundation: multiline Unicode editing, cursor navigation, `@` project-file completion, reverse history search, crash-safe draft recovery, responsive Resize rendering, keyboard approval menus, bounded activity summaries, and `/details` for full tool output. The v0.7.1 update keeps the editor available while an Agent works, queues follow-up requests in order, and safely suspends input for approvals. It retains the multi-agent, MCP, planning, checkpoint, resumable-context, multimodal, and Skill systems from earlier releases.
 
 ## Features
 
@@ -50,6 +50,8 @@ Version 0.7 establishes Xiu's professional terminal interaction foundation: mult
 - Direction-key approval menus that default to deny
 - Bounded tool/Agent summaries with full output available through `/details`
 - Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
+- Editable `xiu[working]>` prompt with a bounded, ordered follow-up queue during active tasks
+- Immediate `/queue`, `/clear-queue`, `/cancel`, and `/exit` controls while an Agent is working
 
 ## Install
 
@@ -92,7 +94,7 @@ Start a persistent interactive session (conversation context is retained between
 xiu
 ```
 
-Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/status`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
 
 Open an interactive picker for saved sessions in the current project after closing the terminal:
 
@@ -136,6 +138,9 @@ Interactive session commands:
 /agents integrate ... preview and integrate a completed Worktree task
 /details            browse complete tool and Agent activity output
 /status             session id, context, tokens, calls, time, and index size
+/queue              show follow-ups queued during the active task
+/clear-queue        clear follow-ups that have not started
+/cancel             cancel the active task and preserve queued follow-ups
 /clear              start a separate new session
 /exit               close Xiu
 ```
@@ -145,6 +150,8 @@ Xiu estimates the active context continuously and compacts it into a continuatio
 The interactive prompt has a slash-command palette: typing `/` opens all commands immediately, further characters filter the list, Up/Down changes the highlighted command, Tab completes it, and Enter selects it.
 
 The v0.7 editor supports text insertion at the cursor, Left/Right, Ctrl+Left/Right, Home/End, Backspace/Delete, and `Ctrl+J` for a newline while Enter submits. Type `@` plus part of a project path and press Tab to accept a project-index candidate. `Ctrl+R` searches recent inputs. Esc closes a candidate list without erasing the draft. Unsubmitted text is restored after restarting Xiu.
+
+While an Agent is running, the prompt changes to `xiu[working]>`. A normal submission is queued as the next request in the same conversation. The footer shows the active phase and queue length. `/queue` lists pending requests, `/clear-queue` removes pending requests, and `/cancel` or Ctrl+C cancels only the current request while preserving the queue. `/exit` cancels the current request and clears the queue before exiting. If an approval is needed, Xiu suspends and clears the working editor before showing the default-deny menu, then restores the draft afterward. The queue is process-local in v0.7.1; an unsubmitted draft and the active session survive restart, but pending queue items do not yet claim crash recovery.
 
 ## Multi-agent orchestration
 
@@ -363,6 +370,6 @@ npm run build
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
-- v0.7.0 provides the terminal state and editor foundation; queued input during an active Agent, fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, and themes remain v0.7.x work.
+- v0.7.1 provides queued input during an active Agent; fixed full-screen panels, interactive Diff hunks, drag-and-drop normalization, persistent pending queues, and themes remain v0.7.x work.
 
 These are the natural next milestones after validating the core loop.

@@ -22,6 +22,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { listSessions, loadSession } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
+import { formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
@@ -49,6 +50,9 @@ const slashCommands: SlashCommand[] = [
   { name: "/agents integrate", description: "Review and integrate a Worktree agent" },
   { name: "/details", description: "Browse complete tool and Agent activity details" },
   { name: "/status", description: "Show tokens, calls, time, and index stats" },
+  { name: "/queue", description: "Show follow-ups queued while a task is running" },
+  { name: "/clear-queue", description: "Clear queued follow-ups while a task is running" },
+  { name: "/cancel", description: "Cancel the task that is currently running" },
   { name: "/clear", description: "Start a new conversation session" },
   { name: "/help", description: "Show all commands" },
   { name: "/exit", description: "Exit Xiu" },
@@ -198,15 +202,41 @@ async function main(): Promise<void> {
 
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
+    let runningTaskView: RunningTaskView | undefined;
+    let activeQueuedInputController: AbortController | undefined;
+    const emitLine = (value = ""): void => {
+      if (runningTaskView) runningTaskView.line(value);
+      else console.log(value);
+    };
+    const emitWrite = (value: string): void => {
+      if (runningTaskView) runningTaskView.write(value);
+      else process.stdout.write(value);
+    };
+    const startPhase = (value: string): void => {
+      if (runningTaskView) {
+        status.stop();
+        runningTaskView.setPhase(value);
+      } else status.start(value);
+    };
+    const stopPhase = (): void => {
+      if (runningTaskView) runningTaskView.setPhase("Processing response");
+      else status.stop();
+    };
     let approvalQueue = Promise.resolve();
+    let activeApproval = Promise.resolve();
     const approveRequest = async (request: Parameters<ConstructorParameters<typeof Agent>[3]>[0]): Promise<boolean> => {
       let release!: () => void;
       const previous = approvalQueue;
       approvalQueue = new Promise<void>((resolve) => { release = resolve; });
       await previous;
+      let finishActiveApproval!: () => void;
       try {
         if (config.autoApprove && request.risk !== "dangerous") return true;
+        activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
         status.stop();
+        activeQueuedInputController?.abort();
+        const buffered = runningTaskView?.drain();
+        if (buffered) process.stdout.write(buffered.endsWith("\n") ? buffered : `${buffered}\n`);
         if (!process.stdin.isTTY) return false;
         if (request.preview) console.log(`${chalk.dim("Proposed change:")}\n${request.preview}\n`);
         const selected = await selectTerminalOption(`${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`, [
@@ -215,6 +245,7 @@ async function main(): Promise<void> {
         ]);
         return selected === true;
       } finally {
+        finishActiveApproval?.();
         release();
       }
     };
@@ -297,9 +328,9 @@ async function main(): Promise<void> {
           activities.progress(activityId, task.progress ?? task.status);
           if (["completed", "failed", "cancelled", "blocked"].includes(task.status)) activities.finish(activityId, task.result ?? task.error ?? task.status, task.status !== "completed");
           const color = task.status === "completed" ? chalk.green : task.status === "failed" || task.status === "blocked" ? chalk.red : chalk.cyan;
-          console.log(color(`[agent ${task.id}] ${task.status}`), chalk.dim(`${task.role} - ${task.title}`));
+          emitLine(`${color(`[agent ${task.id}] ${task.status}`)} ${chalk.dim(`${task.role} - ${task.title}`)}`);
         },
-        onRunUpdate: (run) => console.log(chalk.cyan(`Multi-agent run ${run.id} ${run.status}.\n`)),
+        onRunUpdate: (run) => emitLine(chalk.cyan(`Multi-agent run ${run.id} ${run.status}.`)),
       },
       config.agentConcurrency,
     );
@@ -316,43 +347,43 @@ async function main(): Promise<void> {
       tools,
       approveRequest,
       {
-        onModelStart: (turn) => status.start(`Thinking - turn ${turn}`),
-        onModelEnd: () => status.stop(),
-        onText: (text) => console.log(`${text}\n`),
+        onModelStart: (turn) => startPhase(`Thinking - turn ${turn}`),
+        onModelEnd: () => stopPhase(),
+        onText: (text) => emitLine(`${text}\n`),
         onTextDelta: (text) => {
-          status.stop();
-          process.stdout.write(text);
+          stopPhase();
+          emitWrite(text);
         },
-        onTextStreamEnd: () => process.stdout.write("\n\n"),
+        onTextStreamEnd: () => emitWrite("\n\n"),
         onToolStart: (name, description) => {
           activeToolActivity = activities.start("tool", name, description);
-          console.log(chalk.cyan(`> ${name}`), chalk.dim(description));
-          status.start(`Running ${name}`);
+          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(description)}`);
+          startPhase(`Running ${name}`);
         },
         onToolProgress: (name, message) => {
           if (activeToolActivity) activities.progress(activeToolActivity, message);
-          status.start(`${name}: ${message}`);
+          startPhase(`${name}: ${message}`);
         },
         onToolEnd: (_name, result) => {
-          status.stop();
+          stopPhase();
           const failed = /^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification timed out|Verification unavailable)/i.test(result);
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
-          console.log(chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... (/details for full output)` : summary), "\n");
+          emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... (/details for full output)` : summary)}\n`);
         },
-        onCompletionGate: () => console.log(chalk.yellow("Verification required before completion.\n")),
-        onCompaction: (message) => status.start(message),
-        onRetry: (message) => status.start(message),
+        onCompletionGate: () => emitLine(chalk.yellow("Verification required before completion.\n")),
+        onCompaction: (message) => startPhase(message),
+        onRetry: (message) => startPhase(message),
         onFailure: (message) => {
-          status.stop();
-          console.error(chalk.red(`${message}\n`));
+          stopPhase();
+          emitLine(chalk.red(`${message}\n`));
         },
-        onPlanUpdate: (plan) => console.log(`${chalk.cyan("Task plan updated")}\n${chalk.dim(plan)}\n`),
-        onCheckpoint: (message) => console.log(chalk.dim(`${message}\n`)),
+        onPlanUpdate: (plan) => emitLine(`${chalk.cyan("Task plan updated")}\n${chalk.dim(plan)}\n`),
+        onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
         onTaskComplete: (summary) => {
           const verification = summary.changed ? (summary.verified ? "verified" : "verification noted") : "no changes";
-          console.log(chalk.green(`Done - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`));
+          emitLine(chalk.green(`Done - ${summary.turns} turn(s), ${summary.toolCalls} tool call(s), ${verification}, ${(summary.durationMs / 1000).toFixed(1)}s\n`));
         },
       },
       restored,
@@ -376,12 +407,12 @@ async function main(): Promise<void> {
 
     console.log(chalk.dim("Interactive mode - /help for commands - Ctrl+C or /exit to quit\n"));
     const inputHistory: string[] = [];
-    while (true) {
+    const promptFooter = (): string => {
       const dashboard = agent.status();
       const agentRuns = coordinator.list();
       const plan = planManager.snapshot();
       const activeStep = plan?.steps.find((step) => step.status === "in_progress") ?? plan?.steps.find((step) => step.status === "pending");
-      const footer = formatPromptDashboard({
+      return formatPromptDashboard({
         model: dashboard.model,
         contextTokens: dashboard.stats.estimatedTokens,
         contextLimit: dashboard.contextLimit,
@@ -393,7 +424,109 @@ async function main(): Promise<void> {
         backgroundTasks: listBackgroundProcesses().filter((item) => item.running).length,
         phase: activeStep ? `${activeStep.status}:${activeStep.title}` : undefined,
       });
-      const task = (await readInteractiveInput("xiu> ", slashCommands, inputHistory, footer, {
+    };
+
+    const runTaskSequence = async (firstTask: string): Promise<boolean> => {
+      const queue = new TaskInputQueue();
+      queue.enqueue(firstTask);
+      let exitRequested = false;
+
+      while (queue.size && !exitRequested) {
+        const current = queue.dequeue()!;
+        const view = new RunningTaskView();
+        runningTaskView = view;
+        let settled = false;
+        let failure: unknown;
+        const runPromise = agent.run(current.text)
+          .catch((error) => { failure = error; })
+          .finally(() => {
+            settled = true;
+            activeQueuedInputController?.abort();
+          });
+
+        while (!settled) {
+          const inputController = new AbortController();
+          activeQueuedInputController = inputController;
+          let cancelledFromKeyboard = false;
+          const queuedDraft = await draftStore.load();
+          const followUp = (await readInteractiveInput("xiu[working]> ", slashCommands, inputHistory, () => (
+            formatRunningInputFooter(view.phase(), queue.size, promptFooter())
+          ), {
+            paths: projectIndex.paths("", 1_000),
+            initialValue: queuedDraft,
+            onChange: (value) => { void draftStore.save(value); },
+            onCancel: () => {
+              cancelledFromKeyboard = true;
+              agent.cancel();
+            },
+            signal: inputController.signal,
+            refreshMs: 250,
+          })).trim();
+          if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
+          await draftStore.flush();
+          await activeApproval;
+          if (settled) break;
+          if (cancelledFromKeyboard) {
+            console.log(chalk.yellow("Cancelling current task. Queued follow-ups are preserved.\n"));
+            break;
+          }
+          if (!followUp) continue;
+          inputHistory.push(followUp);
+
+          if (followUp === "/cancel") {
+            agent.cancel();
+            console.log(chalk.yellow("Cancelling current task. Queued follow-ups are preserved.\n"));
+            break;
+          }
+          if (followUp === "/exit" || followUp === "/quit") {
+            exitRequested = true;
+            queue.clear();
+            agent.cancel();
+            console.log(chalk.yellow("Cancelling current task before exit.\n"));
+            break;
+          }
+          if (followUp === "/queue") {
+            const pending = queue.list();
+            console.log(pending.length
+              ? `${chalk.cyan("Queued follow-ups")}\n${pending.map((item, index) => `${index + 1}. ${item.text.replace(/\s+/g, " ").slice(0, 100)}`).join("\n")}\n`
+              : chalk.dim("The follow-up queue is empty.\n"));
+            continue;
+          }
+          if (followUp === "/clear-queue") {
+            const cleared = queue.clear();
+            console.log(chalk.dim(`Cleared ${cleared} queued follow-up(s).\n`));
+            continue;
+          }
+          if (followUp === "/status") {
+            const currentStatus = agent.status();
+            console.log(chalk.dim(`Working: ${view.phase()} | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`));
+            continue;
+          }
+
+          try {
+            const queued = queue.enqueue(followUp);
+            console.log(chalk.green(`Queued ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`));
+          } catch (error) {
+            console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
+          }
+        }
+
+        await runPromise;
+        if (activeQueuedInputController) {
+          activeQueuedInputController.abort();
+          activeQueuedInputController = undefined;
+        }
+        runningTaskView = undefined;
+        const transcript = view.drain();
+        if (transcript) process.stdout.write(transcript.endsWith("\n") ? transcript : `${transcript}\n`);
+        if (failure) console.error(chalk.red(`Error: ${failure instanceof Error ? failure.message : String(failure)}\n`));
+        if (queue.size && !exitRequested) console.log(chalk.cyan(`Continuing with ${queue.size} queued follow-up(s).\n`));
+      }
+      return exitRequested;
+    };
+
+    while (true) {
+      const task = (await readInteractiveInput("xiu> ", slashCommands, inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
         onChange: (value) => { void draftStore.save(value); },
@@ -617,6 +750,10 @@ async function main(): Promise<void> {
         }
         continue;
       }
+      if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {
+        console.log(chalk.dim(`${task} is available while a task is running.\n`));
+        continue;
+      }
       if (task === "/status") {
         const current = agent.status();
         console.log([
@@ -638,11 +775,12 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/help") {
-        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse complete tool and Agent activity output\n/status             Show session, token, call, time, and index stats\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
+        console.log("/resume            Choose and restore a project session\n/history           Show recent conversation\n/history sessions  List sessions in this workspace\n/compact           Compress conversation context now\n/plan               Show the task plan and plan-mode state\n/plan on|off        Toggle read-only plan mode\n/tasks              Show live task statuses\n/diff               Show this session's changed files and Git diff\n/checkpoints        List safe file restore points\n/rewind             Restore files from a selected checkpoint\n/models             Discover and choose an available model\n/skills             Browse installed skills\n/skills install ... Install a local or HTTPS Git skill package\n/mcp                Show MCP server and tool status\n/mcp reload         Reload MCP configuration\n/agents             Show multi-agent runs\n/agents <run>       Show one multi-agent run\n/agents cancel ...  Cancel one Agent task\n/agents retry ...   Retry one interrupted or failed task\n/agents integrate . Review and integrate a Worktree task\n/details            Browse complete tool and Agent activity output\n/status             Show session, token, call, time, and index stats\n/queue              Show follow-ups queued during the current task\n/clear-queue        Clear queued follow-ups\n/cancel             Cancel the current task\n/clear              Start a new conversation session\n/exit               Exit Xiu\n/help               Show interactive commands\n");
         continue;
       }
       try {
-        await agent.run(task);
+        if (await runTaskSequence(task)) break;
+        restoredDraft = await draftStore.load();
       } catch (error) {
         status.stop();
         console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}\n`));
