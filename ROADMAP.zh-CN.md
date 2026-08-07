@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.9.3` |
+| 当前已发布版本 | `0.9.4` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -252,7 +252,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 已在 Windows PowerShell `ConstrainedLanguage` 下完成真实文字剪贴板冒烟验证。
 - 设计和验收记录在 `V0.9.3_DESIGN.zh-CN.md`。
 
-### 本地 v0.9.4 候选版本（尚未发布）
+### 已发布的 v0.9.4
 
 - 不再开启终端鼠标上报或截获右键，右键粘贴完全交还 Windows Terminal、PowerShell 等终端宿主。
 - `Get-Clipboard` 的 FileDropList、Text、Image 能力分别尝试，单项被集团策略拦截不会直接中断其他格式。
