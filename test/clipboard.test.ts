@@ -3,18 +3,58 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ClipboardAttachmentManager, type ClipboardBackend, type ClipboardPayload } from "../src/clipboard.js";
+import { ClipboardAttachmentManager, parsePowerShellClipboardResponse, WindowsClipboardBackend, type ClipboardBackend, type ClipboardPayload } from "../src/clipboard.js";
 
 class FakeClipboard implements ClipboardBackend {
-  constructor(private readonly payload: ClipboardPayload, private readonly imageBytes?: Buffer) {}
+  calls = 0;
+  constructor(private readonly payload: ClipboardPayload, private readonly imageBytes?: Buffer, private readonly saveImage = true) {}
   async read(imageOutputPath: string): Promise<ClipboardPayload> {
-    if (this.payload.kind === "image") {
+    this.calls++;
+    if (this.payload.kind === "image" && this.saveImage) {
       await fs.writeFile(imageOutputPath, this.imageBytes ?? Buffer.from("png"));
       return { kind: "image", imagePath: imageOutputPath };
     }
     return this.payload;
   }
 }
+
+class FailingClipboard implements ClipboardBackend {
+  calls = 0;
+  constructor(private readonly message: string, private readonly available = false, private readonly cached = false) {}
+  async read(): Promise<ClipboardPayload> { this.calls++; throw new Error(this.message); }
+  async supportsRightClick(): Promise<boolean> { return this.available; }
+  async hasCachedHelper(): Promise<boolean> { return this.cached; }
+}
+
+test("PowerShell clipboard JSON preserves Unicode text and file paths", () => {
+  assert.deepEqual(parsePowerShellClipboardResponse('\uFEFF{"kind":"text","text":"你好\\n第二行"}'), { kind: "text", text: "你好\n第二行" });
+  assert.deepEqual(parsePowerShellClipboardResponse('{"kind":"files","files":["C:\\\\项目\\\\设计稿.png"]}'), {
+    kind: "files", files: ["C:\\项目\\设计稿.png"],
+  });
+});
+
+test("native Windows clipboard files never invoke the optional helper", async () => {
+  const native = new FakeClipboard({ kind: "files", files: ["C:\\project\\notes.md"] });
+  const helper = new FailingClipboard("helper is blocked");
+  const backend = new WindowsClipboardBackend(native, helper);
+  assert.deepEqual(await backend.read("C:\\project\\clipboard.png"), { kind: "files", files: ["C:\\project\\notes.md"] });
+  assert.equal(native.calls, 1);
+  assert.equal(helper.calls, 0);
+});
+
+test("blocked bitmap helper gives a save-as-file recovery instruction", async () => {
+  const native = new FakeClipboard({ kind: "image" }, undefined, false);
+  const helper = new FailingClipboard("application control denied execution");
+  const backend = new WindowsClipboardBackend(native, helper);
+  await assert.rejects(backend.read("C:\\project\\clipboard.png"), /Save the image as a file/);
+});
+
+test("right-click capture stays disabled when no permitted backend exists", async () => {
+  const native = new FailingClipboard("Get-Clipboard blocked", false);
+  const helper = new FailingClipboard("helper blocked", false, false);
+  const backend = new WindowsClipboardBackend(native, helper);
+  assert.equal(await backend.supportsRightClick(), false);
+});
 
 test("plain clipboard text remains ordinary editor text", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clipboard-text-"));

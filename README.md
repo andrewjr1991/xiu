@@ -26,6 +26,8 @@ Version 0.9.1 makes clipboard attachments available from terminal right-click in
 
 Version 0.9.2 fixes Node.js splitting SGR mouse reports into separate keypress events. Xiu now reassembles fragmented press and release sequences before they reach the editor, preventing coordinate tails such as `2;51;21M` from appearing as text while preserving one right-click clipboard import.
 
+Version 0.9.3 removes the compiled clipboard helper dependency for text and copied files. On Windows, Xiu first uses the built-in PowerShell `Get-Clipboard` cmdlet and a temporary UTF-8 JSON response; enterprise application control no longer needs to permit a Xiu-generated EXE for these clipboard formats. A bitmap still requires an API capable of saving pixels, so the optional helper is attempted only for images. If no permitted backend is available, Xiu leaves terminal right-click untouched instead of swallowing native text paste.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters

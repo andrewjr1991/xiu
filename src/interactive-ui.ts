@@ -20,6 +20,7 @@ export interface InteractiveInputOptions {
   onCancel?: () => void;
   onToggleDetails?: () => void;
   onPaste?: () => Promise<{ insertText: string; notice?: string }>;
+  enableRightClickPaste?: boolean;
   signal?: AbortSignal;
   refreshMs?: number;
   language?: UiLanguage;
@@ -631,7 +632,7 @@ export async function readInteractiveInput(
     };
 
     cleanupInput = beginRawInput(onKeypress, process.stdin, {
-      enableMouse: process.platform === "win32" && Boolean(options.onPaste),
+      enableMouse: process.platform === "win32" && Boolean(options.onPaste) && options.enableRightClickPaste !== false,
     });
     process.stdout.on("resize", render);
     options.signal?.addEventListener("abort", abortInput, { once: true });

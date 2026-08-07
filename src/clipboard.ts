@@ -71,6 +71,79 @@ export interface ClipboardPasteResult {
 
 export interface ClipboardBackend {
   read(imageOutputPath: string): Promise<ClipboardPayload>;
+  supportsRightClick?(): Promise<boolean>;
+}
+
+const POWERSHELL_CLIPBOARD_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$files = @(Get-Clipboard -Format FileDropList -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ })
+if ($files.Count -gt 0) {
+  $paths = @($files | ForEach-Object {
+    if ($null -ne $_.FullName -and $_.FullName.Length -gt 0) { [string]$_.FullName }
+    else { [string]$_ }
+  })
+  $result = @{ kind = 'files'; files = @($paths) }
+} else {
+  $image = Get-Clipboard -Format Image -ErrorAction SilentlyContinue
+  if ($null -ne $image) {
+    $result = @{ kind = 'image' }
+  } else {
+    $text = Get-Clipboard -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $text) { $result = @{ kind = 'empty' } }
+    else { $result = @{ kind = 'text'; text = [string]$text }
+  }
+}
+$result | ConvertTo-Json -Compress -Depth 3 | Set-Content -LiteralPath $env:XIU_CLIPBOARD_RESPONSE -Encoding UTF8
+`;
+
+function encodedPowerShell(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
+export function parsePowerShellClipboardResponse(value: string): ClipboardPayload {
+  const parsed = JSON.parse(value.replace(/^\uFEFF/, "")) as { kind?: unknown; text?: unknown; files?: unknown };
+  if (parsed.kind === "text" && typeof parsed.text === "string") return { kind: "text", text: parsed.text };
+  if (parsed.kind === "files" && Array.isArray(parsed.files) && parsed.files.every((item) => typeof item === "string")) {
+    return { kind: "files", files: parsed.files };
+  }
+  if (parsed.kind === "image") return { kind: "image" };
+  if (parsed.kind === "empty") return { kind: "empty" };
+  throw new Error("PowerShell clipboard reader returned an invalid response");
+}
+
+class PowerShellClipboardBackend implements ClipboardBackend {
+  private availability?: Promise<boolean>;
+
+  supportsRightClick(): Promise<boolean> {
+    if (process.platform !== "win32") return Promise.resolve(false);
+    this.availability ??= execFileAsync("powershell.exe", [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand",
+      encodedPowerShell("$ErrorActionPreference = 'Stop'; $null = Get-Command Get-Clipboard -ErrorAction Stop; $null = Get-Clipboard -Raw -ErrorAction Stop"),
+    ], { windowsHide: true, timeout: 5_000, maxBuffer: 256 * 1024 }).then(() => true).catch(() => false);
+    return this.availability;
+  }
+
+  async read(imageOutputPath: string): Promise<ClipboardPayload> {
+    if (!(await this.supportsRightClick())) throw new Error("Windows Get-Clipboard is unavailable or blocked by policy");
+    const responsePath = `${imageOutputPath}.json`;
+    try {
+      await execFileAsync("powershell.exe", [
+        "-NoLogo", "-NoProfile", "-NonInteractive", "-STA", "-EncodedCommand",
+        encodedPowerShell(POWERSHELL_CLIPBOARD_SCRIPT),
+      ], {
+        windowsHide: true,
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, XIU_CLIPBOARD_RESPONSE: responsePath },
+      });
+      return parsePowerShellClipboardResponse(await fs.readFile(responsePath, "utf8"));
+    } catch (error) {
+      throw new Error(`Could not read the clipboard with Windows PowerShell: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await fs.unlink(responsePath).catch(() => undefined);
+    }
+  }
 }
 
 function timestamp(): string {
@@ -116,7 +189,7 @@ function parseHelperOutput(stdout: string): ClipboardPayload {
   return { kind: "empty" };
 }
 
-class WindowsClipboardBackend implements ClipboardBackend {
+class WindowsHelperClipboardBackend implements ClipboardBackend {
   private helperPath?: string;
 
   private async helper(): Promise<string> {
@@ -149,6 +222,11 @@ class WindowsClipboardBackend implements ClipboardBackend {
     return executable;
   }
 
+  async hasCachedHelper(): Promise<boolean> {
+    const executable = path.join(os.homedir(), ".xiu", "cache", "clipboard-helper-v1", "xiu-clipboard.exe");
+    return await fs.stat(executable).then((stat) => stat.isFile()).catch(() => false);
+  }
+
   async read(imageOutputPath: string): Promise<ClipboardPayload> {
     if (process.platform !== "win32") throw new Error("Binary clipboard attachments are currently supported on Windows; paste a file path on this platform");
     const executable = await this.helper();
@@ -159,6 +237,39 @@ class WindowsClipboardBackend implements ClipboardBackend {
       const detail = error as Error & { stdout?: string };
       if (detail.stdout) return parseHelperOutput(detail.stdout);
       throw new Error(`Could not read the clipboard: ${detail.message}`);
+    }
+  }
+}
+
+export class WindowsClipboardBackend implements ClipboardBackend {
+  constructor(
+    private readonly native: ClipboardBackend = new PowerShellClipboardBackend(),
+    private readonly imageHelper: ClipboardBackend & { hasCachedHelper?: () => Promise<boolean> } = new WindowsHelperClipboardBackend(),
+  ) {}
+
+  async supportsRightClick(): Promise<boolean> {
+    if (await this.native.supportsRightClick?.()) return true;
+    return await this.imageHelper.hasCachedHelper?.() ?? false;
+  }
+
+  async read(imageOutputPath: string): Promise<ClipboardPayload> {
+    let nativeFailure: unknown;
+    try {
+      const payload = await this.native.read(imageOutputPath);
+      if (payload.kind !== "image" || payload.imagePath) return payload;
+      try {
+        return await this.imageHelper.read(imageOutputPath);
+      } catch (error) {
+        throw new Error(`The clipboard contains a bitmap, but the optional clipboard helper is blocked. Save the image as a file and paste or reference its path instead. ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } catch (error) {
+      nativeFailure = error;
+      if (error instanceof Error && error.message.includes("clipboard contains a bitmap")) throw error;
+    }
+    try {
+      return await this.imageHelper.read(imageOutputPath);
+    } catch (helperFailure) {
+      throw new Error(`No permitted Windows clipboard backend is available. Native reader: ${nativeFailure instanceof Error ? nativeFailure.message : String(nativeFailure)}. Helper: ${helperFailure instanceof Error ? helperFailure.message : String(helperFailure)}`);
     }
   }
 }
@@ -174,6 +285,10 @@ export class ClipboardAttachmentManager {
 
   constructor(private readonly cwd: string, backend?: ClipboardBackend) {
     this.backend = backend ?? new WindowsClipboardBackend();
+  }
+
+  async supportsRightClickPaste(): Promise<boolean> {
+    return await this.backend.supportsRightClick?.() ?? true;
   }
 
   async paste(): Promise<ClipboardPasteResult> {

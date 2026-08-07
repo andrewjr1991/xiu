@@ -214,6 +214,7 @@ async function main(): Promise<void> {
     await projectIndex.initialize();
     const draftStore = new DraftStore(config.cwd);
     const clipboard = new ClipboardAttachmentManager(config.cwd);
+    const rightClickPasteEnabled = await clipboard.supportsRightClickPaste();
     let restoredDraft = await draftStore.load();
     status.stop();
     if (restored) console.log(chalk.green(localize(language, `已恢复会话 ${restored.id}`, `Resumed session ${restored.id}`)), chalk.dim(localize(language, `（${restored.messages.length} 条消息）\n`, `(${restored.messages.length} messages)\n`)));
@@ -604,6 +605,7 @@ async function main(): Promise<void> {
             },
             onToggleDetails: () => { view.toggleDetails(); },
             onPaste: () => clipboard.paste(),
+            enableRightClickPaste: rightClickPasteEnabled,
             signal: inputController.signal,
             refreshMs: 250,
             language,
@@ -742,6 +744,7 @@ async function main(): Promise<void> {
         initialValue: restoredDraft,
         onChange: (value) => { void draftStore.save(value); },
         onPaste: () => clipboard.paste(),
+        enableRightClickPaste: rightClickPasteEnabled,
         language,
       })).trim();
       await draftStore.flush();

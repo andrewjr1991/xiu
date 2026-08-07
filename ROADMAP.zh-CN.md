@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.8.6` |
+| 当前已发布版本 | `0.9.2` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -237,16 +237,24 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 不支持或拦截鼠标事件的终端继续使用 `Ctrl+V` 或 `/paste`；输入期间使用 `Shift+拖动` 选择终端文本。
 - 设计和验收记录在 `V0.9.1_DESIGN.zh-CN.md`。
 
-### 本地 v0.9.2 候选版本（尚未发布）
+### 已发布的 v0.9.2
 
 - 修复 Node.js 将 SGR 鼠标报告拆成多个 keypress 后，坐标尾部被当作普通文本插入输入框的问题。
 - 使用 250 毫秒、64 字符上限的有界状态机重组按下与释放事件，异常序列不会令编辑器长期停留在鼠标解析状态。
 - 回归测试直接复现真实 `ESC[<2;51;21M`/`m` 输入，验证右键事件正确且无文本泄漏。
 - 设计和验收记录在 `V0.9.2_DESIGN.zh-CN.md`。
 
+### 本地 v0.9.3 候选版本（尚未发布）
+
+- 文字和 Explorer 文件优先使用 Windows 自带 `Get-Clipboard` 与一次性 UTF-8 JSON，不再依赖自生成 helper EXE。
+- 只有纯位图才尝试旧 helper；企业策略阻止时明确要求先保存为文件，不绕过组织安全边界。
+- 原生 PowerShell 后端不可用且没有缓存 helper 时不启用鼠标上报，保留终端原生右键文字粘贴。
+- 已在 Windows PowerShell `ConstrainedLanguage` 下完成真实文字剪贴板冒烟验证。
+- 设计和验收记录在 `V0.9.3_DESIGN.zh-CN.md`。
+
 ### 当前自动化基线
 
-- 158 项自动化测试通过。
+- 162 项自动化测试通过。
 - TypeScript 类型检查通过。
 - 正式构建通过。
 - npm 打包预览通过。
