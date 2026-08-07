@@ -213,7 +213,7 @@ async function main(): Promise<void> {
     const projectIndex = new ProjectIndex(config.cwd);
     await projectIndex.initialize();
     const draftStore = new DraftStore(config.cwd);
-    const clipboard = new ClipboardAttachmentManager(config.cwd);
+    const clipboard = new ClipboardAttachmentManager(config.cwd, undefined, language);
     const rightClickPasteEnabled = await clipboard.supportsRightClickPaste();
     let restoredDraft = await draftStore.load();
     status.stop();

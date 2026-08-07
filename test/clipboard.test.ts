@@ -31,6 +31,7 @@ test("PowerShell clipboard JSON preserves Unicode text and file paths", () => {
   assert.deepEqual(parsePowerShellClipboardResponse('{"kind":"files","files":["C:\\\\项目\\\\设计稿.png"]}'), {
     kind: "files", files: ["C:\\项目\\设计稿.png"],
   });
+  assert.deepEqual(parsePowerShellClipboardResponse('{"kind":"restricted"}'), { kind: "restricted" });
 });
 
 test("native Windows clipboard files never invoke the optional helper", async () => {
@@ -46,7 +47,7 @@ test("blocked bitmap helper gives a save-as-file recovery instruction", async ()
   const native = new FakeClipboard({ kind: "image" }, undefined, false);
   const helper = new FailingClipboard("application control denied execution");
   const backend = new WindowsClipboardBackend(native, helper);
-  await assert.rejects(backend.read("C:\\project\\clipboard.png"), /Save the image as a file/);
+  await assert.rejects(backend.read("C:\\project\\clipboard.png"), /image extraction is blocked/);
 });
 
 test("right-click capture stays disabled when no permitted backend exists", async () => {
@@ -54,6 +55,31 @@ test("right-click capture stays disabled when no permitted backend exists", asyn
   const helper = new FailingClipboard("helper blocked", false, false);
   const backend = new WindowsClipboardBackend(native, helper);
   assert.equal(await backend.supportsRightClick(), false);
+});
+
+test("right-click capture stays disabled even when programmatic clipboard access works", async () => {
+  const native = new FakeClipboard({ kind: "text", text: "native paste" });
+  const backend = new WindowsClipboardBackend(native, new FailingClipboard("helper blocked"));
+  assert.equal(await backend.supportsRightClick(), false);
+});
+
+test("enterprise clipboard errors are concise and do not expose CLIXML", async () => {
+  const native = new FailingClipboard("#< CLIXML <Objs><S S=\"Error\">policy details</S></Objs>");
+  const helper = new FailingClipboard("application control denied execution");
+  const backend = new WindowsClipboardBackend(native, helper);
+  await assert.rejects(backend.read("C:\\project\\clipboard.png"), (error: Error) => {
+    assert.match(error.message, /clipboard access is restricted/i);
+    assert.doesNotMatch(error.message, /CLIXML|policy details/);
+    assert.equal(helper.calls, 0);
+    return true;
+  });
+});
+
+test("enterprise clipboard recovery is localized for Chinese UI", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clipboard-policy-"));
+  const backend = new WindowsClipboardBackend(new FailingClipboard("#< CLIXML"), new FailingClipboard("blocked"));
+  const manager = new ClipboardAttachmentManager(cwd, backend, "zh-CN");
+  await assert.rejects(manager.paste(), /系统策略禁止程序读取剪贴板/);
 });
 
 test("plain clipboard text remains ordinary editor text", async () => {

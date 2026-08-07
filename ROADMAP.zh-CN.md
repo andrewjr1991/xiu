@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.9.2` |
+| 当前已发布版本 | `0.9.3` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -244,7 +244,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 回归测试直接复现真实 `ESC[<2;51;21M`/`m` 输入，验证右键事件正确且无文本泄漏。
 - 设计和验收记录在 `V0.9.2_DESIGN.zh-CN.md`。
 
-### 本地 v0.9.3 候选版本（尚未发布）
+### 已发布的 v0.9.3
 
 - 文字和 Explorer 文件优先使用 Windows 自带 `Get-Clipboard` 与一次性 UTF-8 JSON，不再依赖自生成 helper EXE。
 - 只有纯位图才尝试旧 helper；企业策略阻止时明确要求先保存为文件，不绕过组织安全边界。
@@ -252,9 +252,17 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 已在 Windows PowerShell `ConstrainedLanguage` 下完成真实文字剪贴板冒烟验证。
 - 设计和验收记录在 `V0.9.3_DESIGN.zh-CN.md`。
 
+### 本地 v0.9.4 候选版本（尚未发布）
+
+- 不再开启终端鼠标上报或截获右键，右键粘贴完全交还 Windows Terminal、PowerShell 等终端宿主。
+- `Get-Clipboard` 的 FileDropList、Text、Image 能力分别尝试，单项被集团策略拦截不会直接中断其他格式。
+- 文字或文件读取被策略禁止时不再尝试 helper；只有成功识别为纯位图后才允许可选 helper 保存像素。
+- PowerShell 的 CLIXML、内部命令和策略诊断不再直接显示给用户，只保留简短恢复建议。
+- 设计和验收记录在 `V0.9.4_DESIGN.zh-CN.md`。
+
 ### 当前自动化基线
 
-- 162 项自动化测试通过。
+- 165 项自动化测试通过。
 - TypeScript 类型检查通过。
 - 正式构建通过。
 - npm 打包预览通过。
