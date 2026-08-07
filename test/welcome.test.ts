@@ -101,9 +101,10 @@ test("interactive welcome panel positions every mixed-language right border at o
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTty });
   }
   const titleRow = lines.find((line) => line.includes("快速开始"));
+  assert.ok(titleRow?.includes("\x1b[41G┌"), "panel left edge should start at absolute terminal column 41");
   assert.ok(titleRow?.includes("\x1b[43G 快速开始 \x1b[118G"), "title should overlay the complete top rule at fixed columns");
   const sessionRow = lines.find((line) => line.includes("当前会话"));
-  assert.ok(sessionRow?.includes("├") && sessionRow.includes("┤") && sessionRow.includes("\x1b[43G 当前会话 \x1b[118G"), "session heading should be a connected divider");
+  assert.ok(sessionRow?.includes("\x1b[41G├") && sessionRow.includes("\x1b[117G┤\x1b[K") && sessionRow.includes("\x1b[43G 当前会话 \x1b[118G"), "session divider should pin both corners and clear overflow");
   const contentRows = lines.filter((line) => line.includes("输入 / 打开命令面板") || line.includes("自动，危险操作除外"));
   assert.equal(contentRows.length, 2);
   assert.ok(contentRows.every((line) => line.includes("\x1b[117G│")), "each content row should place its right border at terminal column 117");

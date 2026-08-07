@@ -50,8 +50,11 @@ type WelcomeBoxRow = string | { divider: string };
 
 function box(title: string, rows: WelcomeBoxRow[], width: number, rightColumn?: number): string[] {
   const innerWidth = width - 2;
+  const fixedRule = (left: string, right: string): string => rightColumn
+    ? `${left}${"─".repeat(innerWidth)}\x1b[${rightColumn}G${right}\x1b[K`
+    : `${left}${"─".repeat(innerWidth)}${right}`;
   const labelledRule = (left: string, right: string, label: string): string => {
-    const rule = `${left}${"─".repeat(innerWidth)}${right}`;
+    const rule = fixedRule(left, right);
     return rightColumn
       ? `${rule}\x1b[${rightColumn - width + 3}G ${label} \x1b[${rightColumn + 1}G`
       : `${left}─ ${label} ${"─".repeat(Math.max(1, width - textWidth(label) - 5))}${right}`;
@@ -65,7 +68,7 @@ function box(title: string, rows: WelcomeBoxRow[], width: number, rightColumn?: 
   return [
     labelledRule("┌", "┐", title),
     ...rows.map((value) => typeof value === "string" ? row(value) : labelledRule("├", "┤", value.divider)),
-    `└${"─".repeat(innerWidth)}┘`,
+    fixedRule("└", "┘"),
   ];
 }
 
@@ -77,12 +80,14 @@ function padVisible(value: string, width: number): string {
   return `${value}${" ".repeat(Math.max(0, width - visibleLength(value)))}`;
 }
 
-function printSideBySide(left: string[], right: string[], leftWidth: number, gap = 3): void {
+function printSideBySide(left: string[], right: string[], leftWidth: number, gap = 3, rightStartColumn?: number): void {
   const height = Math.max(left.length, right.length);
   for (let index = 0; index < height; index += 1) {
     const leftLine = left[index] ?? "";
     const rightLine = right[index] ?? "";
-    console.log(`${padVisible(leftLine, leftWidth)}${" ".repeat(gap)}${rightLine}`.trimEnd());
+    console.log((rightStartColumn
+      ? `${leftLine}\x1b[${rightStartColumn}G${rightLine}`
+      : `${padVisible(leftLine, leftWidth)}${" ".repeat(gap)}${rightLine}`).trimEnd());
   }
 }
 
@@ -118,8 +123,9 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     const gap = 3;
     const leftWidth = Math.max(30, Math.min(38, Math.floor(width * 0.32)));
     const panelWidth = width - leftWidth - gap;
+    const panelStartColumn = alignBorderWithCursor ? leftWidth + gap + 1 : undefined;
     const rightColumn = alignBorderWithCursor ? leftWidth + gap + panelWidth : undefined;
-    printSideBySide(brand, box(localize(language, "快速开始", "Quick start"), panelRows, panelWidth, rightColumn), leftWidth, gap);
+    printSideBySide(brand, box(localize(language, "快速开始", "Quick start"), panelRows, panelWidth, rightColumn), leftWidth, gap, panelStartColumn);
   } else {
     for (const line of brand) console.log(line);
     console.log();
