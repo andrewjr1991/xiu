@@ -134,9 +134,9 @@ test("project index rebuilds corrupted and unsafe caches", async () => {
   assert.match(await corrupted.search("safeRecoveryMarker"), /safe\.ts/);
 
   await fs.writeFile(cachePath, JSON.stringify({
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString(),
-    files: [{ path: "../../outside-secret.txt", size: 1, modifiedMs: 1, terms: ["outside-secret"] }],
+    files: [{ path: "../../outside-secret.txt", size: 1, modifiedMs: 1, terms: ["outside-secret"], language: "Other", analyzed: false, symbols: [], imports: [], references: [] }],
     profile: { stacks: [], checks: {}, markers: [] },
     truncated: false,
   }), "utf8");

@@ -34,6 +34,8 @@ Version 0.9.5 adds bounded, read-only `extract_html`, `extract_json`, and `extra
 
 Version 0.9.6 makes the project index persistent and incremental. A new Xiu process still enumerates allowed workspace files to detect additions and removals, but it reuses cached search terms whenever path, size, and modification time are unchanged; only added or modified files are read again. Cache structure and paths are validated, symbolic links are not followed, corrupt or incompatible indexes rebuild automatically, and `/status` reports full, incremental, or cache-reuse refreshes with elapsed time.
 
+Version 0.9.7 builds a compact Repository Map on that incremental cache. JavaScript, TypeScript, JSX, TSX, MJS, and CJS files are parsed with the official TypeScript AST to index definitions, relative module dependencies, imports, references, direct calls, constructor uses, aliases, and namespace access. New read-only `repository_map`, `find_symbol`, `find_references`, and `find_callers` tools return bounded paginated JSON; same-name definitions require explicit file disambiguation rather than guesswork. Other languages remain visible as modules without fabricated symbol precision.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -44,6 +46,7 @@ Version 0.9.6 makes the project index persistent and incremental. A new Xiu proc
 - Structured context-checkpoint compaction that preserves the active task contract and continuation state
 - Bounded line and character paging for large, minified, or single-line text files
 - Bounded structured extraction for CSS-selected HTML, JSON Pointer values, and filtered CSV/TSV rows
+- Incremental Repository Map plus JavaScript/TypeScript symbol, reference, dependency, and caller navigation
 - Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
 - UTF-8 Python child-process output on Windows PowerShell
 - Native argument-array process execution without PowerShell re-parsing

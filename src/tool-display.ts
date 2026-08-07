@@ -14,6 +14,13 @@ export function localizeToolDescription(name: string, description: string, langu
     case "extract_html": return `提取 HTML：${rest(/^extract HTML\s*/i)}`;
     case "extract_json": return `提取 JSON：${rest(/^extract JSON\s*/i)}`;
     case "extract_csv": return `提取表格：${rest(/^extract CSV rows from\s*/i)}`;
+    case "repository_map": {
+      const scope = rest(/^map repository modules\s*/i).replace(/^under\s+/i, "");
+      return `查看项目地图${scope ? `：${scope}` : ""}`;
+    }
+    case "find_symbol": return `查找符号 ${rest(/^find symbol\s*/i)}`;
+    case "find_references": return `查找引用 ${rest(/^find references to\s*/i)}`;
+    case "find_callers": return `查找调用方 ${rest(/^find callers of\s*/i)}`;
     case "verify_output": return `验证生成结果 ${rest(/^verify generated output\s*/i)}`;
     case "search_text": return `搜索 ${rest(/^search for\s*/i)}`;
     case "write_file": return `写入 ${rest(/^write\s*/i)}`;

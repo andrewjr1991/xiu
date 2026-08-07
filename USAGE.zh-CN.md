@@ -570,6 +570,23 @@ xiu --resume '会话ID'
 
 `/status` 会显示索引文件数、刷新模式和耗时：`全量构建` 表示没有可信缓存，`增量更新` 表示只处理了变化项，`缓存复用` 表示所有文件内容均未重读。缓存损坏、版本不兼容或包含工作区外路径时会自动重建；索引不会跟随符号链接，也不会写入完整文件内容。
 
+从 v0.9.7 开始，索引同时生成 Repository Map。JavaScript、TypeScript、JSX、TSX、MJS 和 CJS 使用 Xiu 自带的 TypeScript AST 解析器；其他语言仍会显示为文件模块，但不会伪造精确符号关系。可用只读工具包括：
+
+- `repository_map`：按路径分页查看模块、主要符号、内部依赖和被依赖数量；
+- `find_symbol`：查找函数、类、接口、类型、枚举、变量、方法和属性定义；
+- `find_references`：查看明确符号定义的导入和静态引用；
+- `find_callers`：查看直接调用、构造调用和标签调用。
+
+同名符号存在多个定义时，引用和调用工具会返回 `ambiguous: true` 和候选定义。此时把目标定义的 `path` 作为 `defined_in` 再查询，不要猜测。所有结果都有 `returned_count` 和 `next_offset`，下一页使用返回的偏移继续。示例：
+
+```text
+先用 repository_map 查看 src，再用 find_symbol 查找 ProjectIndex。
+查找 src/project-index.ts 中 initialize 的调用方。
+查看 Calculator 在 src/math.ts 中定义对应的全部引用。
+```
+
+这些结果是静态导航证据；动态属性、反射和运行时重绑定可能无法解析。修改前仍应读取相关源码确认上下文。
+
 工具输出默认显示短摘要，避免长日志淹没会话。查看完整工具或多 Agent 活动：
 
 ```text

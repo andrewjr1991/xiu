@@ -15,6 +15,13 @@ test("structured extraction descriptions are localized", () => {
   assert.equal(localizeToolDescription("extract_csv", "extract CSV rows from data.csv", "zh-CN"), "提取表格：data.csv");
 });
 
+test("code intelligence descriptions are localized", () => {
+  assert.equal(localizeToolDescription("repository_map", "map repository modules under src", "zh-CN"), "查看项目地图：src");
+  assert.equal(localizeToolDescription("find_symbol", "find symbol ProjectIndex", "zh-CN"), "查找符号 ProjectIndex");
+  assert.equal(localizeToolDescription("find_references", "find references to ProjectIndex", "zh-CN"), "查找引用 ProjectIndex");
+  assert.equal(localizeToolDescription("find_callers", "find callers of initialize", "zh-CN"), "查找调用方 initialize");
+});
+
 test("English mode leaves tool descriptions unchanged", () => {
   assert.equal(localizeToolDescription("verify_output", "verify generated output snake.html", "en-US"), "verify generated output snake.html");
 });
