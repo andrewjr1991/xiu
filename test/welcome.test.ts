@@ -85,28 +85,24 @@ test("Chinese startup screen is localized and never reaches the terminal wrap co
   for (const line of lines) assert.ok(terminalDisplayWidth(line) <= 117, `line may wrap at terminal edge: ${line}`);
 });
 
-test("legacy Windows console uses an open welcome panel to avoid a jagged CJK right edge", (t) => {
-  if (process.platform !== "win32") return t.skip("Windows Console Host-specific rendering");
+test("interactive welcome panel positions every mixed-language right border at one absolute column", () => {
   const lines: string[] = [];
   const originalLog = console.log;
   const originalColumns = process.stdout.columns;
-  const originalWtSession = process.env.WT_SESSION;
-  const originalTermProgram = process.env.TERM_PROGRAM;
+  const originalIsTty = process.stdout.isTTY;
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 120 });
-  delete process.env.WT_SESSION;
-  delete process.env.TERM_PROGRAM;
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
   try {
     renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\QoderWork Project\\a-very-long-project-name", autoApprove: true, language: "zh-CN" }, "0.8.7", 14);
   } finally {
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
-    if (originalWtSession === undefined) delete process.env.WT_SESSION;
-    else process.env.WT_SESSION = originalWtSession;
-    if (originalTermProgram === undefined) delete process.env.TERM_PROGRAM;
-    else process.env.TERM_PROGRAM = originalTermProgram;
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTty });
   }
-  const contentRows = lines.filter((line) => line.includes("输入 / 打开命令面板") || line.includes("当前会话"));
-  assert.equal(contentRows.length, 2);
-  assert.ok(contentRows.every((line) => !line.endsWith("|")), "legacy panel content should not print a drifting right border");
+  const titleRow = lines.find((line) => line.includes("快速开始"));
+  assert.ok(titleRow?.includes("\x1b[43G 快速开始 \x1b[118G"), "title should overlay the complete top rule at fixed columns");
+  const contentRows = lines.filter((line) => line.includes("输入 / 打开命令面板") || line.includes("当前会话") || line.includes("自动，危险操作除外"));
+  assert.equal(contentRows.length, 3);
+  assert.ok(contentRows.every((line) => line.includes("\x1b[117G|")), "each content row should place its right border at terminal column 117");
 });
