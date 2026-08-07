@@ -32,6 +32,8 @@ Version 0.9.4 always leaves right-click to the terminal host. Xiu no longer enab
 
 Version 0.9.5 adds bounded, read-only `extract_html`, `extract_json`, and `extract_csv` tools. Xiu can query CSS-selected HTML records, RFC 6901 JSON Pointer values, and filtered CSV/TSV rows without repeatedly paging raw files or writing one-off parsing scripts. Every result is valid paginated JSON with explicit counts and continuation offsets; workspace confinement, 50 MB input limits, 60,000-character output limits, BOM/UTF-8/UTF-16/GB18030 decoding, and Plan-mode read-only enforcement remain deterministic.
 
+Version 0.9.6 makes the project index persistent and incremental. A new Xiu process still enumerates allowed workspace files to detect additions and removals, but it reuses cached search terms whenever path, size, and modification time are unchanged; only added or modified files are read again. Cache structure and paths are validated, symbolic links are not followed, corrupt or incompatible indexes rebuild automatically, and `/status` reports full, incremental, or cache-reuse refreshes with elapsed time.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -394,7 +396,7 @@ CLI -> Parent Agent -> task graph -> specialist Agents
 
 Key extension points are `ModelProvider` and `AgentTool` in `src/types.ts`. A provider translates the common conversation into a model API; a tool publishes JSON Schema and executes against a constrained workspace context.
 
-The project index scans up to 8,000 source and configuration files while ignoring dependencies, build output, coverage, Git metadata, and Xiu state. It stores bounded search terms rather than entire file contents, and returns short source excerpts only for the highest-scoring files. Workspace changes invalidate the cache automatically.
+The project index scans up to 8,000 source and configuration files while ignoring dependencies, build output, coverage, Git metadata, Xiu state, and symbolic links. It stores bounded search terms rather than entire file contents, returns short source excerpts only for the highest-scoring files, and incrementally reuses unchanged entries across Xiu processes. Workspace changes mark the index dirty; the next search refreshes only affected entries. Invalid or unsafe caches rebuild automatically.
 
 ## Development
 

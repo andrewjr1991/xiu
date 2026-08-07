@@ -3,10 +3,11 @@ import path from "node:path";
 import fg from "fast-glob";
 import type { AgentTool } from "./types.js";
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 const MAX_FILES = 8_000;
 const MAX_INDEXED_FILE_BYTES = 512 * 1024;
 const MAX_TERMS_PER_FILE = 300;
+const MAX_TERM_CHARACTERS = 160;
 const IGNORES = [
   "**/.git/**", "**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**", "**/coverage/**", "**/.xiu/**", "**/vendor/**",
   "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*credentials*", "**/*secrets*",
@@ -39,17 +40,91 @@ interface StoredIndex {
   truncated: boolean;
 }
 
-function tokenize(value: string): string[] {
+export type IndexRefreshMode = "none" | "full" | "incremental" | "cache";
+
+export interface ProjectIndexStatus {
+  files: number;
+  generatedAt: string;
+  truncated: boolean;
+  dirty: boolean;
+  mode: IndexRefreshMode;
+  durationMs: number;
+  discovered: number;
+  reused: number;
+  indexed: number;
+  added: number;
+  updated: number;
+  removed: number;
+  cachePersisted: boolean;
+}
+
+interface FileMetadata {
+  path: string;
+  size: number;
+  modifiedMs: number;
+}
+
+function tokenize(value: string, maximum = MAX_TERMS_PER_FILE): string[] {
   const normalized = value.toLowerCase();
-  const words = normalized.match(/[a-z_][a-z0-9_.-]{1,}|[\u3400-\u9fff]{2,}/g) ?? [];
   const result = new Set<string>();
-  for (const word of words) {
-    result.add(word);
+  for (const match of normalized.matchAll(/[a-z_][a-z0-9_.-]{1,}|[\u3400-\u9fff]{2,}/g)) {
+    const word = match[0];
+    if (word.length <= MAX_TERM_CHARACTERS) result.add(word);
     if (/^[\u3400-\u9fff]+$/.test(word)) {
-      for (let index = 0; index < word.length - 1; index++) result.add(word.slice(index, index + 2));
+      for (let index = 0; index < word.length - 1 && result.size < maximum; index++) result.add(word.slice(index, index + 2));
     }
+    if (result.size >= maximum) break;
   }
   return [...result];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function validStringArray(value: unknown, maximum: number): value is string[] {
+  return Array.isArray(value) && value.length <= maximum && value.every((item) => typeof item === "string" && item.length <= 2_000);
+}
+
+function safeCachedPath(cwd: string, value: unknown): string | undefined {
+  if (typeof value !== "string" || !value || value.length > 4_096 || value.includes("\0")) return undefined;
+  const normalized = value.replace(/\\/g, "/");
+  if (path.posix.isAbsolute(normalized) || normalized.split("/").some((part) => part === "..")) return undefined;
+  const root = path.resolve(cwd);
+  const resolved = path.resolve(root, normalized);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) return undefined;
+  return normalized;
+}
+
+function validateStoredIndex(cwd: string, value: unknown): StoredIndex | undefined {
+  if (!isRecord(value) || value.version !== INDEX_VERSION || typeof value.generatedAt !== "string" || !Number.isFinite(Date.parse(value.generatedAt))) return undefined;
+  if (!Array.isArray(value.files) || value.files.length > MAX_FILES || typeof value.truncated !== "boolean" || !isRecord(value.profile)) return undefined;
+  const profile = value.profile;
+  if (!validStringArray(profile.stacks, 100) || !validStringArray(profile.markers, 1_000) || !isRecord(profile.checks)) return undefined;
+  if (profile.packageManager !== undefined && (typeof profile.packageManager !== "string" || profile.packageManager.length > 100)) return undefined;
+  const checks: Record<string, string> = {};
+  for (const [name, command] of Object.entries(profile.checks)) {
+    if (name.length > 100 || typeof command !== "string" || command.length > 2_000) return undefined;
+    checks[name] = command;
+  }
+  const files: IndexedFile[] = [];
+  const seen = new Set<string>();
+  for (const raw of value.files) {
+    if (!isRecord(raw)) return undefined;
+    const cachedPath = safeCachedPath(cwd, raw.path);
+    if (!cachedPath || seen.has(cachedPath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size < 0) return undefined;
+    if (typeof raw.modifiedMs !== "number" || !Number.isFinite(raw.modifiedMs) || raw.modifiedMs < 0) return undefined;
+    if (!Array.isArray(raw.terms) || raw.terms.length > MAX_TERMS_PER_FILE || !raw.terms.every((term) => typeof term === "string" && term.length <= MAX_TERM_CHARACTERS)) return undefined;
+    seen.add(cachedPath);
+    files.push({ path: cachedPath, size: raw.size, modifiedMs: raw.modifiedMs, terms: [...raw.terms] });
+  }
+  return {
+    version: INDEX_VERSION,
+    generatedAt: value.generatedAt,
+    files,
+    profile: { stacks: [...profile.stacks], packageManager: profile.packageManager as string | undefined, checks, markers: [...profile.markers] },
+    truncated: value.truncated,
+  };
 }
 
 async function detectProfile(cwd: string, files: string[]): Promise<ProjectProfile> {
@@ -94,55 +169,143 @@ async function detectProfile(cwd: string, files: string[]): Promise<ProjectProfi
 export class ProjectIndex {
   private data?: StoredIndex;
   private dirty = false;
+  private refreshPromise?: Promise<void>;
+  private refreshStatus: ProjectIndexStatus = {
+    files: 0,
+    generatedAt: "not initialized",
+    truncated: false,
+    dirty: false,
+    mode: "none",
+    durationMs: 0,
+    discovered: 0,
+    reused: 0,
+    indexed: 0,
+    added: 0,
+    updated: 0,
+    removed: 0,
+    cachePersisted: false,
+  };
 
   constructor(private readonly cwd: string) {}
 
   async initialize(force = false): Promise<void> {
-    const indexFile = path.join(this.cwd, ".xiu", "index.json");
-    if (!force && !this.dirty) {
-      try {
-        const cached = JSON.parse(await fs.readFile(indexFile, "utf8")) as StoredIndex;
-        if (cached.version === INDEX_VERSION && Date.now() - Date.parse(cached.generatedAt) < 5 * 60_000) {
-          this.data = cached;
-          return;
-        }
-      } catch { /* build a fresh index */ }
-    }
-    const discovered = await fg("**/*", { cwd: this.cwd, onlyFiles: true, dot: true, unique: true, ignore: IGNORES });
-    const paths = discovered.sort().slice(0, MAX_FILES);
-    const files: IndexedFile[] = [];
-    for (let offset = 0; offset < paths.length; offset += 64) {
-      const batch = paths.slice(offset, offset + 64);
-      const indexed = await Promise.all(batch.map(async (relative): Promise<IndexedFile | undefined> => {
-        const target = path.join(this.cwd, relative);
+    if (!force && this.data && !this.dirty) return;
+    if (this.refreshPromise) return await this.refreshPromise;
+    const refresh = this.refresh(force);
+    this.refreshPromise = refresh;
+    try { await refresh; }
+    finally { if (this.refreshPromise === refresh) this.refreshPromise = undefined; }
+  }
+
+  private async loadCache(indexFile: string): Promise<StoredIndex | undefined> {
+    try {
+      return validateStoredIndex(this.cwd, JSON.parse(await fs.readFile(indexFile, "utf8")));
+    } catch { return undefined; }
+  }
+
+  private async discover(): Promise<{ discovered: number; paths: string[]; metadata: FileMetadata[] }> {
+    const found = await fg("**/*", { cwd: this.cwd, onlyFiles: true, dot: true, unique: true, followSymbolicLinks: false, ignore: IGNORES });
+    const paths = found.map((relative) => relative.replace(/\\/g, "/")).sort().slice(0, MAX_FILES);
+    const metadata: FileMetadata[] = [];
+    for (let offset = 0; offset < paths.length; offset += 128) {
+      const batch = await Promise.all(paths.slice(offset, offset + 128).map(async (relative): Promise<FileMetadata | undefined> => {
         try {
-          const stat = await fs.stat(target);
-          let terms = tokenize(relative);
-          const extension = path.extname(relative).toLowerCase();
-          if (stat.size <= MAX_INDEXED_FILE_BYTES && (TEXT_EXTENSIONS.has(extension) || !extension)) {
-            const content = await fs.readFile(target, "utf8");
-            terms = [...new Set([...terms, ...tokenize(content)])].slice(0, MAX_TERMS_PER_FILE);
-          }
-          return { path: relative.replace(/\\/g, "/"), size: stat.size, modifiedMs: stat.mtimeMs, terms };
+          const stat = await fs.lstat(path.join(this.cwd, relative));
+          if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+          return { path: relative, size: stat.size, modifiedMs: stat.mtimeMs };
         } catch { return undefined; }
       }));
-      files.push(...indexed.filter((item): item is IndexedFile => Boolean(item)));
+      metadata.push(...batch.filter((item): item is FileMetadata => Boolean(item)));
     }
-    this.data = {
+    return { discovered: found.length, paths: metadata.map((item) => item.path), metadata };
+  }
+
+  private async indexFile(metadata: FileMetadata): Promise<IndexedFile> {
+    let terms = tokenize(metadata.path);
+    const extension = path.extname(metadata.path).toLowerCase();
+    if (metadata.size <= MAX_INDEXED_FILE_BYTES && (TEXT_EXTENSIONS.has(extension) || !extension)) {
+      try {
+        const contentTerms = tokenize(await fs.readFile(path.join(this.cwd, metadata.path), "utf8"));
+        terms = [...new Set([...terms, ...contentTerms])].slice(0, MAX_TERMS_PER_FILE);
+      } catch { /* retain path-only terms when a file changes during refresh */ }
+    }
+    return { ...metadata, terms };
+  }
+
+  private async persist(indexFile: string, data: StoredIndex): Promise<boolean> {
+    const directory = path.dirname(indexFile);
+    const temporary = path.join(directory, `index.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
+    try {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(temporary, JSON.stringify(data), { encoding: "utf8", flag: "wx" });
+      await fs.rename(temporary, indexFile);
+      return true;
+    } catch {
+      try { await fs.unlink(temporary); } catch { /* nothing to clean */ }
+      return false;
+    }
+  }
+
+  private async refresh(force: boolean): Promise<void> {
+    const startedAt = Date.now();
+    const indexFile = path.join(this.cwd, ".xiu", "index.json");
+    const previousWasInMemory = Boolean(this.data);
+    const previous = force ? undefined : this.data ?? await this.loadCache(indexFile);
+    const discovery = await this.discover();
+    const previousByPath = new Map(previous?.files.map((file) => [file.path, file]));
+    const files: IndexedFile[] = [];
+    let reused = 0;
+    let added = 0;
+    let updated = 0;
+    for (let offset = 0; offset < discovery.metadata.length; offset += 64) {
+      const batch = await Promise.all(discovery.metadata.slice(offset, offset + 64).map(async (metadata): Promise<IndexedFile> => {
+        const cached = previousByPath.get(metadata.path);
+        if (cached && cached.size === metadata.size && cached.modifiedMs === metadata.modifiedMs) {
+          reused++;
+          return cached;
+        }
+        if (cached) updated++;
+        else added++;
+        return await this.indexFile(metadata);
+      }));
+      files.push(...batch);
+    }
+    const currentPaths = new Set(discovery.paths);
+    const removed = previous?.files.filter((file) => !currentPaths.has(file.path)).length ?? 0;
+    const changed = added + updated + removed;
+    const truncated = discovery.discovered > MAX_FILES;
+    const metadataChanged = Boolean(previous && previous.truncated !== truncated);
+    const mode: IndexRefreshMode = !previous ? "full" : changed || metadataChanged ? "incremental" : "cache";
+    const data: StoredIndex = {
       version: INDEX_VERSION,
-      generatedAt: new Date().toISOString(),
+      generatedAt: mode === "cache" ? previous!.generatedAt : new Date().toISOString(),
       files,
-      profile: await detectProfile(this.cwd, paths),
-      truncated: discovered.length > MAX_FILES,
+      profile: mode === "cache" ? previous!.profile : await detectProfile(this.cwd, discovery.paths),
+      truncated,
     };
-    await fs.mkdir(path.dirname(indexFile), { recursive: true });
-    await fs.writeFile(indexFile, JSON.stringify(this.data), "utf8");
+    const cachePersisted = mode === "cache" ? (previousWasInMemory ? this.refreshStatus.cachePersisted : true) : await this.persist(indexFile, data);
+    this.data = data;
     this.dirty = false;
+    this.refreshStatus = {
+      files: files.length,
+      generatedAt: data.generatedAt,
+      truncated: data.truncated,
+      dirty: false,
+      mode,
+      durationMs: Date.now() - startedAt,
+      discovered: discovery.discovered,
+      reused,
+      indexed: files.length - reused,
+      added,
+      updated,
+      removed,
+      cachePersisted,
+    };
   }
 
   invalidate(): void {
-    this.data = undefined;
     this.dirty = true;
+    this.refreshStatus = { ...this.refreshStatus, dirty: true };
   }
 
   profile(): ProjectProfile {
@@ -150,9 +313,8 @@ export class ProjectIndex {
     return this.data.profile;
   }
 
-  status(): { files: number; generatedAt: string; truncated: boolean } {
-    if (!this.data) return { files: 0, generatedAt: "not initialized", truncated: false };
-    return { files: this.data.files.length, generatedAt: this.data.generatedAt, truncated: this.data.truncated };
+  status(): ProjectIndexStatus {
+    return { ...this.refreshStatus, dirty: this.dirty };
   }
 
   paths(query = "", limit = 200): string[] {
@@ -170,8 +332,8 @@ export class ProjectIndex {
   }
 
   async search(query: string, limit = 8): Promise<string> {
-    if (!this.data) await this.initialize();
-    const terms = tokenize(query).filter((term) => term.length >= 2);
+    if (!this.data || this.dirty) await this.initialize();
+    const terms = tokenize(query, 64).filter((term) => term.length >= 2);
     if (!terms.length) return "No relevant files found.";
     const scored = this.data!.files.map((file) => {
       const pathText = file.path.toLowerCase();
@@ -223,7 +385,10 @@ export function createProjectIndexTools(index: ProjectIndex): AgentTool[] {
       risk: "read",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       describe: () => "read detected project profile",
-      async execute() { return JSON.stringify(index.profile(), null, 2); },
+      async execute() {
+        await index.initialize();
+        return JSON.stringify(index.profile(), null, 2);
+      },
     },
   ];
 }
