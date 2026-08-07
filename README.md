@@ -18,6 +18,8 @@ Version 0.8.5 refines the terminal conversation experience. Final responses rend
 
 Version 0.8.6 makes that language and identity contract deterministic. Built-in activity descriptions, retries, checkpoints, plans, and multi-agent status no longer leak English labels in Chinese mode. `/language` now switches the live UI, active progress view, command palette, and next model request immediately without restarting; prior scrollback remains unchanged. Blocking model questions become a highlighted “Xiu 需要你的回答” state followed by a `请回答> ` prompt. ASCII-compatible `xiu> ` and `补充> ` prompts avoid missing-glyph squares on Windows terminals. Explicit identity questions are guarded at runtime, so the underlying provider cannot rename Xiu or attribute it to Sapiens AI: Xiu is developed by 静然.
 
+Version 0.8.7 fixes Windows cancellation at the terminal-input boundary. Both parsed Ctrl+C events and the raw `0x03` byte emitted by some PowerShell/ConPTY combinations cancel the active model or tool call and immediately show a cancelling state. Text and Explorer files can still use terminal right-click paste; clipboard bitmap images use `Ctrl+V` or `/paste`, because Windows Terminal does not send image bytes or a paste event to a character-stream CLI on right-click.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters

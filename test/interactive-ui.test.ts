@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -40,6 +40,12 @@ test("raw input hand-off keeps stdin flowing between consecutive prompts", () =>
   assert.equal(secondKeys, 1);
   assert.equal(pauseCalls, 0);
   assert.equal(input.isRaw, false);
+});
+
+test("Ctrl+C cancellation recognizes parsed keys and raw Windows control bytes", () => {
+  assert.equal(isTerminalCancel("", { name: "c", ctrl: true }), true);
+  assert.equal(isTerminalCancel("\u0003", { sequence: "\u0003" }), true);
+  assert.equal(isTerminalCancel("c", { name: "c" }), false);
 });
 
 test("slash command matching opens for slash and filters as the user types", () => {

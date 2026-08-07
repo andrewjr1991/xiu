@@ -56,7 +56,7 @@ Get-Command xiu
 维护者也可以把 `xiu-ai-cli-版本号.tgz` 发给用户。假设文件下载到了 `D:\Downloads`：
 
 ```powershell
-npm.cmd install --global 'D:\Downloads\xiu-ai-cli-0.8.6.tgz'
+npm.cmd install --global 'D:\Downloads\xiu-ai-cli-0.8.7.tgz'
 xiu --version
 ```
 
@@ -126,7 +126,7 @@ xiu --version
 安装指定版本：
 
 ```powershell
-npm.cmd install --global '@xiu-ai/cli@0.8.6' --registry='https://registry.npmjs.org/'
+npm.cmd install --global '@xiu-ai/cli@0.8.7' --registry='https://registry.npmjs.org/'
 ```
 
 卸载：

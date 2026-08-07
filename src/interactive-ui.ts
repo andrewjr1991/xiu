@@ -331,6 +331,10 @@ export function beginRawInput(
   };
 }
 
+export function isTerminalCancel(text: string, key: readline.Key): boolean {
+  return text === "\u0003" || key.sequence === "\u0003" || Boolean(key.ctrl && key.name?.toLowerCase() === "c");
+}
+
 export async function readInteractiveInput(
   prompt: string,
   commands: SlashCommand[],
@@ -398,8 +402,9 @@ export async function readInteractiveInput(
     const abortInput = (): void => finish("", false);
 
     const onKeypress = (text: string, key: readline.Key): void => {
+      if (finished) return;
       const matches = suggestions();
-      if (key.ctrl && key.name === "c") {
+      if (isTerminalCancel(text, key)) {
         options.onCancel?.();
         return finish("", false);
       }
@@ -542,7 +547,7 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
       if (key.name === "up") selected = (selected - 1 + options.length) % options.length;
       else if (key.name === "down") selected = (selected + 1) % options.length;
       else if (key.name === "return" || key.name === "enter") return finish(options[selected]?.value);
-      else if (key.name === "escape" || (key.ctrl && key.name === "c")) return finish();
+      else if (key.name === "escape" || isTerminalCancel(_text, key)) return finish();
       render();
     };
     const cleanup = beginRawInput(onKeypress);

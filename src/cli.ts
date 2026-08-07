@@ -492,7 +492,10 @@ async function main(): Promise<void> {
 
     const onSigint = () => {
       status.stop();
-      if (agent.cancel()) console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
+      if (agent.cancel()) {
+        runningTaskView?.setPhase(localize(language, "正在取消", "Cancelling"));
+        console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
+      }
       else console.log(chalk.dim(localize(language, "\n使用 /exit 退出 Xiu。", "\nUse /exit to leave Xiu.")));
     };
     process.on("SIGINT", onSigint);
@@ -595,6 +598,8 @@ async function main(): Promise<void> {
             onChange: (value) => { void draftStore.save(value); },
             onCancel: () => {
               cancelledFromKeyboard = true;
+              view.setPhase(localize(language, "正在取消", "Cancelling"));
+              view.activity(localize(language, "用户按下 Ctrl+C，正在中止当前模型或工具调用", "Ctrl+C pressed; aborting the active model or tool call"));
               agent.cancel();
             },
             onToggleDetails: () => { view.toggleDetails(); },

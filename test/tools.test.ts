@@ -162,6 +162,19 @@ test("run_command reports timeouts clearly", async (t) => {
   assert.match(result, /timed out/i);
 });
 
+test("run_command abort signal cancels active PowerShell work", async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-specific command cancellation");
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-command-cancel-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const pending = executeTool(tool, { command: "Start-Sleep -Seconds 10", timeout_ms: 15_000 }, { cwd, approve: async () => true, signal: controller.signal });
+  setTimeout(() => controller.abort(), 100);
+
+  assert.match(await pending, /cancelled by user/i);
+  assert.ok(Date.now() - startedAt < 5_000, "cancelled command should not wait for its original timeout");
+});
+
 test("run_command rejects Bash syntax before requesting approval on Windows", async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-specific behavior");
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-shell-"));
