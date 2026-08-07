@@ -51,6 +51,17 @@ export interface TerminalMouseEvent {
   pressed: boolean;
 }
 
+export interface TerminalMouseInputState {
+  sequence: string;
+  startedAt: number;
+}
+
+export interface TerminalMouseInputResult {
+  state: TerminalMouseInputState;
+  consumed: boolean;
+  event?: TerminalMouseEvent;
+}
+
 const ENABLE_TERMINAL_MOUSE = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_TERMINAL_MOUSE = "\x1b[?1006l\x1b[?1000l";
 
@@ -71,6 +82,53 @@ export function terminalMouseEvent(text: string, key: readline.Key): TerminalMou
     return { button: button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "release", pressed: button !== 3 };
   }
   return undefined;
+}
+
+export function consumeTerminalMouseInput(
+  state: TerminalMouseInputState,
+  text: string | undefined,
+  key: readline.Key,
+  now = Date.now(),
+): TerminalMouseInputResult {
+  const sequence = key.sequence ?? text ?? "";
+  let pending = now - state.startedAt <= 250 ? state.sequence : "";
+
+  if (!pending && (sequence === "\x1b[<" || sequence === "\x1b[M")) {
+    return { state: { sequence, startedAt: now }, consumed: true };
+  }
+
+  if (pending.startsWith("\x1b[<")) {
+    const combined = `${pending}${sequence}`;
+    if (!/^\x1b\[<[0-9;]*[Mm]?$/.test(combined) || combined.length > 64) {
+      return { state: { sequence: "", startedAt: 0 }, consumed: false };
+    }
+    if (/[Mm]$/.test(combined)) {
+      return {
+        state: { sequence: "", startedAt: 0 },
+        consumed: true,
+        event: terminalMouseEvent("", { sequence: combined }),
+      };
+    }
+    return { state: { sequence: combined, startedAt: state.startedAt || now }, consumed: true };
+  }
+
+  if (pending.startsWith("\x1b[M")) {
+    const combined = `${pending}${sequence}`;
+    if (combined.length >= 6) {
+      const complete = combined.slice(0, 6);
+      return {
+        state: { sequence: "", startedAt: 0 },
+        consumed: true,
+        event: terminalMouseEvent("", { sequence: complete }),
+      };
+    }
+    return { state: { sequence: combined, startedAt: state.startedAt || now }, consumed: true };
+  }
+
+  const event = terminalMouseEvent(text ?? "", key);
+  return event
+    ? { state: { sequence: "", startedAt: 0 }, consumed: true, event }
+    : { state: { sequence: "", startedAt: 0 }, consumed: false };
 }
 
 function stripAnsi(value: string): string {
@@ -415,6 +473,7 @@ export async function readInteractiveInput(
     let refreshTimer: NodeJS.Timeout | undefined;
     let pasteNotice = "";
     let pasteInFlight = false;
+    let mouseInputState: TerminalMouseInputState = { sequence: "", startedAt: 0 };
 
     const pasteFromClipboard = (): void => {
       if (pasteInFlight || !options.onPaste) return;
@@ -478,9 +537,10 @@ export async function readInteractiveInput(
     const onKeypress = (text: string, key: readline.Key): void => {
       if (finished) return;
       const matches = suggestions();
-      const mouse = terminalMouseEvent(text, key);
-      if (mouse) {
-        if (mouse.button === "right" && mouse.pressed) pasteFromClipboard();
+      const mouseInput = consumeTerminalMouseInput(mouseInputState, text, key);
+      mouseInputState = mouseInput.state;
+      if (mouseInput.consumed) {
+        if (mouseInput.event?.button === "right" && mouseInput.event.pressed) pasteFromClipboard();
         return;
       }
       if (isTerminalCancel(text, key)) {

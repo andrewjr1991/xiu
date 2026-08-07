@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -53,6 +53,31 @@ test("terminal mouse reports recognize right click without treating release as a
   assert.deepEqual(terminalMouseEvent("", { sequence: "\x1b[<2;40;12m" }), { button: "release", pressed: false });
   assert.deepEqual(terminalMouseEvent("", { sequence: "\x1b[M\"HD" }), { button: "right", pressed: true });
   assert.equal(terminalMouseEvent("a", { name: "a", sequence: "a" }), undefined);
+});
+
+test("fragmented Node keypress mouse reports never leak coordinates into editor text", () => {
+  const input = new PassThrough() as PassThrough & { setRawMode: (enabled: boolean) => void };
+  input.setRawMode = () => {};
+  let state: TerminalMouseInputState = { sequence: "", startedAt: 0 };
+  const mouseEvents: Array<{ button: string; pressed: boolean }> = [];
+  let leakedText = "";
+  const cleanup = beginRawInput((text, key) => {
+    const result = consumeTerminalMouseInput(state, text, key);
+    state = result.state;
+    if (result.event) mouseEvents.push(result.event);
+    else if (!result.consumed) leakedText += text ?? "";
+  }, input as unknown as NodeJS.ReadStream);
+
+  input.write("\x1b[<2;51;21M");
+  input.write("\x1b[<2;51;21m");
+  cleanup();
+
+  assert.equal(leakedText, "");
+  assert.deepEqual(mouseEvents, [
+    { button: "right", pressed: true },
+    { button: "release", pressed: false },
+  ]);
+  assert.equal(state.sequence, "");
 });
 
 test("raw input enables mouse reporting only for the prompt lifetime and restores it", () => {

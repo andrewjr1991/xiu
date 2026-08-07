@@ -24,6 +24,8 @@ Version 0.9.0 introduces reliable direct process execution. Xiu now prefers a na
 
 Version 0.9.1 makes clipboard attachments available from terminal right-click in supported Windows terminals. While an interactive Xiu input is active, right-click reads the clipboard through the same bounded attachment path as `Ctrl+V`, so text, screenshots, and copied Explorer files can be inserted at the cursor. Mouse reporting is disabled as soon as the prompt ends; `Ctrl+V` and `/paste` remain compatible fallbacks for terminals that intercept right-click. Use Shift+drag when selecting terminal text while the Xiu prompt is active.
 
+Version 0.9.2 fixes Node.js splitting SGR mouse reports into separate keypress events. Xiu now reassembles fragmented press and release sequences before they reach the editor, preventing coordinate tails such as `2;51;21M` from appearing as text while preserving one right-click clipboard import.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
