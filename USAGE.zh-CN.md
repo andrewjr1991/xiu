@@ -530,6 +530,24 @@ xiu --resume '会话ID'
 
 `read_file` 默认只返回 200 行，任何一次调用最多返回 500 行，并提示下一次应使用的 `start_line`。对于压缩成一行的 HTML、JSON 或其他超长文本，Xiu 会使用 `start_character` 和 `max_characters` 分段读取，单个字符窗口最多 20000 字符；每个结果都会标明当前字符范围和下一偏移量。这可以防止模型通过超大范围参数让单个文件一次占满上下文。
 
+从 v0.9.5 开始，需要按结构查询 HTML、JSON、CSV 或 TSV 时，Xiu 会优先使用以下只读工具，而不是反复读取原文或临时编写解析脚本：
+
+- `extract_html`：使用 CSS 选择器定位根记录，并从相对子元素提取文本、内部 HTML、外部 HTML 或属性；
+- `extract_json`：使用 RFC 6901 JSON Pointer，例如 `/orders/0/items`；`~1` 表示 `/`，`~0` 表示 `~`；
+- `extract_csv`：支持 CSV/TSV、表头或无表头、列选择、精确条件过滤、引号内逗号与换行。
+
+三个工具统一返回 JSON，并包含 `matched_count`、`returned_count` 和 `next_offset`。当 `next_offset` 不是 `null` 时，下一次调用使用该值继续读取；不要重复请求同一偏移。单次最多 100 条、20 个字段，单文件最多 50 MB，单次输出最多 60000 字符。过长字段会明确标记，结果始终保持为完整有效 JSON。
+
+编码默认自动识别 UTF-8、UTF-8 BOM、UTF-16 BOM；无法作为 UTF-8 解码的中文数据默认尝试 GB18030。也可以通过 `encoding` 显式指定 `iconv-lite` 支持的编码。三项工具均受工作区路径边界限制，并且属于只读操作，因此可以在 `/plan on` 中使用。
+
+模型会自动选择这些工具。需要手动指导时，可以直接说：
+
+```text
+用 extract_html 提取 report.html 中 table tbody tr，每行读取商品名和 data-id。
+用 extract_json 读取 data.json 的 /orders/items，按 20 条分页。
+用 extract_csv 读取 result.csv，只保留 status 等于 pass 的 id、name 列。
+```
+
 工具的完整结果仍写入会话日志并可在 `/details` 查看，但发送回模型的单条结果最多保留 32000 字符，采用头尾保留和中间省略。Windows 下运行 Python 时，Xiu 会自动设置 UTF-8 输出环境，避免中文内容触发 `UnicodeEncodeError`。
 
 开始一个新的独立会话：

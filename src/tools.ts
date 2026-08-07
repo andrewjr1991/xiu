@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import fg from "fast-glob";
 import iconv from "iconv-lite";
 import { backgroundProcessOutput, listBackgroundProcesses, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
+import { structuredExtractTools } from "./structured-extract.js";
 import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -295,6 +296,7 @@ export const builtinTools: AgentTool[] = [
       return truncate(`Lines ${start}-${end} of ${lines.length}\n${body}${notices.length ? `\n${notices.join("\n")}` : ""}`);
     },
   },
+  ...structuredExtractTools,
   {
     name: "verify_output",
     risk: "read",

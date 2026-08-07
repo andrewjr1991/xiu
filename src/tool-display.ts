@@ -11,6 +11,9 @@ export function localizeToolDescription(name: string, description: string, langu
   switch (name) {
     case "list_files": return `列出匹配 ${rest(/^list files matching\s*/i)} 的文件`;
     case "read_file": return `读取 ${rest(/^read\s*/i)}`;
+    case "extract_html": return `提取 HTML：${rest(/^extract HTML\s*/i)}`;
+    case "extract_json": return `提取 JSON：${rest(/^extract JSON\s*/i)}`;
+    case "extract_csv": return `提取表格：${rest(/^extract CSV rows from\s*/i)}`;
     case "verify_output": return `验证生成结果 ${rest(/^verify generated output\s*/i)}`;
     case "search_text": return `搜索 ${rest(/^search for\s*/i)}`;
     case "write_file": return `写入 ${rest(/^write\s*/i)}`;

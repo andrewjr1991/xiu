@@ -9,6 +9,12 @@ test("Chinese mode localizes built-in activity descriptions but preserves paths 
   assert.equal(localizeToolDescription("run_command", "run: npm test", "zh-CN"), "运行 PowerShell：npm test");
 });
 
+test("structured extraction descriptions are localized", () => {
+  assert.equal(localizeToolDescription("extract_html", "extract HTML tr.item from case.html", "zh-CN"), "提取 HTML：tr.item from case.html");
+  assert.equal(localizeToolDescription("extract_json", "extract JSON /orders from data.json", "zh-CN"), "提取 JSON：/orders from data.json");
+  assert.equal(localizeToolDescription("extract_csv", "extract CSV rows from data.csv", "zh-CN"), "提取表格：data.csv");
+});
+
 test("English mode leaves tool descriptions unchanged", () => {
   assert.equal(localizeToolDescription("verify_output", "verify generated output snake.html", "en-US"), "verify generated output snake.html");
 });

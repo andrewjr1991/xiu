@@ -118,7 +118,7 @@ export class RunningTaskView {
   beginTool(name: string, description: string, changesWorkspace = false, verification = false): void {
     if (verification) this.advanceAutomaticStage("verifying");
     else if (changesWorkspace) this.advanceAutomaticStage("editing");
-    else if (/^(?:read_file|list_files|search_text|project_info|git_status|git_diff|git_log|vision_analyze)/.test(name)) this.advanceAutomaticStage("investigating");
+    else if (/^(?:read_file|extract_html|extract_json|extract_csv|list_files|search_text|project_info|git_status|git_diff|git_log|vision_analyze)/.test(name)) this.advanceAutomaticStage("investigating");
     this.activity(`${name}: ${description}`);
   }
 

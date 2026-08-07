@@ -30,6 +30,8 @@ Version 0.9.3 removes the compiled clipboard helper dependency for text and copi
 
 Version 0.9.4 always leaves right-click to the terminal host. Xiu no longer enables mouse reporting for clipboard paste, so Windows Terminal and PowerShell retain their native text and Explorer-path paste behavior even when enterprise policy blocks programmatic clipboard APIs. `Ctrl+V` and `/paste` remain enhanced attachment actions; policy failures are concise and never expose PowerShell CLIXML diagnostics or launch the optional helper unless a bitmap was successfully detected.
 
+Version 0.9.5 adds bounded, read-only `extract_html`, `extract_json`, and `extract_csv` tools. Xiu can query CSS-selected HTML records, RFC 6901 JSON Pointer values, and filtered CSV/TSV rows without repeatedly paging raw files or writing one-off parsing scripts. Every result is valid paginated JSON with explicit counts and continuation offsets; workspace confinement, 50 MB input limits, 60,000-character output limits, BOM/UTF-8/UTF-16/GB18030 decoding, and Plan-mode read-only enforcement remain deterministic.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -39,6 +41,7 @@ Version 0.9.4 always leaves right-click to the terminal host. Xiu no longer enab
 - Automatic retry for transient model failures before output begins
 - Structured context-checkpoint compaction that preserves the active task contract and continuation state
 - Bounded line and character paging for large, minified, or single-line text files
+- Bounded structured extraction for CSS-selected HTML, JSON Pointer values, and filtered CSV/TSV rows
 - Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
 - UTF-8 Python child-process output on Windows PowerShell
 - Native argument-array process execution without PowerShell re-parsing
@@ -76,7 +79,7 @@ Version 0.9.4 always leaves right-click to the terminal host. Xiu no longer enab
 - Persisted multi-agent state, interrupted-task recovery, individual cancellation/retry, elapsed time, and Token statistics
 - Multiline input with `Ctrl+J`, Unicode-safe cursor editing, Home/End, Delete, and Backspace
 - Project-index-backed `@path` completion plus `Ctrl+R` reverse history search
-- Windows clipboard screenshots and copied-file attachments through right-click, `Ctrl+V`, or `/paste`
+- Native terminal right-click for text/paths plus Windows clipboard attachments through `Ctrl+V` or `/paste`
 - Persistent `/language` selection for localized UI, progress, plans, and model responses
 - Per-project draft recovery under `.xiu/draft.json` and responsive terminal Resize reflow
 - Direction-key approval menus that default to deny
