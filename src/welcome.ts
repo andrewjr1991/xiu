@@ -58,14 +58,24 @@ function fit(value: string, width: number): string {
   return `${takeWidth(value, left)}...${takeWidth(value, width - 3 - left, true)}`;
 }
 
-function box(title: string, rows: string[], width: number): string[] {
+function box(title: string, rows: string[], width: number, closeRight = true): string[] {
   const innerWidth = width - 2;
   const titleRule = Math.max(1, width - textWidth(title) - 5);
+  const row = (value: string): string => closeRight
+    ? `|${padVisible(fit(` ${value}`, innerWidth), innerWidth)}|`
+    : `| ${fit(value, innerWidth - 1)}`;
   return [
-    `+- ${title} ${"-".repeat(titleRule)}+`,
-    ...rows.map((row) => `|${padVisible(fit(` ${row}`, innerWidth), innerWidth)}|`),
-    `+${"-".repeat(innerWidth)}+`,
+    `+- ${title} ${"-".repeat(titleRule)}${closeRight ? "+" : ""}`,
+    ...rows.map(row),
+    `+${"-".repeat(innerWidth)}${closeRight ? "+" : ""}`,
   ];
+}
+
+function useClosedWelcomePanel(): boolean {
+  // Legacy Windows Console Host can advance mixed CJK text differently from
+  // wcwidth-style calculations. An open panel avoids a visibly jagged right
+  // edge without taking over the terminal or sacrificing the compact layout.
+  return process.platform !== "win32" || Boolean(process.env.WT_SESSION || process.env.TERM_PROGRAM);
 }
 
 function visibleLength(value: string): number {
@@ -112,16 +122,17 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     chalk.dim(fit(config.cwd, 38)),
   ];
   const panelRows = [...tips, "", ...session];
+  const closePanelRight = useClosedWelcomePanel();
 
   if (width >= 86) {
     const gap = 3;
     const leftWidth = Math.max(30, Math.min(38, Math.floor(width * 0.32)));
     const panelWidth = width - leftWidth - gap;
-    printSideBySide(brand, box(localize(language, "快速开始", "Quick start"), panelRows, panelWidth), leftWidth, gap);
+    printSideBySide(brand, box(localize(language, "快速开始", "Quick start"), panelRows, panelWidth, closePanelRight), leftWidth, gap);
   } else {
     for (const line of brand) console.log(line);
     console.log();
-    for (const line of box(localize(language, "快速开始", "Quick start"), panelRows, width)) console.log(line);
+    for (const line of box(localize(language, "快速开始", "Quick start"), panelRows, width, closePanelRight)) console.log(line);
   }
 
   console.log(chalk.green(localize(language, "提示", "Tips")));
