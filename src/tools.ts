@@ -28,6 +28,85 @@ function optionalStringArray(input: Record<string, unknown>, name: string): stri
   return value as string[];
 }
 
+function processArgs(input: Record<string, unknown>): string[] {
+  const value = input.args;
+  if (!Array.isArray(value) || value.length > 100 || value.some((item) => typeof item !== "string" || item.length > 20_000)) {
+    throw new Error("args must be an array of at most 100 strings, each no longer than 20000 characters");
+  }
+  const args = value as string[];
+  if (args.reduce((total, item) => total + item.length, 0) > 100_000) throw new Error("combined args must not exceed 100000 characters");
+  return args;
+}
+
+function processProgram(input: Record<string, unknown>): string {
+  const program = stringArg(input, "program");
+  if (program !== program.trim() || program.length > 1_000 || /[\0\r\n]/.test(program)) throw new Error("program must be a single executable name or workspace-relative path");
+  return program;
+}
+
+function processTimeout(input: Record<string, unknown>): number {
+  if (input.timeout_ms === undefined) return 120_000;
+  if (!Number.isInteger(input.timeout_ms) || (input.timeout_ms as number) < 1_000 || (input.timeout_ms as number) > 300_000) {
+    throw new Error("timeout_ms must be an integer between 1000 and 300000");
+  }
+  return input.timeout_ms as number;
+}
+
+const SHELL_PROGRAMS = new Set(["powershell", "pwsh", "cmd", "command", "bash", "sh", "zsh", "fish", "wsl"]);
+
+function programName(program: string): string {
+  return path.basename(program).toLowerCase().replace(/\.(?:exe|cmd|bat|com)$/i, "");
+}
+
+function validateDirectProcess(input: Record<string, unknown>): void {
+  const program = processProgram(input);
+  processArgs(input);
+  processTimeout(input);
+  if (SHELL_PROGRAMS.has(programName(program))) {
+    throw new Error("run_process does not accept a shell wrapper. Use run_command for PowerShell or shell syntax; otherwise pass the target program and each argument directly.");
+  }
+}
+
+function quoteProcessArgument(value: string): string {
+  if (value.length > 0 && /^[A-Za-z0-9_./\\:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+export function formatProcessInvocation(program: string, args: string[]): string {
+  return [quoteProcessArgument(program), ...args.map(quoteProcessArgument)].join(" ");
+}
+
+export function classifyProcess(program: string, args: string[]): ToolRisk {
+  const name = programName(program);
+  const lowered = args.map((item) => item.toLowerCase());
+  if (["rm", "rmdir", "del", "erase", "format", "shutdown", "taskkill"].includes(name)) return "dangerous";
+  if (name === "git") {
+    if ((lowered[0] === "reset" && lowered.includes("--hard")) || (lowered[0] === "clean" && lowered.some((item) => /^-[a-z]*f/i.test(item)))) return "dangerous";
+    if (["status", "log", "diff", "show", "rev-parse"].includes(lowered[0] ?? "") || (lowered[0] === "branch" && lowered.includes("--list"))) return "read";
+  }
+  if (lowered.length === 1 && ["--version", "-v"].includes(lowered[0]!)) return "read";
+  return "execute";
+}
+
+function resolveProcessProgram(program: string, cwd: string): string {
+  if (program.includes("/") || program.includes("\\")) return resolveWorkspacePath(cwd, program);
+  if (process.platform === "win32" && ["npm", "npx", "pnpm", "yarn", "corepack"].includes(program.toLowerCase())) return `${program}.cmd`;
+  return program;
+}
+
+function directProcessFailureHint(program: string, errorCode: string | number | undefined): string {
+  if (errorCode === "ENOENT") return `\nHint: program '${program}' was not found. Check PATH or pass a workspace-relative executable path.`;
+  return "";
+}
+
+function shellFailureHint(command: string, output: string): string {
+  const inlineInterpreter = /\b(?:python|py)\s+-c\b|\bnode\s+-e\b/i.test(command);
+  const parserFailure = /ParserError|Unexpected token|The string is missing the terminator|字符串缺少终止符|意外的标记/i.test(output);
+  return inlineInterpreter || parserFailure
+    ? "\nHint: avoid PowerShell quoting for this command. Retry with run_process using program and args so every argument is passed directly."
+    : "";
+}
+
 export function resolveWorkspacePath(cwd: string, requested: string): string {
   const root = path.resolve(cwd);
   const target = path.resolve(root, requested);
@@ -379,12 +458,57 @@ export const builtinTools: AgentTool[] = [
     },
   },
   {
+    name: "run_process",
+    risk: (input) => classifyProcess(processProgram(input), processArgs(input)),
+    changesWorkspace: (input) => classifyProcess(processProgram(input), processArgs(input)) !== "read",
+    description: "Run a program directly with an argument array, without PowerShell or shell parsing. Prefer this for Node, Python, Git, npm, test runners, paths with spaces, JSON, regex, and inline code. Use run_command only when PowerShell or shell syntax is required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        program: { type: "string", description: "Executable name from PATH or a workspace-relative executable path. Do not include arguments here." },
+        args: { type: "array", items: { type: "string" }, maxItems: 100, description: "Exact argument values. They are passed directly and are never parsed by PowerShell." },
+        timeout_ms: { type: "integer", minimum: 1000, maximum: 300000 },
+      },
+      required: ["program", "args"],
+      additionalProperties: false,
+    },
+    describe: (input) => `run directly: ${formatProcessInvocation(processProgram(input), processArgs(input))}`,
+    isVerification: (input, result) => looksLikeVerification(formatProcessInvocation(processProgram(input), processArgs(input))) && verificationCommandPassed(result),
+    validate: validateDirectProcess,
+    async preview(input, context) {
+      const program = processProgram(input);
+      const resolved = resolveProcessProgram(program, context.cwd);
+      return `Direct process (no shell parsing):\n${formatProcessInvocation(resolved, processArgs(input))}`;
+    },
+    async execute(input, context) {
+      const requestedProgram = processProgram(input);
+      const program = resolveProcessProgram(requestedProgram, context.cwd);
+      const args = processArgs(input);
+      const timeout = processTimeout(input);
+      const outputEncoding = process.platform === "win32" ? await windowsConsoleEncoding() : "utf8";
+      try {
+        const result = await execFileAsync(program, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
+        const stdout = decodeOutput(result.stdout, outputEncoding);
+        const stderr = decodeOutput(result.stderr, outputEncoding);
+        return truncate(`Exit code: 0\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+      } catch (error) {
+        const failure = error as Error & { code?: string | number; stdout?: string | Buffer; stderr?: string | Buffer; killed?: boolean };
+        const stdout = decodeOutput(failure.stdout, outputEncoding);
+        const stderr = decodeOutput(failure.stderr, outputEncoding);
+        if (context.signal?.aborted) return "Process cancelled by user.";
+        if (failure.killed) return truncate(`Process timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        const output = `Exit code: ${failure.code ?? "failed"}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim();
+        return truncate(`${output}${directProcessFailureHint(requestedProgram, failure.code)}`);
+      }
+    },
+  },
+  {
     name: "run_command",
     risk: (input) => classifyCommand(stringArg(input, "command")),
     changesWorkspace: (input) => classifyCommand(stringArg(input, "command")) !== "read",
     description: process.platform === "win32"
-      ? "Run a Windows PowerShell 5.1 command in the workspace. Do not use Bash syntax such as &&, ||, or /dev/null. Use for tests, builds, Git, and project tooling. Requires approval unless --yes is active."
-      : "Run a POSIX shell command in the workspace. Use for tests, builds, Git, and project tooling. Requires approval unless --yes is active.",
+      ? "Run Windows PowerShell 5.1 syntax in the workspace. Use only for cmdlets, variables, pipelines, redirection, or command composition. Prefer run_process for programs and complex arguments. Requires approval unless --yes is active."
+      : "Run POSIX shell syntax in the workspace. Use only for pipelines, redirection, variables, or command composition. Prefer run_process for programs and complex arguments. Requires approval unless --yes is active.",
     inputSchema: {
       type: "object",
       properties: {
@@ -419,7 +543,8 @@ export const builtinTools: AgentTool[] = [
         const stderr = decodeOutput(failure.stderr, outputEncoding);
         if (context.signal?.aborted) return "Command cancelled by user.";
         if (failure.killed) return truncate(`Command timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
-        return truncate(`Exit code: ${failure.code ?? "failed"}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        const output = `Exit code: ${failure.code ?? "failed"}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim();
+        return truncate(`${output}${shellFailureHint(command, output)}`);
       }
     },
   },

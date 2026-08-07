@@ -16,7 +16,8 @@ export function localizeToolDescription(name: string, description: string, langu
     case "write_file": return `写入 ${rest(/^write\s*/i)}`;
     case "replace_text": return `修改 ${rest(/^edit\s*/i)}`;
     case "apply_patch": return `应用补丁 ${rest(/^patch\s*/i)}`;
-    case "run_command": return `运行：${rest(/^run:\s*/i)}`;
+    case "run_process": return `直接运行：${rest(/^run directly:\s*/i)}`;
+    case "run_command": return `运行 PowerShell：${rest(/^run:\s*/i)}`;
     case "project_info": return "识别项目类型和检查命令";
     case "start_background": return `后台启动：${rest(/^start in background:\s*/i)}`;
     case "list_background": return "列出后台命令";

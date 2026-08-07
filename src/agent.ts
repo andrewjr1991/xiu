@@ -15,7 +15,7 @@ import type { SkillRegistry } from "./skills.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
-import { executeTool, looksLikeVerification } from "./tools.js";
+import { executeTool, formatProcessInvocation, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 
@@ -486,8 +486,13 @@ export class Agent {
 
   private isVerificationAttempt(toolName: string, input: Record<string, unknown>): boolean {
     if (toolName === "verify_output" || toolName === "validate_project") return true;
-    if (toolName !== "run_command") return false;
-    return looksLikeVerification(String(input.command ?? ""));
+    if (toolName === "run_command") return looksLikeVerification(String(input.command ?? ""));
+    if (toolName === "run_process") {
+      const program = typeof input.program === "string" ? input.program : "";
+      const args = Array.isArray(input.args) ? input.args.filter((value): value is string => typeof value === "string") : [];
+      return looksLikeVerification(formatProcessInvocation(program, args));
+    }
+    return false;
   }
 
   private workspacePaths(input: Record<string, unknown>): string[] {

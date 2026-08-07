@@ -20,6 +20,8 @@ Version 0.8.6 makes that language and identity contract deterministic. Built-in 
 
 Version 0.8.7 fixes Windows cancellation at the terminal-input boundary. Both parsed Ctrl+C events and the raw `0x03` byte emitted by some PowerShell/ConPTY combinations cancel the active model or tool call and immediately show a cancelling state. Text and Explorer files can still use terminal right-click paste; clipboard bitmap images use `Ctrl+V` or `/paste`, because Windows Terminal does not send image bytes or a paste event to a character-stream CLI on right-click. The startup panel uses connected box-drawing characters, a dedicated session divider, and absolute terminal-column positioning for mixed-language right borders.
 
+Version 0.9.0 introduces reliable direct process execution. Xiu now prefers a native `program + args[]` tool for Node, Python, Git, npm, JSON, regex, inline code, and paths with spaces, so arguments do not pass through PowerShell quoting or interpolation. PowerShell remains available for cmdlets, variables, pipelines, and redirection; failed inline-interpreter or parser commands explain how to retry with direct arguments. Shell wrappers and workspace-escaping executable paths are rejected before approval.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -31,6 +33,7 @@ Version 0.8.7 fixes Windows cancellation at the terminal-input boundary. Both pa
 - Bounded line and character paging for large, minified, or single-line text files
 - Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
 - UTF-8 Python child-process output on Windows PowerShell
+- Native argument-array process execution without PowerShell re-parsing
 - Repeated tool-failure detection and error attribution
 - Persistent live task progress with checked steps, current/next actions, and recent file changes
 - Adaptive startup dashboard with quick-start tips, model, approval, workspace, and skill count

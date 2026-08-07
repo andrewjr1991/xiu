@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { builtinTools, classifyCommand, executeTool, looksLikeVerification, resolveWorkspacePath, verificationCommandPassed } from "../src/tools.js";
+import { builtinTools, classifyCommand, classifyProcess, executeTool, formatProcessInvocation, looksLikeVerification, resolveWorkspacePath, verificationCommandPassed } from "../src/tools.js";
 
 test("resolveWorkspacePath blocks traversal", () => {
   const root = path.resolve("workspace");
@@ -142,6 +142,68 @@ test("read tools are auto-approved while dangerous commands carry their risk", a
     approve: async (request) => { seenRisk = request.risk; return false; },
   });
   assert.equal(seenRisk, "dangerous");
+});
+
+test("direct process formatting and risk classification keep arguments separate", () => {
+  assert.equal(formatProcessInvocation("node", ["script with spaces.js", "single'quote", "$HOME|value"]), "node 'script with spaces.js' 'single''quote' '$HOME|value'");
+  assert.equal(classifyProcess("git", ["status", "--short"]), "read");
+  assert.equal(classifyProcess("git", ["reset", "--hard"]), "dangerous");
+  assert.equal(classifyProcess("node", ["script.js"]), "execute");
+});
+
+test("run_process preserves complex arguments without PowerShell interpretation", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-args-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  const values = ["space value", "single'quote", 'double"quote', "$HOME", "a;b&c|d", JSON.stringify({ nested: "值" }), "中文"];
+  let preview = "";
+  const result = await executeTool(tool, {
+    program: "node",
+    args: ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", ...values],
+  }, {
+    cwd,
+    approve: async (request) => { preview = request.preview ?? ""; return true; },
+  });
+  assert.match(preview, /Direct process \(no shell parsing\)/);
+  assert.deepEqual(JSON.parse(result.slice(result.indexOf("\n") + 1)), values);
+});
+
+test("run_process rejects shell wrappers and escaped workspace programs before approval", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-boundary-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  let approvals = 0;
+  const shell = await executeTool(tool, { program: "powershell.exe", args: ["-Command", "Write-Output unsafe"] }, { cwd, approve: async () => { approvals++; return true; } });
+  assert.match(shell, /does not accept a shell wrapper/);
+  const escaped = await executeTool(tool, { program: "../outside", args: [] }, { cwd, approve: async () => { approvals++; return true; } });
+  assert.match(escaped, /escapes workspace/);
+  assert.equal(approvals, 0);
+});
+
+test("run_process reports missing programs and PowerShell failures recommend direct arguments", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-errors-"));
+  const direct = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  const missing = await executeTool(direct, { program: "xiu-program-that-does-not-exist", args: [] }, { cwd, approve: async () => true });
+  assert.match(missing, /was not found/);
+  if (process.platform !== "win32") return t.skip("PowerShell-specific migration hint");
+  const shell = builtinTools.find((candidate) => candidate.name === "run_command")!;
+  const failed = await executeTool(shell, { command: "node -e \"throw new Error('expected failure')\"" }, { cwd, approve: async () => true });
+  assert.match(failed, /Retry with run_process/);
+});
+
+test("run_process supports verification, timeout, and cancellation", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-lifecycle-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  const verificationInput = { program: "node", args: ["scripts/verify-output.js"] };
+  assert.equal(tool.isVerification?.(verificationInput, "Exit code: 0\nVerification passed."), true);
+
+  const timedOut = await executeTool(tool, { program: "node", args: ["-e", "setTimeout(() => {}, 5000)"], timeout_ms: 1_000 }, { cwd, approve: async () => true });
+  assert.match(timedOut, /timed out/i);
+
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const pending = executeTool(tool, { program: "node", args: ["-e", "setTimeout(() => {}, 10000)"], timeout_ms: 15_000 }, { cwd, approve: async () => true, signal: controller.signal });
+  setTimeout(() => controller.abort(), 100);
+  assert.match(await pending, /cancelled by user/i);
+  assert.ok(Date.now() - startedAt < 5_000, "cancelled direct process should stop promptly");
 });
 
 test("project_info detects npm verification scripts", async () => {

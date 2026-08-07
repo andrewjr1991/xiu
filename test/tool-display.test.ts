@@ -5,7 +5,8 @@ import { localizeToolDescription, localizeToolProgress } from "../src/tool-displ
 test("Chinese mode localizes built-in activity descriptions but preserves paths and commands", () => {
   assert.equal(localizeToolDescription("verify_output", "verify generated output snake.html", "zh-CN"), "验证生成结果 snake.html");
   assert.equal(localizeToolDescription("read_file", "read src/app.ts", "zh-CN"), "读取 src/app.ts");
-  assert.equal(localizeToolDescription("run_command", "run: npm test", "zh-CN"), "运行：npm test");
+  assert.equal(localizeToolDescription("run_process", "run directly: node script.js", "zh-CN"), "直接运行：node script.js");
+  assert.equal(localizeToolDescription("run_command", "run: npm test", "zh-CN"), "运行 PowerShell：npm test");
 });
 
 test("English mode leaves tool descriptions unchanged", () => {

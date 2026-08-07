@@ -18,6 +18,8 @@ test("system prompt identifies 静然 as Xiu's developer and rejects provider at
   assert.match(prompt, /meaningful phase changes.*user-facing progress sentence/);
   assert.match(prompt, /use verify_output with explicit required and forbidden content/);
   assert.match(prompt, /Treat @\.xiu\/attachments references as user-provided attachments/);
+  assert.match(prompt, /Prefer run_process for Node, Python, Git, npm/);
+  assert.match(prompt, /pass the executable as program and every argument as a separate args item/);
 });
 
 test("Chinese language mode governs all user-visible model output", async () => {

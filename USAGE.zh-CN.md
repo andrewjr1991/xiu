@@ -332,6 +332,14 @@ v0.8.2 也识别包含“验证”或“校验”的多行 `python -c` 等内联
 xiu '检查项目架构并列出最重要的三个问题'
 ```
 
+### 8.7 Windows 复杂命令与参数
+
+v0.9.0 起，Xiu 会优先使用参数化进程工具运行 Node、Python、Git、npm、测试器和项目脚本。程序名与参数数组分开传给操作系统，不再把整段内容拼成 PowerShell 字符串。因此路径空格、单双引号、`$`、`;`、`&`、`|`、JSON、正则表达式和中文不会被 PowerShell 再次解释。
+
+`run_command` 仍然保留，但只用于 PowerShell cmdlet、变量、管道、重定向和命令组合。如果复杂 `python -c`、`node -e` 或 PowerShell 解析失败，工具结果会提示改用 `run_process`。Xiu 不会自动改写失败命令，避免静默改变原始语义。
+
+参数化进程工具仍遵循风险审批、工作区限制、超时、取消、UTF-8 和验证门禁。它不接受 `powershell`、`pwsh`、`cmd`、`bash`、`sh` 或 `wsl` 作为包装器；确实需要 Shell 语法时必须使用受审批的 `run_command`。
+
 ## 九、权限与审批
 
 Xiu 将工具分成四类：
