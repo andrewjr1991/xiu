@@ -22,6 +22,8 @@ Version 0.8.7 fixes Windows cancellation at the terminal-input boundary. Both pa
 
 Version 0.9.0 introduces reliable direct process execution. Xiu now prefers a native `program + args[]` tool for Node, Python, Git, npm, JSON, regex, inline code, and paths with spaces, so arguments do not pass through PowerShell quoting or interpolation. PowerShell remains available for cmdlets, variables, pipelines, and redirection; failed inline-interpreter or parser commands explain how to retry with direct arguments. Shell wrappers and workspace-escaping executable paths are rejected before approval.
 
+Version 0.9.1 makes clipboard attachments available from terminal right-click in supported Windows terminals. While an interactive Xiu input is active, right-click reads the clipboard through the same bounded attachment path as `Ctrl+V`, so text, screenshots, and copied Explorer files can be inserted at the cursor. Mouse reporting is disabled as soon as the prompt ends; `Ctrl+V` and `/paste` remain compatible fallbacks for terminals that intercept right-click. Use Shift+drag when selecting terminal text while the Xiu prompt is active.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -68,7 +70,7 @@ Version 0.9.0 introduces reliable direct process execution. Xiu now prefers a na
 - Persisted multi-agent state, interrupted-task recovery, individual cancellation/retry, elapsed time, and Token statistics
 - Multiline input with `Ctrl+J`, Unicode-safe cursor editing, Home/End, Delete, and Backspace
 - Project-index-backed `@path` completion plus `Ctrl+R` reverse history search
-- Windows clipboard screenshots and copied-file attachments through `Ctrl+V` or `/paste`
+- Windows clipboard screenshots and copied-file attachments through right-click, `Ctrl+V`, or `/paste`
 - Persistent `/language` selection for localized UI, progress, plans, and model responses
 - Per-project draft recovery under `.xiu/draft.json` and responsive terminal Resize reflow
 - Direction-key approval menus that default to deny

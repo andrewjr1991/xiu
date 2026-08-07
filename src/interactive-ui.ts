@@ -46,6 +46,33 @@ export interface EditorFrame {
   cursorColumn: number;
 }
 
+export interface TerminalMouseEvent {
+  button: "left" | "middle" | "right" | "release" | "wheel" | "other";
+  pressed: boolean;
+}
+
+const ENABLE_TERMINAL_MOUSE = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_TERMINAL_MOUSE = "\x1b[?1006l\x1b[?1000l";
+
+export function terminalMouseEvent(text: string, key: readline.Key): TerminalMouseEvent | undefined {
+  const sequence = key.sequence ?? text;
+  const sgr = /^\x1b\[<(\d+);\d+;\d+([Mm])$/.exec(sequence);
+  if (sgr) {
+    const code = Number(sgr[1]);
+    if (code & 64) return { button: "wheel", pressed: true };
+    if (sgr[2] === "m") return { button: "release", pressed: false };
+    const button = code & 3;
+    return { button: button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "other", pressed: true };
+  }
+  const x10 = /^\x1b\[M([\s\S])([\s\S])([\s\S])$/.exec(sequence);
+  if (x10) {
+    const code = (x10[1]?.codePointAt(0) ?? 32) - 32;
+    const button = code & 3;
+    return { button: button === 0 ? "left" : button === 1 ? "middle" : button === 2 ? "right" : "release", pressed: button !== 3 };
+  }
+  return undefined;
+}
+
 function stripAnsi(value: string): string {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
@@ -339,13 +366,17 @@ function clearRenderedFrame(lines: number, cursorRow: number): void {
 export function beginRawInput(
   onKeypress: (text: string, key: readline.Key) => void,
   input: NodeJS.ReadStream = process.stdin,
+  options: { enableMouse?: boolean; output?: NodeJS.WriteStream } = {},
 ): () => void {
+  const output = options.output ?? process.stdout;
   readline.emitKeypressEvents(input);
   input.setRawMode?.(true);
   input.resume();
+  if (options.enableMouse) output.write(ENABLE_TERMINAL_MOUSE);
   input.on("keypress", onKeypress);
   return () => {
     input.off("keypress", onKeypress);
+    if (options.enableMouse) output.write(DISABLE_TERMINAL_MOUSE);
     input.setRawMode?.(false);
     // Xiu immediately swaps from the running-task editor to the normal editor.
     // Pausing shared stdin during that hand-off can leave Windows ConPTY in a
@@ -384,6 +415,27 @@ export async function readInteractiveInput(
     let refreshTimer: NodeJS.Timeout | undefined;
     let pasteNotice = "";
     let pasteInFlight = false;
+
+    const pasteFromClipboard = (): void => {
+      if (pasteInFlight || !options.onPaste) return;
+      pasteInFlight = true;
+      pasteNotice = localize(language, "正在读取剪贴板……", "Reading clipboard...");
+      render();
+      void options.onPaste().then((result) => {
+        if (finished) return;
+        if (result.insertText) {
+          state = insertEditorText(state, result.insertText);
+          changed();
+        }
+        pasteNotice = result.notice ?? localize(language, "剪贴板内容已粘贴。", "Clipboard pasted.");
+        dismissed = true;
+      }).catch((error) => {
+        if (!finished) pasteNotice = `${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}`;
+      }).finally(() => {
+        pasteInFlight = false;
+        if (!finished) render();
+      });
+    };
 
     const suggestions = (): InputCandidate[] => {
       if (dismissed) return [];
@@ -426,6 +478,11 @@ export async function readInteractiveInput(
     const onKeypress = (text: string, key: readline.Key): void => {
       if (finished) return;
       const matches = suggestions();
+      const mouse = terminalMouseEvent(text, key);
+      if (mouse) {
+        if (mouse.button === "right" && mouse.pressed) pasteFromClipboard();
+        return;
+      }
       if (isTerminalCancel(text, key)) {
         options.onCancel?.();
         return finish("", false);
@@ -444,24 +501,7 @@ export async function readInteractiveInput(
         return;
       }
       if (key.ctrl && key.name === "v" && options.onPaste) {
-        if (pasteInFlight) return;
-        pasteInFlight = true;
-        pasteNotice = localize(language, "正在读取剪贴板……", "Reading clipboard...");
-        render();
-        void options.onPaste().then((result) => {
-          if (finished) return;
-          if (result.insertText) {
-            state = insertEditorText(state, result.insertText);
-            changed();
-          }
-          pasteNotice = result.notice ?? localize(language, "剪贴板内容已粘贴。", "Clipboard pasted.");
-          dismissed = true;
-        }).catch((error) => {
-          if (!finished) pasteNotice = `${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}`;
-        }).finally(() => {
-          pasteInFlight = false;
-          if (!finished) render();
-        });
+        pasteFromClipboard();
         return;
       }
       if (key.ctrl && (key.name === "j" || key.name === "linefeed")) {
@@ -530,7 +570,9 @@ export async function readInteractiveInput(
       render();
     };
 
-    cleanupInput = beginRawInput(onKeypress);
+    cleanupInput = beginRawInput(onKeypress, process.stdin, {
+      enableMouse: process.platform === "win32" && Boolean(options.onPaste),
+    });
     process.stdout.on("resize", render);
     options.signal?.addEventListener("abort", abortInput, { once: true });
     if (options.refreshMs && options.refreshMs > 0) {

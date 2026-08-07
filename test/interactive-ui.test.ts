@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -46,6 +46,28 @@ test("Ctrl+C cancellation recognizes parsed keys and raw Windows control bytes",
   assert.equal(isTerminalCancel("", { name: "c", ctrl: true }), true);
   assert.equal(isTerminalCancel("\u0003", { sequence: "\u0003" }), true);
   assert.equal(isTerminalCancel("c", { name: "c" }), false);
+});
+
+test("terminal mouse reports recognize right click without treating release as another paste", () => {
+  assert.deepEqual(terminalMouseEvent("", { sequence: "\x1b[<2;40;12M" }), { button: "right", pressed: true });
+  assert.deepEqual(terminalMouseEvent("", { sequence: "\x1b[<2;40;12m" }), { button: "release", pressed: false });
+  assert.deepEqual(terminalMouseEvent("", { sequence: "\x1b[M\"HD" }), { button: "right", pressed: true });
+  assert.equal(terminalMouseEvent("a", { name: "a", sequence: "a" }), undefined);
+});
+
+test("raw input enables mouse reporting only for the prompt lifetime and restores it", () => {
+  const input = new PassThrough() as PassThrough & { setRawMode: (enabled: boolean) => void };
+  const output = new PassThrough();
+  input.setRawMode = () => {};
+  let terminalWrites = "";
+  output.on("data", (chunk) => { terminalWrites += chunk.toString(); });
+  const cleanup = beginRawInput(() => {}, input as unknown as NodeJS.ReadStream, {
+    enableMouse: true,
+    output: output as unknown as NodeJS.WriteStream,
+  });
+  assert.equal(terminalWrites, "\x1b[?1000h\x1b[?1006h");
+  cleanup();
+  assert.equal(terminalWrites, "\x1b[?1000h\x1b[?1006h\x1b[?1006l\x1b[?1000l");
 });
 
 test("terminal width treats box drawing as single-width and CJK as double-width", () => {

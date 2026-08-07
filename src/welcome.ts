@@ -98,7 +98,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
   const width = Math.max(30, Math.min(118, columns - 3));
   const tips = [
     localize(language, "1. 输入 / 打开命令面板", "1. Type / to open the command palette"),
-    localize(language, "2. 使用 @路径 或 Ctrl+V 引用文件和图片", "2. Use @path or Ctrl+V to attach files and images"),
+    localize(language, "2. 使用 @路径、右键或 Ctrl+V 引用文件和图片", "2. Use @path, right-click, or Ctrl+V for attachments"),
     localize(language, "3. 使用 /plan on 进行只读调查", "3. Use /plan on to investigate safely"),
     localize(language, "4. 使用 /skills 浏览已安装工作流", "4. Use /skills to browse installed workflows"),
   ];

@@ -85,6 +85,18 @@ test("Chinese startup screen is localized and never reaches the terminal wrap co
   for (const line of lines) assert.ok(terminalDisplayWidth(line) <= 117, `line may wrap at terminal edge: ${line}`);
 });
 
+test("startup screen advertises right-click attachment paste", () => {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => lines.push(values.join(" "));
+  try {
+    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\project", language: "zh-CN" }, "0.9.1", 2);
+  } finally {
+    console.log = originalLog;
+  }
+  assert.match(lines.join("\n"), /右键.*Ctrl\+V/);
+});
+
 test("interactive welcome panel positions every mixed-language right border at one absolute column", () => {
   const lines: string[] = [];
   const originalLog = console.log;
