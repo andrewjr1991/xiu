@@ -48,6 +48,12 @@ test("Ctrl+C cancellation recognizes parsed keys and raw Windows control bytes",
   assert.equal(isTerminalCancel("c", { name: "c" }), false);
 });
 
+test("terminal width treats box drawing as single-width and CJK as double-width", () => {
+  assert.equal(terminalDisplayWidth("┌─┬─┐"), 5);
+  assert.equal(terminalDisplayWidth("中文"), 4);
+  assert.equal(terminalDisplayWidth("e\u0301"), 1);
+});
+
 test("slash command matching opens for slash and filters as the user types", () => {
   assert.equal(matchingCommands("/", commands).length, 5);
   assert.deepEqual(matchingCommands("/res", commands).map((item) => item.name), ["/resume"]);

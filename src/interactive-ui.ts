@@ -51,7 +51,29 @@ function stripAnsi(value: string): string {
 }
 
 export function terminalDisplayWidth(value: string): number {
-  return [...stripAnsi(value)].reduce((width, character) => width + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  return [...stripAnsi(value)].reduce((width, character) => width + terminalCharacterWidth(character), 0);
+}
+
+export function terminalCharacterWidth(character: string): number {
+  const code = character.codePointAt(0) ?? 0;
+  if (code === 0 || code < 0x20 || (code >= 0x7f && code < 0xa0)) return 0;
+  if (
+    (code >= 0x0300 && code <= 0x036f) ||
+    (code >= 0x1ab0 && code <= 0x1aff) ||
+    (code >= 0x1dc0 && code <= 0x1dff) ||
+    (code >= 0x20d0 && code <= 0x20ff) ||
+    (code >= 0xfe20 && code <= 0xfe2f)
+  ) return 0;
+  return code >= 0x1100 && (
+    code <= 0x115f || code === 0x2329 || code === 0x232a ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff)
+  ) ? 2 : 1;
 }
 
 function takeDisplayWidth(value: string, width: number, fromEnd = false): string {
@@ -60,7 +82,7 @@ function takeDisplayWidth(value: string, width: number, fromEnd = false): string
   const selected: string[] = [];
   let used = 0;
   for (const character of characters) {
-    const next = /[^\u0000-\u00ff]/.test(character) ? 2 : 1;
+    const next = terminalCharacterWidth(character);
     if (used + next > width) break;
     selected.push(character);
     used += next;

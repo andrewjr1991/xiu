@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { AgentConfig } from "./config.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import { terminalCharacterWidth } from "./interactive-ui.js";
 
 const LOGO = [
   "__  __  _       ",
@@ -19,21 +20,8 @@ function authState(config: AgentConfig): string {
   return configured ? "configured" : "missing API key";
 }
 
-function characterWidth(character: string): number {
-  const code = character.codePointAt(0) ?? 0;
-  return code >= 0x1100 && (
-    code <= 0x115f || code === 0x2329 || code === 0x232a ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6)
-  ) ? 2 : 1;
-}
-
 function textWidth(value: string): number {
-  return [...value].reduce((total, character) => total + characterWidth(character), 0);
+  return [...value].reduce((total, character) => total + terminalCharacterWidth(character), 0);
 }
 
 function takeWidth(value: string, width: number, fromEnd = false): string {
@@ -42,7 +30,7 @@ function takeWidth(value: string, width: number, fromEnd = false): string {
   const selected: string[] = [];
   let used = 0;
   for (const character of characters) {
-    const next = characterWidth(character);
+    const next = terminalCharacterWidth(character);
     if (used + next > width) break;
     selected.push(character);
     used += next;
@@ -58,22 +46,26 @@ function fit(value: string, width: number): string {
   return `${takeWidth(value, left)}...${takeWidth(value, width - 3 - left, true)}`;
 }
 
-function box(title: string, rows: string[], width: number, rightColumn?: number): string[] {
+type WelcomeBoxRow = string | { divider: string };
+
+function box(title: string, rows: WelcomeBoxRow[], width: number, rightColumn?: number): string[] {
   const innerWidth = width - 2;
-  const rule = `+${"-".repeat(innerWidth)}+`;
-  const titleRule = rightColumn
-    ? `${rule}\x1b[${rightColumn - width + 3}G ${title} \x1b[${rightColumn + 1}G`
-    : `+- ${title} ${"-".repeat(Math.max(1, width - textWidth(title) - 5))}+`;
+  const labelledRule = (left: string, right: string, label: string): string => {
+    const rule = `${left}${"─".repeat(innerWidth)}${right}`;
+    return rightColumn
+      ? `${rule}\x1b[${rightColumn - width + 3}G ${label} \x1b[${rightColumn + 1}G`
+      : `${left}─ ${label} ${"─".repeat(Math.max(1, width - textWidth(label) - 5))}${right}`;
+  };
   const row = (value: string): string => {
     const content = fit(` ${value}`, innerWidth);
     return rightColumn
-      ? `|${content}\x1b[${rightColumn}G|`
-      : `|${padVisible(content, innerWidth)}|`;
+      ? `│${content}\x1b[${rightColumn}G│`
+      : `│${padVisible(content, innerWidth)}│`;
   };
   return [
-    titleRule,
-    ...rows.map(row),
-    rule,
+    labelledRule("┌", "┐", title),
+    ...rows.map((value) => typeof value === "string" ? row(value) : labelledRule("├", "┤", value.divider)),
+    `└${"─".repeat(innerWidth)}┘`,
   ];
 }
 
@@ -106,7 +98,6 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     localize(language, "4. 使用 /skills 浏览已安装工作流", "4. Use /skills to browse installed workflows"),
   ];
   const session = [
-    localize(language, "当前会话", "Session"),
     `${localize(language, "模型", "Model")}      ${config.provider}/${config.model}`,
     `${localize(language, "上下文", "Context")}    ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · ${localize(language, "压缩点", "compact at")} ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
     `${localize(language, "认证", "Auth")}      ${authState(config) === "configured" ? localize(language, "已配置", "configured") : localize(language, "缺少 API Key", "missing API key")}`,
@@ -120,7 +111,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     chalk.dim(localize(language, "修代码，也修工程。", "Build code. Fix systems.")),
     chalk.dim(fit(config.cwd, 38)),
   ];
-  const panelRows = [...tips, "", ...session];
+  const panelRows: WelcomeBoxRow[] = [...tips, { divider: localize(language, "当前会话", "Session") }, ...session];
   const alignBorderWithCursor = Boolean(process.stdout.isTTY);
 
   if (width >= 86) {

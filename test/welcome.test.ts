@@ -102,7 +102,9 @@ test("interactive welcome panel positions every mixed-language right border at o
   }
   const titleRow = lines.find((line) => line.includes("快速开始"));
   assert.ok(titleRow?.includes("\x1b[43G 快速开始 \x1b[118G"), "title should overlay the complete top rule at fixed columns");
-  const contentRows = lines.filter((line) => line.includes("输入 / 打开命令面板") || line.includes("当前会话") || line.includes("自动，危险操作除外"));
-  assert.equal(contentRows.length, 3);
-  assert.ok(contentRows.every((line) => line.includes("\x1b[117G|")), "each content row should place its right border at terminal column 117");
+  const sessionRow = lines.find((line) => line.includes("当前会话"));
+  assert.ok(sessionRow?.includes("├") && sessionRow.includes("┤") && sessionRow.includes("\x1b[43G 当前会话 \x1b[118G"), "session heading should be a connected divider");
+  const contentRows = lines.filter((line) => line.includes("输入 / 打开命令面板") || line.includes("自动，危险操作除外"));
+  assert.equal(contentRows.length, 2);
+  assert.ok(contentRows.every((line) => line.includes("\x1b[117G│")), "each content row should place its right border at terminal column 117");
 });
