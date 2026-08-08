@@ -33,6 +33,7 @@ import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
+import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -60,6 +61,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/agents retry", "重试中断或失败的 Agent", "Retry one interrupted or failed agent"),
     item("/agents integrate", "审查并集成 Worktree Agent", "Review and integrate a Worktree agent"),
     item("/details", "浏览完整工具与 Agent 活动", "Browse complete tool and Agent activity details"),
+    item("/diagnostics", "查看当前或最近任务的诊断报告", "Show diagnostics for the current or most recent task"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/queue", "查看或安排下一项任务", "Show or schedule the next task"),
     item("/clear-queue", "清空运行期排队任务", "Clear queued follow-ups while a task is running"),
@@ -443,7 +445,7 @@ async function main(): Promise<void> {
         },
         onToolEnd: (_name, result) => {
           stopPhase();
-          const failed = /^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification timed out|Verification unavailable)/i.test(result);
+          const failed = /^(?:Tool error:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
@@ -478,8 +480,8 @@ async function main(): Promise<void> {
           runningTaskView?.markFinishing();
           const verification = summary.changed ? (summary.verified ? localize(language, "已验证", "verified") : localize(language, "已尝试验证", "verification noted")) : localize(language, "无文件变化", "no changes");
           const message = localize(language,
-            `${summary.outcome === "completed" ? "✓ 已完成" : "! 未验证完成"} · ${(summary.durationMs / 1000).toFixed(1)} 秒 · ${summary.turns} 轮模型调用 · ${summary.toolCalls} 次工具调用 · ${verification}`,
-            `${summary.outcome === "completed" ? "✓ Done" : "! Stopped unverified"} · ${(summary.durationMs / 1000).toFixed(1)}s · ${summary.turns} model turn(s) · ${summary.toolCalls} tool call(s) · ${verification}`);
+            `${summary.outcome === "completed" ? "✓ 已完成" : "! 未验证完成"} · ${(summary.durationMs / 1000).toFixed(1)} 秒 · ${summary.turns} 轮模型调用 · ${summary.toolCalls} 次工具调用 · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · 失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次 · ` : ""}${verification}`,
+            `${summary.outcome === "completed" ? "✓ Done" : "! Stopped unverified"} · ${(summary.durationMs / 1000).toFixed(1)}s · ${summary.turns} model turn(s) · ${summary.toolCalls} tool call(s) · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s) · ` : ""}${verification}`);
           if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
           else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
@@ -591,9 +593,11 @@ async function main(): Promise<void> {
           activeQueuedInputController = inputController;
           let cancelledFromKeyboard = false;
           const queuedDraft = await draftStore.load();
-          const followUp = (await readInteractiveInput(localize(language, "补充> ", "steer> "), slashCommands(language), inputHistory, () => (
-            formatRunningInputFooter(view, queue.size, agent.status().pendingSteering, promptFooter())
-          ), {
+          const followUp = (await readInteractiveInput(localize(language, "补充> ", "steer> "), slashCommands(language), inputHistory, () => {
+            const runningStatus = agent.status();
+            view.setDiagnostics(runningStatus.diagnostics);
+            return formatRunningInputFooter(view, queue.size, runningStatus.pendingSteering, promptFooter());
+          }, {
             paths: projectIndex.paths("", 1_000),
             initialValue: queuedDraft,
             onChange: (value) => { void draftStore.save(value); },
@@ -665,7 +669,11 @@ async function main(): Promise<void> {
           if (followUp === "/status") {
             const currentStatus = agent.status();
             const turnStatus = currentStatus.maxTurns ? `${currentStatus.turn}/${currentStatus.maxTurns}` : `${currentStatus.turn}`;
-            console.log(chalk.dim(localize(language, `运行中：第 ${turnStatus} 轮 | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)} 秒 | ${currentStatus.pendingSteering} 条补充 | ${queue.size} 个排队 | ${currentStatus.stats.modelCalls} 次模型调用 | ${currentStatus.stats.toolCalls} 次工具调用\n`, `Working: turn ${turnStatus} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)\n`)));
+            console.log(chalk.dim(localize(language, `运行中：第 ${turnStatus} 轮 | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)} 秒 | ${currentStatus.pendingSteering} 条补充 | ${queue.size} 个排队 | ${currentStatus.stats.modelCalls} 次模型调用 | ${currentStatus.stats.toolCalls} 次工具调用${currentStatus.diagnostics ? `\n诊断：${formatTaskDiagnosticSummary(currentStatus.diagnostics, language)}` : ""}\n`, `Working: turn ${turnStatus} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)${currentStatus.diagnostics ? `\nDiagnostics: ${formatTaskDiagnosticSummary(currentStatus.diagnostics, language)}` : ""}\n`)));
+            continue;
+          }
+          if (followUp === "/diagnostics") {
+            console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
             continue;
           }
           if (followUp === "/paste") {
@@ -992,6 +1000,10 @@ async function main(): Promise<void> {
         }
         continue;
       }
+      if (task === "/diagnostics") {
+        console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
+        continue;
+      }
       if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {
         console.log(chalk.dim(localize(language, `${task} 仅在任务运行时可用。\n`, `${task} is available while a task is running.\n`)));
         continue;
@@ -1011,6 +1023,7 @@ async function main(): Promise<void> {
           `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${current.contextLimitMode}）`,
           `模型窗口：${current.contextWindow.toLocaleString()} tokens（${current.contextWindowSource}）`, `API Token：输入 ${current.stats.inputTokens.toLocaleString()} / 输出 ${current.stats.outputTokens.toLocaleString()}`,
           `调用：模型 ${current.stats.modelCalls} / 工具 ${current.stats.toolCalls}`, `压缩次数：${current.stats.compactions}`, `活跃时间：${(current.stats.activeMs / 1000).toFixed(1)} 秒`,
+          `最近任务诊断：${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "暂无"}`,
           indexStatusZh, `MCP：${mcpManager.status().filter((server) => server.state === "connected").length} 个服务 / ${mcpManager.tools().length} 个工具`,
           `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${listBackgroundProcesses().filter((item) => item.running).length} 个运行中`,
           `活动：${activities.list().length} 条记录（/details）`,
@@ -1020,6 +1033,7 @@ async function main(): Promise<void> {
           `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${current.contextLimitMode})`,
           `Model window: ${current.contextWindow.toLocaleString()} tokens (${current.contextWindowSource})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
           `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`, `Compactions: ${current.stats.compactions}`, `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,
+          `Latest task diagnostics: ${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "none"}`,
           indexStatusEn, `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
           `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`, `Background: ${listBackgroundProcesses().filter((item) => item.running).length} running`,
           `Activities: ${activities.list().length} recorded (/details)`,

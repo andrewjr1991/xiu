@@ -18,6 +18,7 @@ import { emptySessionStats, estimateConversationTokens, type RestoredSession, ty
 import { executeTool, formatProcessInvocation, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
+import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -36,7 +37,7 @@ export interface AgentEvents {
   onPlanUpdate?: (plan: TaskPlan) => void;
   onWorkspaceChange?: (change: WorkspaceChangeNotice) => void;
   onCheckpoint?: (message: string) => void;
-  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number }) => void;
+  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
 }
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled";
@@ -63,6 +64,7 @@ export class Agent {
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private currentTurn = 0;
+  private taskDiagnostics?: TaskDiagnostics;
 
   constructor(
     private config: AgentConfig,
@@ -84,6 +86,7 @@ export class Agent {
       if (restored.model) this.setModelInMemory(restored.model);
       this.planManager?.restore(restored.plan, restored.planMode);
       this.checkpointManager?.setSession(restored.id);
+      this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
     }
   }
 
@@ -97,19 +100,23 @@ export class Agent {
     this.primaryTask = task.trim();
     this.steeringHistory = [];
     this.toolEvidence = [];
+    this.taskDiagnostics = new TaskDiagnostics(task.trim());
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
       if (controller.signal.aborted) {
         this.lastRunOutcome = "cancelled";
+        this.taskDiagnostics?.complete("cancelled");
         throw new Error("Task cancelled.");
       }
       this.lastRunOutcome = "failed";
+      this.taskDiagnostics?.complete("failed");
       throw error;
     } finally {
       this.stats.activeMs += Date.now() - startedAt;
       this.stats.estimatedTokens = estimateConversationTokens(this.messages);
       if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
+      await this.checkpointDiagnostics();
       if (this.activeController === controller) this.activeController = undefined;
       this.pendingSteering = [];
       this.primaryTask = undefined;
@@ -170,6 +177,7 @@ export class Agent {
         proxy: this.config.proxy ? "configured" : undefined,
       },
     });
+    await this.checkpointDiagnostics();
     if (this.planManager) {
       await this.log(this.sessionPath, { type: "plan_mode", enabled: this.planManager.mode() });
       const existingPlan = this.planManager.snapshot();
@@ -249,6 +257,8 @@ export class Agent {
         }
         const outcome = workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
         this.lastRunOutcome = outcome;
+        this.taskDiagnostics?.complete(outcome);
+        await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({
           turns: turn,
           toolCalls: toolCallCount,
@@ -256,6 +266,7 @@ export class Agent {
           verified: verifiedAfterChange,
           outcome,
           durationMs: Date.now() - startedAt,
+          diagnostics: this.taskDiagnostics?.snapshot(),
         });
         return response.text;
       }
@@ -263,6 +274,7 @@ export class Agent {
       for (const call of response.toolCalls) {
         toolCallCount++;
         this.stats.toolCalls++;
+        this.taskDiagnostics?.beginTool(call.name, call.input);
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         let result: string;
         let abortForLoop = false;
@@ -294,7 +306,10 @@ export class Agent {
             result = await executeTool(tool, call.input, {
               cwd: this.config.cwd,
               approve: async (request) => {
-                const approved = await this.approve(request);
+                this.taskDiagnostics?.beginApproval(request.description);
+                let approved: boolean | undefined;
+                try { approved = await this.approve(request); }
+                finally { this.taskDiagnostics?.finishApproval(approved !== false); }
                 if (approved && changesWorkspace) {
                   const checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
                   if (checkpoint) {
@@ -309,7 +324,7 @@ export class Agent {
             });
           }
           this.events.onToolEnd?.(call.name, result);
-          if (/^(Tool error:|Exit code: (?!0\b)|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result)) {
+          if (this.toolResultFailed(result)) {
             this.repeatedFailures.set(failureKey, (this.repeatedFailures.get(failureKey) ?? 0) + 1);
             this.events.onFailure?.(`${call.name}: ${result.split(/\r?\n/, 1)[0]}`);
           } else this.repeatedFailures.delete(failureKey);
@@ -317,9 +332,11 @@ export class Agent {
             const plan = this.planManager?.snapshot();
             if (plan) await this.log(this.sessionPath, { type: "plan", plan });
             if (plan) this.events.onPlanUpdate?.(plan);
+            if (plan) this.taskDiagnostics?.recordProgress();
           }
           if (changesWorkspace && !/^Tool (error|execution denied)/.test(result)) {
             workspaceChanged = true;
+            this.taskDiagnostics?.recordProgress();
             verifiedAfterChange = false;
             loopGuard.reset();
             this.projectIndex?.invalidate();
@@ -329,9 +346,14 @@ export class Agent {
               if (change) this.events.onWorkspaceChange?.(change);
             }
           }
-          if (tool.isVerification?.(call.input, result)) verifiedAfterChange = true;
+          if (tool.isVerification?.(call.input, result)) {
+            verifiedAfterChange = true;
+            this.taskDiagnostics?.recordProgress();
+          }
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
         }
+        const diagnosticOutcome = /^Tool execution denied by user\./i.test(result) ? "denied" : (this.toolResultFailed(result) ? "failure" : "success");
+        this.taskDiagnostics?.finishTool(diagnosticOutcome, result);
         this.recordToolEvidence(call.name, call.input, result);
         const contextResult = this.boundToolContext(result);
         this.messages.push({ role: "tool", content: contextResult, toolCallId: call.id, toolName: call.name });
@@ -344,6 +366,7 @@ export class Agent {
           result,
           ...(contextResult === result ? {} : { contextResult }),
         });
+        await this.checkpointDiagnostics();
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
     }
@@ -361,6 +384,7 @@ export class Agent {
     this.steeringHistory = [];
     this.primaryTask = undefined;
     this.toolEvidence = [];
+    this.taskDiagnostics = undefined;
     this.planManager?.restore(undefined, false);
     this.checkpointManager?.clearSession();
   }
@@ -384,7 +408,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
@@ -400,6 +424,7 @@ export class Agent {
       turn: this.currentTurn,
       maxTurns: this.config.maxTurns,
       pendingSteering: this.pendingSteering.length,
+      diagnostics: this.taskDiagnostics?.snapshot(),
     };
   }
 
@@ -433,6 +458,7 @@ export class Agent {
     this.steeringHistory = [];
     this.primaryTask = undefined;
     this.toolEvidence = [];
+    this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
     if (restored.model) this.setModelInMemory(restored.model);
     this.planManager?.restore(restored.plan, restored.planMode);
     this.checkpointManager?.setSession(restored.id);
@@ -480,6 +506,7 @@ export class Agent {
     const items = this.pendingSteering.splice(0);
     const content = `User steering received while the task was running. It adds requirements but NEVER replaces or lowers the priority of the primary goal. Do not stop after answering only the steering. Continue until both sections are complete.\n\nPRIMARY GOAL (still mandatory):\n${this.primaryTask}\n\nADDITIONAL REQUIREMENTS:\n${this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nNEWLY RECEIVED IN THIS TURN:\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
     this.messages.push({ role: "user", content });
+    this.taskDiagnostics?.recordProgress();
     if (this.sessionPath) await this.log(this.sessionPath, { type: "steering", turn, items });
     return true;
   }
@@ -537,6 +564,9 @@ export class Agent {
     }).join("\n\n");
     let summary: string;
     let usage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+    const diagnoseCompaction = this.lastRunOutcome === "running" ? this.taskDiagnostics : undefined;
+    diagnoseCompaction?.recordCompaction();
+    diagnoseCompaction?.beginModel("context compaction", 1);
     try {
       const response = await this.provider.complete(
         "You are performing a CONTEXT CHECKPOINT COMPACTION for a coding agent; in other words, you compact coding-agent context. Produce a concise, factual handoff for the next model. Use these headings: Current progress; Completed evidence; Key findings and decisions; Failed approaches (do not repeat); Files and exact commands; Next action; Verification status; Constraints. Never replace or weaken the authoritative task contract. Distinguish completed facts from intended work. Do not call tools or add conversational commentary.",
@@ -546,9 +576,14 @@ export class Agent {
       );
       summary = this.boundCheckpointSummary(response.text);
       usage = response.usage;
+      diagnoseCompaction?.finishModel(response.usage ?? { inputTokens: estimateConversationTokens([{ role: "user", content: transcript }]), outputTokens: Math.ceil(response.text.length / 4) }, true);
       this.recordUsage(response.usage, response.text);
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted) {
+        diagnoseCompaction?.cancelActive();
+        throw error;
+      }
+      diagnoseCompaction?.finishModel(undefined, false, error instanceof Error ? error.message : String(error));
       const userGoals = this.recentUserGoals().slice(0, 8).map((message) => message.slice(0, 2500));
       const recent = this.messages.slice(-12).map((message) => `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content.slice(0, 2500)}`);
       summary = this.boundCheckpointSummary(`Model-assisted compaction failed (${error instanceof Error ? error.message : String(error)}). Local continuation brief:\nRecent user goals:\n${userGoals.join("\n---\n")}\n\nRecent activity:\n${recent.join("\n\n")}`);
@@ -568,6 +603,7 @@ export class Agent {
     this.stats.compactions++;
     this.stats.estimatedTokens = estimateConversationTokens(this.messages);
     if (this.sessionPath) await this.log(this.sessionPath, { type: "compact", reason, beforeTokens: before, afterTokens: this.stats.estimatedTokens, context, usage });
+    await this.checkpointDiagnostics();
     return localize(this.config.language ?? "en-US", `上下文已从约 ${before.toLocaleString()} tokens 压缩到 ${this.stats.estimatedTokens.toLocaleString()} tokens。`, `Compacted context from about ${before.toLocaleString()} to ${this.stats.estimatedTokens.toLocaleString()} tokens.`);
   }
 
@@ -651,17 +687,33 @@ export class Agent {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let emitted = false;
+      const operation = `turn ${this.currentTurn}`;
+      const estimatedInput = estimateConversationTokens(this.messages);
+      this.taskDiagnostics?.beginModel(operation, attempt);
       try {
+        let response: Awaited<ReturnType<ModelProvider["complete"]>>;
+        let streamed = false;
         if (allowStreaming && this.provider.stream && this.events.onTextDelta) {
-          const response = await this.provider.stream(this.system!, this.messages, this.tools, (delta) => {
+          response = await this.provider.stream(this.system!, this.messages, this.tools, (delta) => {
             emitted = true;
             this.events.onTextDelta?.(delta);
           }, signal);
-          return { response, streamed: emitted };
+          streamed = emitted;
+        } else {
+          response = await this.provider.complete(this.system!, this.messages, this.tools, signal);
         }
-        return { response: await this.provider.complete(this.system!, this.messages, this.tools, signal), streamed: false };
+        this.taskDiagnostics?.finishModel(response.usage ?? { inputTokens: estimatedInput, outputTokens: Math.ceil(response.text.length / 4) }, true);
+        await this.checkpointDiagnostics();
+        return { response, streamed };
       } catch (error) {
-        if (signal.aborted || emitted || attempt === maxAttempts || !this.isTransientError(error)) {
+        if (signal.aborted) {
+          this.taskDiagnostics?.cancelActive();
+          await this.checkpointDiagnostics();
+          throw error;
+        }
+        this.taskDiagnostics?.finishModel(undefined, false, error instanceof Error ? error.message : String(error));
+        await this.checkpointDiagnostics();
+        if (emitted || attempt === maxAttempts || !this.isTransientError(error)) {
           this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
           throw error;
         }
@@ -680,6 +732,14 @@ export class Agent {
     const value = error as { status?: number; code?: string; message?: string };
     return value.status === 408 || value.status === 409 || value.status === 429 || (typeof value.status === "number" && value.status >= 500)
       || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|temporar|rate limit/i.test(`${value.code ?? ""} ${value.message ?? ""}`);
+  }
+
+  private toolResultFailed(result: string): boolean {
+    return /^(?:Tool error:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
+  }
+
+  private async checkpointDiagnostics(): Promise<void> {
+    if (this.sessionPath && this.taskDiagnostics) await this.log(this.sessionPath, { type: "diagnostics", snapshot: this.taskDiagnostics.snapshot() });
   }
 
   private async log(file: string, value: unknown): Promise<void> {

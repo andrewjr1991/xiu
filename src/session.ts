@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ConversationMessage } from "./types.js";
 import type { TaskPlan } from "./plan.js";
+import { restoreTaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 
 export interface SessionStats {
   modelCalls: number;
@@ -23,6 +24,7 @@ export interface RestoredSession {
   stats: SessionStats;
   plan?: TaskPlan;
   planMode?: boolean;
+  diagnostics?: TaskDiagnosticSnapshot;
 }
 
 export interface SessionListItem {
@@ -106,6 +108,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
   let model = selected.model;
   let plan: TaskPlan | undefined;
   let planMode = false;
+  let diagnostics: TaskDiagnosticSnapshot | undefined;
   for (const event of events) {
     if (event.type === "task") messages.push({ role: "user", content: String(event.contextualTask ?? event.task ?? "") });
     else if (event.type === "assistant") messages.push({
@@ -121,6 +124,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     else if (event.type === "model_changed" && typeof event.model === "string") model = event.model;
     else if (event.type === "plan" && event.plan) plan = event.plan as TaskPlan;
     else if (event.type === "plan_mode") planMode = Boolean(event.enabled);
+    else if (event.type === "diagnostics") diagnostics = restoreTaskDiagnostics(event.snapshot)?.snapshot();
   }
   stats.estimatedTokens = estimateConversationTokens(messages);
   return {
@@ -133,6 +137,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     stats,
     plan,
     planMode,
+    diagnostics,
   };
 }
 

@@ -6,6 +6,7 @@ import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
 import { estimateConversationTokens, listSessions, loadSession } from "../src/session.js";
+import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
 function config(cwd: string): AgentConfig {
@@ -44,6 +45,24 @@ test("sessions are isolated by workspace", async () => {
   assert.equal((await listSessions(first)).length, 1);
   assert.equal((await listSessions(second)).length, 0);
   await assert.rejects(loadSession(second), /No Xiu sessions/);
+});
+
+test("the latest bounded task diagnostics restore with the session", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-diagnostic-resume-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const diagnostics = new TaskDiagnostics("diagnose the build");
+  diagnostics.beginTool("run_process", { program: "npm", args: ["test"] });
+  diagnostics.finishTool(false, "Exit code: 1");
+  const file = path.join(directory, "diagnostic-session.jsonl");
+  await fs.writeFile(file, [
+    JSON.stringify({ timestamp: new Date().toISOString(), type: "task", task: "diagnose the build", config: { model: "test-model" } }),
+    JSON.stringify({ timestamp: new Date().toISOString(), type: "diagnostics", snapshot: diagnostics.snapshot() }),
+  ].join("\n") + "\n");
+  const restored = await loadSession(cwd, "diagnostic-session");
+  assert.equal(restored.diagnostics?.task, "diagnose the build");
+  assert.equal(restored.diagnostics?.tools.failures, 1);
+  assert.equal(restored.diagnostics?.phase.kind, "idle");
 });
 
 test("manual compaction replaces long history with a continuation brief", async () => {

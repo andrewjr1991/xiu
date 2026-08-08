@@ -75,6 +75,22 @@ test("running input footer shows only the current turn when no limit is configur
   assert.doesNotMatch(footer, /31\//);
 });
 
+test("running input footer shows bounded task diagnostics", () => {
+  const view = new RunningTaskView(256_000, "zh-CN");
+  view.setDiagnostics({
+    version: 1, task: "长任务", startedAt: new Date(0).toISOString(), updatedAt: new Date(1_000).toISOString(), outcome: "running", durationMs: 1_000,
+    phase: { kind: "tool", operation: "run_process npm test", activeMs: 200 }, health: { state: "attention", reason: "recent_failures" },
+    model: { attempts: 2, completed: 2, failures: 0, retries: 0, inputTokens: 1_000, outputTokens: 200, totalMs: 500, slowestMs: 300 },
+    tools: { calls: 3, failures: 1, totalMs: 400, slowestMs: 250, byName: [{ name: "run_process", calls: 1, failures: 1, totalMs: 250 }] },
+    approvals: { requests: 0, denied: 0, waitMs: 0 }, compactions: 0,
+    progress: { lastAt: new Date(0).toISOString(), operationsSince: 2, distinctOperations: 1, consecutiveFailures: 1 }, failures: [],
+  });
+  const footer = formatRunningInputFooter(view, 0, 0, "自动 | model");
+  assert.match(footer, /诊断：1,200 tokens/);
+  assert.match(footer, /失败 1/);
+  assert.match(footer, /需要关注/);
+});
+
 test("running task details toggle expands recent activity", () => {
   const view = new RunningTaskView();
   view.activity("one");

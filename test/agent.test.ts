@@ -60,8 +60,12 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.deepEqual(changes[0]?.preview, []);
   assert.equal(outcome, "unverified");
   assert.equal(agent.status().outcome, "unverified");
+  assert.equal(agent.status().diagnostics?.model.attempts, 3);
+  assert.equal(agent.status().diagnostics?.tools.calls, 1);
+  assert.equal(agent.status().diagnostics?.outcome, "unverified");
   const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));
   assert.equal(sessions.length, 1);
+  assert.equal((await loadSession(cwd)).diagnostics?.tools.calls, 1);
 });
 
 test("agent completes a generated artifact after verify_output passes", async () => {
@@ -239,6 +243,8 @@ test("agent cancellation aborts an in-flight model request", async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(agent.cancel(), true);
   await assert.rejects(running, /Task cancelled/);
+  assert.equal(agent.status().diagnostics?.model.failures, 0);
+  assert.equal(agent.status().diagnostics?.outcome, "cancelled");
 });
 
 test("agent retains conversation across interactive tasks and can clear it", async () => {
@@ -300,4 +306,7 @@ test("agent retries a transient model failure before any text is emitted", async
   assert.equal(await agent.run("retry"), "recovered");
   assert.equal(calls, 2);
   assert.match(retries[0] ?? "", /retrying 2\/3/);
+  assert.equal(agent.status().diagnostics?.model.attempts, 2);
+  assert.equal(agent.status().diagnostics?.model.failures, 1);
+  assert.equal(agent.status().diagnostics?.model.retries, 1);
 });

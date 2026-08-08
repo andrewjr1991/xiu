@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { TaskPlan, PlanStepStatus } from "./plan.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import { formatTaskDiagnosticSummary, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 
 export interface QueuedTaskInput {
   id: string;
@@ -96,6 +97,7 @@ export class RunningTaskView {
   private latestNarration = "";
   private completion?: { message: string; success: boolean };
   private importantActions: string[] = [];
+  private diagnostics?: TaskDiagnosticSnapshot;
 
   constructor(private readonly maxCharacters = 256_000, private uiLanguage: UiLanguage = "en-US") {
     if (!Number.isInteger(maxCharacters) || maxCharacters < 1) throw new Error("Running task output limit must be a positive integer.");
@@ -162,6 +164,14 @@ export class RunningTaskView {
 
   setCompletion(message: string, success: boolean): void {
     this.completion = { message: message.trim(), success };
+  }
+
+  setDiagnostics(diagnostics?: TaskDiagnosticSnapshot): void {
+    this.diagnostics = diagnostics ? structuredClone(diagnostics) : undefined;
+  }
+
+  diagnosticLine(): string | undefined {
+    return this.diagnostics ? `${localize(this.uiLanguage, "诊断：", "Diagnostics: ")}${formatTaskDiagnosticSummary(this.diagnostics, this.uiLanguage)}` : undefined;
   }
 
   completionSummary(): { message: string; success: boolean } | undefined {
@@ -313,5 +323,6 @@ export function formatRunningInputFooter(view: RunningTaskView, queued: number, 
   const details = view.detailsVisible() ? localize(language, "Ctrl+O 隐藏详情", "Ctrl+O hide details") : localize(language, "Ctrl+O 显示详情", "Ctrl+O show details");
   const turnLabel = turn.maximum ? `${turn.current || "-"}/${turn.maximum}` : `${turn.current || "-"}`;
   const headline = `${localize(language, "运行中：", "Working: ")}${localize(language, "轮次", "Turn")} ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
-  return [headline, ...view.progressLines(), `${details} | ${localize(language, "Enter 补充当前任务 | /queue <任务> 安排下一项 | Ctrl+C 取消", "Enter steers current | /queue <task> schedules next | Ctrl+C cancels")}`, baseFooter].join("\n");
+  const diagnostic = view.diagnosticLine();
+  return [headline, ...(diagnostic ? [diagnostic] : []), ...view.progressLines(), `${details} | ${localize(language, "Enter 补充当前任务 | /queue <任务> 安排下一项 | Ctrl+C 取消", "Enter steers current | /queue <task> schedules next | Ctrl+C cancels")}`, baseFooter].join("\n");
 }

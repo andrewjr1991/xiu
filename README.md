@@ -36,6 +36,8 @@ Version 0.9.6 makes the project index persistent and incremental. A new Xiu proc
 
 Version 0.9.7 builds a compact Repository Map on that incremental cache. JavaScript, TypeScript, JSX, TSX, MJS, and CJS files are parsed with the official TypeScript AST to index definitions, relative module dependencies, imports, references, direct calls, constructor uses, aliases, and namespace access. New read-only `repository_map`, `find_symbol`, `find_references`, and `find_callers` tools return bounded paginated JSON; same-name definitions require explicit file disambiguation rather than guesswork. Other languages remain visible as modules without fabricated symbol precision.
 
+Version 0.9.8 adds deterministic per-task diagnostics. The live footer and `/diagnostics` distinguish model time, tool time, approval waiting, Token use, retries, failures, slow operations, repeated failure, and lack of new evidence. Diagnostic snapshots are bounded, redact credential-shaped input, persist with project sessions, and mark an unfinished restored task as interrupted. Slow active work and user approval are never mislabeled as stalls, and health warnings only explain evidence and recommend a strategy—they never cancel a task or bypass safety policy.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -47,6 +49,7 @@ Version 0.9.7 builds a compact Repository Map on that incremental cache. JavaScr
 - Bounded line and character paging for large, minified, or single-line text files
 - Bounded structured extraction for CSS-selected HTML, JSON Pointer values, and filtered CSV/TSV rows
 - Incremental Repository Map plus JavaScript/TypeScript symbol, reference, dependency, and caller navigation
+- Persisted per-task diagnostics for Token use, model/tool latency, approvals, failures, retries, and explainable stall signals
 - Cross-compaction tool evidence ledger plus bounded model-context tool results with complete session logs
 - UTF-8 Python child-process output on Windows PowerShell
 - Native argument-array process execution without PowerShell re-parsing
@@ -137,7 +140,7 @@ Start a persistent interactive session (conversation context is retained between
 xiu
 ```
 
-Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/diagnostics`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
 
 Open an interactive picker for saved sessions in the current project after closing the terminal:
 
@@ -182,6 +185,7 @@ Interactive session commands:
 /agents retry ...   retry a failed, cancelled, blocked, or interrupted task
 /agents integrate ... preview and integrate a completed Worktree task
 /details            browse complete tool and Agent activity output
+/diagnostics        inspect the current or most recent task diagnosis
 /status             session id, context, tokens, calls, time, and index size
 /queue              show explicitly scheduled next tasks
 /queue <task>       schedule an independent task to run next
