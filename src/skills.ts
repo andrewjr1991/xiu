@@ -76,9 +76,11 @@ export class SkillRegistry {
     const roots: Array<{ directory: string; scope: XiuSkill["scope"] }> = [
       ...(includeProject ? [
         { directory: path.join(this.cwd, ".xiu", "skills"), scope: "project" as const },
+        { directory: path.join(this.cwd, ".agents", "skills"), scope: "compatible" as const },
         { directory: path.join(this.cwd, ".claude", "skills"), scope: "compatible" as const },
       ] : []),
       { directory: this.globalDirectory(), scope: "global" },
+      { directory: path.join(os.homedir(), ".agents", "skills"), scope: "compatible" },
     ];
     const discovered: XiuSkill[] = [];
     for (const root of roots) {

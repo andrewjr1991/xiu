@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, terminalDisplayWidth, terminalKeyName, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -169,12 +169,19 @@ test("editor frame wraps multiline Chinese input and returns a valid cursor posi
   assert.ok(frame.cursorColumn >= 2 && frame.cursorColumn <= 29);
 });
 
-test("editor frame counts and clips every physical line in a multiline running footer", () => {
+test("editor frame wraps every physical line in a multiline running footer", () => {
   const frame = editorFrameLines("xiu[working]> ", { value: "继续修复", cursor: 4 }, [], 0, "Working: Running a very long verification command | 2 queued\nAuto | model | D:\\long\\workspace", 36);
-  assert.equal(frame.lines.length, 4);
+  assert.ok(frame.lines.length > 4);
   assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 35));
-  assert.match(frame.lines.at(-2) ?? "", /\.\.\./);
+  assert.match(frame.lines.join(""), /Running a very long verification command/);
   assert.match(frame.lines.at(-1) ?? "", /Auto/);
+});
+
+test("terminal key names recognize raw Windows direction sequences", () => {
+  assert.equal(terminalKeyName("\x1b[A", {}), "up");
+  assert.equal(terminalKeyName("\x1b[B", {}), "down");
+  assert.equal(terminalKeyName("\r", {}), "return");
+  assert.equal(terminalKeyName("\x1b", {}), "escape");
 });
 
 test("persistent task progress remains bounded in a narrow terminal", () => {

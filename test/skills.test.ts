@@ -12,15 +12,18 @@ test("skill registry discovers project, compatible, and global skills with proje
   const globalRoot = path.join(cwd, "global-skills");
   await fs.mkdir(path.join(cwd, ".xiu", "skills", "review"), { recursive: true });
   await fs.mkdir(path.join(cwd, ".claude", "skills", "deploy"), { recursive: true });
+  await fs.mkdir(path.join(cwd, ".agents", "skills", "grill-me"), { recursive: true });
   await fs.mkdir(path.join(globalRoot, "review"), { recursive: true });
   await fs.writeFile(path.join(cwd, ".xiu", "skills", "review", "SKILL.md"), skillMarkdown("review", "Project review workflow"));
   await fs.writeFile(path.join(cwd, ".claude", "skills", "deploy", "SKILL.md"), skillMarkdown("deploy", "Compatible deploy workflow"));
+  await fs.writeFile(path.join(cwd, ".agents", "skills", "grill-me", "SKILL.md"), skillMarkdown("grill-me", "Strict design review workflow"));
   await fs.writeFile(path.join(globalRoot, "review", "SKILL.md"), skillMarkdown("review", "Global review workflow"));
   const registry = new SkillRegistry(cwd, globalRoot);
   await registry.refresh(true);
-  assert.equal(registry.list().length, 2);
+  assert.equal(registry.list().length, 3);
   assert.equal(registry.list().find((skill) => skill.name === "review")?.scope, "project");
   assert.match(registry.catalog(), /deploy \[compatible\]/);
+  assert.match(registry.catalog(), /grill-me \[compatible\]/);
   assert.match(await registry.read("review"), /Project review workflow/);
 
   const tool = createSkillTools(registry)[0]!;

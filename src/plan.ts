@@ -1,5 +1,6 @@
 import type { AgentTool } from "./types.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import { normalizeAssistantText } from "./language-output.js";
 
 export type PlanStepStatus = "pending" | "in_progress" | "completed" | "blocked";
 
@@ -32,6 +33,14 @@ export class TaskPlanManager {
   }
 
   update(goal: string, steps: PlanStep[]): TaskPlan {
+    if (this.language === "zh-CN") {
+      goal = normalizeAssistantText(goal, this.language);
+      steps = steps.map((step) => ({
+        ...step,
+        title: normalizeAssistantText(step.title, this.language),
+        ...(step.note ? { note: normalizeAssistantText(step.note, this.language) } : {}),
+      }));
+    }
     if (!goal.trim()) throw new Error("plan goal must not be empty");
     if (!steps.length) throw new Error("plan must contain at least one step");
     const ids = new Set<string>();

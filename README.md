@@ -38,6 +38,8 @@ Version 0.9.7 builds a compact Repository Map on that incremental cache. JavaScr
 
 Version 0.9.8 adds deterministic per-task diagnostics. The live footer and `/diagnostics` distinguish model time, tool time, approval waiting, Token use, retries, failures, slow operations, repeated failure, and lack of new evidence. Diagnostic snapshots are bounded, redact credential-shaped input, persist with project sessions, and mark an unfinished restored task as interrupted. Slow active work and user approval are never mislabeled as stalls, and health warnings only explain evidence and recommend a strategy—they never cancel a task or bypass safety policy.
 
+The local 0.9.9 candidate focuses on long-session stability. Simplified Chinese output is normalized before display while code literals remain unchanged; successful verification now enters an explicit final-summary phase; `.agents/skills` is discovered and `/skills` refreshes before opening; Windows selectors accept raw arrow sequences and number keys; `/resume` prints recent dialogue; long progress wraps instead of disappearing; and workspace changes no longer restart the steering prompt.
+
 ## Features
 
 - OpenAI, Anthropic, and Agnes model adapters
@@ -148,7 +150,7 @@ Open an interactive picker for saved sessions in the current project after closi
 xiu --resume
 ```
 
-Inside Xiu, `/resume` opens the same picker. It shows each session's first task, last update, model, and ID; use Up/Down and Enter to choose. Legacy sessions from `.forge/sessions/` and `.forge_sessions/` are also discovered during the Xiu rename transition.
+Inside Xiu, `/resume` opens the same picker. It shows each session's first task, last update, model, and ID; use Up/Down, number keys, and Enter to choose. After restoration, Xiu prints the recent user/assistant dialogue and points to `/history` for the complete context. Legacy sessions from `.forge/sessions/` and `.forge_sessions/` are also discovered during the Xiu rename transition.
 
 List session IDs or resume a specific one:
 
@@ -227,8 +229,10 @@ Xiu discovers reusable workflows from three locations, with project definitions 
 
 ```text
 <project>/.xiu/skills/<name>/SKILL.md     project
+<project>/.agents/skills/<name>/SKILL.md  compatible
 <project>/.claude/skills/<name>/SKILL.md compatible
 ~/.xiu/skills/<name>/SKILL.md            global
+~/.agents/skills/<name>/SKILL.md         compatible
 ```
 
 Only each skill's name and description enter the base prompt. When a workflow matches the task, the agent calls `read_skill` to load the complete `SKILL.md`, keeping startup context small even with many installed skills.

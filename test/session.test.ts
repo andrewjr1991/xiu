@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
-import { estimateConversationTokens, listSessions, loadSession } from "../src/session.js";
+import { estimateConversationTokens, formatRestoredConversation, listSessions, loadSession } from "../src/session.js";
 import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
@@ -94,6 +94,17 @@ test("context estimation treats Chinese text more conservatively than ASCII", ()
   const chinese = estimateConversationTokens([{ role: "user", content: "这是一个需要保留的中文任务要求" }]);
   const ascii = estimateConversationTokens([{ role: "user", content: "abcdefghijklmn" }]);
   assert.ok(chinese > ascii);
+});
+
+test("restored conversation preview shows recent dialogue without generated project context", () => {
+  const preview = formatRestoredConversation([
+    { role: "user", content: "修复选择器\n\nAutomatically prepared project context:\nlarge index" },
+    { role: "tool", content: "raw tool output" },
+    { role: "assistant", content: "已经修复。" },
+  ], "zh-CN");
+  assert.match(preview.join("\n"), /你> 修复选择器/);
+  assert.match(preview.join("\n"), /Xiu> 已经修复/);
+  assert.doesNotMatch(preview.join("\n"), /large index|raw tool output/);
 });
 
 test("conversation compacts automatically before crossing the configured context budget", async () => {

@@ -185,6 +185,35 @@ function truncateDisplay(value: string, width: number, keepEnd = false): string 
     : `${takeDisplayWidth(value, width - 3)}...`;
 }
 
+export function wrapTerminalText(value: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  const lines: string[] = [];
+  let current = "";
+  let used = 0;
+  for (const character of stripAnsi(value)) {
+    const characterWidth = terminalCharacterWidth(character);
+    if (used > 0 && used + characterWidth > safeWidth) {
+      lines.push(current);
+      current = "";
+      used = 0;
+    }
+    current += character;
+    used += characterWidth;
+  }
+  lines.push(current);
+  return lines;
+}
+
+export function terminalKeyName(text: string, key: readline.Key): string | undefined {
+  if (key.name) return key.name;
+  const sequence = key.sequence ?? text;
+  if (sequence === "\x1b[A" || sequence === "\x1bOA") return "up";
+  if (sequence === "\x1b[B" || sequence === "\x1bOB") return "down";
+  if (sequence === "\r" || sequence === "\n") return "return";
+  if (sequence === "\x1b") return "escape";
+  return undefined;
+}
+
 export function matchingCommands(input: string, commands: SlashCommand[]): SlashCommand[] {
   if (!input.startsWith("/")) return [];
   const normalized = input.toLowerCase();
@@ -335,13 +364,14 @@ export function editorFrameLines(
   if (footer) {
     lines.push(chalk.dim("-".repeat(Math.max(19, Math.min(lineWidth, 120)))));
     for (const footerLine of footer.split("\n")) {
-      const clipped = truncateDisplay(stripAnsi(footerLine), lineWidth);
-      if (/^\s*√/.test(clipped)) lines.push(chalk.green(clipped));
-      else if (/^\s*→|^(?:Now|Update|当前|进展)[:：]/.test(clipped)) lines.push(chalk.cyan(clipped));
-      else if (/^\s*!/.test(clipped)) lines.push(chalk.red(clipped));
-      else if (/^(?:Changed|变更)[:：]/.test(clipped)) lines.push(chalk.yellow(clipped));
-      else if (/^(?:Plan|Progress|计划|进度)[:：]/.test(clipped)) lines.push(chalk.white(clipped));
-      else lines.push(chalk.dim(clipped));
+      for (const wrapped of wrapTerminalText(footerLine, lineWidth)) {
+        if (/^\s*√/.test(footerLine)) lines.push(chalk.green(wrapped));
+        else if (/^\s*→|^(?:Now|Update|当前|进展)[:：]/.test(footerLine)) lines.push(chalk.cyan(wrapped));
+        else if (/^\s*!/.test(footerLine)) lines.push(chalk.red(wrapped));
+        else if (/^(?:Changed|变更)[:：]/.test(footerLine)) lines.push(chalk.yellow(wrapped));
+        else if (/^(?:Plan|Progress|计划|进度)[:：]/.test(footerLine)) lines.push(chalk.white(wrapped));
+        else lines.push(chalk.dim(wrapped));
+      }
     }
   }
   return { lines, cursorRow: input.cursorRow, cursorColumn: input.cursorColumn };
@@ -403,7 +433,7 @@ export function terminalOptionFrameLines<T>(
     const description = truncateDisplay(option.description, descriptionWidth);
     lines.push(`${pointer} ${label}  ${chalk.dim(description)}`.trimEnd());
   }
-  lines.push(chalk.dim(truncateDisplay(localize(language, "↑/↓ 选择 · Enter 确认 · Esc 取消", "Up/Down navigate - Enter select - Esc cancel"), lineWidth)));
+  lines.push(chalk.dim(truncateDisplay(localize(language, "↑/↓ 或数字键选择 · Enter 确认 · Esc 取消", "Up/Down or number keys - Enter select - Esc cancel"), lineWidth)));
   return lines;
 }
 
@@ -669,10 +699,13 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
     };
 
     const onKeypress = (_text: string, key: readline.Key): void => {
-      if (key.name === "up") selected = (selected - 1 + options.length) % options.length;
-      else if (key.name === "down") selected = (selected + 1) % options.length;
-      else if (key.name === "return" || key.name === "enter") return finish(options[selected]?.value);
-      else if (key.name === "escape" || isTerminalCancel(_text, key)) return finish();
+      const name = terminalKeyName(_text, key);
+      const numeric = /^[1-9]$/.test(_text) ? Number(_text) - 1 : -1;
+      if (numeric >= 0 && numeric < options.length) return finish(options[numeric]?.value);
+      if (name === "up") selected = (selected - 1 + options.length) % options.length;
+      else if (name === "down") selected = (selected + 1) % options.length;
+      else if (name === "return" || name === "enter") return finish(options[selected]?.value);
+      else if (name === "escape" || isTerminalCancel(_text, key)) return finish();
       render();
     };
     const cleanup = beginRawInput(onKeypress);

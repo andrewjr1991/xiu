@@ -154,6 +154,16 @@ test("Chinese task view localizes progress, actions, and footer controls", () =>
   assert.deepEqual(view.receiptLines(), ["  √ 验证通过：npm test"]);
 });
 
+test("successful verification advances the automatic view to final summary", () => {
+  const view = new RunningTaskView(256_000, "zh-CN");
+  view.beginTool("verify_output", "验证生成结果", false, true);
+  view.markVerificationPassed();
+  const output = view.progressLines().join("\n");
+  assert.match(output, /√ 验证结果/);
+  assert.match(output, /→ 复核并完成/);
+  assert.match(output, /验证已通过，等待最终总结/);
+});
+
 test("running task view changes language without recreating the active task", () => {
   const view = new RunningTaskView(256_000, "en-US");
   view.setTurn(2);

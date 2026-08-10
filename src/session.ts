@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ConversationMessage } from "./types.js";
 import type { TaskPlan } from "./plan.js";
 import { restoreTaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
+import { localize, type UiLanguage } from "./i18n.js";
 
 export interface SessionStats {
   modelCalls: number;
@@ -162,4 +163,29 @@ export function estimateTextTokens(value: string): number {
     }
   }
   return Math.ceil(ascii / 4 + nonAscii + astral);
+}
+
+function transcriptText(message: ConversationMessage): string {
+  return message.content
+    .split(/\n\nAutomatically prepared project context:/, 1)[0]!
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function formatRestoredConversation(messages: ConversationMessage[], language: UiLanguage, maximum = 12): string[] {
+  const visible = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({ role: message.role, text: transcriptText(message) }))
+    .filter((message) => message.text && !/^Completion gate:/i.test(message.text));
+  const selected = visible.slice(-maximum);
+  const omitted = visible.length - selected.length;
+  const lines = [localize(language, "最近会话内容：", "Recent conversation:")];
+  if (omitted > 0) lines.push(localize(language, `  … 已省略较早的 ${omitted} 条消息`, `  ... ${omitted} earlier message(s) omitted`));
+  for (const message of selected) {
+    const label = message.role === "user" ? localize(language, "你", "You") : "Xiu";
+    const clipped = message.text.length > 600 ? `${message.text.slice(0, 597)}...` : message.text;
+    lines.push(`${label}> ${clipped}`);
+  }
+  lines.push(localize(language, "使用 /history 查看完整上下文。", "Use /history to view the full context."));
+  return lines;
 }

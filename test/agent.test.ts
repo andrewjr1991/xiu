@@ -118,6 +118,19 @@ test("agent rebuilds its language contract immediately after a runtime switch", 
   assert.match(systems[1] ?? "", /Use Simplified Chinese/);
 });
 
+test("Chinese agent returns and stores normalized Simplified Chinese", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-simplified-output-"));
+  const provider: ModelProvider = {
+    async complete() {
+      return { text: "設計與驗證已完成。保留 `繁體變數`。", toolCalls: [], raw: { content: "設計與驗證已完成。" } };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true, language: "zh-CN" }, provider, [], async () => true);
+  assert.equal(await agent.run("完成任务"), "设计与验证已完成。保留 `繁體變數`。");
+  assert.match(agent.history(), /设计与验证已完成/);
+  assert.doesNotMatch(agent.history(), /設計與驗證/);
+});
+
 test("steering amends the active task without replacing its primary goal", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-steer-"));
   await fs.writeFile(path.join(cwd, "input.txt"), "data");

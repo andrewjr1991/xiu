@@ -12,6 +12,7 @@ import { selectableModels } from "./model-catalog.js";
 import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
+import { normalizeAssistantText } from "./language-output.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
@@ -207,7 +208,9 @@ export class Agent {
       let response;
       let streamed = false;
       try {
-        const requested = await this.requestModel(signal, !identityQuestion);
+        // Buffer Chinese output so it can be normalized before anything is
+        // rendered. Streaming partial tokens cannot be converted reliably.
+        const requested = await this.requestModel(signal, !identityQuestion && this.config.language !== "zh-CN");
         response = requested.response;
         streamed = requested.streamed;
       } finally {
@@ -220,6 +223,9 @@ export class Agent {
           toolCalls: [],
           raw: undefined,
         };
+      } else {
+        const normalized = normalizeAssistantText(response.text, this.config.language ?? "en-US");
+        if (normalized !== response.text) response = { ...response, text: normalized, raw: undefined };
       }
       this.recordUsage(response.usage, response.text);
       if (response.text && !streamed) this.events.onText?.(response.text);

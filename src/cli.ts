@@ -22,7 +22,7 @@ import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSub
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
-import { listSessions, loadSession } from "./session.js";
+import { formatRestoredConversation, listSessions, loadSession } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { SettingsStore } from "./settings.js";
@@ -219,7 +219,10 @@ async function main(): Promise<void> {
     const rightClickPasteEnabled = await clipboard.supportsRightClickPaste();
     let restoredDraft = await draftStore.load();
     status.stop();
-    if (restored) console.log(chalk.green(localize(language, `已恢复会话 ${restored.id}`, `Resumed session ${restored.id}`)), chalk.dim(localize(language, `（${restored.messages.length} 条消息）\n`, `(${restored.messages.length} messages)\n`)));
+    if (restored) {
+      console.log(chalk.green(localize(language, `已恢复会话 ${restored.id}`, `Resumed session ${restored.id}`)), chalk.dim(localize(language, `（${restored.messages.length} 条消息）`, `(${restored.messages.length} messages)`)));
+      console.log(`${formatRestoredConversation(restored.messages, language).join("\n")}\n`);
+    }
 
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode, language);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
@@ -408,6 +411,7 @@ async function main(): Promise<void> {
 
     let activeToolActivity: string | undefined;
     let activeToolDetails: { name: string; description: string; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" } | undefined;
+    let verificationReadyForSummary = false;
     const agent = new Agent(
       config,
       provider,
@@ -417,7 +421,9 @@ async function main(): Promise<void> {
         onModelStart: (turn) => {
           runningTaskView?.setTurn(turn, config.maxTurns);
           runningTaskView?.activity(localize(language, `模型第 ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} 轮开始`, `Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`));
-          startPhase(localize(language, "思考中", "Thinking"));
+          startPhase(verificationReadyForSummary
+            ? localize(language, "验证已通过，正在整理最终结果", "Verification passed; preparing the final result")
+            : localize(language, "思考中", "Thinking"));
         },
         onModelEnd: () => stopPhase(),
         onText: (text) => emitLine(`${text}\n`),
@@ -430,6 +436,7 @@ async function main(): Promise<void> {
           if (hasToolCalls) runningTaskView?.narrate(text);
         },
         onToolStart: (name, description, details) => {
+          if (!details.verification) verificationReadyForSummary = false;
           const displayDescription = localizeToolDescription(name, description, language);
           activeToolActivity = activities.start("tool", name, displayDescription);
           activeToolDetails = { name, description: displayDescription, verification: details.verification, risk: details.risk };
@@ -452,7 +459,11 @@ async function main(): Promise<void> {
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
           emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
           if (!failed && activeToolDetails) {
-            if (activeToolDetails.verification) runningTaskView?.recordImportantAction(localize(language, `验证通过：${activeToolDetails.description}`, `Verified: ${activeToolDetails.description}`));
+            if (activeToolDetails.verification) {
+              verificationReadyForSummary = true;
+              runningTaskView?.markVerificationPassed();
+              runningTaskView?.recordImportantAction(localize(language, `验证通过：${activeToolDetails.description}`, `Verified: ${activeToolDetails.description}`));
+            }
             else if (activeToolDetails.risk === "execute" || activeToolDetails.risk === "dangerous") runningTaskView?.recordImportantAction(localize(language, `已执行：${activeToolDetails.description}`, `Ran: ${activeToolDetails.description}`));
           }
           activeToolDetails = undefined;
@@ -472,7 +483,6 @@ async function main(): Promise<void> {
         onWorkspaceChange: (change) => {
           if (runningTaskView) {
             runningTaskView.recordWorkspaceChange(change);
-            activeQueuedInputController?.abort();
           } else printWorkspaceChanges([change]);
         },
         onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
@@ -573,6 +583,8 @@ async function main(): Promise<void> {
 
       while (queue.size && !exitRequested) {
         const current = queue.dequeue()!;
+        verificationReadyForSummary = false;
+        const skillsBeforeTask = new Set(skillRegistry.list().map((skill) => skill.name.toLowerCase()));
         const view = new RunningTaskView(256_000, language);
         const existingPlan = planManager.snapshot();
         view.setPlan(existingPlan?.steps.some((step) => step.status !== "completed") ? existingPlan : undefined);
@@ -712,6 +724,10 @@ async function main(): Promise<void> {
           activeQueuedInputController = undefined;
         }
         runningTaskView = undefined;
+        const refreshedSkills = await skillRegistry.refresh(true);
+        agent.reloadInstructions();
+        const discoveredSkills = refreshedSkills.filter((skill) => !skillsBeforeTask.has(skill.name.toLowerCase()));
+        if (discoveredSkills.length) console.log(chalk.green(localize(language, `已发现并加载新技能：${discoveredSkills.map((skill) => skill.name).join("、")}。`, `Discovered and loaded new skill(s): ${discoveredSkills.map((skill) => skill.name).join(", ")}.`)));
         printWorkspaceChanges(view.drainWorkspaceChanges());
         view.discard();
         const receipts = view.receiptLines();
@@ -766,7 +782,8 @@ async function main(): Promise<void> {
         else {
           agent.restoreSession(selected);
           awaitingReply = undefined;
-          console.log(chalk.green(localize(language, `已恢复会话 ${selected.id}`, `Resumed session ${selected.id}`)), chalk.dim(localize(language, `（${selected.messages.length} 条消息，${selected.model ?? agent.status().model}）\n`, `(${selected.messages.length} messages, ${selected.model ?? agent.status().model})\n`)));
+          console.log(chalk.green(localize(language, `已恢复会话 ${selected.id}`, `Resumed session ${selected.id}`)), chalk.dim(localize(language, `（${selected.messages.length} 条消息，${selected.model ?? agent.status().model}）`, `(${selected.messages.length} messages, ${selected.model ?? agent.status().model})`)));
+          console.log(`${formatRestoredConversation(selected.messages, language).join("\n")}\n`);
         }
         continue;
       }
@@ -880,7 +897,8 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/skills") {
-        const skills = skillRegistry.list();
+        const skills = await skillRegistry.refresh(true);
+        agent.reloadInstructions();
         if (!skills.length) {
           console.log(chalk.dim(localize(language, "没有已安装技能。使用 /skills install <本地路径或 HTTPS Git URL> 安装。\n", "No skills installed. Use /skills install <path-or-https-git-url>.\n")));
           continue;

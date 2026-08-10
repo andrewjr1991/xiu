@@ -33,6 +33,17 @@ test("Chinese mode rejects English natural-language plan steps", () => {
   ]));
 });
 
+test("Chinese mode normalizes Traditional Chinese plan text", () => {
+  const manager = new TaskPlanManager(undefined, false, "zh-CN");
+  manager.update("驗證並完成", [
+    { id: "verify", title: "檢查檔案並整理結果", status: "in_progress", note: "確保沒有遺漏" },
+  ]);
+  const plan = manager.snapshot()!;
+  assert.equal(plan.goal, "验证并完成");
+  assert.equal(plan.steps[0]?.title, "检查档案并整理结果");
+  assert.equal(plan.steps[0]?.note, "确保没有遗漏");
+});
+
 test("Chinese mode hides untranslated titles restored from an older session", () => {
   const manager = new TaskPlanManager({
     goal: "Build the feature",

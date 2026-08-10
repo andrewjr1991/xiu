@@ -159,7 +159,7 @@ export class RunningTaskView {
       .replace(/\s+/g, " ")
       .trim();
     if (!normalized || (this.uiLanguage === "zh-CN" && isEnglishNarrative(normalized))) return;
-    this.latestNarration = normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+    this.latestNarration = normalized.length > 600 ? `${normalized.slice(0, 597)}...` : normalized;
   }
 
   setCompletion(message: string, success: boolean): void {
@@ -182,6 +182,11 @@ export class RunningTaskView {
     this.advanceAutomaticStage("finishing");
   }
 
+  markVerificationPassed(): void {
+    this.advanceAutomaticStage("finishing");
+    this.setPhase(localize(this.uiLanguage, "验证已通过，等待最终总结", "Verification passed; awaiting final summary"));
+  }
+
   activity(text: string): void {
     const normalized = text.replace(/\s+/g, " ").trim();
     if (!normalized || this.activities.at(-1)?.text === normalized) return;
@@ -200,10 +205,15 @@ export class RunningTaskView {
 
   progressLines(): string[] {
     if (!this.detailed) return this.summaryLines();
-    return this.activities.slice(-8).map((item) => {
+    const visible = this.activities.slice(-16);
+    const lines = visible.map((item) => {
       const elapsed = Math.max(0, Math.floor((item.timestamp - this.startedAt) / 1000));
       return `  +${elapsed}s ${item.text}`;
     });
+    if (visible.length < this.activities.length) {
+      lines.unshift(localize(this.uiLanguage, `  … 已省略较早的 ${this.activities.length - visible.length} 条活动（使用 /details 查看完整记录）`, `  ... ${this.activities.length - visible.length} earlier activities omitted (use /details for the full log)`));
+    }
+    return lines;
   }
 
   elapsedMs(): number {
@@ -276,9 +286,9 @@ export class RunningTaskView {
     const completed = plan.steps.filter((step) => step.status === "completed").length;
     const currentIndex = plan.steps.findIndex((step) => step.status === "in_progress");
     const nextIndex = plan.steps.findIndex((step, index) => index > currentIndex && step.status === "pending");
-    const visible = plan.steps.length <= 6
+    const visible = plan.steps.length <= 12
       ? plan.steps
-      : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 4);
+      : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 8);
     const lines = [`${localize(this.uiLanguage, "计划：", "Plan: ")}${completed}/${plan.steps.length} ${localize(this.uiLanguage, "已完成", "completed")}`];
     for (const step of visible) {
       const title = this.uiLanguage === "zh-CN" && isEnglishNarrative(step.title) ? `步骤 ${step.id}` : step.title;
