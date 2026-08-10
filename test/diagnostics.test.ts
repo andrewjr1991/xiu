@@ -170,3 +170,16 @@ test("completed diagnostics disclose recoverable failures cumulative token seman
   assert.match(report, /阶段调用：规划 1 · 实现 0 · 验证 0/);
   assert.match(report, /首轮分析/);
 });
+
+test("diagnostics report provider prompt cache tokens without treating them as extra context", () => {
+  const diagnostics = new TaskDiagnostics("cache task", () => 1_000);
+  diagnostics.beginModel("turn 1", 1);
+  diagnostics.finishModel({ inputTokens: 2_000, outputTokens: 100, cacheReadInputTokens: 1_500, cacheCreationInputTokens: 300 }, true);
+  diagnostics.beginModel("turn 2", 1);
+  diagnostics.finishModel({ inputTokens: 1_000, outputTokens: 50, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, true);
+  const snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.model.cacheReadInputTokens, 1_500);
+  assert.equal(snapshot.model.cacheCreationInputTokens, 300);
+  assert.equal(snapshot.model.cacheHits, 1);
+  assert.match(formatTaskDiagnostics(snapshot, "zh-CN"), /Prompt Cache：命中请求 1\/2.*读取 1,500 tokens.*写入 300 tokens/);
+});

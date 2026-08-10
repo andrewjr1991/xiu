@@ -110,6 +110,42 @@ test("provider capability probes persist per model and configuration changes inv
   assert.equal(restored.capabilityProbe("gateway", "coder-b"), undefined);
 });
 
+test("provider registry migrates version 1 settings and discards untrusted legacy probe cache", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-migrate-"));
+  const filename = path.join(directory, "providers.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    profiles: [{
+      id: "legacy", name: "Legacy", kind: "openai-compatible", model: "coder", baseURL: "https://legacy.example/v1",
+      features: { text: true, tools: true, vision: false, image: false, video: false },
+    }],
+    probes: [{ providerId: "legacy", model: "coder", checkedAt: "2026-08-10T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported" }],
+  }), "utf8");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  assert.equal(registry.get("legacy")?.model, "coder");
+  assert.equal(registry.capabilityProbe("legacy", "coder"), undefined);
+  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 2);
+});
+
+test("versioned capability cache is fingerprinted and invalidated when credentials change", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-fingerprint-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  await registry.upsert({
+    id: "fingerprint", name: "Fingerprint", kind: "openai-compatible", model: "coder", baseURL: "https://cache.example/v1", apiKey: "first-key",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  await registry.setCapabilityProbe({ providerId: "fingerprint", model: "coder", checkedAt: "2026-08-11T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported" });
+  const stored = JSON.parse(await fs.readFile(filename, "utf8")) as { version: number; probes: Array<{ profileFingerprint?: string }> };
+  assert.equal(stored.version, 2);
+  assert.match(stored.probes[0]?.profileFingerprint ?? "", /^[a-f0-9]{24}$/);
+  assert.equal(registry.capabilityProbe("fingerprint", "coder")?.tools, "supported");
+  await registry.setApiKey("fingerprint", "second-key");
+  assert.equal(registry.capabilityProbe("fingerprint", "coder"), undefined);
+});
+
 test("provider registry persists ordered failover chains and removes stale references", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-failover-"));
   const filename = path.join(directory, "providers.json");

@@ -23,6 +23,10 @@ export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Provider-reported input tokens served from its prompt cache. Subset of inputTokens. */
+  cacheReadInputTokens?: number;
+  /** Provider-reported input tokens written to its prompt cache. Subset of inputTokens. */
+  cacheCreationInputTokens?: number;
 }
 
 export interface AvailableModel {

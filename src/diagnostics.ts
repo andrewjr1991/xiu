@@ -35,6 +35,9 @@ export interface TaskDiagnosticSnapshot {
     totalMs: number;
     slowestMs: number;
     slowestOperation?: string;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheHits?: number;
   };
   tools: {
     calls: number;
@@ -164,8 +167,9 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
   const toolNumbers = [tools.calls, tools.failures, tools.totalMs, tools.slowestMs];
   const approvalNumbers = [approvals.requests, approvals.denied, approvals.waitMs];
   const optionalApprovalNumbers = [approvals.checks, approvals.automatic, approvals.remembered].filter((value) => value !== undefined);
+  const optionalCacheNumbers = [model.cacheReadInputTokens, model.cacheCreationInputTokens, model.cacheHits].filter((value) => value !== undefined);
   const progressNumbers = [progress.operationsSince, progress.distinctOperations, progress.consecutiveFailures];
-  if (![...modelNumbers, ...toolNumbers, ...approvalNumbers, ...optionalApprovalNumbers, ...progressNumbers, item.compactions].every((number) => finiteInteger(number))) return false;
+  if (![...modelNumbers, ...toolNumbers, ...approvalNumbers, ...optionalApprovalNumbers, ...optionalCacheNumbers, ...progressNumbers, item.compactions].every((number) => finiteInteger(number))) return false;
   if ([model.slowestOperation, tools.slowestOperation].some((field) => field !== undefined && (typeof field !== "string" || field.length > MAX_OPERATION_CHARACTERS))) return false;
   if (!validDate(progress.lastAt)) return false;
   if (!Array.isArray(tools.byName) || tools.byName.length > MAX_TOOL_NAMES || !tools.byName.every((row) => {
@@ -226,7 +230,7 @@ export class TaskDiagnostics {
   private modelStartedAt?: number;
   private modelOperation?: string;
   private approvalStartedAt?: number;
-  private model = { attempts: 0, completed: 0, failures: 0, retries: 0, inputTokens: 0, outputTokens: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
+  private model = { attempts: 0, completed: 0, failures: 0, retries: 0, inputTokens: 0, outputTokens: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, cacheHits: 0 };
   private tools = { calls: 0, failures: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
   private approvals = { requests: 0, denied: 0, waitMs: 0, checks: 0, automatic: 0, remembered: 0 };
   private providerFailovers: NonNullable<TaskDiagnosticSnapshot["providerFailovers"]> = { switches: 0, events: [] };
@@ -246,7 +250,7 @@ export class TaskDiagnostics {
       this.updatedAtMs = Date.parse(restored.updatedAt);
       this.completedAtMs = restored.completedAt ? Date.parse(restored.completedAt) : undefined;
       this.outcome = restored.outcome;
-      this.model = { ...restored.model, slowestOperation: restored.model.slowestOperation };
+      this.model = { ...restored.model, slowestOperation: restored.model.slowestOperation, cacheReadInputTokens: restored.model.cacheReadInputTokens ?? 0, cacheCreationInputTokens: restored.model.cacheCreationInputTokens ?? 0, cacheHits: restored.model.cacheHits ?? 0 };
       this.tools = { calls: restored.tools.calls, failures: restored.tools.failures, totalMs: restored.tools.totalMs, slowestMs: restored.tools.slowestMs, slowestOperation: restored.tools.slowestOperation };
       this.approvals = {
         ...restored.approvals,
@@ -282,7 +286,7 @@ export class TaskDiagnostics {
     this.active = { kind: "model", operation: name, startedAt: now };
   }
 
-  finishModel(usage: { inputTokens: number; outputTokens: number } | undefined, success: boolean, error = "Model request failed"): void {
+  finishModel(usage: { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined, success: boolean, error = "Model request failed"): void {
     const now = this.touch();
     const durationMs = this.modelStartedAt === undefined ? 0 : Math.max(0, now - this.modelStartedAt);
     const operation = this.modelOperation ?? "model request";
@@ -295,6 +299,10 @@ export class TaskDiagnostics {
       this.model.completed++;
       this.model.inputTokens += Math.max(0, Math.trunc(usage?.inputTokens ?? 0));
       this.model.outputTokens += Math.max(0, Math.trunc(usage?.outputTokens ?? 0));
+      const cacheRead = Math.max(0, Math.trunc(usage?.cacheReadInputTokens ?? 0));
+      this.model.cacheReadInputTokens += cacheRead;
+      this.model.cacheCreationInputTokens += Math.max(0, Math.trunc(usage?.cacheCreationInputTokens ?? 0));
+      if (cacheRead > 0) this.model.cacheHits++;
     } else {
       this.model.failures++;
       this.operationsSinceProgress++;
@@ -624,6 +632,10 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
   const recoverable = snapshot.outcome === "completed" && failures > 0;
   const averageInput = snapshot.model.completed ? Math.round(snapshot.model.inputTokens / snapshot.model.completed) : 0;
   const toolSuccessRate = snapshot.tools.calls ? Math.round(((snapshot.tools.calls - snapshot.tools.failures) / snapshot.tools.calls) * 100) : 100;
+  const cacheHits = snapshot.model.cacheHits ?? 0;
+  const cacheRead = snapshot.model.cacheReadInputTokens ?? 0;
+  const cacheCreation = snapshot.model.cacheCreationInputTokens ?? 0;
+  const cacheHitRate = snapshot.model.completed ? Math.round((cacheHits / snapshot.model.completed) * 100) : 0;
   const lines = language === "zh-CN" ? [
     "任务诊断",
     `任务：${snapshot.task}`,
@@ -631,6 +643,7 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
     `当前阶段：${phaseLabel(snapshot.phase.kind, language)}${snapshot.phase.operation ? ` · ${snapshot.phase.operation}` : ""}${snapshot.phase.activeMs ? ` · ${duration(snapshot.phase.activeMs)}` : ""}`,
     `Token（所有模型请求累计量，重复上下文会重复计入）：输入 ${snapshot.model.inputTokens.toLocaleString()} / 输出 ${snapshot.model.outputTokens.toLocaleString()} / 合计 ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()} · 平均输入 ${averageInput.toLocaleString()}/次`,
     `模型：${snapshot.model.attempts} 次尝试 / ${snapshot.model.completed} 次成功 / ${snapshot.model.retries} 次重试 / ${snapshot.model.failures} 次失败 · ${duration(snapshot.model.totalMs)}`,
+    `Prompt Cache：命中请求 ${cacheHits}/${snapshot.model.completed}（${cacheHitRate}%） · 读取 ${cacheRead.toLocaleString()} tokens · 写入 ${cacheCreation.toLocaleString()} tokens（仅 Provider 回报）`,
     `工具：${snapshot.tools.calls} 次调用 / 成功率 ${toolSuccessRate}% / 失败 ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
     `审批：实际提示 ${snapshot.approvals.requests} 次 / 自动放行 ${snapshot.approvals.automatic ?? 0} / 会话规则放行 ${snapshot.approvals.remembered ?? 0} / 策略检查 ${snapshot.approvals.checks ?? snapshot.approvals.requests} · 拒绝 ${snapshot.approvals.denied} · 人工等待 ${duration(snapshot.approvals.waitMs)}`,
     `进展：${snapshot.progress.operationsSince} 次操作未产生新证据 · 连续失败 ${snapshot.progress.consecutiveFailures} · 压缩 ${snapshot.compactions} 次`,
@@ -641,6 +654,7 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
     `Current phase: ${phaseLabel(snapshot.phase.kind, language)}${snapshot.phase.operation ? ` · ${snapshot.phase.operation}` : ""}${snapshot.phase.activeMs ? ` · ${duration(snapshot.phase.activeMs)}` : ""}`,
     `Tokens (cumulative across model requests; repeated context is counted each time): ${snapshot.model.inputTokens.toLocaleString()} input / ${snapshot.model.outputTokens.toLocaleString()} output / ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()} total · ${averageInput.toLocaleString()} average input/request`,
     `Model: ${snapshot.model.attempts} attempt(s) / ${snapshot.model.completed} completed / ${snapshot.model.retries} retries / ${snapshot.model.failures} failures · ${duration(snapshot.model.totalMs)}`,
+    `Prompt cache: ${cacheHits}/${snapshot.model.completed} request(s) hit (${cacheHitRate}%) · ${cacheRead.toLocaleString()} tokens read · ${cacheCreation.toLocaleString()} tokens written (provider-reported only)`,
     `Tools: ${snapshot.tools.calls} call(s) / ${toolSuccessRate}% success / Failures: ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
     `Approvals: ${snapshot.approvals.requests} prompt(s) / ${snapshot.approvals.automatic ?? 0} automatic / ${snapshot.approvals.remembered ?? 0} remembered / ${snapshot.approvals.checks ?? snapshot.approvals.requests} policy check(s) / denied ${snapshot.approvals.denied} · human wait ${duration(snapshot.approvals.waitMs)}`,
     `Progress: ${snapshot.progress.operationsSince} operation(s) without new evidence · ${snapshot.progress.consecutiveFailures} consecutive failure(s) · ${snapshot.compactions} compaction(s)`,

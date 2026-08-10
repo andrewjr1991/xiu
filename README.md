@@ -56,6 +56,8 @@ Version 0.11.2 adds explicit, explainable model routing for the main Agent's pla
 
 The v0.11.2 acceptance hardening also records every planning/implementation/verification call even when no Provider switch occurs, explains stage transitions, distinguishes cumulative request Tokens from current context occupancy, and reports recoverable failures plus tool success rate. Windows npm/npx direct execution avoids `.cmd` `EINVAL` failures, standard project checks prefer `validate_project`, and approval diagnostics distinguish actual prompts from `--yes` and remembered session decisions. Narrow session permissions are available for ordinary workspace writes, exact edits, direct programs, and project verification; dangerous actions remain explicitly confirmed.
 
+Version 0.11.3 adds safe prompt-cache observability and request deduplication without caching Agent answers. OpenAI-compatible usage reports and Anthropic cache creation/read usage feed `/diagnostics`; native OpenAI requests receive a stable hashed prompt-cache key, and Anthropic marks the stable system prompt with an ephemeral cache boundary. Model discovery is cached briefly and identical concurrent metadata/capability probes are coalesced. Provider settings migrate to a fingerprinted version-2 capability cache, invalidating stale probes after endpoint, proxy, feature, model, authentication, or protocol changes. Tool calls, file changes, approvals, streamed answers, and billable media generation are never locally result-cached or replayed.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles

@@ -49,6 +49,90 @@ test("a locally saved provider key is used for compatible API requests", async (
   }
 });
 
+test("OpenAI-compatible usage reports server-side prompt cache tokens", async () => {
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        id: "chat-cache", object: "chat.completion", created: 1, model: "coder",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "cached" } }],
+        usage: { prompt_tokens: 1200, completion_tokens: 20, total_tokens: 1220, prompt_tokens_details: { cached_tokens: 1000 } },
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "openai-compatible", providerId: "private", model: "coder", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" });
+    const result = await createProvider(config).complete("stable system", [{ role: "user", content: "hello" }], []);
+    assert.equal(result.usage?.inputTokens, 1200);
+    assert.equal(result.usage?.cacheReadInputTokens, 1000);
+    assert.equal(result.usage?.cacheCreationInputTokens, 0);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("Anthropic marks the stable system prompt ephemeral and reports cache usage", async () => {
+  let requestBody: Record<string, unknown> = {};
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        id: "msg_cache", type: "message", role: "assistant", model: "claude-test", stop_reason: "end_turn", stop_sequence: null,
+        content: [{ type: "text", text: "cached" }],
+        usage: { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 500, cache_read_input_tokens: 400 },
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "anthropic", providerId: "anthropic", model: "claude-test", baseURL: `http://127.0.0.1:${address.port}`, apiKey: "test" });
+    const result = await createProvider(config).complete("stable system", [{ role: "user", content: "hello" }], []);
+    assert.deepEqual(requestBody.system, [{ type: "text", text: "stable system", cache_control: { type: "ephemeral" } }]);
+    assert.equal(result.usage?.inputTokens, 1000);
+    assert.equal(result.usage?.cacheCreationInputTokens, 500);
+    assert.equal(result.usage?.cacheReadInputTokens, 400);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("concurrent model discovery requests are coalesced without caching chat completions", async () => {
+  let modelCalls = 0;
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      modelCalls++;
+      setTimeout(() => response.end(JSON.stringify({ object: "list", data: [{ id: "coder", object: "model", owned_by: "test" }] })), 20);
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "openai-compatible", providerId: "dedupe", model: "coder", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" });
+    const left = createProvider(config);
+    const right = createProvider(config);
+    const [first, second] = await Promise.all([left.listModels!(), right.listModels!()]);
+    assert.equal(modelCalls, 1);
+    assert.equal(first[0]?.id, "coder");
+    assert.equal(second[0]?.id, "coder");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("provider probing falls back to a minimal chat request when model discovery is unsupported", async () => {
   let chatCalls = 0;
   const server = http.createServer((request, response) => {

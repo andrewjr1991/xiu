@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities } from "../src/capability-probe.js";
+import { applyCapabilityProbe, CAPABILITY_PROBE_PROTOCOL_VERSION, probeIsFresh, probeModelCapabilities } from "../src/capability-probe.js";
 import { resolveConfig } from "../src/config.js";
 import type { MediaBackend } from "../src/media.js";
 import type { ModelProvider } from "../src/types.js";
@@ -31,7 +31,7 @@ test("capability probe records verified tool and vision support without project 
     provider: provider(async () => true), mediaBackend, now: () => new Date("2026-08-10T00:00:00.000Z"),
   });
   assert.deepEqual(result, {
-    protocolVersion: 3,
+    protocolVersion: CAPABILITY_PROBE_PROTOCOL_VERSION,
     providerId: "private", model: "coder", checkedAt: "2026-08-10T00:00:00.000Z",
     text: "supported", tools: "supported", vision: "supported",
   });
@@ -68,7 +68,7 @@ test("capability probe distinguishes unsupported responses from transient unknow
 
 test("capability probe cache freshness is bounded and future timestamps are rejected", () => {
   const checkedAt = "2026-08-10T00:00:00.000Z";
-  const probe = { protocolVersion: 3, providerId: "private", model: "coder", checkedAt, text: "supported", tools: "supported", vision: "unsupported" } as const;
+  const probe = { protocolVersion: CAPABILITY_PROBE_PROTOCOL_VERSION, providerId: "private", model: "coder", checkedAt, text: "supported", tools: "supported", vision: "unsupported" } as const;
   const now = Date.parse(checkedAt);
   assert.equal(probeIsFresh(probe, now + 6 * 24 * 60 * 60 * 1000), true);
   assert.equal(probeIsFresh(probe, now + 8 * 24 * 60 * 60 * 1000), false);

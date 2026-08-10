@@ -1,12 +1,15 @@
 import type { AgentConfig } from "./config.js";
+import { createHash } from "node:crypto";
 import { createMediaBackend, type MediaBackend } from "./media.js";
 import { createProvider } from "./providers.js";
 import type { ProviderFeatures } from "./provider-registry.js";
 import type { ModelProvider } from "./types.js";
+import { SafeRequestCache } from "./request-cache.js";
 
 export type CapabilityProbeState = "supported" | "unsupported" | "unknown" | "not-tested";
 
-export const CAPABILITY_PROBE_PROTOCOL_VERSION = 3;
+export const CAPABILITY_PROBE_PROTOCOL_VERSION = 4;
+const capabilityProbeFlights = new SafeRequestCache(0, 100);
 
 export interface ModelCapabilityProbe {
   protocolVersion?: number;
@@ -18,6 +21,7 @@ export interface ModelCapabilityProbe {
   vision: CapabilityProbeState;
   contextWindow?: number;
   contextWindowSource?: "api";
+  profileFingerprint?: string;
 }
 
 export interface CapabilityProbeOptions {
@@ -65,7 +69,7 @@ async function withTimeout<T>(timeoutMs: number, operation: (signal: AbortSignal
   finally { clearTimeout(timer); }
 }
 
-export async function probeModelCapabilities(config: AgentConfig, options: CapabilityProbeOptions = {}): Promise<ModelCapabilityProbe> {
+async function executeCapabilityProbe(config: AgentConfig, options: CapabilityProbeOptions): Promise<ModelCapabilityProbe> {
   const provider = options.provider ?? createProvider(config);
   const timeoutMs = Math.max(1_000, Math.min(options.timeoutMs ?? 30_000, 120_000));
   let tools: CapabilityProbeState = "not-tested";
@@ -96,6 +100,12 @@ export async function probeModelCapabilities(config: AgentConfig, options: Capab
     tools,
     vision,
   };
+}
+
+export async function probeModelCapabilities(config: AgentConfig, options: CapabilityProbeOptions = {}): Promise<ModelCapabilityProbe> {
+  const credential = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? "";
+  const key = createHash("sha256").update(JSON.stringify({ providerId: config.providerId, provider: config.provider, model: config.model, baseURL: config.baseURL, proxy: config.proxy, apiKeyEnv: config.apiKeyEnv, credential, includeVision: options.includeVision !== false })).digest("hex");
+  return capabilityProbeFlights.run(key, () => executeCapabilityProbe(config, options), false);
 }
 
 export function probeIsFresh(probe: ModelCapabilityProbe | undefined, now = Date.now(), maximumAgeMs = 7 * 24 * 60 * 60 * 1000): boolean {

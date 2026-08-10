@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderName } from "./config.js";
@@ -29,7 +30,7 @@ export interface ProviderProfile {
 }
 
 interface ProviderFile {
-  version: 1;
+  version: 2;
   active?: string;
   activeModels?: Record<string, string>;
   failoverChains?: Record<string, string[]>;
@@ -37,6 +38,19 @@ interface ProviderFile {
   profiles: ProviderProfile[];
   credentials?: Record<string, string>;
   probes?: ModelCapabilityProbe[];
+}
+
+function probeFingerprint(profile: ProviderProfile, model: string): string {
+  return createHash("sha256").update(JSON.stringify({
+    id: profile.id,
+    kind: profile.kind,
+    model,
+    baseURL: profile.baseURL,
+    apiKeyEnv: profile.apiKeyEnv,
+    proxy: profile.proxy,
+    contextWindow: profile.contextWindow,
+    features: profile.features,
+  })).digest("hex").slice(0, 24);
 }
 
 const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false });
@@ -91,6 +105,7 @@ function validateProbe(probe: ModelCapabilityProbe, knownIds: Set<string>): Mode
   if (probe.contextWindow !== undefined && (!Number.isInteger(probe.contextWindow) || probe.contextWindow < 8_000)) throw new Error("capability probe has an invalid context window");
   if (probe.contextWindowSource !== undefined && probe.contextWindowSource !== "api") throw new Error("capability probe has an invalid context window source");
   if (probe.protocolVersion !== undefined && (!Number.isInteger(probe.protocolVersion) || probe.protocolVersion < 1)) throw new Error("capability probe has an invalid protocol version");
+  if (probe.profileFingerprint !== undefined && !/^[a-f0-9]{24}$/.test(probe.profileFingerprint)) throw new Error("capability probe has an invalid profile fingerprint");
   return { ...probe, model: probe.model.trim() };
 }
 
@@ -136,14 +151,15 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
 }
 
 export class ProviderRegistry {
-  private file: ProviderFile = { version: 1, profiles: [], credentials: {} };
+  private file: ProviderFile = { version: 2, profiles: [], credentials: {} };
 
   constructor(private readonly filename = path.join(os.homedir(), ".xiu", "providers.json")) {}
 
   async load(): Promise<void> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as Partial<ProviderFile>;
-      if (parsed.version !== 1 || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
+      if (![1, 2].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
+      const sourceVersion = Number(parsed.version);
       if (parsed.profiles.length > 100) throw new Error("provider configuration contains more than 100 profiles");
       const legacyCredentials: Record<string, string> = {};
       const profiles = parsed.profiles.map((profile) => {
@@ -165,12 +181,13 @@ export class ProviderRegistry {
         credentials[id] = value;
       }
       const knownIds = new Set([...BUILTIN_PROVIDER_PROFILES.map((profile) => profile.id), ...profiles.map((profile) => profile.id)]);
-      const rawProbes = Array.isArray(parsed.probes) ? parsed.probes : [];
+      const rawProbes = sourceVersion === 2 && Array.isArray(parsed.probes) ? parsed.probes : [];
       if (rawProbes.length > 500) throw new Error("provider configuration contains more than 500 capability probes");
       const uniqueProbes = new Map<string, ModelCapabilityProbe>();
       for (const rawProbe of rawProbes) {
         const probe = validateProbe(rawProbe as ModelCapabilityProbe, knownIds);
-        uniqueProbes.set(`${probe.providerId}\0${probe.model}`, probe);
+        const profile = [...BUILTIN_PROVIDER_PROFILES, ...profiles].find((item) => item.id === probe.providerId);
+        if (profile && probe.profileFingerprint === probeFingerprint(profile, probe.model)) uniqueProbes.set(`${probe.providerId}\0${probe.model}`, probe);
       }
       const rawActiveModels = parsed.activeModels && typeof parsed.activeModels === "object" ? parsed.activeModels : {};
       const activeModels: Record<string, string> = {};
@@ -195,11 +212,12 @@ export class ProviderRegistry {
           }
         }
       }
-      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentials, probes: [...uniqueProbes.values()] };
+      this.file = { version: 2, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentials, probes: [...uniqueProbes.values()] };
       if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
+      if (sourceVersion === 1) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.file = { version: 1, profiles: [], credentials: {} };
+        this.file = { version: 2, profiles: [], credentials: {} };
         return;
       }
       throw new Error(`Could not read Xiu provider settings: ${error instanceof Error ? error.message : String(error)}`);
@@ -253,12 +271,14 @@ export class ProviderRegistry {
 
   capabilityProbe(providerId: string, model: string): ModelCapabilityProbe | undefined {
     const probe = this.file.probes?.find((item) => item.providerId === providerId && item.model === model);
-    return probe ? { ...probe } : undefined;
+    const profile = this.get(providerId);
+    return probe && profile && probe.profileFingerprint === probeFingerprint(profile, model) ? { ...probe } : undefined;
   }
 
   async setCapabilityProbe(probe: ModelCapabilityProbe): Promise<void> {
     if (!this.get(probe.providerId)) throw new Error(`Provider profile not found: ${probe.providerId}`);
-    const normalized = validateProbe(probe, new Set(this.list().map((profile) => profile.id)));
+    const profile = this.get(probe.providerId)!;
+    const normalized = validateProbe({ ...probe, profileFingerprint: probeFingerprint(profile, probe.model) }, new Set(this.list().map((profile) => profile.id)));
     this.file.probes = (this.file.probes ?? []).filter((item) => item.providerId !== normalized.providerId || item.model !== normalized.model);
     this.file.probes.push(normalized);
     if (this.file.probes.length > 500) this.file.probes.splice(0, this.file.probes.length - 500);
@@ -282,8 +302,7 @@ export class ProviderRegistry {
     if (existing >= 0) this.file.profiles[existing] = storedProfile as ProviderProfile;
     else this.file.profiles.push(storedProfile as ProviderProfile);
     if (apiKey) (this.file.credentials ??= {})[normalized.id] = apiKey;
-    if (!previous || JSON.stringify({ kind: previous.kind, model: previous.model, baseURL: previous.baseURL, proxy: previous.proxy, features: previous.features })
-      !== JSON.stringify({ kind: normalized.kind, model: normalized.model, baseURL: normalized.baseURL, proxy: normalized.proxy, features: normalized.features })) {
+    if (!previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
       this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
     }
     await this.save();
@@ -295,6 +314,7 @@ export class ProviderRegistry {
     this.file.credentials ??= {};
     if (apiKey) this.file.credentials[id] = apiKey;
     else delete this.file.credentials[id];
+    this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     await this.save();
   }
 
@@ -323,7 +343,7 @@ export class ProviderRegistry {
     await fs.mkdir(path.dirname(this.filename), { recursive: true });
     const temporary = `${this.filename}.${process.pid}.tmp`;
     const safeFile: ProviderFile = {
-      version: 1,
+      version: 2,
       active: this.file.active,
       activeModels: { ...this.file.activeModels },
       failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
