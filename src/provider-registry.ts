@@ -31,6 +31,7 @@ interface ProviderFile {
   version: 1;
   active?: string;
   activeModels?: Record<string, string>;
+  failoverChains?: Record<string, string[]>;
   profiles: ProviderProfile[];
   credentials?: Record<string, string>;
   probes?: ModelCapabilityProbe[];
@@ -175,7 +176,15 @@ export class ProviderRegistry {
         if (!knownIds.has(id) || typeof model !== "string" || !model.trim() || model.length > 200) continue;
         activeModels[id] = model.trim();
       }
-      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, profiles, credentials, probes: [...uniqueProbes.values()] };
+      const failoverChains: Record<string, string[]> = {};
+      if (parsed.failoverChains && typeof parsed.failoverChains === "object") {
+        for (const [primaryId, rawChain] of Object.entries(parsed.failoverChains)) {
+          if (!knownIds.has(primaryId) || !Array.isArray(rawChain)) continue;
+          const chain = rawChain.filter((id): id is string => typeof id === "string" && knownIds.has(id) && id !== primaryId);
+          failoverChains[primaryId] = [...new Set(chain)].slice(0, 8);
+        }
+      }
+      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, profiles, credentials, probes: [...uniqueProbes.values()] };
       if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -201,6 +210,18 @@ export class ProviderRegistry {
   activeId(): string | undefined { return this.file.active; }
 
   activeModel(id: string): string | undefined { return this.file.activeModels?.[id]; }
+
+  failoverChain(id: string): string[] { return [...(this.file.failoverChains?.[id] ?? [])]; }
+
+  async setFailoverChain(id: string, chain: string[]): Promise<void> {
+    if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+    if (chain.length > 8) throw new Error("A failover chain can contain at most 8 providers");
+    const normalized = [...new Set(chain)];
+    if (normalized.includes(id)) throw new Error("The primary provider cannot be its own fallback");
+    for (const fallbackId of normalized) if (!this.get(fallbackId)) throw new Error(`Provider profile not found: ${fallbackId}`);
+    (this.file.failoverChains ??= {})[id] = normalized;
+    await this.save();
+  }
 
   capabilityProbe(providerId: string, model: string): ModelCapabilityProbe | undefined {
     const probe = this.file.probes?.find((item) => item.providerId === providerId && item.model === model);
@@ -256,6 +277,10 @@ export class ProviderRegistry {
     this.file.profiles = next;
     if (this.file.credentials) delete this.file.credentials[id];
     if (this.file.activeModels) delete this.file.activeModels[id];
+    if (this.file.failoverChains) {
+      delete this.file.failoverChains[id];
+      for (const [primaryId, chain] of Object.entries(this.file.failoverChains)) this.file.failoverChains[primaryId] = chain.filter((item) => item !== id);
+    }
     this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     if (this.file.active === id) this.file.active = undefined;
     await this.save();
@@ -268,6 +293,7 @@ export class ProviderRegistry {
       version: 1,
       active: this.file.active,
       activeModels: { ...this.file.activeModels },
+      failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
       profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),
       credentials: { ...this.file.credentials },
       probes: [...(this.file.probes ?? [])],

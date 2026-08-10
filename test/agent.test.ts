@@ -68,6 +68,29 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.equal((await loadSession(cwd)).diagnostics?.tools.calls, 1);
 });
 
+test("agent does not report success when the final tool operation failed", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-tool-failure-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      return calls === 1
+        ? { text: "Trying.", toolCalls: [{ id: "failed", name: "always_fails", input: {} }], raw: {} }
+        : { text: "The service is unavailable.", toolCalls: [], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "always_fails", description: "fail deterministically", risk: "execute",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    describe: () => "run failing operation",
+    execute: async () => "Tool error: service unavailable",
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
+  assert.equal(await agent.run("Complete an external operation"), "The service is unavailable.");
+  assert.equal(agent.status().outcome, "failed");
+  assert.equal(agent.status().diagnostics?.outcome, "failed");
+});
+
 test("agent completes a generated artifact after verify_output passes", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-artifact-"));
   let calls = 0;
@@ -97,6 +120,48 @@ test("agent completes a generated artifact after verify_output passes", async ()
   assert.equal(await agent.run("Create a prelabel table"), "The verified table is ready.");
   assert.equal(calls, 3);
   assert.equal(agent.status().outcome, "completed");
+});
+
+test("a malformed redundant tool call cannot override successful verification in the same batch", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-mixed-tool-batch-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls++;
+      if (calls === 1) {
+        return {
+          text: "Creating the artifact.",
+          toolCalls: [{ id: "write", name: "write_file", input: { path: "video.mp4", content: "fake-mp4-payload" } }],
+          raw: {},
+        };
+      }
+      if (calls === 2) {
+        return {
+          text: "Verifying the artifact.",
+          toolCalls: [
+            { id: "verify", name: "verify_output", input: { path: "video.mp4", min_bytes: 8, required_substrings: ["mp4"] } },
+            { id: "redundant", name: "run_process", input: { program: "node", args: "[\"--version\"]" } },
+          ],
+          raw: {},
+        };
+      }
+      return { text: "The verified artifact is ready.", toolCalls: [], raw: {} };
+    },
+  };
+  const failures: string[] = [];
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
+    provider,
+    builtinTools,
+    async () => true,
+    { onFailure: (message) => failures.push(message) },
+  );
+
+  assert.equal(await agent.run("Create and verify a video artifact"), "The verified artifact is ready.");
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(agent.status().diagnostics?.tools.calls, 3);
+  assert.equal(agent.status().diagnostics?.tools.failures, 1);
+  assert.match(failures.at(-1) ?? "", /invalid arguments for run_process/);
 });
 
 test("agent rebuilds its language contract immediately after a runtime switch", async () => {
@@ -322,4 +387,98 @@ test("agent retries a transient model failure before any text is emitted", async
   assert.equal(agent.status().diagnostics?.model.attempts, 2);
   assert.equal(agent.status().diagnostics?.model.failures, 1);
   assert.equal(agent.status().diagnostics?.model.retries, 1);
+});
+
+test("agent fails over after bounded transient retries before any output", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-failover-"));
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const primary: ModelProvider = {
+    async complete() {
+      primaryCalls++;
+      throw Object.assign(new Error("Connection error."), { name: "APIConnectionError" });
+    },
+  };
+  const fallback: ModelProvider = {
+    async complete() {
+      fallbackCalls++;
+      return { text: "continued on backup", toolCalls: [], raw: {} };
+    },
+  };
+  const config: AgentConfig = { provider: "openai", providerId: "primary", model: "primary-model", cwd, autoApprove: true };
+  const switches: string[] = [];
+  const agent = new Agent(config, primary, [], async () => true, {
+    onProviderFailover: ({ fromProviderId, toProviderId }) => switches.push(`${fromProviderId}->${toProviderId}`),
+  });
+  agent.setFailoverController({
+    async resolve() {
+      return { candidate: { config: { ...config, providerId: "backup", model: "backup-model" }, provider: fallback, tools: [], label: "Backup" } };
+    },
+  });
+
+  assert.equal(await agent.run("finish safely"), "continued on backup");
+  assert.equal(primaryCalls, 3);
+  assert.equal(fallbackCalls, 1);
+  assert.deepEqual(switches, ["primary->backup"]);
+  assert.equal(agent.status().model, "backup-model");
+  assert.equal(agent.status().diagnostics?.providerFailovers?.switches, 1);
+});
+
+test("agent never fails over after streaming partial output", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-no-unsafe-failover-"));
+  let resolutions = 0;
+  const provider: ModelProvider = {
+    async complete() { throw new Error("complete should not run"); },
+    async stream(_system, _messages, _tools, onTextDelta) {
+      onTextDelta("partial");
+      throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    },
+  };
+  const agent = new Agent({ provider: "openai", providerId: "primary", model: "test", cwd, autoApprove: true }, provider, [], async () => true, { onTextDelta: () => {} });
+  agent.setFailoverController({ async resolve() { resolutions++; return {}; } });
+
+  await assert.rejects(agent.run("do not duplicate output"), /connection reset/);
+  assert.equal(resolutions, 0);
+});
+
+test("context compaction uses the failover chain without exposing tools or partial output", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-compact-failover-"));
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const primary: ModelProvider = {
+    async complete() {
+      primaryCalls++;
+      if (primaryCalls === 1) return { text: "seed response", toolCalls: [], raw: {} };
+      throw Object.assign(new Error("upstream temporarily unavailable"), { status: 503 });
+    },
+  };
+  const fallback: ModelProvider = {
+    async complete(system, _messages, tools) {
+      fallbackCalls++;
+      assert.match(system, /CONTEXT CHECKPOINT COMPACTION/);
+      assert.deepEqual(tools, []);
+      return { text: "Current progress: preserved on backup\nNext action: continue", toolCalls: [], raw: {} };
+    },
+  };
+  const config: AgentConfig = { provider: "openai", providerId: "primary", model: "primary-model", cwd, autoApprove: true };
+  const switches: string[] = [];
+  const failures: string[] = [];
+  const agent = new Agent(config, primary, [], async () => true, {
+    onProviderFailover: ({ fromProviderId, toProviderId }) => switches.push(`${fromProviderId}->${toProviderId}`),
+    onFailure: (message) => failures.push(message),
+  });
+  agent.setFailoverController({
+    async resolve(request) {
+      assert.equal(request.requiresTools, false);
+      return { candidate: { config: { ...config, providerId: "backup", model: "backup-model" }, provider: fallback, tools: [], label: "Backup" } };
+    },
+  });
+
+  assert.equal(await agent.run("seed the conversation"), "seed response");
+  assert.match(await agent.compact(), /Compacted context/);
+  assert.equal(primaryCalls, 4);
+  assert.equal(fallbackCalls, 1);
+  assert.deepEqual(switches, ["primary->backup"]);
+  assert.deepEqual(failures, []);
+  assert.equal(agent.status().model, "backup-model");
 });

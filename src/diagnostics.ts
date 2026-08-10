@@ -44,6 +44,10 @@ export interface TaskDiagnosticSnapshot {
     byName: Array<{ name: string; calls: number; failures: number; totalMs: number }>;
   };
   approvals: { requests: number; denied: number; waitMs: number };
+  providerFailovers?: {
+    switches: number;
+    events: Array<{ at: string; fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string }>;
+  };
   compactions: number;
   progress: { lastAt: string; operationsSince: number; distinctOperations: number; consecutiveFailures: number };
   failures: DiagnosticFailure[];
@@ -156,6 +160,15 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
     const entry = failure as Record<string, unknown>;
     return validDate(entry.at) && ["model", "tool"].includes(String(entry.category)) && typeof entry.operation === "string" && entry.operation.length <= MAX_OPERATION_CHARACTERS && typeof entry.message === "string" && entry.message.length <= MAX_MESSAGE_CHARACTERS && finiteInteger(entry.durationMs);
   })) return false;
+  if (item.providerFailovers !== undefined) {
+    const failovers = item.providerFailovers as Record<string, unknown>;
+    if (!finiteInteger(failovers.switches) || !Array.isArray(failovers.events) || failovers.events.length > 12 || !failovers.events.every((event) => {
+      if (!event || typeof event !== "object") return false;
+      const entry = event as Record<string, unknown>;
+      return validDate(entry.at)
+        && [entry.fromProviderId, entry.fromModel, entry.toProviderId, entry.toModel, entry.reason].every((field) => typeof field === "string" && field.length <= MAX_MESSAGE_CHARACTERS);
+    })) return false;
+  }
   return true;
 }
 
@@ -173,6 +186,7 @@ export class TaskDiagnostics {
   private model = { attempts: 0, completed: 0, failures: 0, retries: 0, inputTokens: 0, outputTokens: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
   private tools = { calls: 0, failures: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
   private approvals = { requests: 0, denied: 0, waitMs: 0 };
+  private providerFailovers: NonNullable<TaskDiagnosticSnapshot["providerFailovers"]> = { switches: 0, events: [] };
   private toolStats = new Map<string, { calls: number; failures: number; totalMs: number }>();
   private compactions = 0;
   private lastProgressAtMs: number;
@@ -191,6 +205,7 @@ export class TaskDiagnostics {
       this.model = { ...restored.model, slowestOperation: restored.model.slowestOperation };
       this.tools = { calls: restored.tools.calls, failures: restored.tools.failures, totalMs: restored.tools.totalMs, slowestMs: restored.tools.slowestMs, slowestOperation: restored.tools.slowestOperation };
       this.approvals = { ...restored.approvals };
+      this.providerFailovers = restored.providerFailovers ? structuredClone(restored.providerFailovers) : { switches: 0, events: [] };
       this.toolStats = new Map(restored.tools.byName.map((row) => [row.name, { calls: row.calls, failures: row.failures, totalMs: row.totalMs }]));
       this.compactions = restored.compactions;
       this.lastProgressAtMs = Date.parse(restored.progress.lastAt);
@@ -301,6 +316,20 @@ export class TaskDiagnostics {
     this.touch();
   }
 
+  recordProviderFailover(fromProviderId: string, fromModel: string, toProviderId: string, toModel: string, reason: string): void {
+    this.providerFailovers.switches++;
+    this.providerFailovers.events.push({
+      at: iso(this.touch()),
+      fromProviderId: bounded(fromProviderId, 100),
+      fromModel: bounded(fromModel, 200),
+      toProviderId: bounded(toProviderId, 100),
+      toModel: bounded(toModel, 200),
+      reason: bounded(redactText(reason), MAX_MESSAGE_CHARACTERS),
+    });
+    if (this.providerFailovers.events.length > 12) this.providerFailovers.events.shift();
+    this.markProgress();
+  }
+
   cancelActive(): void {
     const now = this.touch();
     if (this.approvalStartedAt !== undefined) this.approvals.waitMs += Math.max(0, now - this.approvalStartedAt);
@@ -370,6 +399,7 @@ export class TaskDiagnostics {
           .slice(0, MAX_TOOL_NAMES),
       },
       approvals: { ...this.approvals },
+      providerFailovers: structuredClone(this.providerFailovers),
       compactions: this.compactions,
       progress: { lastAt: iso(this.lastProgressAtMs), operationsSince: this.operationsSinceProgress, distinctOperations: this.distinctOperations, consecutiveFailures: this.consecutiveFailures },
       failures: this.failures.map((failure) => ({ ...failure })),
@@ -514,6 +544,10 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
   if (recommendation) lines.push(localize(language, `建议：${recommendation}`, `Recommendation: ${recommendation}`));
   if (snapshot.model.slowestOperation) lines.push(localize(language, `最慢模型：${duration(snapshot.model.slowestMs)} · ${snapshot.model.slowestOperation}`, `Slowest model: ${duration(snapshot.model.slowestMs)} · ${snapshot.model.slowestOperation}`));
   if (snapshot.tools.slowestOperation) lines.push(localize(language, `最慢工具：${duration(snapshot.tools.slowestMs)} · ${snapshot.tools.slowestOperation}`, `Slowest tool: ${duration(snapshot.tools.slowestMs)} · ${snapshot.tools.slowestOperation}`));
+  if (snapshot.providerFailovers?.switches) {
+    lines.push(localize(language, `Provider 故障转移：${snapshot.providerFailovers.switches} 次`, `Provider failovers: ${snapshot.providerFailovers.switches}`));
+    lines.push(...snapshot.providerFailovers.events.slice(-6).map((event) => `  ${event.fromProviderId}/${event.fromModel} -> ${event.toProviderId}/${event.toModel} · ${event.reason}`));
+  }
   if (snapshot.tools.byName.length) lines.push(localize(language, "工具耗时：", "Tool time:"), ...snapshot.tools.byName.slice(0, 8).map((row) => `  ${row.name}: ${row.calls} × · ${duration(row.totalMs)}${row.failures ? ` · ${localize(language, `失败 ${row.failures}`, `${row.failures} failed`)}` : ""}`));
   if (failures) lines.push(localize(language, "最近失败：", "Recent failures:"), ...snapshot.failures.slice(-6).map((failure) => `  ${failure.category} · ${failure.operation} · ${failure.message}`));
   return lines.join("\n");

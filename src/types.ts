@@ -69,6 +69,8 @@ export interface ApprovalRequest {
   description: string;
   risk: Exclude<ToolRisk, "read">;
   preview?: string;
+  /** Optional narrowly scoped permission that may be remembered for the current Xiu process. */
+  sessionScope?: string;
 }
 
 export interface ToolContext {
@@ -80,6 +82,8 @@ export interface ToolContext {
 
 export interface AgentTool extends ToolDefinition {
   risk: ToolRisk | ((input: Record<string, unknown>) => ToolRisk);
+  /** Enables an explicit "always allow for this session" choice for this exact operation family. */
+  approvalScope?: string | ((input: Record<string, unknown>) => string | undefined);
   describe(input: Record<string, unknown>): string;
   validate?(input: Record<string, unknown>): void;
   preview?(input: Record<string, unknown>, context: ToolContext): Promise<string>;

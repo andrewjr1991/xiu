@@ -52,6 +52,12 @@ export function localizeToolDescription(name: string, description: string, langu
 export function localizeToolProgress(message: string, language: UiLanguage): string {
   if (language !== "zh-CN") return message;
   return message
+    .replace(/^Submitting potentially billable image request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的图片请求 $1，模型：")
+    .replace(/^Resuming download for image request\s+/i, "正在继续下载图片请求：")
+    .replace(/^Submitting potentially billable video request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的视频请求 $1，模型：")
+    .replace(/^Resuming video request\s+/i, "正在恢复视频请求：")
+    .replace(/^Video\s+(.+?):\s+status service busy; retrying poll in\s+(\d+)s/i, "视频任务 $1：状态服务繁忙，$2 秒后重试查询")
+    .replace(/^Video\s+(.+?):\s*/i, "视频任务 $1：")
     .replace(/^Generating image with\s+/i, "正在使用以下模型生成图片：")
     .replace(/^Submitting video to\s+/i, "正在向以下模型提交视频任务：")
     .replace(/^Downloading completed video\s+/i, "正在下载已完成的视频：")

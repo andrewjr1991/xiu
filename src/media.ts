@@ -47,13 +47,28 @@ function trimSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function apiError(status: number, body: string): Error {
+export class MediaApiError extends Error {
+  constructor(message: string, readonly status: number, readonly retryAfterMs?: number) {
+    super(message);
+    this.name = "MediaApiError";
+  }
+}
+
+function retryAfterMilliseconds(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
+function apiError(status: number, body: string, retryAfter?: string | null): Error {
   let message = body;
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
     message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message ?? body;
   } catch { /* retain raw body */ }
-  return new Error(`Media API request failed (${status}): ${message.slice(0, 1000)}`);
+  return new MediaApiError(`Media API request failed (${status}): ${message.slice(0, 1000)}`, status, retryAfterMilliseconds(retryAfter ?? null));
 }
 
 function parseTask(value: unknown): VideoTask {
@@ -94,7 +109,7 @@ export class AgnesMediaBackend implements MediaBackend {
       dispatcher: this.dispatcher,
     });
     const text = await response.text();
-    if (!response.ok) throw apiError(response.status, text);
+    if (!response.ok) throw apiError(response.status, text, response.headers.get("retry-after"));
     return text ? JSON.parse(text) : {};
   }
 
@@ -169,7 +184,7 @@ export class AgnesMediaBackend implements MediaBackend {
       dispatcher: this.dispatcher,
     });
     const text = await response.text();
-    if (!response.ok) throw apiError(response.status, text);
+    if (!response.ok) throw apiError(response.status, text, response.headers.get("retry-after"));
     const task = parseTask(text ? JSON.parse(text) : {});
     if (!task.id) task.id = id;
     return task;

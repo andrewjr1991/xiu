@@ -20,6 +20,7 @@ import { executeTool, formatProcessInvocation, looksLikeVerification } from "./t
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
+import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -35,10 +36,12 @@ export interface AgentEvents {
   onCompaction?: (message: string) => void;
   onRetry?: (message: string) => void;
   onFailure?: (message: string) => void;
+  onProviderFailover?: (details: { fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
+  onProviderFailoverUnavailable?: (details: { providerId: string; model: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
   onPlanUpdate?: (plan: TaskPlan) => void;
   onWorkspaceChange?: (change: WorkspaceChangeNotice) => void;
   onCheckpoint?: (message: string) => void;
-  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified"; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
+  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified" | "failed"; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
 }
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled";
@@ -66,6 +69,9 @@ export class Agent {
   private lastRunOutcome: AgentRunOutcome = "idle";
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
+  private failoverController?: ProviderFailoverController;
+  private taskFailoverOriginProviderId?: string;
+  private taskAttemptedProviders = new Set<string>();
 
   constructor(
     private config: AgentConfig,
@@ -102,6 +108,8 @@ export class Agent {
     this.steeringHistory = [];
     this.toolEvidence = [];
     this.taskDiagnostics = new TaskDiagnostics(task.trim());
+    this.taskFailoverOriginProviderId = this.config.providerId;
+    this.taskAttemptedProviders = new Set([this.config.providerId]);
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
@@ -122,6 +130,8 @@ export class Agent {
       this.pendingSteering = [];
       this.primaryTask = undefined;
       this.steeringHistory = [];
+      this.taskFailoverOriginProviderId = undefined;
+      this.taskAttemptedProviders.clear();
     }
   }
 
@@ -142,6 +152,10 @@ export class Agent {
 
   replaceTools(tools: AgentTool[]): void {
     this.tools = [...tools];
+  }
+
+  setFailoverController(controller: ProviderFailoverController | undefined): void {
+    this.failoverController = controller;
   }
 
   async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
@@ -206,6 +220,7 @@ export class Agent {
     let auditedSteeringCount = 0;
     let planReminderSent = false;
     let toolCallCount = 0;
+    let lastToolFailed = false;
     const loopGuard = new ToolLoopGuard();
     for (let turn = 1; ; turn++) {
       if (this.config.maxTurns !== undefined && turn > this.config.maxTurns) {
@@ -275,7 +290,7 @@ export class Agent {
           completionReminderSent = true;
           continue;
         }
-        const outcome = workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
+        const outcome = lastToolFailed ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
         this.lastRunOutcome = outcome;
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
@@ -291,6 +306,8 @@ export class Agent {
         return response.text;
       }
 
+      let toolBatchSucceeded = false;
+      let toolBatchFailed = false;
       for (const call of response.toolCalls) {
         toolCallCount++;
         this.stats.toolCalls++;
@@ -301,6 +318,7 @@ export class Agent {
         if (!tool) {
           result = `Unknown tool: ${call.name}`;
         } else {
+          try {
           const description = tool.describe(call.input);
           const risk = typeof tool.risk === "function" ? tool.risk(call.input) : tool.risk;
           const changesWorkspace = typeof tool.changesWorkspace === "function"
@@ -371,7 +389,16 @@ export class Agent {
             this.taskDiagnostics?.recordProgress();
           }
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            result = `Tool error: invalid arguments for ${call.name}: ${message}`;
+            this.events.onToolEnd?.(call.name, result);
+            this.events.onFailure?.(`${call.name}: ${result}`);
+          }
         }
+        const callFailed = this.toolResultFailed(result) || /^Tool execution denied by user\./i.test(result);
+        if (callFailed) toolBatchFailed = true;
+        else toolBatchSucceeded = true;
         const diagnosticOutcome = /^Tool execution denied by user\./i.test(result) ? "denied" : (this.toolResultFailed(result) ? "failure" : "success");
         this.taskDiagnostics?.finishTool(diagnosticOutcome, result);
         this.recordToolEvidence(call.name, call.input, result);
@@ -389,6 +416,7 @@ export class Agent {
         await this.checkpointDiagnostics();
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
+      lastToolFailed = toolBatchFailed && !toolBatchSucceeded;
     }
   }
 
@@ -603,24 +631,28 @@ export class Agent {
     let usage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
     const diagnoseCompaction = this.lastRunOutcome === "running" ? this.taskDiagnostics : undefined;
     diagnoseCompaction?.recordCompaction();
-    diagnoseCompaction?.beginModel("context compaction", 1);
     try {
-      const response = await this.provider.complete(
-        "You are performing a CONTEXT CHECKPOINT COMPACTION for a coding agent; in other words, you compact coding-agent context. Produce a concise, factual handoff for the next model. Use these headings: Current progress; Completed evidence; Key findings and decisions; Failed approaches (do not repeat); Files and exact commands; Next action; Verification status; Constraints. Never replace or weaken the authoritative task contract. Distinguish completed facts from intended work. Do not call tools or add conversational commentary.",
-        [{ role: "user", content: `${taskContract}\n\nFULL TRANSCRIPT TO COMPACT:\n${transcript}` }],
-        [],
-        signal,
-      );
+      const previousMessages = this.messages;
+      const previousSystem = this.system;
+      const previousDiagnostics = this.taskDiagnostics;
+      this.messages = [{ role: "user", content: `${taskContract}\n\nFULL TRANSCRIPT TO COMPACT:\n${transcript}` }];
+      this.system = "You are performing a CONTEXT CHECKPOINT COMPACTION for a coding agent; in other words, you compact coding-agent context. Produce a concise, factual handoff for the next model. Use these headings: Current progress; Completed evidence; Key findings and decisions; Failed approaches (do not repeat); Files and exact commands; Next action; Verification status; Constraints. Never replace or weaken the authoritative task contract. Distinguish completed facts from intended work. Do not call tools or add conversational commentary.";
+      this.taskDiagnostics = diagnoseCompaction;
+      let response: Awaited<ReturnType<ModelProvider["complete"]>>;
+      try {
+        ({ response } = await this.requestModel(signal, false, false, [], "context compaction"));
+      } finally {
+        this.messages = previousMessages;
+        this.system = previousSystem;
+        this.taskDiagnostics = previousDiagnostics;
+      }
       summary = this.boundCheckpointSummary(response.text);
       usage = response.usage;
-      diagnoseCompaction?.finishModel(response.usage ?? { inputTokens: estimateConversationTokens([{ role: "user", content: transcript }]), outputTokens: Math.ceil(response.text.length / 4) }, true);
       this.recordUsage(response.usage, response.text);
     } catch (error) {
       if (signal.aborted) {
-        diagnoseCompaction?.cancelActive();
         throw error;
       }
-      diagnoseCompaction?.finishModel(undefined, false, error instanceof Error ? error.message : String(error));
       const userGoals = this.recentUserGoals().slice(0, 8).map((message) => message.slice(0, 2500));
       const recent = this.messages.slice(-12).map((message) => `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content.slice(0, 2500)}`);
       summary = this.boundCheckpointSummary(`Model-assisted compaction failed (${error instanceof Error ? error.message : String(error)}). Local continuation brief:\nRecent user goals:\n${userGoals.join("\n---\n")}\n\nRecent activity:\n${recent.join("\n\n")}`);
@@ -720,17 +752,20 @@ export class Agent {
     ).join("\n");
   }
 
-  private async requestModel(signal: AbortSignal, allowStreaming = true): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
+  private async requestModel(signal: AbortSignal, allowStreaming = true, reportFailure = true, toolOverride?: AgentTool[], operationOverride?: string): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
     const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const originProviderId = this.taskFailoverOriginProviderId ?? this.config.providerId;
+    this.taskAttemptedProviders.add(this.config.providerId);
+    let attempt = 1;
+    for (;;) {
       let emitted = false;
-      const operation = `turn ${this.currentTurn}`;
+      const operation = operationOverride ?? `turn ${this.currentTurn}`;
       const estimatedInput = estimateConversationTokens(this.messages);
       this.taskDiagnostics?.beginModel(operation, attempt);
       try {
         let response: Awaited<ReturnType<ModelProvider["complete"]>>;
         let streamed = false;
-        const modelTools = this.config.providerFeatures?.tools === false ? [] : this.tools;
+        const modelTools = toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools);
         if (allowStreaming && this.provider.stream && this.events.onTextDelta) {
           response = await this.provider.stream(this.system!, this.messages, modelTools, (delta) => {
             emitted = true;
@@ -751,25 +786,75 @@ export class Agent {
         }
         this.taskDiagnostics?.finishModel(undefined, false, error instanceof Error ? error.message : String(error));
         await this.checkpointDiagnostics();
-        if (emitted || attempt === maxAttempts || !this.isTransientError(error)) {
-          this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
+        const transient = isTransientProviderError(error);
+        if (emitted || !transient) {
+          if (reportFailure) this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
           throw error;
         }
-        const delayMs = 500 * 2 ** (attempt - 1);
-        this.events.onRetry?.(localize(this.config.language ?? "en-US", `模型暂时出错；${delayMs}ms 后重试 ${attempt + 1}/${maxAttempts}`, `Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`));
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delayMs);
-          signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Task cancelled.")); }, { once: true });
+        if (attempt < maxAttempts) {
+          const delayMs = 500 * 2 ** (attempt - 1);
+          this.events.onRetry?.(localize(this.config.language ?? "en-US", `模型暂时出错；${delayMs}ms 后重试 ${attempt + 1}/${maxAttempts}`, `Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`));
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, delayMs);
+            signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Task cancelled.")); }, { once: true });
+          });
+          attempt++;
+          continue;
+        }
+
+        const failedProviderId = this.config.providerId;
+        const failedModel = this.config.model;
+        let resolution;
+        try {
+          resolution = await this.failoverController?.resolve({
+            originProviderId,
+            currentProviderId: failedProviderId,
+            currentModel: failedModel,
+            attemptedProviderIds: [...this.taskAttemptedProviders],
+            error,
+            estimatedInputTokens: estimatedInput,
+            requiresTools: (toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools)).length > 0,
+          });
+        } catch (failoverError) {
+          resolution = { reason: failoverError instanceof Error ? failoverError.message : String(failoverError) };
+        }
+        if (!resolution?.candidate) {
+          const reason = resolution?.reason ?? localize(this.config.language ?? "en-US", "没有配置可用的备用 Provider", "No usable fallback provider is configured");
+          if (reportFailure) {
+            this.events.onProviderFailoverUnavailable?.({ providerId: failedProviderId, model: failedModel, reason, skipped: resolution?.skipped ?? [] });
+            this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
+          }
+          throw error;
+        }
+
+        const candidate = resolution.candidate;
+        Object.assign(this.config, candidate.config);
+        this.provider = candidate.provider;
+        this.tools = [...candidate.tools];
+        this.taskAttemptedProviders.add(candidate.config.providerId);
+        const reason = safeProviderErrorMessage(error);
+        this.taskDiagnostics?.recordProviderFailover(failedProviderId, failedModel, candidate.config.providerId, candidate.config.model, reason);
+        if (this.sessionPath) await this.log(this.sessionPath, {
+          type: "provider_failover",
+          fromProviderId: failedProviderId,
+          fromModel: failedModel,
+          toProviderId: candidate.config.providerId,
+          toModel: candidate.config.model,
+          reason,
+          skipped: resolution.skipped ?? [],
         });
+        this.events.onProviderFailover?.({
+          fromProviderId: failedProviderId,
+          fromModel: failedModel,
+          toProviderId: candidate.config.providerId,
+          toModel: candidate.config.model,
+          reason,
+          skipped: resolution.skipped ?? [],
+        });
+        await this.checkpointDiagnostics();
+        attempt = 1;
       }
     }
-    throw new Error("Model request failed after retries.");
-  }
-
-  private isTransientError(error: unknown): boolean {
-    const value = error as { status?: number; code?: string; message?: string };
-    return value.status === 408 || value.status === 409 || value.status === 429 || (typeof value.status === "number" && value.status >= 500)
-      || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|temporar|rate limit/i.test(`${value.code ?? ""} ${value.message ?? ""}`);
   }
 
   private toolResultFailed(result: string): boolean {

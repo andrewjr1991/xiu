@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentConfig } from "./config.js";
-import { createMediaBackend, type MediaBackend, type VideoTask } from "./media.js";
+import { createMediaBackend, MediaApiError, type MediaBackend, type VideoTask } from "./media.js";
+import { mediaOperationKey, mediaRetryBlocked, MediaOperationStore } from "./media-operations.js";
+import { safeProviderErrorMessage } from "./provider-failover.js";
 import { resolveWorkspacePath } from "./tools.js";
 import type { AgentTool } from "./types.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const RATIOS = new Set(["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]);
+const VIDEO_POLL_INTERVAL_MS = 30_000;
 
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
@@ -43,6 +46,15 @@ async function saveAsset(cwd: string, outputPath: string, bytes: Buffer): Promis
   return path.relative(cwd, target);
 }
 
+async function existingAsset(cwd: string, relativePath: string | undefined): Promise<Buffer | undefined> {
+  if (!relativePath) return undefined;
+  try { return await fs.readFile(resolveWorkspacePath(cwd, relativePath)); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("Task cancelled."));
@@ -62,6 +74,29 @@ function failed(task: VideoTask): boolean {
   return ["failed", "error", "cancelled", "canceled"].includes(task.status);
 }
 
+function mediaStatus(error: unknown): number | undefined {
+  if (error instanceof MediaApiError) return error.status;
+  const match = (error instanceof Error ? error.message : String(error)).match(/\((\d{3})\)/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function retryDelay(error: unknown, polling: boolean): number {
+  if (error instanceof MediaApiError && error.retryAfterMs !== undefined) return Math.max(1_000, error.retryAfterMs);
+  const message = error instanceof Error ? error.message : String(error);
+  const quota = message.match(/allows\s+(\d+)\s+requests?\s+per\s+(\d+)\s+minute/i);
+  if (quota) return Math.max(1_000, Math.ceil((Number(quota[2]) * 60_000) / Math.max(1, Number(quota[1]))));
+  return polling ? 30_000 : 60_000;
+}
+
+function isRetryableMediaStatus(status: number | undefined): boolean {
+  return status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500 && status <= 599);
+}
+
+function cooldownMessage(requestId: string, retryAfterAt: string): string {
+  const seconds = Math.max(1, Math.ceil((Date.parse(retryAfterAt) - Date.now()) / 1000));
+  return `Media provider cooldown is active after request ${requestId}. Wait about ${seconds}s before submitting another paid request. Existing video task polling and asset downloads may still resume safely.`;
+}
+
 export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBackend): AgentTool[] {
   let backend = suppliedBackend;
   const getBackend = (): MediaBackend => backend ??= createMediaBackend(config);
@@ -71,6 +106,8 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
     image: "agnes-image-2.1-flash",
     video: "agnes-video-v2.0",
   };
+  const operations = new MediaOperationStore(config.cwd);
+  const providerId = config.providerId ?? config.provider;
 
   const tools: AgentTool[] = [];
   const features = config.providerFeatures;
@@ -94,7 +131,8 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
   if ((suppliedBackend?.generateImage && suppliedBackend.download) || ((features?.image ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.image))) tools.push({
       name: "generate_image",
       description: "Generate or edit an image with the configured image model and save it in the workspace. Reference images may be workspace paths, URLs, or data URIs.",
-      risk: "execute",
+      risk: () => "dangerous",
+      approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:image",
       changesWorkspace: true,
       inputSchema: {
         type: "object",
@@ -104,6 +142,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           size: { type: "string", enum: ["1K", "2K", "3K", "4K"], default: "1K" },
           ratio: { type: "string", enum: [...RATIOS], default: "1:1" },
           reference_images: { type: "array", items: { type: "string" } },
+          force_new_generation: { type: "boolean", description: "Submit another potentially billable request after an ambiguous or failed prior attempt. Requires explicit approval." },
         },
         required: ["prompt", "output_path"], additionalProperties: false,
       },
@@ -116,22 +155,78 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       async execute(input, context) {
         const references = optionalStrings(input, "reference_images");
         const images = references ? await Promise.all(references.map((value) => imageSource(context.cwd, value))) : undefined;
-        context.reportProgress?.(`Generating image with ${models.image}`);
-        const result = await getBackend().generateImage!({
+        const request = {
           prompt: requiredString(input, "prompt"),
           size: typeof input.size === "string" ? input.size : "1K",
           ratio: typeof input.ratio === "string" ? input.ratio : "1:1",
           images,
-        }, context.signal);
-        const bytes = result.b64Json ? Buffer.from(result.b64Json, "base64") : await getBackend().download!(result.url!, context.signal);
-        const saved = await saveAsset(context.cwd, requiredString(input, "output_path"), bytes);
-        return `Generated image with ${models.image}\nSaved: ${saved}\n${result.url ? `Source URL: ${result.url}` : "Source: base64 response"}`;
+        };
+        const key = mediaOperationKey("image", providerId, models.image!, request);
+        const existing = await operations.get(key);
+        if (input.force_new_generation === true && !existing) throw new Error("force_new_generation is only valid for the exact matching request after a previous ambiguous or failed submission. It must not be used to bypass normal media safeguards.");
+        const cooldown = input.force_new_generation === true || !existing ? await operations.cooldown("image", providerId, models.image!) : undefined;
+        if (cooldown?.retryAfterAt) throw new Error(cooldownMessage(cooldown.requestId, cooldown.retryAfterAt));
+        let operation = existing && input.force_new_generation !== true
+          ? existing
+          : await operations.begin({ key, kind: "image", providerId, model: models.image! }, input.force_new_generation === true);
+        if (existing && input.force_new_generation !== true) {
+          const blocked = mediaRetryBlocked(operation);
+          if (blocked) throw new Error(blocked);
+        }
+        const outputPath = requiredString(input, "output_path");
+        let bytes = await existingAsset(context.cwd, operation.savedPath) ?? await existingAsset(context.cwd, operation.cachedAsset);
+        if (operation.status === "completed" && bytes) {
+          const saved = await saveAsset(context.cwd, outputPath, bytes);
+          await operations.update(key, { savedPath: saved });
+          return `Reused completed image request ${operation.requestId}; no new generation charge.\nSaved: ${saved}`;
+        }
+        if (!bytes && operation.url) {
+          context.reportProgress?.(`Resuming download for image request ${operation.requestId}`);
+          try {
+            bytes = await getBackend().download!(operation.url, context.signal);
+          } catch (error) {
+            throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error)}`);
+          }
+        }
+        if (!bytes) {
+          context.reportProgress?.(`Submitting potentially billable image request ${operation.requestId} to ${models.image}`);
+          let result;
+          try {
+            result = await getBackend().generateImage!(request, context.signal);
+          } catch (error) {
+            const reason = safeProviderErrorMessage(error);
+            const status = mediaStatus(error);
+            if (status !== undefined) {
+              const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
+              await operations.update(key, { status: "failed", error: reason, retryAfterAt });
+              throw new Error(`Image request ${operation.requestId} was rejected before an asset was returned${retryAfterAt ? `; new submissions are paused until ${retryAfterAt}` : ""}: ${reason}`);
+            }
+            await operations.update(key, { status: "ambiguous", error: reason });
+            throw new Error(`Image request ${operation.requestId} failed with an unknown submission outcome and was not retried: ${reason}`);
+          }
+          if (result.b64Json) {
+            bytes = Buffer.from(result.b64Json, "base64");
+            const cachedAsset = await operations.cacheAsset(operation.requestId, path.extname(outputPath).toLowerCase(), bytes);
+            operation = await operations.update(key, { status: "asset_ready", cachedAsset });
+          } else {
+            operation = await operations.update(key, { status: "asset_ready", url: result.url });
+            try {
+              bytes = await getBackend().download!(result.url!, context.signal);
+            } catch (error) {
+              throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error)}`);
+            }
+          }
+        }
+        const saved = await saveAsset(context.cwd, outputPath, bytes);
+        operation = await operations.update(key, { status: "completed", savedPath: saved });
+        return `Generated image with ${models.image}\nRequest: ${operation.requestId}\nSaved: ${saved}\n${operation.url ? `Source URL: ${operation.url}` : "Source: cached base64 response"}`;
       },
     });
   if ((suppliedBackend?.createVideo && suppliedBackend.getVideo && suppliedBackend.download) || ((features?.video ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.video))) tools.push({
       name: "generate_video",
       description: "Create a video asynchronously with the configured video model, report progress, and save the completed MP4 in the workspace. image_url and keyframe_urls must be public HTTP(S) URLs.",
-      risk: "execute",
+      risk: () => "dangerous",
+      approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:video",
       changesWorkspace: true,
       inputSchema: {
         type: "object",
@@ -147,6 +242,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           negative_prompt: { type: "string" },
           seed: { type: "integer" },
           timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 },
+          force_new_generation: { type: "boolean", description: "Create another potentially billable video task after an ambiguous or failed prior attempt. Requires explicit approval." },
         },
         required: ["prompt", "output_path"], additionalProperties: false,
       },
@@ -160,8 +256,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       },
       async execute(input, context) {
         const timeoutMs = (typeof input.timeout_seconds === "number" ? input.timeout_seconds : 600) * 1000;
-        context.reportProgress?.(`Submitting video to ${models.video}`);
-        let task = await getBackend().createVideo!({
+        const request = {
           prompt: requiredString(input, "prompt"),
           image: typeof input.image_url === "string" ? input.image_url : undefined,
           keyframes: optionalStrings(input, "keyframe_urls"),
@@ -171,20 +266,101 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           frameRate: typeof input.frame_rate === "number" ? input.frame_rate : 24,
           negativePrompt: typeof input.negative_prompt === "string" ? input.negative_prompt : undefined,
           seed: typeof input.seed === "number" ? input.seed : undefined,
-        }, context.signal);
+        };
+        const key = mediaOperationKey("video", providerId, models.video!, request);
+        const existing = await operations.get(key);
+        if (input.force_new_generation === true && !existing) throw new Error("force_new_generation is only valid for the exact matching request after a previous ambiguous or failed submission. It must not be used to create a new prompt variant.");
+        const cooldown = input.force_new_generation === true || !existing ? await operations.cooldown("video", providerId, models.video!) : undefined;
+        if (cooldown?.retryAfterAt) throw new Error(cooldownMessage(cooldown.requestId, cooldown.retryAfterAt));
+        let operation = existing && input.force_new_generation !== true
+          ? existing
+          : await operations.begin({ key, kind: "video", providerId, model: models.video! }, input.force_new_generation === true);
+        if (existing && input.force_new_generation !== true) {
+          const blocked = mediaRetryBlocked(operation);
+          if (blocked) throw new Error(blocked);
+        }
+        const outputPath = requiredString(input, "output_path");
+        let bytes = await existingAsset(context.cwd, operation.savedPath) ?? await existingAsset(context.cwd, operation.cachedAsset);
+        if (operation.status === "completed" && bytes) {
+          const saved = await saveAsset(context.cwd, outputPath, bytes);
+          await operations.update(key, { savedPath: saved });
+          return `Reused completed video request ${operation.requestId}; no new generation charge.\nTask: ${operation.taskId ?? "completed"}\nSaved: ${saved}`;
+        }
+        let task: VideoTask;
+        let resumePollImmediately = false;
+        if (operation.taskId) {
+          task = { id: operation.taskId, status: operation.status === "asset_ready" ? "completed" : "submitted", url: operation.url };
+          resumePollImmediately = !operation.url;
+          context.reportProgress?.(`Resuming video request ${operation.requestId} (task ${operation.taskId})`);
+        } else if (operation.url) {
+          task = { id: operation.requestId, status: "completed", url: operation.url };
+        } else {
+          context.reportProgress?.(`Submitting potentially billable video request ${operation.requestId} to ${models.video}`);
+          try {
+            task = await getBackend().createVideo!(request, context.signal);
+          } catch (error) {
+            const reason = safeProviderErrorMessage(error);
+            const status = mediaStatus(error);
+            if (status !== undefined) {
+              const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
+              await operations.update(key, { status: "failed", error: reason, retryAfterAt });
+              throw new Error(`Video request ${operation.requestId} was rejected before a task ID was returned${retryAfterAt ? `; new submissions are paused until ${retryAfterAt}` : ""}: ${reason}`);
+            }
+            await operations.update(key, { status: "ambiguous", error: reason });
+            throw new Error(`Video request ${operation.requestId} failed with an unknown submission outcome and was not retried: ${reason}`);
+          }
+          operation = await operations.update(key, {
+            status: task.url ? "asset_ready" : "submitted",
+            taskId: task.id || undefined,
+            url: task.url,
+          });
+        }
         const deadline = Date.now() + timeoutMs;
         while (!completed(task) && !failed(task) && !task.url) {
-          if (Date.now() >= deadline) throw new Error(`Video generation timed out after ${timeoutMs / 1000}s (task ${task.id})`);
+          if (Date.now() >= deadline) throw new Error(`Video request ${operation.requestId} timed out after ${timeoutMs / 1000}s. Task ${task.id} was preserved; repeat the same request to resume polling without creating another task.`);
           const progress = task.progress === undefined ? task.status : `${task.status} ${Math.round(task.progress)}%`;
           context.reportProgress?.(`Video ${task.id}: ${progress}`);
-          await delay(3000, context.signal);
-          task = await getBackend().getVideo!(task.id, context.signal);
+          if (resumePollImmediately) resumePollImmediately = false;
+          else await delay(VIDEO_POLL_INTERVAL_MS, context.signal);
+          try {
+            task = await getBackend().getVideo!(task.id, context.signal);
+          } catch (error) {
+            const status = mediaStatus(error);
+            if (isRetryableMediaStatus(status)) {
+              const waitMs = retryDelay(error, true);
+              if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${task.id} is still preserved, but polling could not recover before the ${timeoutMs / 1000}s timeout: ${safeProviderErrorMessage(error)}`);
+              context.reportProgress?.(`Video ${task.id}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
+              await delay(waitMs, context.signal);
+              resumePollImmediately = true;
+              continue;
+            }
+            throw new Error(`Could not poll video task ${task.id}. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error)}`);
+          }
+          operation = await operations.update(key, {
+            status: task.url ? "asset_ready" : "submitted",
+            taskId: task.id,
+            url: task.url,
+          });
         }
-        if (failed(task)) throw new Error(`Video generation failed: ${task.error ?? task.status}`);
+        if (failed(task)) {
+          const reason = task.error ?? task.status;
+          await operations.update(key, { status: "failed", taskId: task.id, error: reason });
+          throw new Error(`Video generation failed: ${reason}`);
+        }
         if (!task.url) throw new Error("Completed video task returned no download URL");
+        operation = await operations.update(key, { status: "asset_ready", taskId: task.id, url: task.url });
         context.reportProgress?.(`Downloading completed video ${task.id}`);
-        const saved = await saveAsset(context.cwd, requiredString(input, "output_path"), await getBackend().download!(task.url, context.signal));
-        return `Generated video with ${models.video}\nTask: ${task.id}\nSaved: ${saved}\nSource URL: ${task.url}`;
+        if (!bytes) {
+          try {
+            bytes = await getBackend().download!(task.url, context.signal);
+          } catch (error) {
+            throw new Error(`Video task ${task.id} completed, but its asset could not be downloaded. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error)}`);
+          }
+        }
+        const cachedAsset = await operations.cacheAsset(operation.requestId, ".mp4", bytes);
+        const saved = await saveAsset(context.cwd, outputPath, bytes);
+        await operations.update(key, { status: "completed", taskId: task.id, url: task.url, cachedAsset, savedPath: saved });
+        return `Generated video with ${models.video}\nRequest: ${operation.requestId}\nTask: ${task.id}\nSaved: ${saved}\nSource URL: ${task.url}`;
       },
     });
   return tools;

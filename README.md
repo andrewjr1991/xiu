@@ -46,7 +46,9 @@ Version 0.10.0 introduces persistent Provider profiles. Xiu includes OpenAI, Ant
 
 Version 0.10.1 adds runtime capability verification per Provider and model. Xiu probes text completion, requests one inert structured tool call, and asks the model to identify the pixels of a fixed built-in color image without reading project files. A non-empty reply alone is not enough, so compatible endpoints that silently ignore image input are not marked as vision-capable. Tool probing first uses a forced named function and then falls back to `tool_choice: auto` for thinking models and compatible gateways that reject forced selection. Only the API's structured `tool_calls` field counts as support; textual pseudo calls are never executed. Results are cached for seven days in `~/.xiu/providers.json`; `/provider test` and `/provider capabilities` force a refresh. The same file persists the last interactively selected Provider and model, which take precedence over legacy environment defaults on the next launch; explicit CLI flags still override them. Probe-protocol upgrades automatically invalidate older cached classifications. `/providers`, `/models`, and `/status` show the same supported, unsupported, unknown, or untested state. Unknown and explicitly unsupported tool or vision capabilities are not exposed to the model. Image and video generation remain adapter-declared because probing them would create paid assets.
 
-The local 0.10.2 candidate clarifies live model state in the scrollback-oriented terminal UI. The welcome card is labelled as a startup snapshot, while the live footer always shows `provider/model` and updates immediately after a switch without clearing terminal history.
+Version 0.10.2 clarifies live model state in the scrollback-oriented terminal UI. The welcome card is labelled as a startup snapshot, while the live footer always shows `provider/model` and updates immediately after a switch without clearing terminal history.
+
+Version 0.11.0 begins Xiu's resilient Provider-routing work. Each primary Provider can have an ordered fallback chain managed with `/provider fallback`, `add`, `remove`, and `clear`. Xiu retries only transient network, rate-limit, timeout, and server failures; after bounded retries it chooses the first fallback whose cached or declared tool capability and context budget satisfy the active request. A switch is allowed only before any response text has streamed, so Xiu never replays a partially visible answer or repeats completed tool side effects. The same safe boundary covers non-streaming context compaction and each parallel sub-agent. Media generation never fails over across providers: it uses a persistent request ledger and asset cache instead, so identical completed requests are reused, image downloads and video tasks resume safely, and an ambiguous potentially billed submission is never replayed without explicit duplicate-charge approval. Every Provider switch and skipped candidate is visible in the terminal, persisted in the session log, and included in `/diagnostics`.
 
 ## Features
 
@@ -56,6 +58,7 @@ The local 0.10.2 candidate clarifies live model state in the scrollback-oriented
 - Live task plans with persistent step status and a read-only planning mode
 - Session-scoped changed-file summaries, Git diffs, file checkpoints, and confirmed restore
 - Automatic retry for transient model failures before output begins
+- Ordered, capability-aware Provider failover at side-effect-safe request boundaries
 - Structured context-checkpoint compaction that preserves the active task contract and continuation state
 - Bounded line and character paging for large, minified, or single-line text files
 - Bounded structured extraction for CSS-selected HTML, JSON Pointer values, and filtered CSV/TSV rows
@@ -394,6 +397,10 @@ xiu -p agnes --unified-model agnes-omni
 ```
 
 The same settings are available as `XIU_VISION_MODEL`, `XIU_IMAGE_MODEL`, `XIU_VIDEO_MODEL`, and `XIU_UNIFIED_MODEL`. These are advanced adapter overrides, not normal requirements for Claude or GPT. `XIU_MEDIA_BASE_URL` can point media operations at a separate gateway. Local reference images are encoded as data URIs; video image inputs must currently be public HTTP(S) URLs as required by the Agnes video API.
+
+Image and video generation requires explicit approval because it may be billable. The approval menu can allow one request or remember that exact media operation family for the current Xiu process; image and video permissions are separate and expire on exit. Xiu records a provider/model/request idempotency key in `.xiu/media-operations.json`: completed requests reuse the cached asset, interrupted image downloads resume from their URL, and video polling/download resumes from the saved task ID. If the initial paid submission has an unknown outcome, Xiu refuses to submit it again automatically; `force_new_generation=true` never inherits a remembered permission and is accepted only after explicit approval of the possible duplicate charge. Media requests are never replayed across Provider failover boundaries.
+
+Video status polling is deliberately rate-limited and absorbs transient 429/503 responses inside the same tool call while preserving the original task ID. A rejected paid submission activates a provider/model cooldown that prompt rewrites cannot bypass, and `force_new_generation=true` is valid only for an exactly matching historical request. Failed or denied tools never produce a green execution receipt; a task whose final operation still failed is reported as incomplete instead of successful with no file changes.
 
 When `--yes` is absent, Xiu asks before writes and project execution. Read-only operations run automatically. With `--yes`, normal writes and execution are approved, but dangerous commands still require explicit confirmation. In a non-interactive process, unapproved actions are denied.
 

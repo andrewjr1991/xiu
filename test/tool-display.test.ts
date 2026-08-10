@@ -28,4 +28,9 @@ test("English mode leaves tool descriptions unchanged", () => {
 
 test("Chinese mode localizes media progress", () => {
   assert.equal(localizeToolProgress("Generating image with image-model", "zh-CN"), "正在使用以下模型生成图片：image-model");
+  assert.equal(localizeToolProgress("Submitting potentially billable image request req-1 to image-model", "zh-CN"), "正在提交可能产生费用的图片请求 req-1，模型：image-model");
+  assert.equal(localizeToolProgress("Resuming download for image request req-1", "zh-CN"), "正在继续下载图片请求：req-1");
+  assert.equal(localizeToolProgress("Submitting potentially billable video request req-2 to video-model", "zh-CN"), "正在提交可能产生费用的视频请求 req-2，模型：video-model");
+  assert.equal(localizeToolProgress("Resuming video request req-2 (task video-1)", "zh-CN"), "正在恢复视频请求：req-2 (task video-1)");
+  assert.equal(localizeToolProgress("Video video-1: status service busy; retrying poll in 30s", "zh-CN"), "视频任务 video-1：状态服务繁忙，30 秒后重试查询");
 });

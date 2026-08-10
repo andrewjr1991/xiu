@@ -13,7 +13,7 @@ import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-
 import { CheckpointManager } from "./checkpoint.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
-import { resolveConfig } from "./config.js";
+import { resolveConfig, type AgentConfig } from "./config.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
@@ -36,6 +36,8 @@ import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
+import type { AgentTool } from "./types.js";
+import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -56,6 +58,10 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/providers", "浏览并切换 Provider", "Browse and switch providers"),
     item("/provider test", "测试当前 Provider 连接", "Test the current provider connection"),
     item("/provider capabilities", "重新探测当前模型能力", "Re-probe current model capabilities"),
+    item("/provider fallback", "查看当前 Provider 的备用链", "Show the current provider failover chain"),
+    item("/provider fallback add", "向备用链末尾添加 Provider", "Append a provider to the failover chain"),
+    item("/provider fallback remove", "从备用链移除 Provider", "Remove a provider from the failover chain"),
+    item("/provider fallback clear", "清空当前 Provider 的备用链", "Clear the current provider failover chain"),
     item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
     item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
@@ -425,6 +431,7 @@ async function main(): Promise<void> {
     };
     let approvalQueue = Promise.resolve();
     let activeApproval = Promise.resolve();
+    const sessionApprovalScopes = new Set<string>();
     const approveRequest = async (request: Parameters<ConstructorParameters<typeof Agent>[3]>[0]): Promise<boolean> => {
       let release!: () => void;
       const previous = approvalQueue;
@@ -433,21 +440,71 @@ async function main(): Promise<void> {
       let finishActiveApproval!: () => void;
       try {
         if (config.autoApprove && request.risk !== "dangerous") return true;
+        if (request.sessionScope && sessionApprovalScopes.has(request.sessionScope)) return true;
         activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
         status.stop();
         activeQueuedInputController?.abort();
         runningTaskView?.discard();
         if (!process.stdin.isTTY) return false;
         if (request.preview) console.log(`${chalk.dim(localize(language, "拟议修改：", "Proposed change:"))}\n${request.preview}\n`);
-        const selected = await selectTerminalOption(localize(language, `${request.risk.toUpperCase()} 审批：允许 Xiu ${request.description}？`, `${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`), [
-          { label: localize(language, "否，拒绝", "No, deny"), description: localize(language, "不执行此操作", "Do not run this operation"), value: false },
-          { label: localize(language, "是，仅允许一次", "Yes, allow once"), description: request.description, value: true },
-        ], language);
-        return selected === true;
+        const options = [
+          { label: localize(language, "否，拒绝", "No, deny"), description: localize(language, "不执行此操作", "Do not run this operation"), value: "deny" as const },
+          { label: localize(language, "是，仅允许一次", "Yes, allow once"), description: request.description, value: "once" as const },
+          ...(request.sessionScope ? [{
+            label: localize(language, "是，本次会话始终允许", "Yes, always allow this session"),
+            description: localize(language, "仅记住这一类操作；重新启动 Xiu 后失效", "Remember only this operation family until Xiu exits"),
+            value: "session" as const,
+          }] : []),
+        ];
+        const selected = await selectTerminalOption(localize(language, `${request.risk.toUpperCase()} 审批：允许 Xiu ${request.description}？`, `${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`), options, language);
+        if (selected === "session" && request.sessionScope) sessionApprovalScopes.add(request.sessionScope);
+        return selected === "once" || selected === "session";
       } finally {
         finishActiveApproval?.();
         release();
       }
+    };
+
+    const resolveProviderFailover = async (
+      request: ProviderFailoverRequest,
+      buildCandidateTools: (candidateConfig: AgentConfig) => AgentTool[],
+    ): Promise<ProviderFailoverResolution> => {
+      const chain = providerRegistry.failoverChain(request.originProviderId);
+      if (!chain.length) return { reason: localize(language, `主 Provider ${request.originProviderId} 未配置备用链`, `No failover chain is configured for primary provider ${request.originProviderId}`) };
+      const skipped: Array<{ providerId: string; reason: string }> = [];
+      for (const providerId of chain) {
+        if (request.attemptedProviderIds.includes(providerId)) {
+          skipped.push({ providerId, reason: localize(language, "本次任务已尝试", "already attempted in this task") });
+          continue;
+        }
+        const profile = providerRegistry.get(providerId);
+        if (!profile) {
+          skipped.push({ providerId, reason: localize(language, "配置不存在", "profile not found") });
+          continue;
+        }
+        const model = providerRegistry.activeModel(providerId) ?? profile.model;
+        const effective = runtimeProfile(profile, model);
+        if (request.requiresTools && !effective.features.tools) {
+          skipped.push({ providerId, reason: localize(language, "当前请求需要工具能力", "the current request requires tool support") });
+          continue;
+        }
+        const candidateConfig = profileConfig(profile, model);
+        const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
+        if (request.estimatedInputTokens >= safeInputLimit) {
+          skipped.push({ providerId, reason: localize(language, `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过安全输入线 ${safeInputLimit.toLocaleString()}`, `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the safe input limit ${safeInputLimit.toLocaleString()}`) });
+          continue;
+        }
+        return {
+          candidate: {
+            config: candidateConfig,
+            provider: createProvider(candidateConfig),
+            tools: buildCandidateTools(candidateConfig),
+            label: profile.name,
+          },
+          skipped,
+        };
+      }
+      return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
     };
 
     const visibleAgentStates = new Map<string, string>();
@@ -478,6 +535,9 @@ async function main(): Promise<void> {
             onToolStart: (name, description) => context.reportProgress(`${name}: ${localizeToolDescription(name, description, language)}`),
             onToolProgress: (name, message) => context.reportProgress(`${name}: ${localizeToolProgress(message, language)}`),
             onRetry: (message) => context.reportProgress(localizeToolProgress(message, language)),
+            onProviderFailover: (details) => context.reportProgress(localize(language,
+              `Provider 故障转移：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`,
+              `Provider failover: ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`)),
           },
           undefined,
           childIndex,
@@ -485,6 +545,20 @@ async function main(): Promise<void> {
           childCheckpoint,
           skillRegistry,
         );
+        childAgent.setFailoverController({
+          resolve: async (request) => {
+            const resolution = await resolveProviderFailover(request, () => childTools);
+            if (resolution.candidate) {
+              resolution.candidate.config = {
+                ...resolution.candidate.config,
+                cwd: childConfig.cwd,
+                maxTurns: childConfig.maxTurns,
+                sessionNamespace: childConfig.sessionNamespace,
+              };
+            }
+            return resolution;
+          },
+        });
         const cancel = () => childAgent.cancel();
         context.signal.addEventListener("abort", cancel, { once: true });
         try {
@@ -542,7 +616,7 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const buildBaseTools = () => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(config), ...coordinatorTools];
+    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...coordinatorTools];
     let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
     const provider = createProvider(config);
@@ -590,7 +664,7 @@ async function main(): Promise<void> {
         },
         onToolEnd: (_name, result) => {
           stopPhase();
-          const failed = /^(?:Tool error:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
+          const failed = /^(?:Tool error:|Tool execution denied|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
@@ -614,6 +688,21 @@ async function main(): Promise<void> {
           runningTaskView?.activity(`${localize(language, "失败", "Failure")}: ${message}`);
           emitLine(chalk.red(`${message}\n`));
         },
+        onProviderFailover: (details) => {
+          stopPhase();
+          const message = localize(language,
+            `Provider 故障转移：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}（原请求在输出前连续失败）`,
+            `Provider failover: ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel} (the original request failed repeatedly before output)`);
+          runningTaskView?.activity(message);
+          emitLine(`${chalk.yellow(`↪ ${message}`)}\n`);
+          if (details.skipped.length) emitLine(`${chalk.dim(details.skipped.map((item) => `${item.providerId}: ${item.reason}`).join(" · "))}\n`);
+          startPhase(localize(language, `已切换到 ${details.toProviderId}，正在继续任务`, `Continuing with ${details.toProviderId}`));
+        },
+        onProviderFailoverUnavailable: (details) => {
+          const skipped = details.skipped.length ? ` ${details.skipped.map((item) => `${item.providerId}: ${item.reason}`).join(" · ")}` : "";
+          runningTaskView?.activity(localize(language, `备用 Provider 不可用：${details.reason}`, `No fallback provider available: ${details.reason}`));
+          emitLine(`${chalk.dim(localize(language, `未执行故障转移：${details.reason}${skipped}`, `Failover not performed: ${details.reason}${skipped}`))}\n`);
+        },
         onPlanUpdate: (plan) => {
           runningTaskView?.setPlan(plan);
           emitLine(`${chalk.cyan(localize(language, "任务计划已更新", "Task plan updated"))}\n${chalk.dim(planManager.format())}\n`);
@@ -627,9 +716,12 @@ async function main(): Promise<void> {
         onTaskComplete: (summary) => {
           runningTaskView?.markFinishing();
           const verification = summary.changed ? (summary.verified ? localize(language, "已验证", "verified") : localize(language, "已尝试验证", "verification noted")) : localize(language, "无文件变化", "no changes");
-          const message = localize(language,
-            `${summary.outcome === "completed" ? "✓ 已完成" : "! 未验证完成"} · ${(summary.durationMs / 1000).toFixed(1)} 秒 · ${summary.turns} 轮模型调用 · ${summary.toolCalls} 次工具调用 · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · 失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次 · ` : ""}${verification}`,
-            `${summary.outcome === "completed" ? "✓ Done" : "! Stopped unverified"} · ${(summary.durationMs / 1000).toFixed(1)}s · ${summary.turns} model turn(s) · ${summary.toolCalls} tool call(s) · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s) · ` : ""}${verification}`);
+          const outcomeLabel = summary.outcome === "completed"
+            ? localize(language, "✓ 已完成", "✓ Done")
+            : summary.outcome === "failed"
+              ? localize(language, "! 任务未完成", "! Task incomplete")
+              : localize(language, "! 未验证完成", "! Stopped unverified");
+          const message = `${outcomeLabel} · ${(summary.durationMs / 1000).toFixed(1)}${localize(language, " 秒", "s")} · ${summary.turns} ${localize(language, "轮模型调用", "model turn(s)")} · ${summary.toolCalls} ${localize(language, "次工具调用", "tool call(s)")} · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${localize(language, `失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次`, `${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s)`)} · ` : ""}${verification}`;
           if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
           else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
@@ -670,6 +762,46 @@ async function main(): Promise<void> {
         `工具 ${capabilityStateName(probe.tools)} / 视觉 ${capabilityStateName(probe.vision)}`,
         `tools ${capabilityStateName(probe.tools)} / vision ${capabilityStateName(probe.vision)}`);
     };
+    agent.setFailoverController({
+      resolve: async (request) => {
+        const chain = providerRegistry.failoverChain(request.originProviderId);
+        if (!chain.length) return { reason: localize(language, `主 Provider ${request.originProviderId} 未配置备用链`, `No failover chain is configured for primary provider ${request.originProviderId}`) };
+        const skipped: Array<{ providerId: string; reason: string }> = [];
+        for (const providerId of chain) {
+          if (request.attemptedProviderIds.includes(providerId)) {
+            skipped.push({ providerId, reason: localize(language, "本次任务已尝试", "already attempted in this task") });
+            continue;
+          }
+          const profile = providerRegistry.get(providerId);
+          if (!profile) {
+            skipped.push({ providerId, reason: localize(language, "配置不存在", "profile not found") });
+            continue;
+          }
+          const model = providerRegistry.activeModel(providerId) ?? profile.model;
+          const effective = runtimeProfile(profile, model);
+          if (request.requiresTools && !effective.features.tools) {
+            skipped.push({ providerId, reason: localize(language, "当前请求需要工具能力", "the current request requires tool support") });
+            continue;
+          }
+          const candidateConfig = profileConfig(profile, model);
+          const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
+          if (request.estimatedInputTokens >= safeInputLimit) {
+            skipped.push({ providerId, reason: localize(language, `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过安全输入线 ${safeInputLimit.toLocaleString()}`, `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the safe input limit ${safeInputLimit.toLocaleString()}`) });
+            continue;
+          }
+          return {
+            candidate: {
+              config: candidateConfig,
+              provider: createProvider(candidateConfig),
+              tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
+              label: profile.name,
+            },
+            skipped,
+          };
+        }
+        return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
+      },
+    });
     const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
       status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
       try {
@@ -981,6 +1113,7 @@ async function main(): Promise<void> {
           exact: true,
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
+        if (!failure && agent.status().outcome === "failed") failure = new Error(localize(language, "最后一次工具操作失败或被拒绝，目标尚未完成。", "The last tool operation failed or was denied, so the goal is incomplete."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
           const action = await selectTerminalOption(localize(language, "当前任务未完成，下一步怎么做？", "The current task did not complete. What next?"), failureRecoveryOptions(queue.size, language), language);
@@ -1043,6 +1176,60 @@ async function main(): Promise<void> {
       if (task === "/provider test" || task === "/provider capabilities") {
         const profile = providerRegistry.get(config.providerId) ?? startupProfile;
         await switchProviderProfile(profile, true, agent.status().model, true);
+        continue;
+      }
+      if (task === "/provider fallback" || task.startsWith("/provider fallback ")) {
+        const primaryId = config.providerId;
+        const action = task.slice("/provider fallback".length).trim();
+        const chain = providerRegistry.failoverChain(primaryId);
+        if (!action) {
+          console.log(chalk.cyan(localize(language, `主 Provider：${primaryId}`, `Primary provider: ${primaryId}`)));
+          console.log(chain.length
+            ? `${chain.map((id, index) => `${index + 1}. ${providerRegistry.get(id)?.name ?? id} (${id})`).join("\n")}\n`
+            : chalk.dim(localize(language, "尚未配置备用链。使用 /provider fallback add 添加。\n", "No failover chain is configured. Add one with /provider fallback add.\n")));
+          continue;
+        }
+        if (action === "clear") {
+          await providerRegistry.setFailoverChain(primaryId, []);
+          console.log(chalk.green(localize(language, `已清空 ${primaryId} 的备用链。\n`, `Cleared the failover chain for ${primaryId}.\n`)));
+          continue;
+        }
+        if (action === "add") {
+          const candidates = providerRegistry.list().filter((profile) => profile.id !== primaryId && !chain.includes(profile.id));
+          if (!candidates.length) {
+            console.log(chalk.dim(localize(language, "没有可添加的 Provider。\n", "There are no providers available to add.\n")));
+            continue;
+          }
+          const selected = await selectTerminalOption(localize(language, "选择要追加的备用 Provider", "Choose a fallback provider to append"), candidates.map((profile) => ({
+            label: profile.name,
+            description: `${profile.id} · ${profile.model} · ${featureNames(profile)} · ${compactCapabilityProbeSummary(profile)}`,
+            value: profile.id,
+          })), language);
+          if (!selected) console.log(chalk.dim(localize(language, "已取消。\n", "Cancelled.\n")));
+          else {
+            await providerRegistry.setFailoverChain(primaryId, [...chain, selected]);
+            console.log(chalk.green(localize(language, `已将 ${selected} 添加为第 ${chain.length + 1} 顺位备用 Provider。\n`, `Added ${selected} as fallback provider #${chain.length + 1}.\n`)));
+          }
+          continue;
+        }
+        if (action === "remove") {
+          if (!chain.length) {
+            console.log(chalk.dim(localize(language, "备用链为空。\n", "The failover chain is empty.\n")));
+            continue;
+          }
+          const selected = await selectTerminalOption(localize(language, "移除哪个备用 Provider？", "Remove which fallback provider?"), chain.map((id, index) => ({
+            label: providerRegistry.get(id)?.name ?? id,
+            description: localize(language, `第 ${index + 1} 顺位 · ${id}`, `Position ${index + 1} · ${id}`),
+            value: id,
+          })), language);
+          if (!selected) console.log(chalk.dim(localize(language, "已取消。\n", "Cancelled.\n")));
+          else {
+            await providerRegistry.setFailoverChain(primaryId, chain.filter((id) => id !== selected));
+            console.log(chalk.green(localize(language, `已从备用链移除 ${selected}。\n`, `Removed ${selected} from the failover chain.\n`)));
+          }
+          continue;
+        }
+        console.log(chalk.yellow(localize(language, "用法：/provider fallback [add|remove|clear]\n", "Usage: /provider fallback [add|remove|clear]\n")));
         continue;
       }
       if (task === "/provider key") {

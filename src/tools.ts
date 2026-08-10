@@ -728,7 +728,8 @@ export async function executeTool(tool: AgentTool, input: Record<string, unknown
     let preview: string | undefined;
     try { preview = await tool.preview?.(input, context); }
     catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
-    if (!(await context.approve({ description: tool.describe(input), risk, preview }))) return "Tool execution denied by user.";
+    const sessionScope = typeof tool.approvalScope === "function" ? tool.approvalScope(input) : tool.approvalScope;
+    if (!(await context.approve({ description: tool.describe(input), risk, preview, sessionScope }))) return "Tool execution denied by user.";
   }
   try { return await tool.execute(input, context); }
   catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }

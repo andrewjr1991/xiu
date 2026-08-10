@@ -109,3 +109,21 @@ test("provider capability probes persist per model and configuration changes inv
   assert.equal(restored.capabilityProbe("gateway", "coder-a"), undefined);
   assert.equal(restored.capabilityProbe("gateway", "coder-b"), undefined);
 });
+
+test("provider registry persists ordered failover chains and removes stale references", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-failover-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  await registry.upsert({
+    id: "backup-one", name: "Backup One", kind: "openai-compatible", model: "backup-model", baseURL: "http://127.0.0.1:9001/v1",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  await registry.setFailoverChain("agnes", ["backup-one", "openai"]);
+
+  const restored = new ProviderRegistry(filename);
+  await restored.load();
+  assert.deepEqual(restored.failoverChain("agnes"), ["backup-one", "openai"]);
+  await restored.remove("backup-one");
+  assert.deepEqual(restored.failoverChain("agnes"), ["openai"]);
+});
