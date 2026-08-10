@@ -4,6 +4,7 @@ import type { ConversationMessage } from "./types.js";
 import type { TaskPlan } from "./plan.js";
 import { restoreTaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import type { WorkspaceChangeNotice } from "./change-summary.js";
 
 export interface SessionStats {
   modelCalls: number;
@@ -26,6 +27,20 @@ export interface RestoredSession {
   plan?: TaskPlan;
   planMode?: boolean;
   diagnostics?: TaskDiagnosticSnapshot;
+  replay: SessionReplayTurn[];
+}
+
+export interface SessionReplayTurn {
+  task: string;
+  inputKind?: "task" | "answer" | "system";
+  supplements: string[];
+  response?: string;
+  changes: WorkspaceChangeNotice[];
+  receipts: string[];
+  question?: string;
+  completion?: { message: string; success: boolean };
+  diagnostics?: TaskDiagnosticSnapshot;
+  exact: boolean;
 }
 
 export interface SessionListItem {
@@ -110,14 +125,31 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
   let plan: TaskPlan | undefined;
   let planMode = false;
   let diagnostics: TaskDiagnosticSnapshot | undefined;
+  const replay: SessionReplayTurn[] = [];
+  let replayTurn: SessionReplayTurn | undefined;
+  const finishReplayTurn = (): void => {
+    if (!replayTurn) return;
+    if (!replayTurn.response?.trim()) delete replayTurn.response;
+    replay.push(replayTurn);
+    replayTurn = undefined;
+  };
   for (const event of events) {
-    if (event.type === "task") messages.push({ role: "user", content: String(event.contextualTask ?? event.task ?? "") });
-    else if (event.type === "assistant") messages.push({
-      role: "assistant",
-      content: String(event.text ?? ""),
-      raw: event.raw,
-      toolCalls: Array.isArray(event.toolCalls) ? event.toolCalls as ConversationMessage["toolCalls"] : undefined,
-    });
+    if (event.type === "task") {
+      finishReplayTurn();
+      const task = String(event.task ?? "");
+      messages.push({ role: "user", content: String(event.contextualTask ?? task) });
+      replayTurn = { task, inputKind: inferInputKind(task), supplements: [], changes: [], receipts: [], exact: false };
+    }
+    else if (event.type === "assistant") {
+      const text = String(event.text ?? "");
+      messages.push({
+        role: "assistant",
+        content: text,
+        raw: event.raw,
+        toolCalls: Array.isArray(event.toolCalls) ? event.toolCalls as ConversationMessage["toolCalls"] : undefined,
+      });
+      if (replayTurn && text.trim()) replayTurn.response = text;
+    }
     else if (event.type === "tool") messages.push({ role: "tool", content: String(event.contextResult ?? event.result ?? ""), toolCallId: String(event.id ?? ""), toolName: String(event.name ?? "") });
     else if (event.type === "completion_gate") messages.push({ role: "user", content: String(event.message ?? "") });
     else if (event.type === "compact") messages = [{ role: "user", content: String(event.context ?? event.summary ?? "") }];
@@ -125,8 +157,30 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     else if (event.type === "model_changed" && typeof event.model === "string") model = event.model;
     else if (event.type === "plan" && event.plan) plan = event.plan as TaskPlan;
     else if (event.type === "plan_mode") planMode = Boolean(event.enabled);
-    else if (event.type === "diagnostics") diagnostics = restoreTaskDiagnostics(event.snapshot)?.snapshot();
+    else if (event.type === "diagnostics") {
+      diagnostics = restoreTaskDiagnostics(event.snapshot)?.snapshot();
+      if (replayTurn && diagnostics) replayTurn.diagnostics = diagnostics;
+    }
+    else if (event.type === "steering" && replayTurn && Array.isArray(event.items)) replayTurn.supplements.push(...event.items.map(String));
+    else if (event.type === "ui_turn" && event.turn && typeof event.turn === "object") {
+      const saved = event.turn as Partial<SessionReplayTurn>;
+      replayTurn = {
+        task: typeof saved.task === "string" ? saved.task : replayTurn?.task ?? "",
+        inputKind: saved.inputKind === "answer" || saved.inputKind === "system" ? saved.inputKind : "task",
+        supplements: Array.isArray(saved.supplements) ? saved.supplements.map(String) : replayTurn?.supplements ?? [],
+        response: typeof saved.response === "string" ? saved.response : undefined,
+        changes: Array.isArray(saved.changes) ? saved.changes as WorkspaceChangeNotice[] : [],
+        receipts: Array.isArray(saved.receipts) ? saved.receipts.map(String) : [],
+        question: typeof saved.question === "string" ? saved.question : undefined,
+        completion: saved.completion && typeof saved.completion.message === "string"
+          ? { message: saved.completion.message, success: Boolean(saved.completion.success) }
+          : undefined,
+        diagnostics: saved.diagnostics,
+        exact: true,
+      };
+    }
   }
+  finishReplayTurn();
   stats.estimatedTokens = estimateConversationTokens(messages);
   return {
     id: selected.id,
@@ -139,7 +193,13 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     plan,
     planMode,
     diagnostics,
+    replay,
   };
+}
+
+function inferInputKind(task: string): SessionReplayTurn["inputKind"] {
+  if (/^(?:Continue the unfinished task|Continue the task that paused for user input|继续此前因等待用户回答|继续未完成任务)/i.test(task.trim())) return "system";
+  return "task";
 }
 
 export function estimateConversationTokens(messages: ConversationMessage[]): number {
@@ -168,24 +228,22 @@ export function estimateTextTokens(value: string): number {
 function transcriptText(message: ConversationMessage): string {
   return message.content
     .split(/\n\nAutomatically prepared project context:/, 1)[0]!
-    .replace(/\s+/g, " ")
     .trim();
 }
 
-export function formatRestoredConversation(messages: ConversationMessage[], language: UiLanguage, maximum = 12): string[] {
+/** Legacy formatter retained for API compatibility. The CLI uses structured replay. */
+export function formatRestoredConversation(messages: ConversationMessage[], language: UiLanguage, maximum = Number.POSITIVE_INFINITY): string[] {
   const visible = messages
     .filter((message) => message.role === "user" || message.role === "assistant")
     .map((message) => ({ role: message.role, text: transcriptText(message) }))
     .filter((message) => message.text && !/^Completion gate:/i.test(message.text));
   const selected = visible.slice(-maximum);
   const omitted = visible.length - selected.length;
-  const lines = [localize(language, "最近会话内容：", "Recent conversation:")];
+  const lines = [localize(language, "会话内容：", "Conversation:")];
   if (omitted > 0) lines.push(localize(language, `  … 已省略较早的 ${omitted} 条消息`, `  ... ${omitted} earlier message(s) omitted`));
   for (const message of selected) {
     const label = message.role === "user" ? localize(language, "你", "You") : "Xiu";
-    const clipped = message.text.length > 600 ? `${message.text.slice(0, 597)}...` : message.text;
-    lines.push(`${label}> ${clipped}`);
+    lines.push(`${label}> ${message.text}`);
   }
-  lines.push(localize(language, "使用 /history 查看完整上下文。", "Use /history to view the full context."));
   return lines;
 }

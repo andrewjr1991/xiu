@@ -22,7 +22,7 @@ import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSub
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
-import { formatRestoredConversation, listSessions, loadSession } from "./session.js";
+import { listSessions, loadSession, type RestoredSession, type SessionReplayTurn } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { SettingsStore } from "./settings.js";
@@ -219,11 +219,6 @@ async function main(): Promise<void> {
     const rightClickPasteEnabled = await clipboard.supportsRightClickPaste();
     let restoredDraft = await draftStore.load();
     status.stop();
-    if (restored) {
-      console.log(chalk.green(localize(language, `已恢复会话 ${restored.id}`, `Resumed session ${restored.id}`)), chalk.dim(localize(language, `（${restored.messages.length} 条消息）`, `(${restored.messages.length} messages)`)));
-      console.log(`${formatRestoredConversation(restored.messages, language).join("\n")}\n`);
-    }
-
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode, language);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
     let runningTaskView: RunningTaskView | undefined;
@@ -276,6 +271,42 @@ async function main(): Promise<void> {
       console.log(chalk.yellow.bold(`? ${question}`));
       console.log(chalk.dim(localize(language, "请在下方输入答案；当前会话和任务上下文会继续保留。\n", "Type your answer below; the current session and task context are preserved.\n")));
     };
+    const oldAnswerFromTask = (task: string): string | undefined => {
+      const match = /(?:用户回答|User answer)[:：]\s*\n([\s\S]*?)(?:\n\n(?:请根据回答|Use the answer)|$)/i.exec(task);
+      return match?.[1]?.trim() || undefined;
+    };
+    const renderReplay = (session: RestoredSession): void => {
+      console.log(chalk.green(localize(language, `已恢复会话 ${session.id}`, `Resumed session ${session.id}`)), chalk.dim(localize(language, `（${session.replay.length} 轮对话，${session.messages.length} 条上下文消息，${session.model ?? config.model}）`, `(${session.replay.length} conversation turns, ${session.messages.length} context messages, ${session.model ?? config.model})`)));
+      console.log(chalk.dim(localize(language, session.replay.some((turn) => !turn.exact)
+        ? "以下旧会话由已保存事件完整重建；从 v0.9.10 起，新会话会保存原始终端语义格式。"
+        : "以下内容使用原始终端语义格式回放。",
+      session.replay.some((turn) => !turn.exact)
+        ? "This older session is reconstructed from all saved events. New sessions from v0.9.10 preserve terminal semantics."
+        : "The conversation below is replayed from saved terminal semantics.")));
+      console.log();
+      for (const turn of session.replay) {
+        const oldAnswer = turn.inputKind === "system" ? oldAnswerFromTask(turn.task) : undefined;
+        if (turn.inputKind === "answer" || oldAnswer) console.log(`${chalk.cyan(localize(language, "请回答> ", "answer> "))}${oldAnswer ?? turn.task}`);
+        else if (turn.inputKind === "system") console.log(chalk.dim(localize(language, "↻ 继续此前未完成的任务", "↻ Continuing the unfinished task")));
+        else console.log(`${chalk.cyan("xiu> ")}${turn.task}`);
+        for (const supplement of turn.supplements) console.log(`${chalk.cyan(localize(language, "补充> ", "steer> "))}${supplement}`);
+        if (turn.changes.length) printWorkspaceChanges(turn.changes);
+        if (turn.receipts.length) console.log(`${chalk.cyan(localize(language, "关键操作", "Key actions"))}\n${turn.receipts.map((line) => chalk.green(line)).join("\n")}\n`);
+        if (turn.response?.trim()) console.log(`${chalk.cyan.bold("Xiu")}\n${renderTerminalMarkdown(turn.response)}\n`);
+        if (turn.question) printUserQuestion(turn.question);
+        const completion = turn.completion ?? (turn.diagnostics && turn.diagnostics.outcome !== "running" ? {
+          message: localize(language,
+            `${turn.diagnostics.outcome === "completed" ? "✓ 已完成" : `! ${turn.diagnostics.outcome}`} · ${(turn.diagnostics.durationMs / 1000).toFixed(1)} 秒 · ${turn.diagnostics.model.attempts} 轮模型调用 · ${turn.diagnostics.tools.calls} 次工具调用`,
+            `${turn.diagnostics.outcome === "completed" ? "✓ Done" : `! ${turn.diagnostics.outcome}`} · ${(turn.diagnostics.durationMs / 1000).toFixed(1)}s · ${turn.diagnostics.model.attempts} model turn(s) · ${turn.diagnostics.tools.calls} tool call(s)`),
+          success: turn.diagnostics.outcome === "completed",
+        } : undefined);
+        if (completion && !turn.question) console.log(completion.success ? chalk.green(completion.message) : chalk.yellow(completion.message));
+        console.log(chalk.dim("─".repeat(Math.max(20, Math.min((process.stdout.columns || 100) - 2, 120)))));
+      }
+      if (!session.replay.length) console.log(chalk.dim(localize(language, "此会话没有可回放的用户对话。", "This session has no user conversation to replay.")));
+      console.log();
+    };
+    if (restored) renderReplay(restored);
     const startPhase = (value: string): void => {
       if (runningTaskView) {
         status.stop();
@@ -576,13 +607,18 @@ async function main(): Promise<void> {
       console.log(chalk.green(localize(language, `语言已立即切换为${languageName(selected, language)}。当前界面、进度、命令和下一次模型调用均已更新。\n`, `Language switched immediately to ${languageName(selected, language)}. The current UI, progress, commands, and next model call are updated.\n`)));
     };
 
-    const runTaskSequence = async (firstTask: string): Promise<boolean> => {
+    const runTaskSequence = async (firstTask: string, firstDisplay?: Pick<SessionReplayTurn, "task" | "inputKind">): Promise<boolean> => {
       const queue = new TaskInputQueue();
       queue.enqueue(firstTask);
       let exitRequested = false;
+      let first = true;
 
       while (queue.size && !exitRequested) {
         const current = queue.dequeue()!;
+        const replayInput = first && firstDisplay ? firstDisplay : { task: current.text, inputKind: "task" as const };
+        first = false;
+        const replayChanges: WorkspaceChangeNotice[] = [];
+        const replaySupplements: string[] = [];
         verificationReadyForSummary = false;
         const skillsBeforeTask = new Set(skillRegistry.list().map((skill) => skill.name.toLowerCase()));
         const view = new RunningTaskView(256_000, language);
@@ -628,7 +664,9 @@ async function main(): Promise<void> {
             persistPrompt: false,
           })).trim();
           if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
-          printWorkspaceChanges(view.drainWorkspaceChanges());
+          const liveChanges = view.drainWorkspaceChanges();
+          replayChanges.push(...liveChanges);
+          printWorkspaceChanges(liveChanges);
           await draftStore.flush();
           await activeApproval;
           if (cancelledFromKeyboard) {
@@ -706,6 +744,7 @@ async function main(): Promise<void> {
           }
 
           if (!settled && agent.steer(followUp)) {
+            replaySupplements.push(followUp);
             view.activity(localize(language, `已接受用户补充：${followUp.slice(0, 100)}`, `User steering accepted: ${followUp.slice(0, 100)}`));
             console.log(chalk.green(localize(language, `\u21B3 已补充当前任务：${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`, `\u21B3 Steering current task: ${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`)));
           } else {
@@ -728,7 +767,9 @@ async function main(): Promise<void> {
         agent.reloadInstructions();
         const discoveredSkills = refreshedSkills.filter((skill) => !skillsBeforeTask.has(skill.name.toLowerCase()));
         if (discoveredSkills.length) console.log(chalk.green(localize(language, `已发现并加载新技能：${discoveredSkills.map((skill) => skill.name).join("、")}。`, `Discovered and loaded new skill(s): ${discoveredSkills.map((skill) => skill.name).join(", ")}.`)));
-        printWorkspaceChanges(view.drainWorkspaceChanges());
+        const finalChanges = view.drainWorkspaceChanges();
+        replayChanges.push(...finalChanges);
+        printWorkspaceChanges(finalChanges);
         view.discard();
         const receipts = view.receiptLines();
         if (receipts.length) console.log(`${chalk.cyan(localize(language, "关键操作", "Key actions"))}\n${receipts.map((line) => chalk.green(line)).join("\n")}\n`);
@@ -745,6 +786,17 @@ async function main(): Promise<void> {
           console.log(chalk.yellow(localize(language, "等待你的回答 · 当前上下文已保存", "Waiting for your answer · current context saved")));
           console.log(chalk.dim("─".repeat(Math.max(20, Math.min((process.stdout.columns || 100) - 2, 120)))));
         }
+        await agent.recordReplayTurn({
+          ...replayInput,
+          supplements: replaySupplements,
+          response: finalResponse,
+          changes: replayChanges,
+          receipts,
+          question: interaction.question,
+          completion,
+          diagnostics: agent.status().diagnostics,
+          exact: true,
+        });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
@@ -782,8 +834,7 @@ async function main(): Promise<void> {
         else {
           agent.restoreSession(selected);
           awaitingReply = undefined;
-          console.log(chalk.green(localize(language, `已恢复会话 ${selected.id}`, `Resumed session ${selected.id}`)), chalk.dim(localize(language, `（${selected.messages.length} 条消息，${selected.model ?? agent.status().model}）`, `(${selected.messages.length} messages, ${selected.model ?? agent.status().model})`)));
-          console.log(`${formatRestoredConversation(selected.messages, language).join("\n")}\n`);
+          renderReplay(selected);
         }
         continue;
       }
@@ -794,7 +845,9 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/history" || task === "/history current") {
-        console.log(`${agent.history()}\n`);
+        const currentSessionId = agent.status().sessionId;
+        if (!currentSessionId) console.log(chalk.dim(localize(language, "没有对话历史。\n", "No conversation history.\n")));
+        else renderReplay(await loadSession(config.cwd, currentSessionId));
         continue;
       }
       if (task === "/history sessions") {
@@ -1066,7 +1119,7 @@ async function main(): Promise<void> {
         const pendingQuestion = awaitingReply;
         awaitingReply = undefined;
         const continuedTask = pendingQuestion ? continueTaskAfterAnswer(pendingQuestion.originalTask, pendingQuestion.question, task, language) : task;
-        if (await runTaskSequence(continuedTask)) break;
+        if (await runTaskSequence(continuedTask, pendingQuestion ? { task, inputKind: "answer" } : { task, inputKind: "task" })) break;
         restoredDraft = await draftStore.load();
       } catch (error) {
         status.stop();

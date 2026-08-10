@@ -15,7 +15,7 @@ import type { SkillRegistry } from "./skills.js";
 import { normalizeAssistantText } from "./language-output.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
-import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionStats } from "./session.js";
+import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
 import { executeTool, formatProcessInvocation, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
@@ -439,6 +439,11 @@ export class Agent {
     if (!trimmed) throw new Error("Model name cannot be empty.");
     this.setModelInMemory(trimmed);
     if (this.sessionPath) await this.log(this.sessionPath, { type: "model_changed", model: trimmed });
+  }
+
+  /** Persist the semantic terminal result once the CLI has assembled its visible cards. */
+  async recordReplayTurn(turn: SessionReplayTurn): Promise<void> {
+    if (this.sessionPath) await this.log(this.sessionPath, { type: "ui_turn", version: 1, turn });
   }
 
   async listModels(): Promise<{ models: AvailableModel[]; discoveryError?: string }> {

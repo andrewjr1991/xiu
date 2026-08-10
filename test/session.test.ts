@@ -107,6 +107,42 @@ test("restored conversation preview shows recent dialogue without generated proj
   assert.doesNotMatch(preview.join("\n"), /large index|raw tool output/);
 });
 
+test("structured replay preserves multiline terminal semantics", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-replay-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "replay.jsonl"), [
+    JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "task", task: "修复界面" }),
+    JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "assistant", text: "中间说明", toolCalls: [{ id: "1", name: "read_file", input: {} }] }),
+    JSON.stringify({ timestamp: "2026-01-01T00:00:02.000Z", type: "assistant", text: "第一行\n\n- 完整列表", toolCalls: [] }),
+    JSON.stringify({ timestamp: "2026-01-01T00:00:03.000Z", type: "ui_turn", version: 1, turn: {
+      task: "修复界面", inputKind: "task", supplements: ["同时补测试"], response: "第一行\n\n- 完整列表", changes: [], receipts: ["  √ 验证通过"], completion: { message: "✓ 已完成", success: true }, exact: true,
+    } }),
+  ].join("\n") + "\n");
+  const restored = await loadSession(cwd, "replay");
+  assert.equal(restored.replay.length, 1);
+  assert.equal(restored.replay[0]?.response, "第一行\n\n- 完整列表");
+  assert.deepEqual(restored.replay[0]?.supplements, ["同时补测试"]);
+  assert.equal(restored.replay[0]?.completion?.message, "✓ 已完成");
+  assert.equal(restored.replay[0]?.exact, true);
+});
+
+test("legacy replay includes every task instead of only the latest twelve messages", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-legacy-replay-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const events: object[] = [];
+  for (let index = 0; index < 15; index++) {
+    events.push({ timestamp: new Date(index * 2_000).toISOString(), type: "task", task: `任务 ${index}` });
+    events.push({ timestamp: new Date(index * 2_000 + 1_000).toISOString(), type: "assistant", text: `回答 ${index}\n第二行`, toolCalls: [] });
+  }
+  await fs.writeFile(path.join(directory, "legacy-all.jsonl"), events.map(JSON.stringify).join("\n") + "\n");
+  const restored = await loadSession(cwd, "legacy-all");
+  assert.equal(restored.replay.length, 15);
+  assert.equal(restored.replay[0]?.task, "任务 0");
+  assert.equal(restored.replay[14]?.response, "回答 14\n第二行");
+});
+
 test("conversation compacts automatically before crossing the configured context budget", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-auto-compact-"));
   let summaries = 0;

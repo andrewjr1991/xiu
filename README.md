@@ -38,7 +38,9 @@ Version 0.9.7 builds a compact Repository Map on that incremental cache. JavaScr
 
 Version 0.9.8 adds deterministic per-task diagnostics. The live footer and `/diagnostics` distinguish model time, tool time, approval waiting, Token use, retries, failures, slow operations, repeated failure, and lack of new evidence. Diagnostic snapshots are bounded, redact credential-shaped input, persist with project sessions, and mark an unfinished restored task as interrupted. Slow active work and user approval are never mislabeled as stalls, and health warnings only explain evidence and recommend a strategy—they never cancel a task or bypass safety policy.
 
-The local 0.9.9 candidate focuses on long-session stability. Simplified Chinese output is normalized before display while code literals remain unchanged; successful verification now enters an explicit final-summary phase; `.agents/skills` is discovered and `/skills` refreshes before opening; Windows selectors accept raw arrow sequences and number keys; `/resume` prints recent dialogue; long progress wraps instead of disappearing; and workspace changes no longer restart the steering prompt.
+Version 0.9.9 focuses on long-session stability. Simplified Chinese output is normalized before display while code literals remain unchanged; successful verification enters an explicit final-summary phase; `.agents/skills` is discovered and `/skills` refreshes before opening; Windows selectors accept raw arrow sequences and number keys; long progress wraps instead of disappearing; and workspace changes no longer restart the steering prompt.
+
+The local 0.9.10 candidate replaces the lossy session preview with complete semantic terminal replay. `/resume`, `xiu --resume`, and `/history` now share the normal Markdown, file-change, key-action, question, and completion renderers. Older logs are reconstructed from every saved task and assistant event without the previous 12-message/600-character cap; new sessions persist a versioned semantic turn record so future restoration can reproduce the visible conversation structure without storing ANSI escape bytes.
 
 ## Features
 
@@ -150,7 +152,7 @@ Open an interactive picker for saved sessions in the current project after closi
 xiu --resume
 ```
 
-Inside Xiu, `/resume` opens the same picker. It shows each session's first task, last update, model, and ID; use Up/Down, number keys, and Enter to choose. After restoration, Xiu prints the recent user/assistant dialogue and points to `/history` for the complete context. Legacy sessions from `.forge/sessions/` and `.forge_sessions/` are also discovered during the Xiu rename transition.
+Inside Xiu, `/resume` opens the same picker. It shows each session's first task, last update, model, and ID; use Up/Down, number keys, and Enter to choose. After restoration, Xiu replays the complete saved conversation using the same terminal formatting as the original interaction. `/history` uses the same renderer. Legacy sessions from `.forge/sessions/` and `.forge_sessions/` are also discovered during the Xiu rename transition; their visible conversation is reconstructed from all available events.
 
 List session IDs or resume a specific one:
 
