@@ -819,7 +819,7 @@ Skills 是写在 `SKILL.md` 中的可复用工作流程。Xiu 从以下位置发
 
 ## 十五、MCP Server
 
-MCP 可以把外部工具接入 Xiu。用户级配置：
+MCP 可以把外部工具接入 Xiu。v0.11.4 同时支持本地 stdio 与远程 Streamable HTTP。用户级配置：
 
 ```text
 ~/.xiu/mcp.json
@@ -852,6 +852,33 @@ Windows 示例：
   }
 }
 ```
+
+远程 Streamable HTTP MCP 使用单一端点，凭证建议只写环境变量名：
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "transport": "streamable-http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" },
+      "risk": "execute"
+    }
+  }
+}
+```
+
+可直接在 Xiu 中管理用户级远程服务：
+
+```text
+/mcp add
+/mcp add docs https://example.com/mcp DOCS_MCP_TOKEN
+/mcp test docs
+/mcp remove docs
+/mcp reload
+```
+
+`/mcp add` 会让用户明确选择默认风险等级，保存后立即连接并刷新工具；`/mcp remove` 只删除 `~/.xiu/mcp.json` 中的用户级条目，不会改项目配置；`/mcp test` 会显示传输类型、工具数和连接错误。公网地址必须使用 HTTPS，明文 HTTP 只允许 `localhost`、`127.0.0.1` 和 `::1`。Xiu 会管理 MCP 协议 Header、会话 ID、取消和关闭，不允许配置覆盖保留 Header，也不会在界面或日志中展开 Token。当前版本尚不支持交互式 MCP OAuth。
 
 查看连接情况：
 
@@ -978,6 +1005,9 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `/skills` | 浏览 Skills |
 | `/skills install ...` | 安装本地或 HTTPS Git Skill |
 | `/mcp` | 查看 MCP 连接与工具数 |
+| `/mcp add [name] [url] [TOKEN_ENV]` | 添加用户级 Streamable HTTP MCP |
+| `/mcp remove [name]` | 删除用户级 MCP 配置 |
+| `/mcp test [name]` | 重连并测试一个或全部 MCP |
 | `/mcp reload` | 重载 MCP 配置 |
 | `/agents` | 查看所有多 Agent 运行 |
 | `/agents <运行ID>` | 查看一个运行的详细状态 |

@@ -25,13 +25,13 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.11.2` |
+| 当前已发布版本 | `0.11.3` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
 API Key、Token 和个人代理凭证不得写入本文档或提交到项目。
 
-## 三、当前状态（2026-08-10）
+## 三、当前状态（2026-08-11）
 
 ### 已发布的 v0.6.0
 
@@ -403,7 +403,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 当前版本不对模型价格和质量做未经验证的猜测；用户通过阶段绑定表达策略。并行子 Agent 自动阶段路由和 Prompt Cache 延后。
 - 设计与验收记录在 `V0.11.2_DESIGN.zh-CN.md`。
 
-### 本地 v0.11.3 候选版（尚未发布）
+### 已发布的 v0.11.3
 
 - 主 Agent 回答不进入本地结果缓存，工具调用、文件修改、审批、流式回答和媒体生成均不存在缓存重放路径。
 - OpenAI/OpenAI-compatible 读取 Provider 返回的 cached token；原生 OpenAI 使用不含提示原文的稳定缓存键，Anthropic 为稳定系统提示设置 ephemeral 缓存边界。
@@ -412,6 +412,16 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - Provider 配置升级为版本 2；能力缓存带协议版本和配置指纹，旧配置自动迁移，端点、代理、模型、能力声明或鉴权变化会让探测失效。
 - 缓存键不持久化 API Key、项目内容或提示原文；媒体幂等和安全审批边界保持不变。
 - 设计与验收记录在 `V0.11.3_DESIGN.zh-CN.md`。
+
+### 本地 v0.11.4 候选版（尚未发布）
+
+- 在现有 stdio MCP 基础上接入官方 Streamable HTTP Client，支持 JSON/SSE 响应、协议会话、取消和关闭时终止会话。
+- 用户级与受信任项目级配置均支持远程 URL；公网仅允许 HTTPS，HTTP 只允许本机回环地址。
+- Bearer Header 可引用环境变量，保留协议 Header 不允许覆盖，凭证不会出现在摘要和状态中。
+- `/mcp add`、`/mcp remove`、`/mcp test` 和既有 `/mcp reload` 形成无需重启的管理闭环。
+- 远程 MCP 工具继续经过工作区信任、风险审批、Plan 模式和取消边界；默认风险为 `execute`。
+- v0.11.4 暂不实现交互式 OAuth、Resources、Prompts 和 Sampling，避免用不完整实现冒充协议支持。
+- 设计与验收记录在 `V0.11.4_DESIGN.zh-CN.md`。
 
 ### 当前自动化基线
 
@@ -753,9 +763,9 @@ v0.8 的首个里程碑根据真实长任务失败数据调整为“可靠上下
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. 使用 OpenAI-compatible 与 Anthropic/OpenAI 真实 Provider 验收 Prompt Cache 统计、能力缓存迁移和重复模型发现合并。
-2. 修复人工验收发现的阻断问题；执行完整自动化、构建、打包和干净安装后发布 v0.11.3。
-3. 发布后进入 Streamable HTTP MCP、MCP OAuth、Skills 生命周期管理与扩展接口。
+1. 使用本机测试 Server 和一个真实远程 MCP 验收 Streamable HTTP 的连接、工具调用、取消、会话关闭与凭证脱敏。
+2. 修复人工验收发现的阻断问题；执行完整自动化、构建、打包和干净安装后发布 v0.11.4。
+3. 发布后设计 MCP OAuth 与 Resources/Prompts 支持，再进入 Skills 生命周期管理与稳定扩展接口。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

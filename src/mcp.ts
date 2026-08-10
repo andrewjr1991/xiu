@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -11,11 +12,14 @@ const packageJson = createRequire(import.meta.url)("../package.json") as { versi
 const MAX_OUTPUT = 60_000;
 const VALID_RISKS = new Set<ToolRisk>(["read", "write", "execute", "dangerous"]);
 
-interface McpServerConfig {
-  command: string;
+export interface McpServerConfig {
+  transport?: "stdio" | "streamable-http";
+  command?: string;
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
   enabled?: boolean;
   risk?: ToolRisk;
   toolRisks?: Record<string, ToolRisk>;
@@ -43,6 +47,7 @@ interface PendingRequest {
 
 export interface McpServerStatus {
   name: string;
+  transport: "stdio" | "streamable-http";
   state: "connected" | "failed";
   tools: number;
   error?: string;
@@ -64,10 +69,34 @@ function expandEnvironment(value: string): string {
   });
 }
 
+const RESERVED_HTTP_HEADERS = new Set(["accept", "content-type", "mcp-session-id", "mcp-protocol-version"]);
+
+function transportOf(config: McpServerConfig): "stdio" | "streamable-http" {
+  return config.url ? "streamable-http" : "stdio";
+}
+
+function validateRemoteUrl(value: string, name: string): string {
+  if (value.length > 2_048) throw new Error(`MCP server ${name} URL is too long`);
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new Error(`MCP server ${name} has an invalid URL`); }
+  if (url.protocol === "https:") return url.toString();
+  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "http:" || !local) throw new Error(`MCP server ${name} must use HTTPS; HTTP is allowed only for localhost`);
+  return url.toString();
+}
+
 function validateServer(name: string, value: unknown): McpServerConfig {
   if (!value || typeof value !== "object") throw new Error(`MCP server ${name} must be an object`);
   const config = value as Record<string, unknown>;
-  if (typeof config.command !== "string" || !config.command.trim()) throw new Error(`MCP server ${name} requires command`);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error(`MCP server name ${name} must contain only letters, numbers, _ or -`);
+  const hasCommand = typeof config.command === "string" && Boolean(config.command.trim());
+  const hasUrl = typeof config.url === "string" && Boolean(config.url.trim());
+  if (config.enabled !== false && hasCommand === hasUrl) throw new Error(`MCP server ${name} requires exactly one of command or url`);
+  if (config.transport !== undefined && !["stdio", "streamable-http"].includes(String(config.transport))) throw new Error(`MCP server ${name} has an invalid transport`);
+  if (hasCommand && config.transport === "streamable-http") throw new Error(`MCP server ${name} command conflicts with streamable-http transport`);
+  if (hasUrl && config.transport === "stdio") throw new Error(`MCP server ${name} url conflicts with stdio transport`);
+  if (hasUrl) config.url = validateRemoteUrl(String(config.url), name);
   if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some((item) => typeof item !== "string"))) {
     throw new Error(`MCP server ${name} args must be an array of strings`);
   }
@@ -75,6 +104,15 @@ function validateServer(name: string, value: unknown): McpServerConfig {
     || Object.values(config.env).some((item) => typeof item !== "string"))) {
     throw new Error(`MCP server ${name} env must contain string values`);
   }
+  if (config.headers !== undefined && (!config.headers || typeof config.headers !== "object" || Array.isArray(config.headers)
+    || Object.entries(config.headers).length > 32 || Object.entries(config.headers).some(([key, item]) => typeof item !== "string" || key.length > 128 || item.length > 4_096))) {
+    throw new Error(`MCP server ${name} headers must contain at most 32 bounded string values`);
+  }
+  if (config.headers && Object.keys(config.headers).some((key) => RESERVED_HTTP_HEADERS.has(key.toLowerCase()))) {
+    throw new Error(`MCP server ${name} cannot override a reserved MCP header`);
+  }
+  if (hasCommand && config.headers !== undefined) throw new Error(`MCP server ${name} stdio transport does not accept headers`);
+  if (hasUrl && (config.args !== undefined || config.cwd !== undefined || config.env !== undefined)) throw new Error(`MCP server ${name} streamable HTTP transport does not accept command process options`);
   if (config.risk !== undefined && !VALID_RISKS.has(config.risk as ToolRisk)) throw new Error(`MCP server ${name} has invalid risk`);
   if (config.toolRisks !== undefined && (!config.toolRisks || typeof config.toolRisks !== "object" || Array.isArray(config.toolRisks)
     || Object.values(config.toolRisks).some((item) => !VALID_RISKS.has(item as ToolRisk)))) {
@@ -104,7 +142,27 @@ async function readConfig(file: string): Promise<Record<string, McpServerConfig>
   return Object.fromEntries(Object.entries(parsed.mcpServers ?? {}).map(([name, value]) => [name, validateServer(name, value)]));
 }
 
-class McpConnection {
+interface McpConnectionLike {
+  start(): Promise<McpToolDefinition[]>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  close(): Promise<void>;
+}
+
+function formatToolResult(result: Record<string, unknown>): string {
+  const sections: string[] = [];
+  if (Array.isArray(result?.content)) {
+    for (const block of result.content as Array<Record<string, unknown>>) {
+      if (block.type === "text") sections.push(String(block.text ?? ""));
+      else if (block.type === "image" || block.type === "audio") sections.push(`[${block.type}: ${String(block.mimeType ?? "unknown type")}, binary data omitted]`);
+      else sections.push(JSON.stringify(block));
+    }
+  }
+  if (result?.structuredContent !== undefined) sections.push(JSON.stringify(result.structuredContent, null, 2));
+  const output = truncate(sections.filter(Boolean).join("\n") || "MCP tool completed without text output.");
+  return result?.isError ? `Tool error: ${output}` : output;
+}
+
+class StdioMcpConnection implements McpConnectionLike {
   private child?: ChildProcessWithoutNullStreams;
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
@@ -118,7 +176,7 @@ class McpConnection {
     const configuredCwd = this.config.cwd
       ? path.resolve(this.workspace, this.config.cwd)
       : this.workspace;
-    this.child = spawn(this.config.command, this.config.args ?? [], {
+    this.child = spawn(this.config.command!, this.config.args ?? [], {
       cwd: configuredCwd,
       env: {
         ...process.env,
@@ -229,17 +287,7 @@ class McpConnection {
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const result = await this.request("tools/call", { name, arguments: args }, 120_000, signal) as Record<string, unknown>;
-    const sections: string[] = [];
-    if (Array.isArray(result?.content)) {
-      for (const block of result.content as Array<Record<string, unknown>>) {
-        if (block.type === "text") sections.push(String(block.text ?? ""));
-        else if (block.type === "image" || block.type === "audio") sections.push(`[${block.type}: ${String(block.mimeType ?? "unknown type")}, binary data omitted]`);
-        else sections.push(JSON.stringify(block));
-      }
-    }
-    if (result?.structuredContent !== undefined) sections.push(JSON.stringify(result.structuredContent, null, 2));
-    const output = truncate(sections.filter(Boolean).join("\n") || "MCP tool completed without text output.");
-    return result?.isError ? `Tool error: ${output}` : output;
+    return formatToolResult(result);
   }
 
   private failAll(error: Error): void {
@@ -270,8 +318,52 @@ class McpConnection {
   }
 }
 
+class HttpMcpConnection implements McpConnectionLike {
+  private client?: Client;
+  private transport?: StreamableHTTPClientTransport;
+
+  constructor(private name: string, private config: McpServerConfig) {}
+
+  async start(): Promise<McpToolDefinition[]> {
+    const headers = Object.fromEntries(Object.entries(this.config.headers ?? {}).map(([key, value]) => [key, expandEnvironment(value)]));
+    const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), { requestInit: { headers } });
+    const client = new Client({ name: "xiu", version: packageJson.version });
+    this.client = client;
+    this.transport = transport;
+    try {
+      await client.connect(transport);
+      const result = await client.listTools(undefined, { timeout: 15_000, maxTotalTimeout: 30_000 });
+      return result.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema,
+      }));
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      this.client = undefined;
+      this.transport = undefined;
+      throw new Error(`MCP server ${this.name} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    if (!this.client) throw new Error(`MCP server ${this.name} is not connected`);
+    const result = await this.client.callTool({ name, arguments: args }, { signal, timeout: 120_000, maxTotalTimeout: 120_000 });
+    return formatToolResult(result as unknown as Record<string, unknown>);
+  }
+
+  async close(): Promise<void> {
+    const client = this.client;
+    const transport = this.transport;
+    this.client = undefined;
+    this.transport = undefined;
+    if (transport?.sessionId) await transport.terminateSession().catch(() => undefined);
+    if (client) await client.close().catch(() => undefined);
+  }
+}
+
 export class McpManager {
-  private connections = new Map<string, McpConnection>();
+  private connections = new Map<string, McpConnectionLike>();
   private activeTools: AgentTool[] = [];
   private serverStatuses: McpServerStatus[] = [];
 
@@ -287,7 +379,10 @@ export class McpManager {
     await this.close();
     for (const [name, config] of Object.entries(servers)) {
       if (config.enabled === false) continue;
-      const connection = new McpConnection(name, config, this.workspace);
+      const transport = transportOf(config);
+      const connection: McpConnectionLike = transport === "streamable-http"
+        ? new HttpMcpConnection(name, config)
+        : new StdioMcpConnection(name, config, this.workspace);
       try {
         const definitions = await connection.start();
         this.connections.set(name, connection);
@@ -304,16 +399,16 @@ export class McpManager {
           return tool;
         });
         this.activeTools.push(...tools);
-        this.serverStatuses.push({ name, state: "connected", tools: tools.length });
+        this.serverStatuses.push({ name, transport, state: "connected", tools: tools.length });
       } catch (error) {
         await connection.close();
-        this.serverStatuses.push({ name, state: "failed", tools: 0, error: error instanceof Error ? error.message : String(error) });
+        this.serverStatuses.push({ name, transport, state: "failed", tools: 0, error: error instanceof Error ? error.message : String(error) });
       }
     }
     return this.status();
   }
 
-  private adaptTool(name: string, config: McpServerConfig, connection: McpConnection, definition: McpToolDefinition): AgentTool {
+  private adaptTool(name: string, config: McpServerConfig, connection: McpConnectionLike, definition: McpToolDefinition): AgentTool {
     const risk = config.toolRisks?.[definition.name] ?? config.risk ?? "execute";
     const changesWorkspace = config.toolChangesWorkspace?.[definition.name] ?? config.changesWorkspace ?? risk === "write";
     const toolName = `mcp__${safeName(name)}__${safeName(definition.name)}`.slice(0, 64);
@@ -331,6 +426,43 @@ export class McpManager {
 
   tools(): AgentTool[] { return [...this.activeTools]; }
   status(): McpServerStatus[] { return this.serverStatuses.map((item) => ({ ...item })); }
+
+  async userServerNames(): Promise<string[]> {
+    return Object.keys(await readConfig(this.globalConfig)).sort((left, right) => left.localeCompare(right));
+  }
+
+  async addUserHttpServer(name: string, url: string, bearerTokenEnvironment?: string, risk: ToolRisk = "execute"): Promise<void> {
+    const servers = await readConfig(this.globalConfig);
+    if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
+    if (bearerTokenEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearerTokenEnvironment)) throw new Error("MCP bearer token environment variable name is invalid");
+    const config = validateServer(name, {
+      transport: "streamable-http",
+      url,
+      ...(bearerTokenEnvironment ? { headers: { Authorization: `Bearer \${${bearerTokenEnvironment}}` } } : {}),
+      risk,
+    });
+    servers[name] = config;
+    await this.writeUserConfig(servers);
+  }
+
+  async removeUserServer(name: string): Promise<boolean> {
+    const servers = await readConfig(this.globalConfig);
+    if (!servers[name]) return false;
+    delete servers[name];
+    await this.writeUserConfig(servers);
+    return true;
+  }
+
+  private async writeUserConfig(servers: Record<string, McpServerConfig>): Promise<void> {
+    await fs.mkdir(path.dirname(this.globalConfig), { recursive: true });
+    const temporary = `${this.globalConfig}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temporary, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    try { await fs.rename(temporary, this.globalConfig); }
+    catch (error) {
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
 
   summary(language: UiLanguage = "en-US"): string {
     if (!this.serverStatuses.length) return localize(language, "未配置 MCP 服务器。", "No MCP servers configured.");

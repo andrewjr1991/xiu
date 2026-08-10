@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/cli",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "A safe terminal coding agent with risk-aware tools and multi-provider support.",
   "type": "module",
   "bin": {
@@ -41,7 +41,8 @@
     "V0.11_DESIGN.zh-CN.md",
     "V0.11.1_DESIGN.zh-CN.md",
     "V0.11.2_DESIGN.zh-CN.md",
-    "V0.11.3_DESIGN.zh-CN.md"
+    "V0.11.3_DESIGN.zh-CN.md",
+    "V0.11.4_DESIGN.zh-CN.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -55,6 +56,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "chalk": "^5.4.1",
     "cheerio": "1.0.0",
     "commander": "^14.0.0",

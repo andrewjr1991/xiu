@@ -78,6 +78,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
+    item("/mcp add", "添加用户级远程 MCP 服务", "Add a user-level remote MCP server"),
+    item("/mcp remove", "删除用户级 MCP 服务", "Remove a user-level MCP server"),
+    item("/mcp test", "测试 MCP 服务连接", "Test an MCP server connection"),
     item("/mcp reload", "重新加载 MCP 配置", "Reload user and project MCP configuration"),
     item("/agents", "查看多 Agent 运行和任务状态", "Show multi-agent runs and task status"),
     item("/agents cancel", "取消一个 Agent 任务", "Cancel one agent task"),
@@ -1682,6 +1685,64 @@ async function main(): Promise<void> {
       }
       if (task === "/mcp") {
         console.log(`${mcpManager.summary(language)}\n`);
+        continue;
+      }
+      if (task === "/mcp add" || task.startsWith("/mcp add ")) {
+        const parts = task.trim().split(/\s+/);
+        const name = parts[2] ?? (await askQuestion(localize(language, "MCP 名称：", "MCP name: "))).trim();
+        const url = parts[3] ?? (await askQuestion(localize(language, "Streamable HTTP 地址：", "Streamable HTTP URL: "))).trim();
+        const bearerEnv = (parts[4] ?? (await askQuestion(localize(language, "Bearer Token 环境变量名（无需认证可留空）：", "Bearer-token environment variable (blank for no authentication): "))).trim()) || undefined;
+        const risk = await selectTerminalOption(localize(language, "选择 MCP 工具的默认风险等级", "Choose the default MCP tool risk"), [
+          { label: localize(language, "执行（推荐）", "Execute (recommended)"), description: localize(language, "调用前按现有风险规则审批", "Use existing risk-based approval before calls"), value: "execute" as const },
+          { label: localize(language, "只读", "Read-only"), description: localize(language, "仅当该服务的所有工具确实只读时选择", "Only when every tool on this server is truly read-only"), value: "read" as const },
+          { label: localize(language, "写入", "Write"), description: localize(language, "服务可能修改工作区或外部状态", "The server may modify workspace or external state"), value: "write" as const },
+        ], language);
+        if (!risk) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); continue; }
+        status.start(localize(language, `正在添加并连接 MCP ${name}`, `Adding and connecting MCP ${name}`));
+        try {
+          await mcpManager.addUserHttpServer(name, url, bearerEnv, risk);
+          await mcpManager.start();
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+          status.stop();
+          const server = mcpManager.status().find((item) => item.name === name);
+          const result = server?.state === "connected"
+            ? localize(language, `MCP ${name} 已添加并连接，发现 ${server.tools} 个工具。`, `MCP ${name} added and connected with ${server.tools} tools.`)
+            : localize(language, `MCP ${name} 已保存，但连接失败：${server?.error ?? "未知错误"}`, `MCP ${name} was saved, but connection failed: ${server?.error ?? "unknown error"}`);
+          console.log(`${server?.state === "connected" ? chalk.green(result) : chalk.yellow(result)}\n`);
+        } catch (error) {
+          status.stop();
+          console.error(chalk.red(`${localize(language, "MCP 添加失败", "MCP add failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/mcp remove" || task.startsWith("/mcp remove ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const names = await mcpManager.userServerNames();
+        const name = requested ?? await selectTerminalOption(localize(language, "删除哪个用户级 MCP？", "Remove which user-level MCP server?"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有可删除的用户级 MCP，或操作已取消。\n", "No user-level MCP server can be removed, or the operation was cancelled.\n"))); continue; }
+        const confirmed = (await askQuestion(chalk.yellow(localize(language, `确认删除用户级 MCP ${name}？[y/N] `, `Remove user-level MCP ${name}? [y/N] `)))).trim();
+        if (!/^(y|yes)$/i.test(confirmed)) { console.log(chalk.dim(localize(language, "已取消删除 MCP。\n", "MCP removal cancelled.\n"))); continue; }
+        try {
+          if (!await mcpManager.removeUserServer(name)) throw new Error(localize(language, `用户配置中不存在 ${name}`, `${name} does not exist in user configuration`));
+          await mcpManager.start();
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+          console.log(chalk.green(localize(language, `已删除 MCP ${name}。\n`, `Removed MCP ${name}.\n`)));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "MCP 删除失败", "MCP removal failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/mcp test" || task.startsWith("/mcp test ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        status.start(localize(language, "正在测试 MCP 连接", "Testing MCP connections"));
+        await mcpManager.start();
+        agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+        status.stop();
+        const servers = requested ? mcpManager.status().filter((item) => item.name === requested) : mcpManager.status();
+        if (!servers.length) console.log(chalk.yellow(localize(language, `未找到 MCP ${requested ?? "服务"}。\n`, `MCP ${requested ?? "server"} was not found.\n`)));
+        else console.log(`${servers.map((server) => server.state === "connected"
+          ? chalk.green(localize(language, `✓ ${server.name}：已连接 · ${server.transport} · ${server.tools} 个工具`, `✓ ${server.name}: connected · ${server.transport} · ${server.tools} tools`))
+          : chalk.red(localize(language, `✗ ${server.name}：连接失败 · ${server.error}`, `✗ ${server.name}: failed · ${server.error}`))).join("\n")}\n`);
         continue;
       }
       if (task === "/mcp reload") {

@@ -58,6 +58,8 @@ The v0.11.2 acceptance hardening also records every planning/implementation/veri
 
 Version 0.11.3 adds safe prompt-cache observability and request deduplication without caching Agent answers. OpenAI-compatible usage reports and Anthropic cache creation/read usage feed `/diagnostics`; native OpenAI requests receive a stable hashed prompt-cache key, and Anthropic marks the stable system prompt with an ephemeral cache boundary. Model discovery is cached briefly and identical concurrent metadata/capability probes are coalesced. Provider settings migrate to a fingerprinted version-2 capability cache, invalidating stale probes after endpoint, proxy, feature, model, authentication, or protocol changes. Tool calls, file changes, approvals, streamed answers, and billable media generation are never locally result-cached or replayed.
 
+Version 0.11.4 adds official Streamable HTTP MCP transport alongside stdio. Remote servers support JSON or SSE responses, protocol sessions, cancellation, clean session termination, environment-backed bearer headers, and the same Xiu risk approvals and Plan-mode boundary as local tools. `/mcp add`, `/mcp remove`, and `/mcp test` manage user-level remote servers without restarting Xiu. Remote endpoints require HTTPS except for loopback development addresses; OAuth remains a later milestone.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -82,7 +84,7 @@ Version 0.11.3 adds safe prompt-cache observability and request deduplication wi
 - Compact prompt footer with model, context usage, plan mode, skill count, and workspace
 - Xiu-native project/global skills with Claude-compatible discovery and on-demand loading
 - Safe local or HTTPS Git skill installation with limits, symlink rejection, and recoverable replacement backups
-- Stdio MCP client with user/project configuration, tool discovery, live reload, cancellation, and clean shutdown
+- Stdio and Streamable HTTP MCP clients with user/project configuration, tool discovery, live reload, cancellation, and clean shutdown
 - Namespaced MCP tools governed by the same read/write/execute/dangerous approvals and Plan-mode boundary
 - Provider-aware capability routing for text, vision, image generation, and video generation
 - Agnes Image 2.1 Flash text-to-image, image-to-image, and multi-image composition
@@ -201,6 +203,9 @@ Interactive session commands:
 /skills             browse installed skills
 /skills install ... install from a local path or HTTPS Git repository
 /mcp                show MCP server connections and tool counts
+/mcp add [name] [url] [TOKEN_ENV]  add a user-level Streamable HTTP server
+/mcp remove [name]  remove a user-level MCP server
+/mcp test [name]    reconnect and test one or all MCP servers
 /mcp reload         reload user and project MCP configuration
 /agents             show all saved multi-agent runs
 /agents <run>       show one run and every specialist task
@@ -270,7 +275,7 @@ Remote sources must use HTTPS Git URLs. Packages are limited to 20 MB and 1,000 
 
 ## MCP servers
 
-Xiu loads stdio MCP servers after the workspace trust check. User configuration lives at `~/.xiu/mcp.json`; a project can add or override servers in `<project>/.xiu/mcp.json`. Project configuration wins when both files contain the same server name, and `"enabled": false` disables an inherited server.
+Xiu loads stdio and Streamable HTTP MCP servers after the workspace trust check. User configuration lives at `~/.xiu/mcp.json`; a project can add or override servers in `<project>/.xiu/mcp.json`. Project configuration wins when both files contain the same server name, and `"enabled": false` disables an inherited server.
 
 ```json
 {
@@ -292,6 +297,23 @@ Xiu loads stdio MCP servers after the workspace trust check. User configuration 
   }
 }
 ```
+
+A remote Streamable HTTP server uses one endpoint. Keep credentials in an environment variable rather than the JSON file:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "transport": "streamable-http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" },
+      "risk": "execute"
+    }
+  }
+}
+```
+
+Use `/mcp add` for an interactive setup, `/mcp test [name]` to reconnect and inspect the result, and `/mcp remove [name]` to remove only a user-level entry. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials. Interactive OAuth is not yet supported.
 
 On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, and `changesWorkspace` / `toolChangesWorkspace` hints for diff and verification tracking. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
 
@@ -446,7 +468,7 @@ npm run build
 
 - Shell commands rely on approval and the operating-system account rather than a container sandbox.
 - Precise checkpoint restore currently covers Xiu's focused file tools and generated outputs; arbitrary shell-command side effects require Git or project-specific recovery.
-- MCP v0.5 currently supports stdio transport; Streamable HTTP, OAuth discovery, resources, prompts, and sampling are future extensions.
+- MCP supports stdio and Streamable HTTP transport; OAuth discovery, resources, prompts, and sampling remain future extensions.
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.
