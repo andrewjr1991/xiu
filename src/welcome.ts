@@ -119,7 +119,10 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     chalk.dim(localize(language, "修代码，也修工程。", "Build code. Fix systems.")),
     chalk.dim(fit(config.cwd, 38)),
   ];
-  const panelRows: WelcomeBoxRow[] = [...tips, { divider: localize(language, "当前会话", "Session") }, ...session];
+  // The welcome panel is terminal scrollback, not a live TUI region. Label it
+  // explicitly so a later provider/model switch cannot make the old row look
+  // like current state; the prompt dashboard below remains live.
+  const panelRows: WelcomeBoxRow[] = [...tips, { divider: localize(language, "启动时配置 · 实时状态见底栏", "Startup config · live status below") }, ...session];
   const alignBorderWithCursor = Boolean(process.stdout.isTTY);
 
   if (width >= 86) {

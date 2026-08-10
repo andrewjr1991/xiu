@@ -147,7 +147,7 @@ v0.10.1 起，Provider 切换和模型切换还会分别探测工具与视觉能
 
 上下文窗口不是 OpenAI-compatible `/models` 标准接口的必填字段，因此无法对所有供应商百分百自动识别。若服务返回 `context_window`、`context_length`、`max_model_len`、`max_context_length` 或 `input_token_limit`，Xiu 会自动读取并按模型缓存；否则使用 Provider 中手动填写的值。优先级为：启动参数 `--context-window`、Provider 手动配置、API 返回值、Xiu 已知的官方值、保守默认值。比如 1M 上下文应填写整数 `1000000`，自动压缩点默认是窗口的 80%，即 `800000`。
 
-启动欢迎卡片属于当次启动的历史输出，切换 Provider 后不会回头改写终端滚动记录。切换成功回执和 `/status` 显示的才是当前模型实际使用的上下文窗口与压缩点。
+启动欢迎卡片属于当次启动的历史输出，切换 Provider 后不会回头改写终端滚动记录。v0.10.2 起该区域明确标为“启动时配置 · 实时状态见底栏”；输入框下方的实时状态栏会显示 `Provider ID/模型 ID` 并在切换后立即更新。切换成功回执和 `/status` 显示的也是当前模型实际使用的上下文窗口与压缩点。
 
 命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。通过 `/providers` 和 `/models` 选中的 Provider 与模型会保存在 `~/.xiu/providers.json`，下次启动继续使用。优先级为：本次显式命令行参数、上次交互选择、环境变量、内置默认值。环境变量因此适合作为首次启动默认值；若要临时覆盖已保存选择，请使用 `xiu --provider <Profile-ID> --model <模型-ID>`。
 

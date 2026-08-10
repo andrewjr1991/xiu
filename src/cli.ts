@@ -742,7 +742,7 @@ async function main(): Promise<void> {
       const plan = planManager.snapshot();
       const activeStep = plan?.steps.find((step) => step.status === "in_progress") ?? plan?.steps.find((step) => step.status === "pending");
       return formatPromptDashboard({
-        model: dashboard.model,
+        model: `${config.providerId}/${dashboard.model}`,
         contextTokens: dashboard.stats.estimatedTokens,
         contextLimit: dashboard.contextLimit,
         skills: skillRegistry.list().length,
