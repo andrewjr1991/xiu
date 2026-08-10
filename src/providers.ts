@@ -4,6 +4,25 @@ import { ProxyAgent } from "undici";
 import type { AgentConfig } from "./config.js";
 import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolDefinition } from "./types.js";
 
+function discoveredContextWindow(model: object): number | undefined {
+  const metadata = model as Record<string, unknown>;
+  for (const key of ["context_window", "context_length", "max_model_len", "max_context_length", "input_token_limit"]) {
+    const value = metadata[key];
+    const numeric = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : undefined;
+    if (numeric !== undefined && Number.isInteger(numeric) && numeric >= 8_000) return numeric;
+  }
+  return undefined;
+}
+
+function canRetryForcedToolProbeWithAuto(error: unknown): boolean {
+  const status = typeof error === "object" && error !== null && "status" in error
+    ? Number((error as { status?: unknown }).status)
+    : undefined;
+  if (status === 400 || status === 422) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /tool_choice|forced tool|force.*tool|thinking.*tool/i.test(message);
+}
+
 class OpenAIProvider implements ModelProvider {
   private client: OpenAI;
   constructor(private config: AgentConfig) {
@@ -44,10 +63,41 @@ class OpenAIProvider implements ModelProvider {
     const page = await this.client.models.list();
     const models: AvailableModel[] = [];
     for await (const model of page) {
-      models.push({ id: model.id, description: model.owned_by ? `Owned by ${model.owned_by}` : undefined, source: "api" });
+      models.push({ id: model.id, description: model.owned_by ? `Owned by ${model.owned_by}` : undefined, source: "api", contextWindow: discoveredContextWindow(model) });
       if (models.length >= 200) break;
     }
     return models;
+  }
+
+  async probeToolSupport(signal?: AbortSignal): Promise<boolean> {
+    const name = "xiu_capability_probe";
+    const tool = { type: "function" as const, function: {
+        name, description: "An inert capability probe. It performs no action.",
+        parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
+      } };
+    const request = async (toolChoice: "auto" | { type: "function"; function: { name: string } }): Promise<boolean> => {
+      const response = await this.client.chat.completions.create({
+        model: this.config.model,
+        messages: [{
+          role: "user",
+          content: "Use the xiu_capability_probe function with value OK. Do not answer in plain text; this request only verifies structured function calling.",
+        }],
+        tools: [tool],
+        tool_choice: toolChoice,
+      }, { signal });
+      // Deliberately accept only the API's structured tool_calls field. Text such
+      // as <tool_call>...</tool_call> is not executable protocol data.
+      return Boolean(response.choices[0]?.message.tool_calls?.some((call) => call.type === "function" && call.function.name === name));
+    };
+
+    try {
+      if (await request({ type: "function", function: { name } })) return true;
+    } catch (error) {
+      // Thinking models such as DashScope DeepSeek can support Function Calling
+      // while rejecting a forced named tool. Their compatible API supports auto.
+      if (!canRetryForcedToolProbeWithAuto(error)) throw error;
+    }
+    return request("auto");
   }
 
   async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
@@ -154,10 +204,25 @@ class AnthropicProvider implements ModelProvider {
     const page = await this.client.models.list({ limit: 100 });
     const models: AvailableModel[] = [];
     for await (const model of page) {
-      models.push({ id: model.id, name: model.display_name, description: model.created_at ? `Released ${model.created_at.slice(0, 10)}` : undefined, source: "api" });
+      models.push({ id: model.id, name: model.display_name, description: model.created_at ? `Released ${model.created_at.slice(0, 10)}` : undefined, source: "api", contextWindow: discoveredContextWindow(model) });
       if (models.length >= 200) break;
     }
     return models;
+  }
+
+  async probeToolSupport(signal?: AbortSignal): Promise<boolean> {
+    const name = "xiu_capability_probe";
+    const response = await this.client.messages.create({
+      model: this.config.model,
+      max_tokens: 64,
+      messages: [{ role: "user", content: "Call the provided capability probe with value OK." }],
+      tools: [{
+        name, description: "An inert capability probe. It performs no action.",
+        input_schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
+      }],
+      tool_choice: { type: "tool", name },
+    }, { signal });
+    return response.content.some((block) => block.type === "tool_use" && block.name === name);
   }
 
   async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
@@ -245,15 +310,14 @@ export interface ProviderProbeResult {
 /** Verify a provider even when its OpenAI-compatible surface does not implement GET /models. */
 export async function probeProvider(config: AgentConfig, signal?: AbortSignal): Promise<ProviderProbeResult> {
   const provider = createProvider(config);
-  if (!provider.listModels) {
-    await provider.complete("You are checking an API connection.", [{ role: "user", content: "Reply only: OK" }], [], signal);
-    return { provider, models: [] };
+  let models: AvailableModel[] = [];
+  let discoveryError: string | undefined;
+  if (provider.listModels) {
+    try { models = await provider.listModels(); }
+    catch (error) { discoveryError = error instanceof Error ? error.message : String(error); }
   }
-  try {
-    return { provider, models: await provider.listModels() };
-  } catch (error) {
-    const discoveryError = error instanceof Error ? error.message : String(error);
-    await provider.complete("You are checking an API connection.", [{ role: "user", content: "Reply only: OK" }], [], signal);
-    return { provider, models: [], discoveryError };
-  }
+  // A successful model-list response does not prove that the selected model can
+  // answer requests, so every connection test also performs a minimal text call.
+  await provider.complete("You are checking an API connection.", [{ role: "user", content: "Reply only: OK" }], [], signal);
+  return { provider, models, discoveryError };
 }

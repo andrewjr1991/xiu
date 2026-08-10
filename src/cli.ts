@@ -11,12 +11,13 @@ import { listBackgroundProcesses, stopAllBackgroundProcesses } from "./backgroun
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
+import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig } from "./config.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
-import { ProviderRegistry, type ProviderProfile } from "./provider-registry.js";
+import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { McpManager } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
@@ -54,6 +55,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/models", "发现并选择可用模型", "Discover and choose an available model"),
     item("/providers", "浏览并切换 Provider", "Browse and switch providers"),
     item("/provider test", "测试当前 Provider 连接", "Test the current provider connection"),
+    item("/provider capabilities", "重新探测当前模型能力", "Re-probe current model capabilities"),
     item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
     item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
@@ -195,24 +197,43 @@ async function main(): Promise<void> {
   const settings = await settingsStore.load();
   const providerRegistry = new ProviderRegistry();
   await providerRegistry.load();
-  const profileConfig = (profile: ProviderProfile, model?: string) => resolveConfig({
-    ...options,
-    provider: profile.kind,
-    providerId: profile.id,
-    providerLabel: profile.name,
-    apiKeyEnv: profile.apiKeyEnv,
-    apiKey: profile.apiKey,
-    providerFeatures: profile.features,
-    model: model ?? options.model ?? process.env.XIU_MODEL ?? profile.model,
-    baseURL: options.baseURL ?? profile.baseURL,
-    proxy: options.proxy ?? profile.proxy,
-    contextWindow: options.contextWindow ?? (profile.contextWindow ? String(profile.contextWindow) : undefined),
-    language: options.language ?? process.env.XIU_LANGUAGE ?? settings.language,
+  const runtimeProfile = (profile: ProviderProfile, model = profile.model): ProviderProfile => ({
+    ...profile,
+    features: applyCapabilityProbe(profile.features, providerRegistry.capabilityProbe(profile.id, model)),
   });
-  const requestedProviderId = options.provider ?? process.env.XIU_PROVIDER ?? providerRegistry.activeId() ?? "openai";
+  const profileConfig = (profile: ProviderProfile, model?: string, discoveredContextWindow?: number) => {
+    const selectedModel = model ?? profile.model;
+    const effective = runtimeProfile(profile, selectedModel);
+    const cachedProbe = providerRegistry.capabilityProbe(profile.id, selectedModel);
+    const apiContextWindow = discoveredContextWindow ?? cachedProbe?.contextWindow;
+    const resolved = resolveConfig({
+      ...options,
+      provider: effective.kind,
+      providerId: effective.id,
+      providerLabel: effective.name,
+      apiKeyEnv: effective.apiKeyEnv,
+      apiKey: effective.apiKey,
+      providerFeatures: effective.features,
+      baseURL: options.baseURL ?? effective.baseURL,
+      proxy: options.proxy ?? effective.proxy,
+      contextWindow: options.contextWindow ?? (effective.contextWindow ? String(effective.contextWindow) : apiContextWindow ? String(apiContextWindow) : undefined),
+      model: selectedModel,
+      language: options.language ?? process.env.XIU_LANGUAGE ?? settings.language,
+    });
+    if (options.contextWindow === undefined && effective.contextWindow === undefined && apiContextWindow) resolved.contextWindowSource = "api";
+    return resolved;
+  };
+  const savedProviderId = providerRegistry.activeId();
+  const requestedProviderId = resolveStartupProviderId(options.provider, savedProviderId, process.env.XIU_PROVIDER);
   const startupProfile = providerRegistry.get(requestedProviderId);
   if (!startupProfile) throw new Error(`Provider profile not found: ${requestedProviderId}. Run xiu and use /providers.`);
-  const config = profileConfig(startupProfile);
+  const startupModel = resolveStartupModel(
+    options.model,
+    requestedProviderId === savedProviderId ? providerRegistry.activeModel(requestedProviderId) : undefined,
+    process.env.XIU_MODEL,
+    startupProfile.model,
+  );
+  const config = profileConfig(startupProfile, startupModel);
   let language = config.language ?? "en-US";
   const stat = await fs.stat(config.cwd).catch(() => undefined);
   if (!stat?.isDirectory()) throw new Error(`Workspace does not exist: ${config.cwd}`);
@@ -231,7 +252,7 @@ async function main(): Promise<void> {
     let restored = resumeRequested && typeof options.resume === "string"
       ? await loadSession(config.cwd, options.resume)
       : undefined;
-    if (restored?.providerId && !options.provider && !process.env.XIU_PROVIDER) {
+    if (restored?.providerId && !options.provider) {
       const restoredProfile = providerRegistry.get(restored.providerId);
       if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
     }
@@ -283,7 +304,7 @@ async function main(): Promise<void> {
         console.log(chalk.dim(localize(language, "未选择会话，将开始新会话。\n", "No session selected. Starting a new session.\n")));
       }
     }
-    if (restored?.providerId && !options.provider && !process.env.XIU_PROVIDER) {
+    if (restored?.providerId && !options.provider) {
       const restoredProfile = providerRegistry.get(restored.providerId);
       if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
     }
@@ -619,7 +640,8 @@ async function main(): Promise<void> {
       checkpointManager,
       skillRegistry,
     );
-    const featureNames = (profile: ProviderProfile): string => {
+    const featureNames = (profile: ProviderProfile, model = profile.model): string => {
+      profile = runtimeProfile(profile, model);
       const names = [localize(language, "文本", "text")];
       if (profile.features.tools) names.push(localize(language, "工具", "tools"));
       if (profile.features.vision) names.push(localize(language, "视觉", "vision"));
@@ -627,28 +649,66 @@ async function main(): Promise<void> {
       if (profile.features.video) names.push(localize(language, "视频", "video"));
       return names.join("/");
     };
-    const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string): Promise<boolean> => {
+    const capabilityStateName = (state: CapabilityProbeState): string => ({
+      supported: localize(language, "支持", "supported"),
+      unsupported: localize(language, "不支持", "unsupported"),
+      unknown: localize(language, "未知", "unknown"),
+      "not-tested": localize(language, "未测试", "not tested"),
+    })[state];
+    const capabilityProbeSummary = (profile: ProviderProfile, model = profile.model): string => {
+      const probe = providerRegistry.capabilityProbe(profile.id, model);
+      if (!probe) return localize(language, "能力未探测", "capabilities not tested");
+      const context = probe.contextWindow ? localize(language, ` · 上下文 ${probe.contextWindow.toLocaleString()}（API）`, ` · context ${probe.contextWindow.toLocaleString()} (API)`) : "";
+      return localize(language,
+        `探测：工具 ${capabilityStateName(probe.tools)} · 视觉 ${capabilityStateName(probe.vision)}${context} · ${new Date(probe.checkedAt).toLocaleString()}`,
+        `Probe: tools ${capabilityStateName(probe.tools)} · vision ${capabilityStateName(probe.vision)}${context} · ${new Date(probe.checkedAt).toLocaleString()}`);
+    };
+    const compactCapabilityProbeSummary = (profile: ProviderProfile, model = profile.model): string => {
+      const probe = providerRegistry.capabilityProbe(profile.id, model);
+      if (!probe) return localize(language, "未探测", "not tested");
+      return localize(language,
+        `工具 ${capabilityStateName(probe.tools)} / 视觉 ${capabilityStateName(probe.vision)}`,
+        `tools ${capabilityStateName(probe.tools)} / vision ${capabilityStateName(probe.vision)}`);
+    };
+    const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
       status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
       try {
-        const nextConfig = profileConfig(profile, preferredModel ?? profile.model);
-        const probe = await probeProvider(nextConfig);
-        const nextProvider = probe.provider;
-        const discovered = probe.models;
-        if (nextConfig.model === "local-model" && discovered[0]?.id) {
-          nextConfig.model = discovered[0].id;
-          if (nextConfig.capabilities) {
-            nextConfig.capabilities.text = discovered[0].id;
-            if (profile.features.vision) nextConfig.capabilities.vision = discovered[0].id;
-          }
+        let targetModel = preferredModel ?? profile.model;
+        let candidateConfig = profileConfig(profile, targetModel);
+        const connectionModel = candidateConfig.model;
+        const connection = await probeProvider(candidateConfig);
+        let nextProvider = connection.provider;
+        const discovered = connection.models;
+        if (candidateConfig.model === "local-model" && discovered[0]?.id) {
+          targetModel = discovered[0].id;
         }
+        let capabilityProbe = providerRegistry.capabilityProbe(profile.id, targetModel);
+        const discoveredWindow = discovered.find((model) => model.id === targetModel)?.contextWindow;
+        const apiContextWindow = discoveredWindow ?? capabilityProbe?.contextWindow;
+        candidateConfig = profileConfig(profile, targetModel, apiContextWindow);
+        if (candidateConfig.model !== connectionModel) nextProvider = createProvider(candidateConfig);
+        if (forceCapabilityProbe || !probeIsFresh(capabilityProbe)) {
+          status.start(localize(language, `正在探测 ${targetModel} 的工具与视觉能力`, `Probing tool and vision capabilities for ${targetModel}`));
+          capabilityProbe = await probeModelCapabilities(candidateConfig, { provider: nextProvider });
+          if (apiContextWindow) {
+            capabilityProbe.contextWindow = apiContextWindow;
+            capabilityProbe.contextWindowSource = "api";
+          }
+          await providerRegistry.setCapabilityProbe(capabilityProbe);
+        }
+        const nextConfig = profileConfig(profile, targetModel, apiContextWindow);
         await agent.replaceProvider(nextConfig, nextProvider);
         baseTools = buildBaseTools();
         agent.replaceTools([...baseTools, ...mcpManager.tools()]);
-        if (persist) await providerRegistry.setActive(profile.id);
+        if (persist) await providerRegistry.setActive(profile.id, targetModel);
         status.stop();
+        const activeContextWindow = nextConfig.contextWindow ?? 128_000;
+        const activeContextLimit = nextConfig.contextLimit ?? Math.floor(activeContextWindow * 0.8);
         console.log(chalk.green(localize(language, `Provider 已切换为 ${profile.name}，模型 ${nextConfig.model}。`, `Provider changed to ${profile.name}, model ${nextConfig.model}.`)));
-        console.log(chalk.dim(localize(language, `能力：${featureNames(profile)}${discovered.length ? ` · 发现 ${discovered.length} 个模型` : ""}\n`, `Capabilities: ${featureNames(profile)}${discovered.length ? ` · discovered ${discovered.length} models` : ""}\n`)));
-        if (probe.discoveryError) console.log(chalk.dim(localize(language, "该服务未提供兼容的模型列表接口；已通过最小聊天请求验证连接。\n", "The service has no compatible model-list endpoint; connection verified with a minimal chat request.\n")));
+        console.log(chalk.dim(localize(language, `上下文：${activeContextWindow.toLocaleString()} · 压缩点 ${activeContextLimit.toLocaleString()}（${nextConfig.contextWindowSource ?? "fallback"}）`, `Context: ${activeContextWindow.toLocaleString()} · compact at ${activeContextLimit.toLocaleString()} (${nextConfig.contextWindowSource ?? "fallback"})`)));
+        console.log(chalk.dim(localize(language, `能力：${featureNames(profile, targetModel)}${discovered.length ? ` · 发现 ${discovered.length} 个模型` : ""}`, `Capabilities: ${featureNames(profile, targetModel)}${discovered.length ? ` · discovered ${discovered.length} models` : ""}`)));
+        console.log(chalk.dim(`${capabilityProbeSummary(profile, targetModel)}\n`));
+        if (connection.discoveryError) console.log(chalk.dim(localize(language, "该服务未提供兼容的模型列表接口；已通过最小聊天请求验证连接。\n", "The service has no compatible model-list endpoint; connection verified with a minimal chat request.\n")));
         return true;
       } catch (error) {
         status.stop();
@@ -972,7 +1032,7 @@ async function main(): Promise<void> {
         const profiles = providerRegistry.list();
         const selected = await selectTerminalOption(localize(language, "选择 Provider", "Choose a provider"), profiles.map((profile) => ({
           label: `${profile.name}${profile.id === config.providerId ? localize(language, "（当前）", " (current)") : ""}`,
-          description: `${profile.id} · ${profile.kind} · ${profile.model} · ${featureNames(profile)}${profile.baseURL ? ` · ${profile.baseURL}` : ""}`,
+          description: `${profile.id} · ${profile.kind} · ${profile.model} · ${featureNames(profile)} · ${compactCapabilityProbeSummary(profile)}`,
           value: profile.id,
         })), language);
         if (!selected) console.log(chalk.dim(localize(language, "已取消 Provider 选择。\n", "Provider selection cancelled.\n")));
@@ -980,18 +1040,9 @@ async function main(): Promise<void> {
         else await switchProviderProfile(providerRegistry.get(selected)!);
         continue;
       }
-      if (task === "/provider test") {
-        status.start(localize(language, "正在测试当前 Provider", "Testing the current provider"));
-        try {
-          const probe = await probeProvider(config);
-          status.stop();
-          console.log(chalk.green(localize(language, `连接成功：${config.providerId}，发现 ${probe.models.length} 个模型。`, `Connected to ${config.providerId}; discovered ${probe.models.length} model(s).`)));
-          if (probe.discoveryError) console.log(chalk.dim(localize(language, "模型列表接口不可用；已通过最小聊天请求验证连接。\n", "The model-list endpoint is unavailable; connection verified with a minimal chat request.\n")));
-          else console.log();
-        } catch (error) {
-          status.stop();
-          console.error(chalk.red(`${localize(language, "连接测试失败", "Connection test failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
-        }
+      if (task === "/provider test" || task === "/provider capabilities") {
+        const profile = providerRegistry.get(config.providerId) ?? startupProfile;
+        await switchProviderProfile(profile, true, agent.status().model, true);
         continue;
       }
       if (task === "/provider key") {
@@ -1205,11 +1256,13 @@ async function main(): Promise<void> {
         status.stop();
         if (available.discoveryError) console.log(chalk.yellow(localize(language, `无法在线发现模型：${available.discoveryError}\n改为显示内置模型。\n`, `Live model discovery unavailable: ${available.discoveryError}\nShowing built-in models instead.\n`)));
         const current = agent.status().model;
+        const currentProfile = providerRegistry.get(config.providerId) ?? startupProfile;
         const selected = await selectTerminalOption(localize(language, "选择模型", "Choose a model"), available.models.map((model) => ({
           label: `${model.id}${model.id === current ? localize(language, "（当前）", " (current)") : ""}`,
           description: [
             model.name && model.name !== model.id ? model.name : "",
-            model.capabilities?.join("/"),
+            featureNames(currentProfile, model.id),
+            capabilityProbeSummary(currentProfile, model.id),
             model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K ctx` : "",
             model.providerId,
             model.description ?? "",
@@ -1219,8 +1272,7 @@ async function main(): Promise<void> {
         })), language);
         if (!selected || selected === current) console.log(chalk.dim(selected ? localize(language, `模型保持为 ${current}。\n`, `Model remains ${current}.\n`) : localize(language, "已取消模型选择。\n", "Model selection cancelled.\n")));
         else {
-          await agent.setModel(selected);
-          console.log(chalk.green(localize(language, `模型已切换：${current} → ${selected}。\n`, `Model changed: ${current} -> ${selected}.\n`)));
+          await switchProviderProfile(currentProfile, true, selected);
         }
         continue;
       }
@@ -1372,7 +1424,7 @@ async function main(): Promise<void> {
         const indexStatusZh = `索引：${index?.files ?? 0} 个文件${index?.truncated ? "（已截断）" : ""} · ${index?.analyzedModules ?? 0} 个已分析模块 · ${index?.symbols ?? 0} 个符号 · ${index?.dependencies ?? 0} 条依赖 · ${indexModeZh} · ${index?.durationMs ?? 0} 毫秒${index?.dirty ? " · 等待刷新" : ""}`;
         const indexStatusEn = `Index: ${index?.files ?? 0} files${index?.truncated ? " (truncated)" : ""} · ${index?.analyzedModules ?? 0} analyzed modules · ${index?.symbols ?? 0} symbols · ${index?.dependencies ?? 0} dependencies · ${indexModeEn} · ${index?.durationMs ?? 0}ms${index?.dirty ? " · refresh pending" : ""}`;
         console.log(zh ? [
-          `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile)}`, `语言：简体中文`,
+          `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `能力探测：${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `语言：简体中文`,
           `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${current.outcome}`,
           `轮次：${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : "（无限制）"}`, `待处理补充：${current.pendingSteering}`, `消息：${current.messages}`,
           `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${current.contextLimitMode}）`,
@@ -1383,7 +1435,7 @@ async function main(): Promise<void> {
           `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${listBackgroundProcesses().filter((item) => item.running).length} 个运行中`,
           `活动：${activities.list().length} 条记录（/details）`,
         ].join("\n") + "\n" : [
-          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
+          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
           `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`, `Pending steering: ${current.pendingSteering}`, `Messages: ${current.messages}`,
           `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${current.contextLimitMode})`,
           `Model window: ${current.contextWindow.toLocaleString()} tokens (${current.contextWindowSource})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,

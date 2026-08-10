@@ -1,6 +1,6 @@
 import type { AgentConfig, ProviderName } from "./config.js";
 
-export type ContextWindowSource = "official" | "configured" | "fallback";
+export type ContextWindowSource = "official" | "api" | "configured" | "fallback";
 
 export interface ContextProfile {
   contextWindow: number;

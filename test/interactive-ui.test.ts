@@ -42,6 +42,28 @@ test("raw input hand-off keeps stdin flowing between consecutive prompts", () =>
   assert.equal(input.isRaw, false);
 });
 
+test("stale raw input cleanup cannot disable a newer prompt", () => {
+  const input = new PassThrough() as PassThrough & {
+    setRawMode: (enabled: boolean) => void;
+    isRaw: boolean;
+  };
+  input.isRaw = false;
+  input.setRawMode = (enabled) => { input.isRaw = enabled; };
+  let firstKeys = 0;
+  let secondKeys = 0;
+  const releaseFirst = beginRawInput(() => { firstKeys += 1; }, input as unknown as NodeJS.ReadStream);
+  const releaseSecond = beginRawInput(() => { secondKeys += 1; }, input as unknown as NodeJS.ReadStream);
+
+  releaseFirst();
+  assert.equal(input.isRaw, true);
+  input.emit("keypress", "x", { name: "x" });
+  assert.equal(firstKeys, 0);
+  assert.equal(secondKeys, 1);
+
+  releaseSecond();
+  assert.equal(input.isRaw, false);
+});
+
 test("Ctrl+C cancellation recognizes parsed keys and raw Windows control bytes", () => {
   assert.equal(isTerminalCancel("", { name: "c", ctrl: true }), true);
   assert.equal(isTerminalCancel("\u0003", { sequence: "\u0003" }), true);
@@ -137,8 +159,29 @@ test("terminal selector clips long skill descriptions so Esc can clear every phy
     value: "skill",
   }], 0, 10, 60);
   assert.equal(lines.length, 3);
-  assert.ok(lines.every((line) => terminalDisplayWidth(line) <= 59));
+  assert.ok(lines.every((line) => terminalDisplayWidth(line) <= 56));
   assert.match(lines[1] ?? "", /\.\.\./);
+});
+
+test("terminal selector stays compact when Windows reports a wider buffer than viewport", () => {
+  const lines = terminalOptionFrameLines("选择 Provider", [{
+    label: "阿里云百炼",
+    description: "DashScope · openai-compatible · deepseek-v4-pro · 文本/工具/视觉 · https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    value: "dashscope",
+  }], 0, 10, 260, "zh-CN");
+  assert.ok(lines.every((line) => terminalDisplayWidth(line) <= 88));
+  assert.match(lines[1] ?? "", /\.\.\./);
+});
+
+test("terminal selector reserves enough safety margin to avoid classic PowerShell physical wraps", () => {
+  const options = Array.from({ length: 8 }, (_, index) => ({
+    label: index ? "Agnes" : "Agnes（当前）",
+    description: "agnes · agnes · agnes-2.5-flash · 文本/工具/视觉/生图/视频 · 工具 支持 / 视觉 支持",
+    value: index,
+  }));
+  const lines = terminalOptionFrameLines("选择 Provider", options, 7, 10, 240, "zh-CN");
+  assert.equal(lines.length, 10);
+  assert.ok(lines.every((line) => terminalDisplayWidth(line) <= 88));
 });
 
 test("interactive input and command palette stay within terminal width", () => {

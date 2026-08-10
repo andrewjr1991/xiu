@@ -58,7 +58,7 @@ Xiu v0.10 支持 Agnes、OpenAI、Anthropic、Ollama、LM Studio、vLLM 和自�
 /providers
 ```
 
-即可查看全部内置和自定义 Provider，通过上下键选择。Xiu 会先测试连接，成功后才切换，并把选择保存到 `~/.xiu/providers.json`。
+即可查看全部内置和自定义 Provider，通过上下键选择。Xiu 会先验证文本请求，再探测当前模型的工具调用与视觉输入能力；成功后才切换，并把选择和探测结果保存到 `~/.xiu/providers.json`。
 
 API Key 有两种配置方式：
 
@@ -128,6 +128,7 @@ $env:OFFICE_MODEL_KEY = '你的实际 API Key'
 
 ```text
 /provider test
+/provider capabilities
 /provider key
 /provider edit
 /provider remove
@@ -136,9 +137,19 @@ $env:OFFICE_MODEL_KEY = '你的实际 API Key'
 
 `/provider edit` 用于修改已经保存的自定义 Provider。选择后会依次显示名称、Base URL、默认模型、密钥环境变量名、上下文窗口和视觉能力；直接回车保留当前值，环境变量名或上下文窗口输入 `-` 可清空。现有本地 Key 会保留，需要更换时使用 `/provider key`。
 
-连接测试会先尝试 OpenAI-compatible 模型列表接口。如果服务没有实现该接口，Xiu 会自动发送一次最小聊天请求验证连接，并明确提示“模型列表接口不可用”，不会把它误判成 Provider 整体不可用。
+连接测试会尝试 OpenAI-compatible 模型列表接口，并且无论列表是否可用，都会发送一次最小聊天请求验证当前模型确实能够回复。如果服务没有实现模型列表接口，Xiu 会明确提示“模型列表接口不可用”，不会把它误判成 Provider 整体不可用。
 
-命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。优先级为：命令行、环境变量、上次持久选择、默认 `openai`。
+v0.10.1 起，Provider 切换和模型切换还会分别探测工具与视觉能力：工具探测只要求模型调用一个不会执行任何操作的虚拟工具；先尝试强制指定该工具，若推理模型或兼容网关不支持强制选择，则自动改用 `tool_choice: auto`。只有 API 返回结构化 `tool_calls` 才算支持，模型输出的 `<tool_call>` 等普通文本不会被执行。视觉探测发送 Xiu 内置的纯色色块 PNG，并要求模型准确识别实际颜色；只有答案与像素内容一致才算支持，因此静默忽略图片的端点不会误报。它不会读取或上传项目文件。结果按“Provider ID + 模型 ID”缓存七天，同一供应商的不同模型互不混用；探测协议升级后旧缓存自动失效。网络错误或超时记为“未知”，不会误报为支持，也不会把对应能力暴露给模型。输入 `/provider test` 或 `/provider capabilities` 可强制刷新当前模型的探测结果。探测会产生少量模型 Token；图片和视频生成不会自动探测，以免产生付费资产。
+
+`/providers`、`/models` 和 `/status` 会显示同一份能力状态。修改自定义 Provider 的地址、默认模型或能力声明后，旧探测缓存会自动失效；API Key 不受影响。
+
+“不支持工具”表示模型只能进行文本对话，不能让 Xiu 可靠地读取或修改文件、搜索代码、运行命令、调用 MCP、执行测试和完成验证，因此不适合作为完整编码 Agent。“不支持视觉”表示不能理解粘贴的截图或项目图片，但文本编程、文件操作和命令不受影响。图片生成和视频生成是另外两项能力，不等同于视觉输入。当前 Xiu 通过工具调用执行图片分析，所以若模型视觉探测成功但工具探测失败，有效运行能力仍会按“仅文本”处理。
+
+上下文窗口不是 OpenAI-compatible `/models` 标准接口的必填字段，因此无法对所有供应商百分百自动识别。若服务返回 `context_window`、`context_length`、`max_model_len`、`max_context_length` 或 `input_token_limit`，Xiu 会自动读取并按模型缓存；否则使用 Provider 中手动填写的值。优先级为：启动参数 `--context-window`、Provider 手动配置、API 返回值、Xiu 已知的官方值、保守默认值。比如 1M 上下文应填写整数 `1000000`，自动压缩点默认是窗口的 80%，即 `800000`。
+
+启动欢迎卡片属于当次启动的历史输出，切换 Provider 后不会回头改写终端滚动记录。切换成功回执和 `/status` 显示的才是当前模型实际使用的上下文窗口与压缩点。
+
+命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。通过 `/providers` 和 `/models` 选中的 Provider 与模型会保存在 `~/.xiu/providers.json`，下次启动继续使用。优先级为：本次显式命令行参数、上次交互选择、环境变量、内置默认值。环境变量因此适合作为首次启动默认值；若要临时覆盖已保存选择，请使用 `xiu --provider <Profile-ID> --model <模型-ID>`。
 
 ### 3.6 环境变量何时失效
 
@@ -1030,6 +1041,12 @@ npm.cmd install --global '@xiu-ai/cli@latest' --registry='https://registry.npmjs
 ```
 
 检查配置中的 `command` 是否存在。Windows 通常使用 `npx.cmd`，macOS/Linux 使用 `npx`。修改后输入 `/mcp reload`。
+
+### 22.9 离开一会后输入不显示，按 Enter 或 Esc 才恢复
+
+v0.10.1 修复了输入框、任务补充框和选择菜单交接时的 Raw 模式竞态：旧输入的延迟清理不再关闭新输入，Windows 守护器也会重新应用被外部程序改变的 Raw 模式。
+
+如果窗口标题同时出现“选择”或 `Select`，则是经典 Windows PowerShell 控制台进入了 QuickEdit/标记模式，宿主会暂停 Xiu 整个进程，因此程序无法在暂停期间自行恢复。按 Esc 或 Enter 可立即退出。若经常误触，可在 PowerShell 窗口标题栏右键进入“属性 → 选项”，取消“快速编辑模式”，或者改用 Windows Terminal。Xiu 不会擅自修改系统控制台设置，也不会接管鼠标右键，以免破坏原生文字和文件路径粘贴。
 
 ## 二十三、安全建议
 

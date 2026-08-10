@@ -52,6 +52,8 @@ export interface ModelProvider {
     signal?: AbortSignal,
   ): Promise<AssistantTurn>;
   listModels?(): Promise<AvailableModel[]>;
+  /** Force one inert tool call to verify structured tool-use support. */
+  probeToolSupport?(signal?: AbortSignal): Promise<boolean>;
   stream?(
     system: string,
     messages: ConversationMessage[],

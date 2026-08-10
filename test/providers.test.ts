@@ -86,11 +86,39 @@ test("provider probing falls back to a minimal chat request when model discovery
   }
 });
 
+test("provider probing verifies text completion even when model discovery succeeds", async () => {
+  let chatCalls = 0;
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.end(JSON.stringify({ object: "list", data: [{ id: "coder", object: "model", owned_by: "test" }] }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/v1/chat/completions") {
+      chatCalls += 1;
+      response.end(JSON.stringify({ id: "chat-probe", object: "chat.completion", created: 1, model: "coder", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }] }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const result = await probeProvider(resolveConfig({ provider: "openai-compatible", providerId: "private", model: "coder", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" }));
+    assert.equal(result.models[0]?.id, "coder");
+    assert.equal(chatCalls, 1);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("a keyless local provider lists models and completes through the compatible API", async () => {
   const server = http.createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.method === "GET" && request.url === "/v1/models") {
-      response.end(JSON.stringify({ object: "list", data: [{ id: "local-coder", object: "model", owned_by: "local" }] }));
+      response.end(JSON.stringify({ object: "list", data: [{ id: "local-coder", object: "model", owned_by: "local", context_window: 1_000_000 }] }));
       return;
     }
     if (request.method === "POST" && request.url === "/v1/chat/completions") {
@@ -106,8 +134,94 @@ test("a keyless local provider lists models and completes through the compatible
     assert.ok(address && typeof address === "object");
     const config = resolveConfig({ provider: "ollama", providerId: "ollama", model: "local-coder", baseURL: `http://127.0.0.1:${address.port}/v1` });
     const provider = createProvider(config);
-    assert.equal((await provider.listModels?.())?.[0]?.id, "local-coder");
+    const listed = await provider.listModels?.();
+    assert.equal(listed?.[0]?.id, "local-coder");
+    assert.equal(listed?.[0]?.contextWindow, 1_000_000);
     assert.equal((await provider.complete("system", [{ role: "user", content: "hello" }], [])).text, "local response");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("OpenAI-compatible tool probing forces an inert structured tool call", async () => {
+  let requestBody: Record<string, unknown> = {};
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      requestBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        id: "chat-tool-probe", object: "chat.completion", created: 1, model: "private-coder",
+        choices: [{ index: 0, finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "xiu_capability_probe", arguments: '{"value":"OK"}' } }] } }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "openai-compatible", providerId: "private", model: "private-coder", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" });
+    assert.equal(await createProvider(config).probeToolSupport?.(), true);
+    assert.deepEqual(requestBody.tool_choice, { type: "function", function: { name: "xiu_capability_probe" } });
+    assert.equal((requestBody.tools as Array<{ function: { name: string } }>)[0]?.function.name, "xiu_capability_probe");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("OpenAI-compatible tool probing falls back to auto for thinking models", async () => {
+  const requestBodies: Record<string, unknown>[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      requestBodies.push(body);
+      response.setHeader("content-type", "application/json");
+      const structured = body.tool_choice === "auto";
+      response.end(JSON.stringify({
+        id: "chat-tool-probe", object: "chat.completion", created: 1, model: "thinking-coder",
+        choices: [{ index: 0, finish_reason: structured ? "tool_calls" : "stop", message: structured
+          ? { role: "assistant", content: null, tool_calls: [{ id: "call-1", type: "function", function: { name: "xiu_capability_probe", arguments: '{"value":"OK"}' } }] }
+          : { role: "assistant", content: '<tool_call name="xiu_capability_probe">{"value":"OK"}</tool_call>' } }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "openai-compatible", providerId: "private", model: "thinking-coder", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" });
+    assert.equal(await createProvider(config).probeToolSupport?.(), true);
+    assert.equal(requestBodies.length, 2);
+    assert.deepEqual(requestBodies[0]?.tool_choice, { type: "function", function: { name: "xiu_capability_probe" } });
+    assert.equal(requestBodies[1]?.tool_choice, "auto");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("OpenAI-compatible tool probing never executes textual pseudo tool calls", async () => {
+  let requestCount = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requestCount += 1;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        id: "chat-tool-probe", object: "chat.completion", created: 1, model: "text-only",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: '<tool_call name="xiu_capability_probe">{"value":"OK"}</tool_call>' } }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "openai-compatible", providerId: "private", model: "text-only", baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "test" });
+    assert.equal(await createProvider(config).probeToolSupport?.(), false);
+    assert.equal(requestCount, 2);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

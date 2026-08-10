@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderName } from "./config.js";
+import type { CapabilityProbeState, ModelCapabilityProbe } from "./capability-probe.js";
 
 export interface ProviderFeatures {
   text: true;
@@ -29,8 +30,10 @@ export interface ProviderProfile {
 interface ProviderFile {
   version: 1;
   active?: string;
+  activeModels?: Record<string, string>;
   profiles: ProviderProfile[];
   credentials?: Record<string, string>;
+  probes?: ModelCapabilityProbe[];
 }
 
 const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false });
@@ -67,6 +70,26 @@ export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
 
 const ALLOWED_KINDS = new Set<ProviderName>(["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"]);
 const RESERVED_IDS = new Set(["__proto__", "prototype", "constructor"]);
+const PROBE_STATES = new Set<CapabilityProbeState>(["supported", "unsupported", "unknown", "not-tested"]);
+
+export function resolveStartupProviderId(cliProvider?: string, savedProvider?: string, environmentProvider?: string): string {
+  return cliProvider ?? savedProvider ?? environmentProvider ?? "openai";
+}
+
+export function resolveStartupModel(cliModel: string | undefined, savedModel: string | undefined, environmentModel: string | undefined, profileModel: string): string {
+  return cliModel ?? savedModel ?? environmentModel ?? profileModel;
+}
+
+function validateProbe(probe: ModelCapabilityProbe, knownIds: Set<string>): ModelCapabilityProbe {
+  if (!probe || typeof probe !== "object" || !knownIds.has(probe.providerId)) throw new Error("capability probe references an unknown provider");
+  if (typeof probe.model !== "string" || !probe.model.trim() || probe.model.length > 200) throw new Error("capability probe has an invalid model");
+  if (typeof probe.checkedAt !== "string" || !Number.isFinite(Date.parse(probe.checkedAt))) throw new Error("capability probe has an invalid timestamp");
+  for (const state of [probe.text, probe.tools, probe.vision]) if (!PROBE_STATES.has(state)) throw new Error("capability probe has an invalid state");
+  if (probe.contextWindow !== undefined && (!Number.isInteger(probe.contextWindow) || probe.contextWindow < 8_000)) throw new Error("capability probe has an invalid context window");
+  if (probe.contextWindowSource !== undefined && probe.contextWindowSource !== "api") throw new Error("capability probe has an invalid context window source");
+  if (probe.protocolVersion !== undefined && (!Number.isInteger(probe.protocolVersion) || probe.protocolVersion < 1)) throw new Error("capability probe has an invalid protocol version");
+  return { ...probe, model: probe.model.trim() };
+}
 
 function validateURL(value: string | undefined, label: string): void {
   if (!value) return;
@@ -138,7 +161,21 @@ export class ProviderRegistry {
         if (!BUILTIN_PROVIDER_PROFILES.some((profile) => profile.id === id) && !profiles.some((profile) => profile.id === id)) throw new Error(`credential references unknown provider: ${id}`);
         credentials[id] = value;
       }
-      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, profiles, credentials };
+      const knownIds = new Set([...BUILTIN_PROVIDER_PROFILES.map((profile) => profile.id), ...profiles.map((profile) => profile.id)]);
+      const rawProbes = Array.isArray(parsed.probes) ? parsed.probes : [];
+      if (rawProbes.length > 500) throw new Error("provider configuration contains more than 500 capability probes");
+      const uniqueProbes = new Map<string, ModelCapabilityProbe>();
+      for (const rawProbe of rawProbes) {
+        const probe = validateProbe(rawProbe as ModelCapabilityProbe, knownIds);
+        uniqueProbes.set(`${probe.providerId}\0${probe.model}`, probe);
+      }
+      const rawActiveModels = parsed.activeModels && typeof parsed.activeModels === "object" ? parsed.activeModels : {};
+      const activeModels: Record<string, string> = {};
+      for (const [id, model] of Object.entries(rawActiveModels)) {
+        if (!knownIds.has(id) || typeof model !== "string" || !model.trim() || model.length > 200) continue;
+        activeModels[id] = model.trim();
+      }
+      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, profiles, credentials, probes: [...uniqueProbes.values()] };
       if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -163,9 +200,27 @@ export class ProviderRegistry {
 
   activeId(): string | undefined { return this.file.active; }
 
-  async setActive(id: string): Promise<void> {
+  activeModel(id: string): string | undefined { return this.file.activeModels?.[id]; }
+
+  capabilityProbe(providerId: string, model: string): ModelCapabilityProbe | undefined {
+    const probe = this.file.probes?.find((item) => item.providerId === providerId && item.model === model);
+    return probe ? { ...probe } : undefined;
+  }
+
+  async setCapabilityProbe(probe: ModelCapabilityProbe): Promise<void> {
+    if (!this.get(probe.providerId)) throw new Error(`Provider profile not found: ${probe.providerId}`);
+    const normalized = validateProbe(probe, new Set(this.list().map((profile) => profile.id)));
+    this.file.probes = (this.file.probes ?? []).filter((item) => item.providerId !== normalized.providerId || item.model !== normalized.model);
+    this.file.probes.push(normalized);
+    if (this.file.probes.length > 500) this.file.probes.splice(0, this.file.probes.length - 500);
+    await this.save();
+  }
+
+  async setActive(id: string, model?: string): Promise<void> {
     if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+    if (model !== undefined && (!model.trim() || model.length > 200)) throw new Error("Active model must be 1-200 characters");
     this.file.active = id;
+    if (model) (this.file.activeModels ??= {})[id] = model.trim();
     await this.save();
   }
 
@@ -174,9 +229,14 @@ export class ProviderRegistry {
     if (BUILTIN_PROVIDER_PROFILES.some((item) => item.id === normalized.id)) throw new Error(`Built-in provider id cannot be replaced: ${normalized.id}`);
     const { apiKey, ...storedProfile } = normalized;
     const existing = this.file.profiles.findIndex((item) => item.id === normalized.id);
+    const previous = existing >= 0 ? this.file.profiles[existing] : undefined;
     if (existing >= 0) this.file.profiles[existing] = storedProfile as ProviderProfile;
     else this.file.profiles.push(storedProfile as ProviderProfile);
     if (apiKey) (this.file.credentials ??= {})[normalized.id] = apiKey;
+    if (!previous || JSON.stringify({ kind: previous.kind, model: previous.model, baseURL: previous.baseURL, proxy: previous.proxy, features: previous.features })
+      !== JSON.stringify({ kind: normalized.kind, model: normalized.model, baseURL: normalized.baseURL, proxy: normalized.proxy, features: normalized.features })) {
+      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
+    }
     await this.save();
   }
 
@@ -195,6 +255,8 @@ export class ProviderRegistry {
     if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
     this.file.profiles = next;
     if (this.file.credentials) delete this.file.credentials[id];
+    if (this.file.activeModels) delete this.file.activeModels[id];
+    this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     if (this.file.active === id) this.file.active = undefined;
     await this.save();
   }
@@ -205,8 +267,10 @@ export class ProviderRegistry {
     const safeFile: ProviderFile = {
       version: 1,
       active: this.file.active,
+      activeModels: { ...this.file.activeModels },
       profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),
       credentials: { ...this.file.credentials },
+      probes: [...(this.file.probes ?? [])],
     };
     await fs.writeFile(temporary, `${JSON.stringify(safeFile, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await fs.rename(temporary, this.filename);

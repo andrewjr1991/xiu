@@ -475,7 +475,7 @@ export class Agent {
       models: selectableModels(this.config.provider, this.config.model, discovered, this.config.language).map((model) => ({
         ...model,
         capabilities,
-        contextWindow: this.config.contextWindow,
+        contextWindow: model.contextWindow ?? (model.id === this.config.model ? this.config.contextWindow : undefined),
         providerId: this.config.providerId,
       })),
       discoveryError,

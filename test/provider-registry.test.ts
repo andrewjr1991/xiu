@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, validateProviderProfile } from "../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, resolveStartupModel, resolveStartupProviderId, validateProviderProfile } from "../src/provider-registry.js";
 
 test("provider registry includes cloud and local built-in profiles", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-providers-"));
@@ -25,7 +25,7 @@ test("provider registry can persist a local credential separately from shareable
     baseURL: "https://models.example.test/v1/", apiKeyEnv: "OFFICE_MODEL_KEY", apiKey: "saved-local-secret", contextWindow: 64_000,
     features: { text: true, tools: true, vision: false, image: false, video: false },
   });
-  await registry.setActive("office-gateway");
+  await registry.setActive("office-gateway", "coder-v2");
   const saved = await fs.readFile(filename, "utf8");
   assert.match(saved, /OFFICE_MODEL_KEY/);
   assert.match(saved, /"credentials"/);
@@ -35,6 +35,7 @@ test("provider registry can persist a local credential separately from shareable
   const restored = new ProviderRegistry(filename);
   await restored.load();
   assert.equal(restored.activeId(), "office-gateway");
+  assert.equal(restored.activeModel("office-gateway"), "coder-v2");
   assert.equal(restored.get("office-gateway")?.baseURL, "https://models.example.test/v1");
   assert.equal(restored.get("office-gateway")?.apiKey, "saved-local-secret");
 
@@ -43,6 +44,14 @@ test("provider registry can persist a local credential separately from shareable
   });
   assert.equal(restored.get("office-gateway")?.name, "Edited Gateway");
   assert.equal(restored.get("office-gateway")?.apiKey, "saved-local-secret");
+});
+
+test("saved interactive provider and model override legacy environment defaults", () => {
+  assert.equal(resolveStartupProviderId(undefined, "office-gateway", "agnes"), "office-gateway");
+  assert.equal(resolveStartupProviderId("openai", "office-gateway", "agnes"), "openai");
+  assert.equal(resolveStartupProviderId(undefined, undefined, "agnes"), "agnes");
+  assert.equal(resolveStartupModel(undefined, "coder-v2", "agnes-2.5-flash", "coder"), "coder-v2");
+  assert.equal(resolveStartupModel("coder-v3", "coder-v2", "agnes-2.5-flash", "coder"), "coder-v3");
 });
 
 test("saved credentials also work for built-in providers", async () => {
@@ -75,4 +84,28 @@ test("built-in provider profiles cannot be replaced or removed", async () => {
   await registry.load();
   await assert.rejects(registry.upsert({ ...BUILTIN_PROVIDER_PROFILES[0]!, name: "Fake" }), /cannot be replaced/);
   await assert.rejects(registry.remove("openai"), /cannot be removed/);
+});
+
+test("provider capability probes persist per model and configuration changes invalidate them", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-probes-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  const profile = {
+    id: "gateway", name: "Gateway", kind: "openai-compatible" as const, model: "coder-a", baseURL: "https://one.example.test/v1",
+    features: { text: true as const, tools: true, vision: true, image: false, video: false },
+  };
+  await registry.upsert(profile);
+  await registry.setCapabilityProbe({ providerId: "gateway", model: "coder-a", checkedAt: "2026-08-10T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported", contextWindow: 1_000_000, contextWindowSource: "api" });
+  await registry.setCapabilityProbe({ providerId: "gateway", model: "coder-b", checkedAt: "2026-08-10T00:01:00.000Z", text: "supported", tools: "unsupported", vision: "supported" });
+
+  const restored = new ProviderRegistry(filename);
+  await restored.load();
+  assert.equal(restored.capabilityProbe("gateway", "coder-a")?.tools, "supported");
+  assert.equal(restored.capabilityProbe("gateway", "coder-a")?.contextWindow, 1_000_000);
+  assert.equal(restored.capabilityProbe("gateway", "coder-b")?.tools, "unsupported");
+
+  await restored.upsert({ ...profile, baseURL: "https://two.example.test/v1" });
+  assert.equal(restored.capabilityProbe("gateway", "coder-a"), undefined);
+  assert.equal(restored.capabilityProbe("gateway", "coder-b"), undefined);
 });

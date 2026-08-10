@@ -413,7 +413,12 @@ export function terminalOptionFrameLines<T>(
   columns = process.stdout.columns || 100,
   language: UiLanguage = "en-US",
 ): string[] {
-  const lineWidth = Math.max(19, columns - 1);
+  // Classic Windows PowerShell can report the console buffer width instead of
+  // the visible viewport width. Once a row wraps physically, cursor-up moves by
+  // logical rows and the selector title is repainted at the right edge. Keep a
+  // deliberately conservative hard ceiling; the selected item's full details
+  // are printed after selection, so the menu itself only needs identification.
+  const lineWidth = Math.max(19, Math.min(columns - 4, 88));
   const start = Math.min(Math.max(0, selected - visibleCount + 1), Math.max(0, options.length - visibleCount));
   const visible = options.slice(start, start + visibleCount);
   const lines = [chalk.bold(truncateDisplay(title, lineWidth))];
@@ -452,19 +457,44 @@ function clearRenderedFrame(lines: number, cursorRow: number): void {
   clearRenderedLines(lines);
 }
 
+let nextRawInputGeneration = 0;
+let activeRawInputGeneration = 0;
+
 export function beginRawInput(
   onKeypress: (text: string, key: readline.Key) => void,
   input: NodeJS.ReadStream = process.stdin,
-  options: { enableMouse?: boolean; output?: NodeJS.WriteStream } = {},
+  options: { enableMouse?: boolean; output?: NodeJS.WriteStream; onRecover?: () => void } = {},
 ): () => void {
   const output = options.output ?? process.stdout;
+  const generation = ++nextRawInputGeneration;
+  activeRawInputGeneration = generation;
+  let rawModeTimer: NodeJS.Timeout | undefined;
+  const guardedKeypress = (text: string, key: readline.Key): void => {
+    if (generation === activeRawInputGeneration) onKeypress(text, key);
+  };
+  const ensureRawMode = (): void => {
+    if (generation !== activeRawInputGeneration) return;
+    const wasRaw = input.isRaw;
+    input.setRawMode?.(true);
+    input.resume();
+    if (wasRaw === false) options.onRecover?.();
+  };
   readline.emitKeypressEvents(input);
-  input.setRawMode?.(true);
-  input.resume();
+  ensureRawMode();
   if (options.enableMouse) output.write(ENABLE_TERMINAL_MOUSE);
-  input.on("keypress", onKeypress);
+  input.on("keypress", guardedKeypress);
+  if (process.platform === "win32" && input.isTTY) {
+    // Console modes are shared state on Windows and can be changed by another
+    // prompt or process. Reapply raw mode so input never falls back to the
+    // line-buffered behavior where nothing appears until Enter is pressed.
+    rawModeTimer = setInterval(ensureRawMode, 750);
+    rawModeTimer.unref();
+  }
   return () => {
-    input.off("keypress", onKeypress);
+    input.off("keypress", guardedKeypress);
+    if (rawModeTimer) clearInterval(rawModeTimer);
+    if (generation !== activeRawInputGeneration) return;
+    activeRawInputGeneration = 0;
     if (options.enableMouse) output.write(DISABLE_TERMINAL_MOUSE);
     input.setRawMode?.(false);
     // Xiu immediately swaps from the running-task editor to the normal editor.
@@ -662,7 +692,10 @@ export async function readInteractiveInput(
     };
 
     cleanupInput = beginRawInput(onKeypress, process.stdin, {
+      // Preserve terminal-native right-click paste unless an explicitly
+      // supported enhanced clipboard backend has opted into mouse capture.
       enableMouse: process.platform === "win32" && Boolean(options.onPaste) && options.enableRightClickPaste !== false,
+      onRecover: render,
     });
     process.stdout.on("resize", render);
     options.signal?.addEventListener("abort", abortInput, { once: true });
@@ -682,6 +715,7 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
     let selected = 0;
     let renderedLines = 1;
     const visibleCount = Math.min(10, options.length);
+    let mouseInputState: TerminalMouseInputState = { sequence: "", startedAt: 0 };
 
     const render = (): void => {
       clearRenderedLines(renderedLines);
@@ -699,6 +733,9 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
     };
 
     const onKeypress = (_text: string, key: readline.Key): void => {
+      const mouseInput = consumeTerminalMouseInput(mouseInputState, _text, key);
+      mouseInputState = mouseInput.state;
+      if (mouseInput.consumed) return;
       const name = terminalKeyName(_text, key);
       const numeric = /^[1-9]$/.test(_text) ? Number(_text) - 1 : -1;
       if (numeric >= 0 && numeric < options.length) return finish(options[numeric]?.value);
@@ -708,7 +745,7 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
       else if (name === "escape" || isTerminalCancel(_text, key)) return finish();
       render();
     };
-    const cleanup = beginRawInput(onKeypress);
+    const cleanup = beginRawInput(onKeypress, process.stdin, { onRecover: render });
     render();
   });
 }
