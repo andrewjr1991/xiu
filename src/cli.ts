@@ -19,6 +19,7 @@ import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
+import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
 import { McpManager } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
@@ -38,6 +39,7 @@ import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
 import type { AgentTool } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
+import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-routing.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -55,6 +57,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/checkpoints", "列出安全恢复点", "List safe file restore points"),
     item("/rewind", "选择恢复点回退", "Choose a checkpoint to restore"),
     item("/models", "发现并选择可用模型", "Discover and choose an available model"),
+    item("/media", "查看并恢复媒体生成任务", "Show and recover media generation tasks"),
     item("/providers", "浏览并切换 Provider", "Browse and switch providers"),
     item("/provider test", "测试当前 Provider 连接", "Test the current provider connection"),
     item("/provider capabilities", "重新探测当前模型能力", "Re-probe current model capabilities"),
@@ -62,6 +65,11 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/provider fallback add", "向备用链末尾添加 Provider", "Append a provider to the failover chain"),
     item("/provider fallback remove", "从备用链移除 Provider", "Remove a provider from the failover chain"),
     item("/provider fallback clear", "清空当前 Provider 的备用链", "Clear the current provider failover chain"),
+    item("/routing", "查看阶段模型路由", "Show stage-based model routing"),
+    item("/routing on", "启用阶段模型路由", "Enable stage-based model routing"),
+    item("/routing off", "停用阶段模型路由", "Disable stage-based model routing"),
+    item("/routing set", "为规划、实现或验证阶段指定 Provider", "Assign a provider to a planning, implementation, or verification stage"),
+    item("/routing clear", "清除某个阶段的 Provider", "Clear the provider assigned to a stage"),
     item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
     item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
@@ -439,12 +447,19 @@ async function main(): Promise<void> {
       await previous;
       let finishActiveApproval!: () => void;
       try {
-        if (config.autoApprove && request.risk !== "dangerous") return true;
-        if (request.sessionScope && sessionApprovalScopes.has(request.sessionScope)) return true;
+        if (config.autoApprove && request.risk !== "dangerous") {
+          request.decisionSource = "automatic";
+          return true;
+        }
+        if (request.sessionScope && sessionApprovalScopes.has(request.sessionScope)) {
+          request.decisionSource = "remembered";
+          return true;
+        }
         activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
         status.stop();
         activeQueuedInputController?.abort();
         runningTaskView?.discard();
+        request.decisionSource = "prompted";
         if (!process.stdin.isTTY) return false;
         if (request.preview) console.log(`${chalk.dim(localize(language, "拟议修改：", "Proposed change:"))}\n${request.preview}\n`);
         const options = [
@@ -703,6 +718,24 @@ async function main(): Promise<void> {
           runningTaskView?.activity(localize(language, `备用 Provider 不可用：${details.reason}`, `No fallback provider available: ${details.reason}`));
           emitLine(`${chalk.dim(localize(language, `未执行故障转移：${details.reason}${skipped}`, `Failover not performed: ${details.reason}${skipped}`))}\n`);
         },
+        onProviderRoute: (details) => {
+          stopPhase();
+          const message = localize(language,
+            `阶段路由（${details.phase}）：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`,
+            `Stage route (${details.phase}): ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`);
+          runningTaskView?.activity(message);
+          emitLine(`${chalk.cyan(`↪ ${message}`)}\n${chalk.dim(details.reason)}\n`);
+        },
+        onProviderRouteSkipped: (details) => {
+          const message = localize(language,
+            `阶段路由（${details.phase}）未切换${details.targetProviderId ? `到 ${details.targetProviderId}` : ""}：${details.reason}`,
+            `Stage route (${details.phase}) did not switch${details.targetProviderId ? ` to ${details.targetProviderId}` : ""}: ${details.reason}`);
+          runningTaskView?.activity(message);
+          emitLine(`${chalk.dim(message)}\n`);
+        },
+        onProviderRouteRestore: (details) => {
+          runningTaskView?.activity(localize(language, `已恢复用户选择的 Provider：${details.providerId}/${details.model}`, `Restored the user-selected provider: ${details.providerId}/${details.model}`));
+        },
         onPlanUpdate: (plan) => {
           runningTaskView?.setPlan(plan);
           emitLine(`${chalk.cyan(localize(language, "任务计划已更新", "Task plan updated"))}\n${chalk.dim(planManager.format())}\n`);
@@ -716,12 +749,16 @@ async function main(): Promise<void> {
         onTaskComplete: (summary) => {
           runningTaskView?.markFinishing();
           const verification = summary.changed ? (summary.verified ? localize(language, "已验证", "verified") : localize(language, "已尝试验证", "verification noted")) : localize(language, "无文件变化", "no changes");
+          const recoveredFailures = (summary.diagnostics?.model.failures ?? 0) + (summary.diagnostics?.tools.failures ?? 0);
           const outcomeLabel = summary.outcome === "completed"
             ? localize(language, "✓ 已完成", "✓ Done")
             : summary.outcome === "failed"
               ? localize(language, "! 任务未完成", "! Task incomplete")
               : localize(language, "! 未验证完成", "! Stopped unverified");
-          const message = `${outcomeLabel} · ${(summary.durationMs / 1000).toFixed(1)}${localize(language, " 秒", "s")} · ${summary.turns} ${localize(language, "轮模型调用", "model turn(s)")} · ${summary.toolCalls} ${localize(language, "次工具调用", "tool call(s)")} · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${localize(language, `失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次`, `${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s)`)} · ` : ""}${verification}`;
+          const recoveryNote = summary.outcome === "completed" && recoveredFailures
+            ? localize(language, `（过程中有 ${recoveredFailures} 次可恢复失败）`, ` (${recoveredFailures} recoverable failure(s) during execution)`)
+            : "";
+          const message = `${outcomeLabel}${recoveryNote} · ${(summary.durationMs / 1000).toFixed(1)}${localize(language, " 秒", "s")} · ${summary.turns} ${localize(language, "轮模型调用", "model turn(s)")} · ${summary.toolCalls} ${localize(language, "次工具调用", "tool call(s)")} · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${localize(language, `失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次`, `${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s)`)} · ` : ""}${verification}`;
           if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
           else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
@@ -800,6 +837,42 @@ async function main(): Promise<void> {
           };
         }
         return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
+      },
+    });
+    agent.setRoutingController({
+      resolve: async (request) => {
+        const policy = providerRegistry.routingPolicy();
+        if (!policy.enabled) return {};
+        const targetProviderId = policy.phases[request.phase];
+        if (!targetProviderId) {
+          if (request.currentProviderId === request.defaultProviderId && request.currentModel === request.defaultModel) return {};
+          return { useDefault: true, targetProviderId: request.defaultProviderId, reason: localize(language, `当前阶段未绑定 Provider，恢复任务默认模型`, `no provider is assigned to this stage; restoring the task default model`) };
+        }
+        const profile = providerRegistry.get(targetProviderId);
+        if (!profile) return { targetProviderId, reason: localize(language, "目标 Provider 配置不存在", "the target provider profile does not exist") };
+        const model = providerRegistry.activeModel(targetProviderId) ?? profile.model;
+        const effective = runtimeProfile(profile, model);
+        if (request.requiresTools && !effective.features.tools) {
+          return { targetProviderId, reason: localize(language, "当前阶段需要工具能力，但目标模型不支持工具", "this stage requires tools, but the target model does not support tools") };
+        }
+        const candidateConfig = profileConfig(profile, model);
+        if (candidateConfig.providerId === request.currentProviderId && candidateConfig.model === request.currentModel) return {};
+        const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
+        if (request.estimatedInputTokens >= safeInputLimit) {
+          return { targetProviderId, reason: localize(language,
+            `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过目标模型安全输入线 ${safeInputLimit.toLocaleString()}`,
+            `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the target model safe input limit ${safeInputLimit.toLocaleString()}`) };
+        }
+        return {
+          targetProviderId,
+          reason: localize(language, `用户已将 ${request.phase} 阶段绑定到 ${profile.name}`, `the user assigned the ${request.phase} stage to ${profile.name}`),
+          candidate: {
+            config: candidateConfig,
+            provider: createProvider(candidateConfig),
+            tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
+            label: profile.name,
+          },
+        };
       },
     });
     const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
@@ -1161,6 +1234,41 @@ async function main(): Promise<void> {
         }
         continue;
       }
+      if (task === "/media") {
+        const records = await new MediaOperationStore(config.cwd).list(30);
+        if (!records.length) {
+          console.log(chalk.dim(localize(language, "当前项目还没有媒体生成记录。\n", "This project has no media generation records yet.\n")));
+          continue;
+        }
+        const statusLabel = (record: MediaOperationRecord): string => {
+          const labels: Record<MediaOperationRecord["status"], [string, string]> = {
+            submitting: ["提交结果未知", "submission unknown"],
+            submitted: ["等待生成", "generation pending"],
+            asset_ready: ["等待下载", "download pending"],
+            completed: ["已完成", "completed"],
+            ambiguous: ["结果不明确", "ambiguous"],
+            failed: ["已失败", "failed"],
+          };
+          return localize(language, ...labels[record.status]);
+        };
+        console.log(chalk.cyan(localize(language, "媒体生成与恢复任务", "Media generation and recovery tasks")));
+        for (const record of records) {
+          const details = [
+            record.kind === "image" ? localize(language, "图片", "image") : localize(language, "视频", "video"),
+            statusLabel(record),
+            `${record.providerId}/${record.model}`,
+            record.taskId ? `task ${record.taskId}` : undefined,
+            record.savedPath ? localize(language, `已保存 ${record.savedPath}`, `saved ${record.savedPath}`) : undefined,
+          ].filter(Boolean).join(" · ");
+          const color = record.status === "completed" ? chalk.green : record.status === "failed" || record.status === "ambiguous" || record.status === "submitting" ? chalk.yellow : chalk.cyan;
+          console.log(`${color(`[${record.requestId.slice(0, 8)}]`)} ${details}`);
+        }
+        console.log(chalk.dim(localize(language,
+          "\n需要恢复时，请输入“恢复媒体请求 <ID> 到 <工作区路径>”。恢复只会复用缓存、继续轮询或重新下载，不会创建新的付费请求。\n",
+          "\nTo recover one, enter “resume media request <ID> to <workspace path>”. Recovery only reuses cache, continues polling, or retries a download; it never creates a new billable request.\n",
+        )));
+        continue;
+      }
       if (task === "/providers") {
         const profiles = providerRegistry.list();
         const selected = await selectTerminalOption(localize(language, "选择 Provider", "Choose a provider"), profiles.map((profile) => ({
@@ -1171,6 +1279,54 @@ async function main(): Promise<void> {
         if (!selected) console.log(chalk.dim(localize(language, "已取消 Provider 选择。\n", "Provider selection cancelled.\n")));
         else if (selected === config.providerId) console.log(chalk.dim(localize(language, `当前已是 ${selected}。\n`, `${selected} is already active.\n`)));
         else await switchProviderProfile(providerRegistry.get(selected)!);
+        continue;
+      }
+      if (task === "/routing" || task.startsWith("/routing ")) {
+        const action = task.slice("/routing".length).trim();
+        const phaseLabels: Record<string, string> = {
+          planning: localize(language, "规划", "planning"),
+          implementation: localize(language, "实现", "implementation"),
+          verification: localize(language, "验证", "verification"),
+        };
+        if (!action) {
+          const policy = providerRegistry.routingPolicy();
+          console.log(chalk.cyan(localize(language, `阶段路由：${policy.enabled ? "已启用" : "已停用"}`, `Stage routing: ${policy.enabled ? "enabled" : "disabled"}`)));
+          for (const phase of PROVIDER_ROUTING_PHASES) {
+            const id = policy.phases[phase];
+            const profile = id ? providerRegistry.get(id) : undefined;
+            console.log(`  ${phaseLabels[phase]}: ${profile ? `${profile.name} (${id}/${providerRegistry.activeModel(id!) ?? profile.model})` : localize(language, "跟随当前 Provider", "use the current provider")}`);
+          }
+          console.log(chalk.dim(localize(language, "自动路由只在模型请求边界切换；能力或上下文不满足时会保留当前模型。任务结束后恢复用户手动选择。\n", "Automatic routing only switches at model-request boundaries. Xiu keeps the current model when capabilities or context are insufficient, and restores the user's manual selection after the task.\n")));
+          continue;
+        }
+        if (action === "on" || action === "off") {
+          await providerRegistry.setRoutingEnabled(action === "on");
+          console.log(chalk.green(localize(language, `阶段路由已${action === "on" ? "启用" : "停用"}。\n`, `Stage routing ${action === "on" ? "enabled" : "disabled"}.\n`)));
+          continue;
+        }
+        const match = /^(set|clear)\s+(planning|implementation|verification)$/.exec(action);
+        if (match) {
+          const operation = match[1]!;
+          const phase = match[2]!;
+          if (!isProviderRoutingPhase(phase)) continue;
+          if (operation === "clear") {
+            await providerRegistry.setRoutingPhase(phase);
+            console.log(chalk.green(localize(language, `已清除${phaseLabels[phase]}阶段的 Provider。\n`, `Cleared the provider for the ${phase} stage.\n`)));
+            continue;
+          }
+          const selected = await selectTerminalOption(localize(language, `为${phaseLabels[phase]}阶段选择 Provider`, `Choose a provider for the ${phase} stage`), providerRegistry.list().map((profile) => ({
+            label: profile.name,
+            description: `${profile.id} · ${providerRegistry.activeModel(profile.id) ?? profile.model} · ${featureNames(profile)}`,
+            value: profile.id,
+          })), language);
+          if (!selected) console.log(chalk.dim(localize(language, "已取消。\n", "Cancelled.\n")));
+          else {
+            await providerRegistry.setRoutingPhase(phase, selected);
+            console.log(chalk.green(localize(language, `已将${phaseLabels[phase]}阶段绑定到 ${selected}。使用 /routing on 启用。\n`, `Assigned the ${phase} stage to ${selected}. Enable it with /routing on.\n`)));
+          }
+          continue;
+        }
+        console.log(chalk.yellow(localize(language, "用法：/routing [on|off|set <planning|implementation|verification>|clear <planning|implementation|verification>]\n", "Usage: /routing [on|off|set <planning|implementation|verification>|clear <planning|implementation|verification>]\n")));
         continue;
       }
       if (task === "/provider test" || task === "/provider capabilities") {

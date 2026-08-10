@@ -24,3 +24,17 @@ test("concurrent media operation writers preserve every request", async () => {
   assert.equal((await first.get(imageKey))?.kind, "image");
   assert.equal((await second.get(videoKey))?.kind, "video");
 });
+
+test("media operations can be listed newest-first and resolved by stable identifiers", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-resolve-"));
+  const store = new MediaOperationStore(cwd);
+  const first = await store.begin({ key: "a".repeat(64), kind: "image", providerId: "agnes", model: "image-model" });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = await store.begin({ key: "b".repeat(64), kind: "video", providerId: "agnes", model: "video-model" });
+  await store.update(second.key, { status: "submitted", taskId: "task-stable-123456" });
+
+  assert.deepEqual((await store.list()).map((item) => item.requestId), [second.requestId, first.requestId]);
+  assert.equal((await store.resolve(second.requestId.slice(0, 8))).requestId, second.requestId);
+  assert.equal((await store.resolve("task-stable-123456")).requestId, second.requestId);
+  await assert.rejects(() => store.resolve("missing-id"), /not found/);
+});

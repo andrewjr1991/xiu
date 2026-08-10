@@ -424,6 +424,65 @@ test("agent fails over after bounded transient retries before any output", async
   assert.equal(agent.status().diagnostics?.providerFailovers?.switches, 1);
 });
 
+test("agent routes a model request by phase and restores the user's provider after the task", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-routing-"));
+  let primaryCalls = 0;
+  let plannerCalls = 0;
+  const primary: ModelProvider = {
+    async complete() { primaryCalls++; return { text: "primary", toolCalls: [], raw: {} }; },
+  };
+  const planner: ModelProvider = {
+    async complete() { plannerCalls++; return { text: "planned", toolCalls: [], raw: {} }; },
+  };
+  const config: AgentConfig = { provider: "openai", providerId: "primary", model: "primary-model", cwd, autoApprove: true };
+  const switches: string[] = [];
+  const restores: string[] = [];
+  const agent = new Agent(config, primary, [], async () => true, {
+    onProviderRoute: ({ phase, toProviderId }) => switches.push(`${phase}:${toProviderId}`),
+    onProviderRouteRestore: ({ providerId, model }) => restores.push(`${providerId}/${model}`),
+  });
+  agent.setRoutingController({
+    async resolve(request) {
+      assert.equal(request.phase, "planning");
+      return {
+        targetProviderId: "planner",
+        reason: "configured planning route",
+        candidate: { config: { ...config, providerId: "planner", model: "planner-model" }, provider: planner, tools: [], label: "Planner" },
+      };
+    },
+  });
+
+  assert.equal(await agent.run("make a plan"), "planned");
+  assert.equal(primaryCalls, 0);
+  assert.equal(plannerCalls, 1);
+  assert.deepEqual(switches, ["planning:planner"]);
+  assert.deepEqual(restores, ["primary/primary-model"]);
+  assert.equal(agent.status().model, "primary-model");
+  assert.equal(agent.status().diagnostics?.providerRoutes?.switches, 1);
+  assert.equal(agent.status().diagnostics?.providerRoutes?.phaseCalls?.planning, 1);
+  assert.equal(agent.status().diagnostics?.providerRoutes?.phaseEvents?.[0]?.reason, "initial_analysis");
+});
+
+test("agent keeps the current provider when a configured stage route is unsafe", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-routing-skip-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() { calls++; return { text: "safe current result", toolCalls: [], raw: {} }; },
+  };
+  const skipped: string[] = [];
+  const agent = new Agent({ provider: "openai", providerId: "primary", model: "primary-model", cwd, autoApprove: true }, provider, [], async () => true, {
+    onProviderRouteSkipped: ({ reason }) => skipped.push(reason),
+  });
+  agent.setRoutingController({
+    async resolve() { return { targetProviderId: "tiny", reason: "context exceeds target safe limit" }; },
+  });
+
+  assert.equal(await agent.run("stay safe"), "safe current result");
+  assert.equal(calls, 1);
+  assert.deepEqual(skipped, ["context exceeds target safe limit"]);
+  assert.equal(agent.status().diagnostics?.providerRoutes?.skipped, 1);
+});
+
 test("agent never fails over after streaming partial output", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-no-unsafe-failover-"));
   let resolutions = 0;

@@ -127,3 +127,23 @@ test("provider registry persists ordered failover chains and removes stale refer
   await restored.remove("backup-one");
   assert.deepEqual(restored.failoverChain("agnes"), ["openai"]);
 });
+
+test("provider registry persists stage routing and removes stale targets", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-routing-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  await registry.upsert({
+    id: "fast-planner", name: "Fast Planner", kind: "openai-compatible", model: "planner", baseURL: "http://127.0.0.1:9010/v1",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  await registry.setRoutingPhase("planning", "fast-planner");
+  await registry.setRoutingPhase("verification", "openai");
+  await registry.setRoutingEnabled(true);
+
+  const restored = new ProviderRegistry(filename);
+  await restored.load();
+  assert.deepEqual(restored.routingPolicy(), { enabled: true, phases: { planning: "fast-planner", verification: "openai" } });
+  await restored.remove("fast-planner");
+  assert.deepEqual(restored.routingPolicy(), { enabled: true, phases: { verification: "openai" } });
+});

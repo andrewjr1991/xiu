@@ -56,6 +56,29 @@ export class MediaOperationStore {
     return (await this.read()).operations.find((item) => item.key === key);
   }
 
+  async list(limit = 20): Promise<MediaOperationRecord[]> {
+    await (storeWriteLocks.get(this.file) ?? Promise.resolve());
+    const bounded = Math.max(1, Math.min(100, Math.trunc(limit)));
+    return (await this.read()).operations
+      .slice()
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+      .slice(0, bounded);
+  }
+
+  async resolve(identifier: string): Promise<MediaOperationRecord> {
+    await (storeWriteLocks.get(this.file) ?? Promise.resolve());
+    const value = identifier.trim();
+    if (!value) throw new Error("media request id must not be empty");
+    const operations = (await this.read()).operations;
+    const exact = operations.find((item) => item.requestId === value || item.key === value || item.taskId === value);
+    if (exact) return exact;
+    if (value.length < 8) throw new Error("media request id prefix must contain at least 8 characters");
+    const matches = operations.filter((item) => item.requestId.startsWith(value) || item.key.startsWith(value) || item.taskId?.startsWith(value));
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length > 1) throw new Error(`media request id prefix is ambiguous (${matches.length} matches)`);
+    throw new Error(`media request not found: ${value}`);
+  }
+
   async cooldown(kind: MediaOperationKind, providerId: string, model: string): Promise<MediaOperationRecord | undefined> {
     await (storeWriteLocks.get(this.file) ?? Promise.resolve());
     const now = Date.now();

@@ -95,8 +95,24 @@ function resolveProcessProgram(program: string, cwd: string): string {
   return program;
 }
 
+async function resolveWindowsNodePackageCli(program: string): Promise<string | undefined> {
+  if (process.platform !== "win32") return undefined;
+  const name = programName(program);
+  if (name !== "npm" && name !== "npx") return undefined;
+  const script = name === "npm" ? "npm-cli.js" : "npx-cli.js";
+  const candidates = [
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", script),
+    ...(process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", "node_modules", "npm", "bin", script)] : []),
+  ];
+  for (const candidate of candidates) {
+    try { await fs.access(candidate); return candidate; } catch { /* try the next standard Node/npm layout */ }
+  }
+  return undefined;
+}
+
 function directProcessFailureHint(program: string, errorCode: string | number | undefined): string {
   if (errorCode === "ENOENT") return `\nHint: program '${program}' was not found. Check PATH or pass a workspace-relative executable path.`;
+  if (errorCode === "EINVAL" && ["npm", "npx"].includes(programName(program))) return "\nHint: Windows could not launch the npm command directly. Use validate_project for typecheck, lint, test, or build; do not add cmd, /c, /p, or shell-wrapper arguments.";
   return "";
 }
 
@@ -379,6 +395,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "write_file",
+    approvalScope: "workspace-files:write",
     risk: "write",
     changesWorkspace: true,
     description: "Create or fully overwrite a UTF-8 file. Parent directories are created automatically.",
@@ -398,6 +415,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "replace_text",
+    approvalScope: "workspace-files:edit",
     risk: "write",
     changesWorkspace: true,
     description: "Replace one exact, unique text block in a UTF-8 file. Safer than overwriting an existing file.",
@@ -421,6 +439,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "apply_patch",
+    approvalScope: "workspace-files:edit",
     description: "Apply one or more exact, unique replacements to a file atomically. A structured diff preview is shown before approval.",
     risk: "write",
     changesWorkspace: true,
@@ -461,6 +480,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "run_process",
+    approvalScope: (input) => classifyProcess(processProgram(input), processArgs(input)) === "dangerous" ? undefined : `run-process:${programName(processProgram(input))}`,
     risk: (input) => classifyProcess(processProgram(input), processArgs(input)),
     changesWorkspace: (input) => classifyProcess(processProgram(input), processArgs(input)) !== "read",
     description: "Run a program directly with an argument array, without PowerShell or shell parsing. Prefer this for Node, Python, Git, npm, test runners, paths with spaces, JSON, regex, and inline code. Use run_command only when PowerShell or shell syntax is required.",
@@ -484,8 +504,10 @@ export const builtinTools: AgentTool[] = [
     },
     async execute(input, context) {
       const requestedProgram = processProgram(input);
-      const program = resolveProcessProgram(requestedProgram, context.cwd);
-      const args = processArgs(input);
+      const requestedArgs = processArgs(input);
+      const nodePackageCli = await resolveWindowsNodePackageCli(requestedProgram);
+      const program = nodePackageCli ? process.execPath : resolveProcessProgram(requestedProgram, context.cwd);
+      const args = nodePackageCli ? [nodePackageCli, ...requestedArgs] : requestedArgs;
       const timeout = processTimeout(input);
       const outputEncoding = process.platform === "win32" ? await windowsConsoleEncoding() : "utf8";
       try {
@@ -671,6 +693,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "validate_project",
+    approvalScope: "project-verification",
     description: "Run a named npm verification script (typecheck, lint, test, or build) directly, without shell composition.",
     risk: "execute",
     inputSchema: {

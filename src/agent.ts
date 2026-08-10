@@ -21,6 +21,7 @@ import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } f
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
+import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -38,6 +39,9 @@ export interface AgentEvents {
   onFailure?: (message: string) => void;
   onProviderFailover?: (details: { fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
   onProviderFailoverUnavailable?: (details: { providerId: string; model: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
+  onProviderRoute?: (details: { phase: ProviderRoutingPhase; fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string }) => void;
+  onProviderRouteSkipped?: (details: { phase: ProviderRoutingPhase; providerId: string; model: string; targetProviderId?: string; reason: string }) => void;
+  onProviderRouteRestore?: (details: { providerId: string; model: string }) => void;
   onPlanUpdate?: (plan: TaskPlan) => void;
   onWorkspaceChange?: (change: WorkspaceChangeNotice) => void;
   onCheckpoint?: (message: string) => void;
@@ -70,8 +74,12 @@ export class Agent {
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
   private failoverController?: ProviderFailoverController;
+  private routingController?: ProviderRoutingController;
   private taskFailoverOriginProviderId?: string;
   private taskAttemptedProviders = new Set<string>();
+  private taskRoutingOrigin?: { config: AgentConfig; provider: ModelProvider; tools: AgentTool[] };
+  private taskWasRouted = false;
+  private taskRouteNotices = new Set<string>();
 
   constructor(
     private config: AgentConfig,
@@ -110,6 +118,9 @@ export class Agent {
     this.taskDiagnostics = new TaskDiagnostics(task.trim());
     this.taskFailoverOriginProviderId = this.config.providerId;
     this.taskAttemptedProviders = new Set([this.config.providerId]);
+    this.taskRoutingOrigin = { config: structuredClone(this.config), provider: this.provider, tools: [...this.tools] };
+    this.taskWasRouted = false;
+    this.taskRouteNotices.clear();
     try {
       return await this.runWithSignal(task, controller.signal);
     } catch (error) {
@@ -132,6 +143,16 @@ export class Agent {
       this.steeringHistory = [];
       this.taskFailoverOriginProviderId = undefined;
       this.taskAttemptedProviders.clear();
+      if (this.taskWasRouted && this.taskRoutingOrigin) {
+        Object.assign(this.config, this.taskRoutingOrigin.config);
+        this.provider = this.taskRoutingOrigin.provider;
+        this.tools = [...this.taskRoutingOrigin.tools];
+        this.system = undefined;
+        this.events.onProviderRouteRestore?.({ providerId: this.config.providerId, model: this.config.model });
+      }
+      this.taskRoutingOrigin = undefined;
+      this.taskWasRouted = false;
+      this.taskRouteNotices.clear();
     }
   }
 
@@ -156,6 +177,10 @@ export class Agent {
 
   setFailoverController(controller: ProviderFailoverController | undefined): void {
     this.failoverController = controller;
+  }
+
+  setRoutingController(controller: ProviderRoutingController | undefined): void {
+    this.routingController = controller;
   }
 
   async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
@@ -239,7 +264,14 @@ export class Agent {
       try {
         // Buffer Chinese output so it can be normalized before anything is
         // rendered. Streaming partial tokens cannot be converted reliably.
-        const requested = await this.requestModel(signal, !identityQuestion && this.config.language !== "zh-CN");
+        const activePlanStep = this.planManager?.snapshot()?.steps.find((step) => step.status === "in_progress")?.title ?? "";
+        const routing = determineProviderRoutingPhase({
+          turn,
+          planMode: this.planManager?.mode() === true,
+          completionGateActive: completionReminderSent,
+          activePlanStep,
+        });
+        const requested = await this.requestModel(signal, !identityQuestion && this.config.language !== "zh-CN", true, undefined, undefined, routing.phase, routing.reason);
         response = requested.response;
         streamed = requested.streamed;
       } finally {
@@ -347,7 +379,7 @@ export class Agent {
                 this.taskDiagnostics?.beginApproval(request.description);
                 let approved: boolean | undefined;
                 try { approved = await this.approve(request); }
-                finally { this.taskDiagnostics?.finishApproval(approved !== false); }
+                finally { this.taskDiagnostics?.finishApproval(approved !== false, request.decisionSource ?? "prompted"); }
                 if (approved && changesWorkspace) {
                   const checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
                   if (checkpoint) {
@@ -752,10 +784,61 @@ export class Agent {
     ).join("\n");
   }
 
-  private async requestModel(signal: AbortSignal, allowStreaming = true, reportFailure = true, toolOverride?: AgentTool[], operationOverride?: string): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
+  private async requestModel(signal: AbortSignal, allowStreaming = true, reportFailure = true, toolOverride?: AgentTool[], operationOverride?: string, routingPhase?: ProviderRoutingPhase, routingReason = "implementation"): Promise<{ response: Awaited<ReturnType<ModelProvider["complete"]>>; streamed: boolean }> {
     const maxAttempts = 3;
     const originProviderId = this.taskFailoverOriginProviderId ?? this.config.providerId;
     this.taskAttemptedProviders.add(this.config.providerId);
+    if (routingPhase && this.routingController) {
+      const fromProviderId = this.config.providerId;
+      const fromModel = this.config.model;
+      const estimatedInputTokens = estimateConversationTokens(this.messages);
+      let resolution;
+      try {
+        const taskDefault = this.taskRoutingOrigin?.config ?? this.config;
+        resolution = await this.routingController.resolve({
+          phase: routingPhase,
+          currentProviderId: fromProviderId,
+          currentModel: fromModel,
+          defaultProviderId: taskDefault.providerId,
+          defaultModel: taskDefault.model,
+          estimatedInputTokens,
+          requiresTools: (toolOverride ?? this.tools).length > 0,
+        });
+      } catch (error) {
+        resolution = { reason: error instanceof Error ? error.message : String(error) };
+      }
+      const candidate = resolution.useDefault && this.taskRoutingOrigin
+        ? { ...this.taskRoutingOrigin, label: "task default" }
+        : resolution.candidate;
+      if (candidate && (candidate.config.providerId !== fromProviderId || candidate.config.model !== fromModel)) {
+        Object.assign(this.config, candidate.config);
+        this.provider = candidate.provider;
+        this.tools = [...candidate.tools];
+        this.taskAttemptedProviders.add(candidate.config.providerId);
+        this.taskWasRouted = true;
+        const reason = resolution.reason ?? `configured ${routingPhase} route`;
+        this.taskDiagnostics?.recordProviderRoute(routingPhase, fromProviderId, fromModel, candidate.config.providerId, candidate.config.model, "switched", reason);
+        if (this.sessionPath) await this.log(this.sessionPath, {
+          type: "provider_route", phase: routingPhase, outcome: "switched",
+          fromProviderId, fromModel, toProviderId: candidate.config.providerId, toModel: candidate.config.model, reason,
+        });
+        this.events.onProviderRoute?.({ phase: routingPhase, fromProviderId, fromModel, toProviderId: candidate.config.providerId, toModel: candidate.config.model, reason });
+        await this.checkpointDiagnostics();
+      } else if (resolution.reason && resolution.targetProviderId) {
+        const noticeKey = `${routingPhase}\0${fromProviderId}\0${fromModel}\0${resolution.targetProviderId}\0${resolution.reason}`;
+        if (!this.taskRouteNotices.has(noticeKey)) {
+          this.taskRouteNotices.add(noticeKey);
+          this.taskDiagnostics?.recordProviderRoute(routingPhase, fromProviderId, fromModel, resolution.targetProviderId, undefined, "skipped", resolution.reason);
+          if (this.sessionPath) await this.log(this.sessionPath, {
+            type: "provider_route", phase: routingPhase, outcome: "skipped",
+            fromProviderId, fromModel, toProviderId: resolution.targetProviderId, reason: resolution.reason,
+          });
+          this.events.onProviderRouteSkipped?.({ phase: routingPhase, providerId: fromProviderId, model: fromModel, targetProviderId: resolution.targetProviderId, reason: resolution.reason });
+          await this.checkpointDiagnostics();
+        }
+      }
+    }
+    if (routingPhase) this.taskDiagnostics?.recordProviderPhase(routingPhase, this.config.providerId ?? this.config.provider, this.config.model, routingReason);
     let attempt = 1;
     for (;;) {
       let emitted = false;

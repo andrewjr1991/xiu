@@ -255,6 +255,63 @@ test("a rejected video submission activates a provider-wide cooldown for prompt 
   assert.match(second, /cooldown is active/);
 });
 
+test("media recovery lists operations and reuses a cached asset by request id", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-recovery-cache-"));
+  const backend = new MockMediaBackend();
+  const store = new MediaOperationStore(cwd);
+  const key = mediaOperationKey("image", "agnes", "image-model", { prompt: "old" });
+  const record = await store.begin({ key, kind: "image", providerId: "agnes", model: "image-model" });
+  const cachedAsset = await store.cacheAsset(record.requestId, ".png", Buffer.from("cached-image"));
+  await store.update(key, { status: "completed", cachedAsset });
+  const tools = createMediaTools(config(cwd), backend);
+  const list = tools.find((item) => item.name === "list_media_operations")!;
+  const resume = tools.find((item) => item.name === "resume_media_operation")!;
+
+  const listed = await executeTool(list, {}, { cwd, approve: async () => true });
+  assert.match(listed, new RegExp(record.requestId));
+  const result = await executeTool(resume, { request_id: record.requestId.slice(0, 8), output_path: "restored.png" }, { cwd, approve: async () => true });
+  assert.equal(await fs.readFile(path.join(cwd, "restored.png"), "utf8"), "cached-image");
+  assert.equal(backend.imageCalls, 0);
+  assert.equal(backend.downloadCalls, 0);
+  assert.match(result, /no new generation charge/);
+});
+
+test("media recovery resumes a saved video task id without creating another task", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-recovery-poll-"));
+  const backend = new MockMediaBackend();
+  let polls = 0;
+  backend.getVideo = async (id) => {
+    polls += 1;
+    return { id, status: "completed", url: "https://assets.example/recovered.mp4" };
+  };
+  const store = new MediaOperationStore(cwd);
+  const key = mediaOperationKey("video", "agnes", "video-model", { prompt: "old" });
+  const record = await store.begin({ key, kind: "video", providerId: "agnes", model: "video-model" });
+  await store.update(key, { status: "submitted", taskId: "persisted-video-task" });
+  const resume = createMediaTools(config(cwd), backend).find((item) => item.name === "resume_media_operation")!;
+
+  const result = await executeTool(resume, { request_id: record.requestId, output_path: "restored.mp4" }, { cwd, approve: async () => true });
+  assert.equal(polls, 1);
+  assert.equal(backend.videoCalls, 0);
+  assert.equal(await fs.readFile(path.join(cwd, "restored.mp4"), "utf8"), "video-bytes");
+  assert.match(result, /persisted-video-task/);
+});
+
+test("media recovery never replays an ambiguous submission without a task or asset", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-recovery-ambiguous-"));
+  const backend = new MockMediaBackend();
+  const store = new MediaOperationStore(cwd);
+  const key = mediaOperationKey("video", "agnes", "video-model", { prompt: "unknown" });
+  const record = await store.begin({ key, kind: "video", providerId: "agnes", model: "video-model" });
+  await store.update(key, { status: "ambiguous", error: "connection lost" });
+  const resume = createMediaTools(config(cwd), backend).find((item) => item.name === "resume_media_operation")!;
+
+  const result = await executeTool(resume, { request_id: record.requestId, output_path: "blocked.mp4" }, { cwd, approve: async () => true });
+  assert.match(result, /will not submit it again automatically/);
+  assert.equal(backend.videoCalls, 0);
+  assert.equal(backend.downloadCalls, 0);
+});
+
 test("provider capability profiles only expose supported media tools", () => {
   const cwd = process.cwd();
   const openai = createMediaTools({ provider: "openai", model: "gpt", cwd, maxTurns: 5, autoApprove: true });
@@ -262,7 +319,7 @@ test("provider capability profiles only expose supported media tools", () => {
   const agnes = createMediaTools(config(cwd));
   assert.deepEqual(openai.map((tool) => tool.name), ["analyze_image"]);
   assert.deepEqual(anthropic.map((tool) => tool.name), ["analyze_image"]);
-  assert.deepEqual(agnes.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_video"]);
+  assert.deepEqual(agnes.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_video", "list_media_operations", "resume_media_operation"]);
 });
 
 test("a compatible provider with vision disabled exposes no media tools", () => {

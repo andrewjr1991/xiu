@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ProviderName } from "./config.js";
 import type { CapabilityProbeState, ModelCapabilityProbe } from "./capability-probe.js";
+import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "./provider-routing.js";
 
 export interface ProviderFeatures {
   text: true;
@@ -32,6 +33,7 @@ interface ProviderFile {
   active?: string;
   activeModels?: Record<string, string>;
   failoverChains?: Record<string, string[]>;
+  routing?: ProviderRoutingPolicy;
   profiles: ProviderProfile[];
   credentials?: Record<string, string>;
   probes?: ModelCapabilityProbe[];
@@ -184,7 +186,16 @@ export class ProviderRegistry {
           failoverChains[primaryId] = [...new Set(chain)].slice(0, 8);
         }
       }
-      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, profiles, credentials, probes: [...uniqueProbes.values()] };
+      const routing: ProviderRoutingPolicy = { enabled: false, phases: {} };
+      if (parsed.routing && typeof parsed.routing === "object") {
+        routing.enabled = parsed.routing.enabled === true;
+        if (parsed.routing.phases && typeof parsed.routing.phases === "object") {
+          for (const [phase, providerId] of Object.entries(parsed.routing.phases)) {
+            if (isProviderRoutingPhase(phase) && typeof providerId === "string" && knownIds.has(providerId)) routing.phases[phase] = providerId;
+          }
+        }
+      }
+      this.file = { version: 1, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentials, probes: [...uniqueProbes.values()] };
       if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -212,6 +223,23 @@ export class ProviderRegistry {
   activeModel(id: string): string | undefined { return this.file.activeModels?.[id]; }
 
   failoverChain(id: string): string[] { return [...(this.file.failoverChains?.[id] ?? [])]; }
+
+  routingPolicy(): ProviderRoutingPolicy {
+    return { enabled: this.file.routing?.enabled === true, phases: { ...(this.file.routing?.phases ?? {}) } };
+  }
+
+  async setRoutingEnabled(enabled: boolean): Promise<void> {
+    (this.file.routing ??= { enabled: false, phases: {} }).enabled = enabled;
+    await this.save();
+  }
+
+  async setRoutingPhase(phase: ProviderRoutingPhase, providerId?: string): Promise<void> {
+    if (providerId !== undefined && !this.get(providerId)) throw new Error(`Provider profile not found: ${providerId}`);
+    const routing = (this.file.routing ??= { enabled: false, phases: {} });
+    if (providerId) routing.phases[phase] = providerId;
+    else delete routing.phases[phase];
+    await this.save();
+  }
 
   async setFailoverChain(id: string, chain: string[]): Promise<void> {
     if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
@@ -281,6 +309,11 @@ export class ProviderRegistry {
       delete this.file.failoverChains[id];
       for (const [primaryId, chain] of Object.entries(this.file.failoverChains)) this.file.failoverChains[primaryId] = chain.filter((item) => item !== id);
     }
+    if (this.file.routing) {
+      for (const phase of Object.keys(this.file.routing.phases) as ProviderRoutingPhase[]) {
+        if (this.file.routing.phases[phase] === id) delete this.file.routing.phases[phase];
+      }
+    }
     this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     if (this.file.active === id) this.file.active = undefined;
     await this.save();
@@ -294,6 +327,7 @@ export class ProviderRegistry {
       active: this.file.active,
       activeModels: { ...this.file.activeModels },
       failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
+      routing: { enabled: this.file.routing?.enabled === true, phases: { ...(this.file.routing?.phases ?? {}) } },
       profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),
       credentials: { ...this.file.credentials },
       probes: [...(this.file.probes ?? [])],

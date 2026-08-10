@@ -126,3 +126,47 @@ test("task and approval diagnostics redact credential values", () => {
   assert.doesNotMatch(JSON.stringify(snapshot), /top-secret-value/);
   assert.match(JSON.stringify(snapshot), /REDACTED/);
 });
+
+test("diagnostics distinguish automatic and remembered policy decisions from user prompts", () => {
+  let now = 5_000;
+  const diagnostics = new TaskDiagnostics("approval accounting", () => now);
+  diagnostics.beginApproval("automatic write");
+  now += 40;
+  diagnostics.finishApproval(true, "automatic");
+  diagnostics.beginApproval("remembered verification");
+  now += 30;
+  diagnostics.finishApproval(true, "remembered");
+  diagnostics.beginApproval("dangerous command");
+  now += 50;
+  diagnostics.finishApproval(false, "prompted");
+  const snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.approvals.checks, 3);
+  assert.equal(snapshot.approvals.requests, 1);
+  assert.equal(snapshot.approvals.automatic, 1);
+  assert.equal(snapshot.approvals.remembered, 1);
+  assert.equal(snapshot.approvals.denied, 1);
+  assert.equal(snapshot.approvals.waitMs, 50);
+  assert.match(formatTaskDiagnostics(snapshot, "zh-CN"), /实际提示 1 次.*自动放行 1.*会话规则放行 1.*策略检查 3/);
+});
+
+test("completed diagnostics disclose recoverable failures cumulative token semantics and stage usage", () => {
+  let now = 1_000;
+  const diagnostics = new TaskDiagnostics("route task", () => now);
+  diagnostics.recordProviderPhase("planning", "planner", "plan-model", "initial_analysis");
+  diagnostics.beginModel("turn 1", 1);
+  now += 20;
+  diagnostics.finishModel({ inputTokens: 1_000, outputTokens: 100 }, true);
+  diagnostics.beginTool("run_process", { program: "npm", args: ["test"] });
+  now += 10;
+  diagnostics.finishTool(false, "Exit code: 1");
+  diagnostics.beginTool("validate_project", { check: "test" });
+  now += 10;
+  diagnostics.finishTool(true, "Exit code: 0");
+  diagnostics.complete("completed");
+  const report = formatTaskDiagnostics(diagnostics.snapshot(), "zh-CN");
+  assert.match(report, /可恢复失败/);
+  assert.match(report, /所有模型请求累计量，重复上下文会重复计入/);
+  assert.match(report, /成功率 50%/);
+  assert.match(report, /阶段调用：规划 1 · 实现 0 · 验证 0/);
+  assert.match(report, /首轮分析/);
+});

@@ -42,6 +42,8 @@ export function localizeToolDescription(name: string, description: string, langu
     case "analyze_image": return description.replace(/^send\s+/i, "将 ").replace(/\s+to vision model\s+/i, " 发送到视觉模型 ");
     case "generate_image":
     case "generate_video": return description.replace(/^generate\s+/i, "生成 ").replace(/\s+with\s+/i, "，使用模型 ");
+    case "list_media_operations": return "查看媒体生成与恢复任务";
+    case "resume_media_operation": return description.replace(/^resume media request\s+/i, "恢复媒体请求 ").replace(/\s+into\s+/i, "，保存到 ").replace(/\s+without creating a new generation$/i, "（不创建新生成任务）");
     case "ask_user": return localize(language, "等待用户回答", "Wait for the user's answer");
     default:
       if (name.startsWith("mcp__")) return description.replace(/^call MCP tool\s+/i, "调用 MCP 工具 ").replace(/\s+with\s+/i, "，参数 ");
@@ -54,6 +56,7 @@ export function localizeToolProgress(message: string, language: UiLanguage): str
   return message
     .replace(/^Submitting potentially billable image request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的图片请求 $1，模型：")
     .replace(/^Resuming download for image request\s+/i, "正在继续下载图片请求：")
+    .replace(/^Resuming download for video request\s+/i, "正在继续下载视频请求：")
     .replace(/^Submitting potentially billable video request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的视频请求 $1，模型：")
     .replace(/^Resuming video request\s+/i, "正在恢复视频请求：")
     .replace(/^Video\s+(.+?):\s+status service busy; retrying poll in\s+(\d+)s/i, "视频任务 $1：状态服务繁忙，$2 秒后重试查询")
@@ -61,6 +64,8 @@ export function localizeToolProgress(message: string, language: UiLanguage): str
     .replace(/^Generating image with\s+/i, "正在使用以下模型生成图片：")
     .replace(/^Submitting video to\s+/i, "正在向以下模型提交视频任务：")
     .replace(/^Downloading completed video\s+/i, "正在下载已完成的视频：")
+    .replace(/^Resuming media request\s+/i, "正在恢复媒体请求：")
+    .replace(/^Reusing cached media request\s+/i, "正在复用媒体缓存：")
     .replace(/^Temporary model error; retrying\s+/i, "模型暂时出错，正在重试 ")
     .replace(/^Model request failed:\s*/i, "模型请求失败：");
 }

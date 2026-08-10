@@ -71,6 +71,8 @@ export interface ApprovalRequest {
   preview?: string;
   /** Optional narrowly scoped permission that may be remembered for the current Xiu process. */
   sessionScope?: string;
+  /** Filled by the UI so diagnostics distinguish prompts from automatic policy decisions. */
+  decisionSource?: "prompted" | "automatic" | "remembered";
 }
 
 export interface ToolContext {

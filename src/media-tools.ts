@@ -363,5 +363,118 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Generated video with ${models.video}\nRequest: ${operation.requestId}\nTask: ${task.id}\nSaved: ${saved}\nSource URL: ${task.url}`;
       },
     });
+  if (suppliedBackend?.download || config.provider === "agnes") tools.push({
+    name: "list_media_operations",
+    description: "List recent persistent image and video generation operations for this workspace. Use request IDs to inspect recovery state without submitting paid work.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+      additionalProperties: false,
+    },
+    describe: () => "list persistent media operations",
+    async execute(input) {
+      const limit = typeof input.limit === "number" ? input.limit : 20;
+      const records = await operations.list(limit);
+      return JSON.stringify({
+        operations: records.map((record) => ({
+          request_id: record.requestId,
+          kind: record.kind,
+          status: record.status,
+          provider: record.providerId,
+          model: record.model,
+          task_id: record.taskId,
+          saved_path: record.savedPath,
+          updated_at: record.updatedAt,
+          resumable: record.status === "completed" || record.status === "asset_ready" || (record.kind === "video" && record.status === "submitted" && Boolean(record.taskId)),
+          blocked_reason: mediaRetryBlocked(record),
+        })),
+      }, null, 2);
+    },
+  });
+  if (suppliedBackend?.download || config.provider === "agnes") tools.push({
+    name: "resume_media_operation",
+    description: "Resume an existing media request by stable request ID. This may reuse a cached asset, continue a video status poll, or retry an asset download, but it never submits a new paid generation request.",
+    risk: "execute",
+    changesWorkspace: true,
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string", description: "Full request ID or an unambiguous prefix of at least 8 characters" },
+        output_path: { type: "string", description: "Workspace-relative destination path (.mp4 for video; image extension for image)" },
+        timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 },
+      },
+      required: ["request_id", "output_path"],
+      additionalProperties: false,
+    },
+    describe: (input) => `resume media request ${String(input.request_id)} into ${String(input.output_path)} without creating a new generation`,
+    validate(input) {
+      const outputPath = requiredString(input, "output_path");
+      const extension = path.extname(outputPath).toLowerCase();
+      if (extension !== ".mp4" && !IMAGE_EXTENSIONS.has(extension)) throw new Error("output_path must be .mp4, .png, .jpg, .jpeg, or .webp");
+    },
+    async execute(input, context) {
+      const operation = await operations.resolve(requiredString(input, "request_id"));
+      if (operation.providerId !== providerId) {
+        throw new Error(`Media request ${operation.requestId} belongs to Provider ${operation.providerId}. Switch to that Provider before resuming it.`);
+      }
+      const outputPath = requiredString(input, "output_path");
+      const extension = path.extname(outputPath).toLowerCase();
+      if (operation.kind === "video" && extension !== ".mp4") throw new Error("video recovery output_path must end in .mp4");
+      if (operation.kind === "image" && !IMAGE_EXTENSIONS.has(extension)) throw new Error("image recovery output_path must use a supported image extension");
+
+      let bytes = await existingAsset(context.cwd, operation.savedPath) ?? await existingAsset(context.cwd, operation.cachedAsset);
+      if (bytes) {
+        const saved = await saveAsset(context.cwd, outputPath, bytes);
+        await operations.update(operation.key, { status: "completed", savedPath: saved });
+        return `Reused cached ${operation.kind} request ${operation.requestId}; no new generation charge.\nSaved: ${saved}`;
+      }
+      const blocked = mediaRetryBlocked(operation);
+      if (blocked) throw new Error(blocked);
+
+      let url = operation.url;
+      let taskId = operation.taskId;
+      const backend = getBackend();
+      if (operation.kind === "video" && !url) {
+        if (!taskId || operation.status !== "submitted") throw new Error(`Video request ${operation.requestId} has no safely resumable task ID or asset URL.`);
+        if (!backend.getVideo) throw new Error("The current Provider backend cannot poll video tasks.");
+        const timeoutMs = (typeof input.timeout_seconds === "number" ? input.timeout_seconds : 600) * 1000;
+        const deadline = Date.now() + timeoutMs;
+        let task: VideoTask = { id: taskId, status: "submitted" };
+        context.reportProgress?.(`Resuming video request ${operation.requestId} (task ${taskId})`);
+        while (!completed(task) && !failed(task) && !task.url) {
+          if (Date.now() >= deadline) throw new Error(`Video task ${taskId} is still preserved; recovery timed out after ${timeoutMs / 1000}s.`);
+          try {
+            task = await backend.getVideo(taskId, context.signal);
+          } catch (error) {
+            const status = mediaStatus(error);
+            if (!isRetryableMediaStatus(status)) throw new Error(`Could not resume video task ${taskId}: ${safeProviderErrorMessage(error)}`);
+            const waitMs = retryDelay(error, true);
+            if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${taskId} remains preserved, but polling could not recover before timeout: ${safeProviderErrorMessage(error)}`);
+            context.reportProgress?.(`Video ${taskId}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
+            await delay(waitMs, context.signal);
+            continue;
+          }
+          taskId = task.id;
+          url = task.url;
+          await operations.update(operation.key, { status: url ? "asset_ready" : "submitted", taskId, url });
+          if (!completed(task) && !failed(task) && !url) await delay(VIDEO_POLL_INTERVAL_MS, context.signal);
+        }
+        if (failed(task)) {
+          const reason = task.error ?? task.status;
+          await operations.update(operation.key, { status: "failed", taskId, error: reason });
+          throw new Error(`Video generation failed: ${reason}`);
+        }
+      }
+      if (!url) throw new Error(`Media request ${operation.requestId} has no cached asset or download URL and cannot be resumed safely.`);
+      if (!backend.download) throw new Error("The current Provider backend cannot download media assets.");
+      context.reportProgress?.(`Resuming download for ${operation.kind} request ${operation.requestId}`);
+      bytes = await backend.download(url, context.signal);
+      const cachedAsset = await operations.cacheAsset(operation.requestId, extension, bytes);
+      const saved = await saveAsset(context.cwd, outputPath, bytes);
+      await operations.update(operation.key, { status: "completed", taskId, url, cachedAsset, savedPath: saved, error: undefined });
+      return `Resumed ${operation.kind} request ${operation.requestId}; no new generation charge.\n${taskId ? `Task: ${taskId}\n` : ""}Saved: ${saved}`;
+    },
+  });
   return tools;
 }

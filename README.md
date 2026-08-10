@@ -50,6 +50,12 @@ Version 0.10.2 clarifies live model state in the scrollback-oriented terminal UI
 
 Version 0.11.0 begins Xiu's resilient Provider-routing work. Each primary Provider can have an ordered fallback chain managed with `/provider fallback`, `add`, `remove`, and `clear`. Xiu retries only transient network, rate-limit, timeout, and server failures; after bounded retries it chooses the first fallback whose cached or declared tool capability and context budget satisfy the active request. A switch is allowed only before any response text has streamed, so Xiu never replays a partially visible answer or repeats completed tool side effects. The same safe boundary covers non-streaming context compaction and each parallel sub-agent. Media generation never fails over across providers: it uses a persistent request ledger and asset cache instead, so identical completed requests are reused, image downloads and video tasks resume safely, and an ambiguous potentially billed submission is never replayed without explicit duplicate-charge approval. Every Provider switch and skipped candidate is visible in the terminal, persisted in the session log, and included in `/diagnostics`.
 
+Version 0.11.1 makes that media recovery state directly operable. `/media` lists the newest project-local image and video requests with stable request IDs, status, Provider/model, task ID, and saved path without exposing signed URLs. Xiu can resume a selected request by ID: it may reuse the cached asset, continue polling the existing video task, or retry the existing download, but this recovery tool has no code path that submits a new billable generation request. Unknown or ambiguous submissions remain blocked, and recovery refuses to cross Provider boundaries.
+
+Version 0.11.2 adds explicit, explainable model routing for the main Agent's planning, implementation, and verification stages. `/routing set <stage>` assigns an existing Provider profile, while `/routing on|off` controls the feature. Xiu switches only before a new model request, rejects targets that lack the required tool capability or safe context budget, prints every switch or skip, records route events in the session and `/diagnostics`, and restores the user's manually selected Provider/model when the task ends. Unassigned stages use the task's original model. This release does not guess model price or quality and does not route billable image/video generation.
+
+The v0.11.2 acceptance hardening also records every planning/implementation/verification call even when no Provider switch occurs, explains stage transitions, distinguishes cumulative request Tokens from current context occupancy, and reports recoverable failures plus tool success rate. Windows npm/npx direct execution avoids `.cmd` `EINVAL` failures, standard project checks prefer `validate_project`, and approval diagnostics distinguish actual prompts from `--yes` and remembered session decisions. Narrow session permissions are available for ordinary workspace writes, exact edits, direct programs, and project verification; dangerous actions remain explicitly confirmed.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -59,6 +65,7 @@ Version 0.11.0 begins Xiu's resilient Provider-routing work. Each primary Provid
 - Session-scoped changed-file summaries, Git diffs, file checkpoints, and confirmed restore
 - Automatic retry for transient model failures before output begins
 - Ordered, capability-aware Provider failover at side-effect-safe request boundaries
+- Explainable planning, implementation, and verification routing across configured Provider profiles
 - Structured context-checkpoint compaction that preserves the active task contract and continuation state
 - Bounded line and character paging for large, minified, or single-line text files
 - Bounded structured extraction for CSS-selected HTML, JSON Pointer values, and filtered CSV/TSV rows

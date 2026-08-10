@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { localize, type UiLanguage } from "./i18n.js";
+import { PROVIDER_ROUTING_PHASES, type ProviderRoutingPhase } from "./provider-routing.js";
 
 export type DiagnosticPhaseKind = "idle" | "model" | "tool" | "approval";
 export type DiagnosticHealthState = "healthy" | "waiting" | "attention" | "stalled";
@@ -43,10 +44,26 @@ export interface TaskDiagnosticSnapshot {
     slowestOperation?: string;
     byName: Array<{ name: string; calls: number; failures: number; totalMs: number }>;
   };
-  approvals: { requests: number; denied: number; waitMs: number };
+  approvals: { requests: number; denied: number; waitMs: number; checks?: number; automatic?: number; remembered?: number };
   providerFailovers?: {
     switches: number;
     events: Array<{ at: string; fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string }>;
+  };
+  providerRoutes?: {
+    switches: number;
+    skipped: number;
+    phaseCalls?: Partial<Record<ProviderRoutingPhase, number>>;
+    phaseEvents?: Array<{ at: string; phase: ProviderRoutingPhase; providerId: string; model: string; reason: string }>;
+    events: Array<{
+      at: string;
+      phase: ProviderRoutingPhase;
+      outcome: "switched" | "skipped";
+      fromProviderId: string;
+      fromModel: string;
+      toProviderId: string;
+      toModel?: string;
+      reason: string;
+    }>;
   };
   compactions: number;
   progress: { lastAt: string; operationsSince: number; distinctOperations: number; consecutiveFailures: number };
@@ -146,8 +163,9 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
   const modelNumbers = [model.attempts, model.completed, model.failures, model.retries, model.inputTokens, model.outputTokens, model.totalMs, model.slowestMs];
   const toolNumbers = [tools.calls, tools.failures, tools.totalMs, tools.slowestMs];
   const approvalNumbers = [approvals.requests, approvals.denied, approvals.waitMs];
+  const optionalApprovalNumbers = [approvals.checks, approvals.automatic, approvals.remembered].filter((value) => value !== undefined);
   const progressNumbers = [progress.operationsSince, progress.distinctOperations, progress.consecutiveFailures];
-  if (![...modelNumbers, ...toolNumbers, ...approvalNumbers, ...progressNumbers, item.compactions].every((number) => finiteInteger(number))) return false;
+  if (![...modelNumbers, ...toolNumbers, ...approvalNumbers, ...optionalApprovalNumbers, ...progressNumbers, item.compactions].every((number) => finiteInteger(number))) return false;
   if ([model.slowestOperation, tools.slowestOperation].some((field) => field !== undefined && (typeof field !== "string" || field.length > MAX_OPERATION_CHARACTERS))) return false;
   if (!validDate(progress.lastAt)) return false;
   if (!Array.isArray(tools.byName) || tools.byName.length > MAX_TOOL_NAMES || !tools.byName.every((row) => {
@@ -169,6 +187,31 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
         && [entry.fromProviderId, entry.fromModel, entry.toProviderId, entry.toModel, entry.reason].every((field) => typeof field === "string" && field.length <= MAX_MESSAGE_CHARACTERS);
     })) return false;
   }
+  if (item.providerRoutes !== undefined) {
+    const routes = item.providerRoutes as Record<string, unknown>;
+    if (!finiteInteger(routes.switches) || !finiteInteger(routes.skipped) || !Array.isArray(routes.events) || routes.events.length > 20 || !routes.events.every((event) => {
+      if (!event || typeof event !== "object") return false;
+      const entry = event as Record<string, unknown>;
+      return validDate(entry.at)
+        && ["planning", "implementation", "verification"].includes(String(entry.phase))
+        && ["switched", "skipped"].includes(String(entry.outcome))
+        && [entry.fromProviderId, entry.fromModel, entry.toProviderId, entry.reason].every((field) => typeof field === "string" && field.length <= MAX_MESSAGE_CHARACTERS)
+        && (entry.toModel === undefined || (typeof entry.toModel === "string" && entry.toModel.length <= MAX_MESSAGE_CHARACTERS));
+    })) return false;
+    if (routes.phaseCalls !== undefined) {
+      if (!routes.phaseCalls || typeof routes.phaseCalls !== "object" || Array.isArray(routes.phaseCalls)) return false;
+      for (const [phase, count] of Object.entries(routes.phaseCalls as Record<string, unknown>)) {
+        if (!["planning", "implementation", "verification"].includes(phase) || !finiteInteger(count)) return false;
+      }
+    }
+    if (routes.phaseEvents !== undefined && (!Array.isArray(routes.phaseEvents) || routes.phaseEvents.length > 20 || !routes.phaseEvents.every((event) => {
+      if (!event || typeof event !== "object") return false;
+      const entry = event as Record<string, unknown>;
+      return validDate(entry.at)
+        && ["planning", "implementation", "verification"].includes(String(entry.phase))
+        && [entry.providerId, entry.model, entry.reason].every((field) => typeof field === "string" && field.length <= MAX_MESSAGE_CHARACTERS);
+    }))) return false;
+  }
   return true;
 }
 
@@ -185,8 +228,9 @@ export class TaskDiagnostics {
   private approvalStartedAt?: number;
   private model = { attempts: 0, completed: 0, failures: 0, retries: 0, inputTokens: 0, outputTokens: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
   private tools = { calls: 0, failures: 0, totalMs: 0, slowestMs: 0, slowestOperation: undefined as string | undefined };
-  private approvals = { requests: 0, denied: 0, waitMs: 0 };
+  private approvals = { requests: 0, denied: 0, waitMs: 0, checks: 0, automatic: 0, remembered: 0 };
   private providerFailovers: NonNullable<TaskDiagnosticSnapshot["providerFailovers"]> = { switches: 0, events: [] };
+  private providerRoutes: NonNullable<TaskDiagnosticSnapshot["providerRoutes"]> = { switches: 0, skipped: 0, phaseCalls: {}, phaseEvents: [], events: [] };
   private toolStats = new Map<string, { calls: number; failures: number; totalMs: number }>();
   private compactions = 0;
   private lastProgressAtMs: number;
@@ -204,8 +248,16 @@ export class TaskDiagnostics {
       this.outcome = restored.outcome;
       this.model = { ...restored.model, slowestOperation: restored.model.slowestOperation };
       this.tools = { calls: restored.tools.calls, failures: restored.tools.failures, totalMs: restored.tools.totalMs, slowestMs: restored.tools.slowestMs, slowestOperation: restored.tools.slowestOperation };
-      this.approvals = { ...restored.approvals };
+      this.approvals = {
+        ...restored.approvals,
+        checks: restored.approvals.checks ?? restored.approvals.requests,
+        automatic: restored.approvals.automatic ?? 0,
+        remembered: restored.approvals.remembered ?? 0,
+      };
       this.providerFailovers = restored.providerFailovers ? structuredClone(restored.providerFailovers) : { switches: 0, events: [] };
+      this.providerRoutes = restored.providerRoutes
+        ? { ...structuredClone(restored.providerRoutes), phaseCalls: { ...(restored.providerRoutes.phaseCalls ?? {}) }, phaseEvents: [...(restored.providerRoutes.phaseEvents ?? [])] }
+        : { switches: 0, skipped: 0, phaseCalls: {}, phaseEvents: [], events: [] };
       this.toolStats = new Map(restored.tools.byName.map((row) => [row.name, { calls: row.calls, failures: row.failures, totalMs: row.totalMs }]));
       this.compactions = restored.compactions;
       this.lastProgressAtMs = Date.parse(restored.progress.lastAt);
@@ -296,15 +348,19 @@ export class TaskDiagnostics {
 
   beginApproval(operation: string): void {
     const now = this.touch();
-    this.approvals.requests++;
+    this.approvals.checks++;
     this.approvalStartedAt = now;
     this.activeBeforeApproval = this.active;
     this.active = { kind: "approval", operation: bounded(redactText(operation, this.activeTool?.sensitiveValues), MAX_OPERATION_CHARACTERS), startedAt: now };
   }
 
-  finishApproval(approved: boolean): void {
+  finishApproval(approved: boolean, source: "prompted" | "automatic" | "remembered" = "prompted"): void {
     const now = this.touch();
-    if (this.approvalStartedAt !== undefined) this.approvals.waitMs += Math.max(0, now - this.approvalStartedAt);
+    if (source === "prompted") {
+      this.approvals.requests++;
+      if (this.approvalStartedAt !== undefined) this.approvals.waitMs += Math.max(0, now - this.approvalStartedAt);
+    } else if (source === "automatic") this.approvals.automatic++;
+    else this.approvals.remembered++;
     if (!approved) this.approvals.denied++;
     this.approvalStartedAt = undefined;
     this.active = this.activeBeforeApproval;
@@ -328,6 +384,31 @@ export class TaskDiagnostics {
     });
     if (this.providerFailovers.events.length > 12) this.providerFailovers.events.shift();
     this.markProgress();
+  }
+
+  recordProviderRoute(phase: ProviderRoutingPhase, fromProviderId: string, fromModel: string, toProviderId: string, toModel: string | undefined, outcome: "switched" | "skipped", reason: string): void {
+    if (outcome === "switched") this.providerRoutes.switches++;
+    else this.providerRoutes.skipped++;
+    this.providerRoutes.events.push({
+      at: iso(this.touch()), phase, outcome,
+      fromProviderId: bounded(fromProviderId, 100), fromModel: bounded(fromModel, 200),
+      toProviderId: bounded(toProviderId, 100),
+      ...(toModel ? { toModel: bounded(toModel, 200) } : {}),
+      reason: bounded(redactText(reason), MAX_MESSAGE_CHARACTERS),
+    });
+    if (this.providerRoutes.events.length > 20) this.providerRoutes.events.shift();
+    this.markProgress();
+  }
+
+  recordProviderPhase(phase: ProviderRoutingPhase, providerId: string, model: string, reason: string): void {
+    const phaseCalls = (this.providerRoutes.phaseCalls ??= {});
+    phaseCalls[phase] = (phaseCalls[phase] ?? 0) + 1;
+    const events = (this.providerRoutes.phaseEvents ??= []);
+    const previous = events.at(-1);
+    if (!previous || previous.phase !== phase || previous.providerId !== providerId || previous.model !== model || previous.reason !== reason) {
+      events.push({ at: iso(this.touch()), phase, providerId: bounded(providerId, 100), model: bounded(model, 200), reason: bounded(reason, MAX_MESSAGE_CHARACTERS) });
+      if (events.length > 20) events.shift();
+    }
   }
 
   cancelActive(): void {
@@ -400,6 +481,7 @@ export class TaskDiagnostics {
       },
       approvals: { ...this.approvals },
       providerFailovers: structuredClone(this.providerFailovers),
+      providerRoutes: structuredClone(this.providerRoutes),
       compactions: this.compactions,
       progress: { lastAt: iso(this.lastProgressAtMs), operationsSince: this.operationsSinceProgress, distinctOperations: this.distinctOperations, consecutiveFailures: this.consecutiveFailures },
       failures: this.failures.map((failure) => ({ ...failure })),
@@ -479,6 +561,27 @@ function phaseLabel(phase: DiagnosticPhaseKind, language: UiLanguage): string {
   return localize(language, ...labels[phase]);
 }
 
+function routingPhaseLabel(phase: ProviderRoutingPhase, language: UiLanguage): string {
+  const labels: Record<ProviderRoutingPhase, [string, string]> = {
+    planning: ["规划", "planning"],
+    implementation: ["实现", "implementation"],
+    verification: ["验证", "verification"],
+  };
+  return localize(language, ...labels[phase]);
+}
+
+function routingReasonLabel(reason: string, language: UiLanguage): string {
+  const labels: Record<string, [string, string]> = {
+    plan_mode: ["Plan 模式", "Plan mode"],
+    initial_analysis: ["首轮分析", "initial analysis"],
+    completion_gate: ["完成门禁要求验证", "completion gate requires verification"],
+    verification_step: ["当前计划步骤属于验证", "active plan step is verification"],
+    implementation: ["继续实施任务", "continuing implementation"],
+  };
+  const label = labels[reason];
+  return label ? localize(language, ...label) : reason;
+}
+
 function reasonLabel(reason: string, language: UiLanguage): string {
   const labels: Record<string, [string, string]> = {
     waiting_for_approval: ["正在等待用户审批", "waiting for user approval"],
@@ -518,25 +621,28 @@ export function formatTaskDiagnosticSummary(snapshot: TaskDiagnosticSnapshot, la
 export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefined, language: UiLanguage): string {
   if (!snapshot) return localize(language, "当前会话暂无任务诊断。", "No task diagnostics are available in this session.");
   const failures = snapshot.model.failures + snapshot.tools.failures;
+  const recoverable = snapshot.outcome === "completed" && failures > 0;
+  const averageInput = snapshot.model.completed ? Math.round(snapshot.model.inputTokens / snapshot.model.completed) : 0;
+  const toolSuccessRate = snapshot.tools.calls ? Math.round(((snapshot.tools.calls - snapshot.tools.failures) / snapshot.tools.calls) * 100) : 100;
   const lines = language === "zh-CN" ? [
     "任务诊断",
     `任务：${snapshot.task}`,
-    `状态：${outcomeLabel(snapshot.outcome, language)} · ${healthLabel(snapshot, language)} · 已运行 ${duration(snapshot.durationMs)}`,
+    `状态：${outcomeLabel(snapshot.outcome, language)}${recoverable ? `（过程中有 ${failures} 次可恢复失败）` : ""} · ${healthLabel(snapshot, language)} · 已运行 ${duration(snapshot.durationMs)}`,
     `当前阶段：${phaseLabel(snapshot.phase.kind, language)}${snapshot.phase.operation ? ` · ${snapshot.phase.operation}` : ""}${snapshot.phase.activeMs ? ` · ${duration(snapshot.phase.activeMs)}` : ""}`,
-    `Token：输入 ${snapshot.model.inputTokens.toLocaleString()} / 输出 ${snapshot.model.outputTokens.toLocaleString()} / 合计 ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()}`,
+    `Token（所有模型请求累计量，重复上下文会重复计入）：输入 ${snapshot.model.inputTokens.toLocaleString()} / 输出 ${snapshot.model.outputTokens.toLocaleString()} / 合计 ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()} · 平均输入 ${averageInput.toLocaleString()}/次`,
     `模型：${snapshot.model.attempts} 次尝试 / ${snapshot.model.completed} 次成功 / ${snapshot.model.retries} 次重试 / ${snapshot.model.failures} 次失败 · ${duration(snapshot.model.totalMs)}`,
-    `工具：${snapshot.tools.calls} 次调用 / 失败 ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
-    `审批：${snapshot.approvals.requests} 次 / 拒绝 ${snapshot.approvals.denied} · 等待 ${duration(snapshot.approvals.waitMs)}`,
+    `工具：${snapshot.tools.calls} 次调用 / 成功率 ${toolSuccessRate}% / 失败 ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
+    `审批：实际提示 ${snapshot.approvals.requests} 次 / 自动放行 ${snapshot.approvals.automatic ?? 0} / 会话规则放行 ${snapshot.approvals.remembered ?? 0} / 策略检查 ${snapshot.approvals.checks ?? snapshot.approvals.requests} · 拒绝 ${snapshot.approvals.denied} · 人工等待 ${duration(snapshot.approvals.waitMs)}`,
     `进展：${snapshot.progress.operationsSince} 次操作未产生新证据 · 连续失败 ${snapshot.progress.consecutiveFailures} · 压缩 ${snapshot.compactions} 次`,
   ] : [
     "Task diagnostics",
     `Task: ${snapshot.task}`,
-    `State: ${outcomeLabel(snapshot.outcome, language)} · ${healthLabel(snapshot, language)} · elapsed ${duration(snapshot.durationMs)}`,
+    `State: ${outcomeLabel(snapshot.outcome, language)}${recoverable ? ` (${failures} recoverable failure(s) during execution)` : ""} · ${healthLabel(snapshot, language)} · elapsed ${duration(snapshot.durationMs)}`,
     `Current phase: ${phaseLabel(snapshot.phase.kind, language)}${snapshot.phase.operation ? ` · ${snapshot.phase.operation}` : ""}${snapshot.phase.activeMs ? ` · ${duration(snapshot.phase.activeMs)}` : ""}`,
-    `Tokens: ${snapshot.model.inputTokens.toLocaleString()} input / ${snapshot.model.outputTokens.toLocaleString()} output / ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()} total`,
+    `Tokens (cumulative across model requests; repeated context is counted each time): ${snapshot.model.inputTokens.toLocaleString()} input / ${snapshot.model.outputTokens.toLocaleString()} output / ${(snapshot.model.inputTokens + snapshot.model.outputTokens).toLocaleString()} total · ${averageInput.toLocaleString()} average input/request`,
     `Model: ${snapshot.model.attempts} attempt(s) / ${snapshot.model.completed} completed / ${snapshot.model.retries} retries / ${snapshot.model.failures} failures · ${duration(snapshot.model.totalMs)}`,
-    `Tools: ${snapshot.tools.calls} call(s) / Failures: ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
-    `Approvals: ${snapshot.approvals.requests} / denied ${snapshot.approvals.denied} · waited ${duration(snapshot.approvals.waitMs)}`,
+    `Tools: ${snapshot.tools.calls} call(s) / ${toolSuccessRate}% success / Failures: ${snapshot.tools.failures} · ${duration(snapshot.tools.totalMs)}`,
+    `Approvals: ${snapshot.approvals.requests} prompt(s) / ${snapshot.approvals.automatic ?? 0} automatic / ${snapshot.approvals.remembered ?? 0} remembered / ${snapshot.approvals.checks ?? snapshot.approvals.requests} policy check(s) / denied ${snapshot.approvals.denied} · human wait ${duration(snapshot.approvals.waitMs)}`,
     `Progress: ${snapshot.progress.operationsSince} operation(s) without new evidence · ${snapshot.progress.consecutiveFailures} consecutive failure(s) · ${snapshot.compactions} compaction(s)`,
   ];
   if (snapshot.health.reason) lines.push(localize(language, `诊断依据：${reasonLabel(snapshot.health.reason, language)}`, `Diagnostic reason: ${reasonLabel(snapshot.health.reason, language)}`));
@@ -547,6 +653,20 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
   if (snapshot.providerFailovers?.switches) {
     lines.push(localize(language, `Provider 故障转移：${snapshot.providerFailovers.switches} 次`, `Provider failovers: ${snapshot.providerFailovers.switches}`));
     lines.push(...snapshot.providerFailovers.events.slice(-6).map((event) => `  ${event.fromProviderId}/${event.fromModel} -> ${event.toProviderId}/${event.toModel} · ${event.reason}`));
+  }
+  if (snapshot.providerRoutes && (snapshot.providerRoutes.switches || snapshot.providerRoutes.skipped)) {
+    lines.push(localize(language,
+      `阶段路由：切换 ${snapshot.providerRoutes.switches} 次 · 跳过 ${snapshot.providerRoutes.skipped} 次`,
+      `Stage routing: ${snapshot.providerRoutes.switches} switch(es) · ${snapshot.providerRoutes.skipped} skipped`));
+    lines.push(...snapshot.providerRoutes.events.slice(-8).map((event) =>
+      `  ${event.phase} · ${event.fromProviderId}/${event.fromModel} -> ${event.toProviderId}${event.toModel ? `/${event.toModel}` : ""} · ${event.outcome} · ${event.reason}`));
+  }
+  if (snapshot.providerRoutes?.phaseCalls && Object.values(snapshot.providerRoutes.phaseCalls).some(Boolean)) {
+    lines.push(localize(language, "阶段调用：", "Stage calls:") + PROVIDER_ROUTING_PHASES.map((phase) => `${routingPhaseLabel(phase, language)} ${snapshot.providerRoutes?.phaseCalls?.[phase] ?? 0}`).join(" · "));
+    if (snapshot.providerRoutes.phaseEvents?.length) {
+      lines.push(localize(language, "阶段变化：", "Stage transitions:"), ...snapshot.providerRoutes.phaseEvents.slice(-8).map((event) =>
+        `  ${routingPhaseLabel(event.phase, language)} · ${event.providerId}/${event.model} · ${routingReasonLabel(event.reason, language)}`));
+    }
   }
   if (snapshot.tools.byName.length) lines.push(localize(language, "工具耗时：", "Tool time:"), ...snapshot.tools.byName.slice(0, 8).map((row) => `  ${row.name}: ${row.calls} × · ${duration(row.totalMs)}${row.failures ? ` · ${localize(language, `失败 ${row.failures}`, `${row.failures} failed`)}` : ""}`));
   if (failures) lines.push(localize(language, "最近失败：", "Recent failures:"), ...snapshot.failures.slice(-6).map((failure) => `  ${failure.category} · ${failure.operation} · ${failure.message}`));

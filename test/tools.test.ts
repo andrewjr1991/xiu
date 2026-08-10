@@ -161,10 +161,22 @@ test("run_process preserves complex arguments without PowerShell interpretation"
     args: ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", ...values],
   }, {
     cwd,
-    approve: async (request) => { preview = request.preview ?? ""; return true; },
+    approve: async (request) => {
+      preview = request.preview ?? "";
+      assert.equal(request.sessionScope, "run-process:node");
+      return true;
+    },
   });
   assert.match(preview, /Direct process \(no shell parsing\)/);
   assert.deepEqual(JSON.parse(result.slice(result.indexOf("\n") + 1)), values);
+});
+
+test("run_process launches npm portably without a Windows EINVAL wrapper failure", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-npm-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  const result = await executeTool(tool, { program: "npm", args: ["--version"] }, { cwd, approve: async () => true });
+  assert.match(result, /^Exit code: 0\b/);
+  assert.doesNotMatch(result, /EINVAL/);
 });
 
 test("run_process rejects shell wrappers and escaped workspace programs before approval", async () => {
