@@ -40,11 +40,14 @@ Version 0.9.8 adds deterministic per-task diagnostics. The live footer and `/dia
 
 Version 0.9.9 focuses on long-session stability. Simplified Chinese output is normalized before display while code literals remain unchanged; successful verification enters an explicit final-summary phase; `.agents/skills` is discovered and `/skills` refreshes before opening; Windows selectors accept raw arrow sequences and number keys; long progress wraps instead of disappearing; and workspace changes no longer restart the steering prompt.
 
-The local 0.9.10 candidate replaces the lossy session preview with complete semantic terminal replay. `/resume`, `xiu --resume`, and `/history` now share the normal Markdown, file-change, key-action, question, and completion renderers. Older logs are reconstructed from every saved task and assistant event without the previous 12-message/600-character cap; new sessions persist a versioned semantic turn record so future restoration can reproduce the visible conversation structure without storing ANSI escape bytes.
+Version 0.9.10 replaces the lossy session preview with complete semantic terminal replay. `/resume`, `xiu --resume`, and `/history` now share the normal Markdown, file-change, key-action, question, and completion renderers. Older logs are reconstructed from every saved task and assistant event without the previous 12-message/600-character cap; new sessions persist a versioned semantic turn record so future restoration can reproduce the visible conversation structure without storing ANSI escape bytes.
+
+The local 0.10.0 candidate introduces persistent Provider profiles. Xiu includes OpenAI, Anthropic, Agnes, Ollama, LM Studio, and vLLM presets, plus user-defined OpenAI-compatible endpoints. `/providers` tests and switches profiles without discarding the session; `/provider add|edit|remove|test|key` manages them; `/models` reports the current Provider, declared capabilities, context window, and discovery source. Profile editing keeps existing values and local credentials unless explicitly changed. Connection probing falls back to a minimal chat request when a compatible service does not implement model listing. `~/.xiu/providers.json` can store either an environment-variable name or a local plaintext credential. Secret input is hidden, the file is written atomically with owner-only mode where supported, and credential values are redacted from project session logs and UI output. This release lays the Provider foundation; automatic fallback, task-level routing, price strategy, and caching remain later v0.10.x work.
 
 ## Features
 
-- OpenAI, Anthropic, and Agnes model adapters
+- Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
+- Interactive `/providers` management, connection testing, model discovery, capability declarations, and session-aware switching
 - Streaming text and tool-call assembly for OpenAI-compatible and Anthropic providers
 - Live task plans with persistent step status and a read-only planning mode
 - Session-scoped changed-file summaries, Git diffs, file checkpoints, and confirmed restore

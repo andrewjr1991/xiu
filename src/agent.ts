@@ -144,6 +144,19 @@ export class Agent {
     this.tools = [...tools];
   }
 
+  async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
+    if (this.activeController) throw new Error("Cannot switch providers while a task is running.");
+    Object.assign(this.config, config);
+    this.provider = provider;
+    this.system = undefined;
+    if (this.sessionPath) await this.log(this.sessionPath, {
+      type: "provider_changed",
+      providerId: config.providerId,
+      provider: config.provider,
+      model: config.model,
+    });
+  }
+
   private async runWithSignal(task: string, signal: AbortSignal): Promise<string> {
     const startedAt = Date.now();
     const identityQuestion = isXiuIdentityQuestion(task);
@@ -174,6 +187,7 @@ export class Agent {
       contextualTask,
       config: {
         ...this.config,
+        apiKey: this.config.apiKey ? "configured" : undefined,
         baseURL: this.config.baseURL ? "configured" : undefined,
         proxy: this.config.proxy ? "configured" : undefined,
       },
@@ -453,7 +467,19 @@ export class Agent {
       try { discovered = await this.provider.listModels(); }
       catch (error) { discoveryError = error instanceof Error ? error.message : String(error); }
     }
-    return { models: selectableModels(this.config.provider, this.config.model, discovered, this.config.language), discoveryError };
+    const features = this.config.providerFeatures;
+    const capabilities = features
+      ? ["text", features.tools && "tools", features.vision && "vision", features.image && "image", features.video && "video"].filter(Boolean) as string[]
+      : ["text", "tools"];
+    return {
+      models: selectableModels(this.config.provider, this.config.model, discovered, this.config.language).map((model) => ({
+        ...model,
+        capabilities,
+        contextWindow: this.config.contextWindow,
+        providerId: this.config.providerId,
+      })),
+      discoveryError,
+    };
   }
 
   restoreSession(restored: RestoredSession): void {
@@ -704,14 +730,15 @@ export class Agent {
       try {
         let response: Awaited<ReturnType<ModelProvider["complete"]>>;
         let streamed = false;
+        const modelTools = this.config.providerFeatures?.tools === false ? [] : this.tools;
         if (allowStreaming && this.provider.stream && this.events.onTextDelta) {
-          response = await this.provider.stream(this.system!, this.messages, this.tools, (delta) => {
+          response = await this.provider.stream(this.system!, this.messages, modelTools, (delta) => {
             emitted = true;
             this.events.onTextDelta?.(delta);
           }, signal);
           streamed = emitted;
         } else {
-          response = await this.provider.complete(this.system!, this.messages, this.tools, signal);
+          response = await this.provider.complete(this.system!, this.messages, modelTools, signal);
         }
         this.taskDiagnostics?.finishModel(response.usage ?? { inputTokens: estimatedInput, outputTokens: Math.ceil(response.text.length / 4) }, true);
         await this.checkpointDiagnostics();

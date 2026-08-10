@@ -6,6 +6,10 @@ const BUILTIN_MODELS: Record<ProviderName, AvailableModel[]> = {
   agnes: [{ id: "agnes-2.5-flash", name: "Agnes 2.5 Flash", description: "Xiu default text and vision model", source: "builtin" }],
   openai: [{ id: "gpt-5", name: "GPT-5", description: "Xiu default OpenAI model", source: "builtin" }],
   anthropic: [{ id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", description: "Xiu default Anthropic model", source: "builtin" }],
+  "openai-compatible": [],
+  ollama: [],
+  lmstudio: [],
+  vllm: [],
 };
 
 const NON_CHAT_MODEL = /embedding|moderation|whisper|transcri|speech|tts|dall-e|image|video|sora|rerank/i;

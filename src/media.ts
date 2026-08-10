@@ -76,7 +76,7 @@ export class AgnesMediaBackend implements MediaBackend {
   private readonly dispatcher?: ProxyAgent;
 
   constructor(private readonly config: AgentConfig) {
-    this.apiKey = process.env.AGNES_API_KEY ?? "";
+    this.apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.AGNES_API_KEY ?? "";
     if (!this.apiKey) throw new Error("AGNES_API_KEY is required for Xiu media tools");
     this.baseURL = trimSlash(config.mediaBaseURL ?? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1");
     this.dispatcher = config.proxy ? new ProxyAgent(config.proxy) : undefined;
@@ -193,7 +193,7 @@ export class OpenAIVisionBackend implements MediaBackend {
 
   constructor(private readonly config: AgentConfig) {
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: ((config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.OPENAI_API_KEY) || "xiu-local",
       baseURL: config.baseURL,
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
@@ -221,7 +221,7 @@ export class AnthropicVisionBackend implements MediaBackend {
 
   constructor(private readonly config: AgentConfig) {
     this.client = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
+      apiKey: (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.ANTHROPIC_API_KEY,
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
   }

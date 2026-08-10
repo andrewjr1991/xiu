@@ -30,6 +30,9 @@ export interface AvailableModel {
   name?: string;
   description?: string;
   source: "api" | "builtin" | "current";
+  capabilities?: string[];
+  contextWindow?: number;
+  providerId?: string;
 }
 
 export interface ConversationMessage {

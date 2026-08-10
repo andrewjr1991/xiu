@@ -15,7 +15,8 @@ import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig } from "./config.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
-import { createProvider } from "./providers.js";
+import { createProvider, probeProvider } from "./providers.js";
+import { ProviderRegistry, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { McpManager } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
@@ -51,6 +52,12 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/checkpoints", "列出安全恢复点", "List safe file restore points"),
     item("/rewind", "选择恢复点回退", "Choose a checkpoint to restore"),
     item("/models", "发现并选择可用模型", "Discover and choose an available model"),
+    item("/providers", "浏览并切换 Provider", "Browse and switch providers"),
+    item("/provider test", "测试当前 Provider 连接", "Test the current provider connection"),
+    item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
+    item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
+    item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
+    item("/provider remove", "删除自定义 Provider", "Remove a custom provider"),
     item("/language", "设置界面与会话语言", "Set interface and conversation language"),
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
@@ -77,7 +84,7 @@ const program = new Command()
   .version(packageJson.version)
   .description("A safe, autonomous coding agent for your terminal")
   .argument("[task...]", "coding task to perform")
-  .option("-p, --provider <provider>", "openai, anthropic, or agnes")
+  .option("-p, --provider <provider>", "provider profile id (see /providers)")
   .option("-m, --model <model>", "model name")
   .option("-C, --cwd <directory>", "workspace directory")
   .option("--base-url <url>", "OpenAI-compatible API base URL")
@@ -102,6 +109,57 @@ async function askQuestion(prompt: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try { return await rl.question(prompt); }
   finally { rl.close(); }
+}
+
+async function askSecret(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stdin.setRawMode) return askQuestion(prompt);
+  const input = process.stdin;
+  const wasRaw = Boolean(input.isRaw);
+  const wasPaused = input.isPaused();
+  process.stdout.write(prompt);
+  input.setRawMode(true);
+  input.resume();
+  return new Promise<string>((resolve, reject) => {
+    let value = "";
+    let settled = false;
+    const cleanup = (): void => {
+      if (settled) return;
+      settled = true;
+      input.off("data", onData);
+      input.setRawMode(wasRaw);
+      if (wasPaused) input.pause();
+    };
+    const onData = (chunk: Buffer | string): void => {
+      for (const character of String(chunk)) {
+        if (character === "\r" || character === "\n") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve(value);
+          return;
+        }
+        if (character === "\u0003") {
+          cleanup();
+          process.stdout.write("\n");
+          reject(new Error("API key entry cancelled"));
+          return;
+        }
+        if (character === "\b" || character === "\u007f") {
+          const characters = [...value];
+          if (characters.length) {
+            characters.pop();
+            value = characters.join("");
+            process.stdout.write("\b \b");
+          }
+          continue;
+        }
+        if (character >= " " && character !== "\u007f") {
+          value += character;
+          process.stdout.write("*");
+        }
+      }
+    };
+    input.on("data", onData);
+  });
 }
 
 async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): Promise<boolean> {
@@ -135,7 +193,26 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
-  const config = resolveConfig({ ...options, language: options.language ?? process.env.XIU_LANGUAGE ?? settings.language });
+  const providerRegistry = new ProviderRegistry();
+  await providerRegistry.load();
+  const profileConfig = (profile: ProviderProfile, model?: string) => resolveConfig({
+    ...options,
+    provider: profile.kind,
+    providerId: profile.id,
+    providerLabel: profile.name,
+    apiKeyEnv: profile.apiKeyEnv,
+    apiKey: profile.apiKey,
+    providerFeatures: profile.features,
+    model: model ?? options.model ?? process.env.XIU_MODEL ?? profile.model,
+    baseURL: options.baseURL ?? profile.baseURL,
+    proxy: options.proxy ?? profile.proxy,
+    contextWindow: options.contextWindow ?? (profile.contextWindow ? String(profile.contextWindow) : undefined),
+    language: options.language ?? process.env.XIU_LANGUAGE ?? settings.language,
+  });
+  const requestedProviderId = options.provider ?? process.env.XIU_PROVIDER ?? providerRegistry.activeId() ?? "openai";
+  const startupProfile = providerRegistry.get(requestedProviderId);
+  if (!startupProfile) throw new Error(`Provider profile not found: ${requestedProviderId}. Run xiu and use /providers.`);
+  const config = profileConfig(startupProfile);
   let language = config.language ?? "en-US";
   const stat = await fs.stat(config.cwd).catch(() => undefined);
   if (!stat?.isDirectory()) throw new Error(`Workspace does not exist: ${config.cwd}`);
@@ -154,6 +231,10 @@ async function main(): Promise<void> {
     let restored = resumeRequested && typeof options.resume === "string"
       ? await loadSession(config.cwd, options.resume)
       : undefined;
+    if (restored?.providerId && !options.provider && !process.env.XIU_PROVIDER) {
+      const restoredProfile = providerRegistry.get(restored.providerId);
+      if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
+    }
     if (restored?.model) {
       const previous = config.model;
       config.model = restored.model;
@@ -167,7 +248,7 @@ async function main(): Promise<void> {
     const mayReadProjectSkills = Boolean(initialTask) || await isWorkspaceTrusted(config.cwd);
     await skillRegistry.refresh(mayReadProjectSkills);
     if (initialTask) {
-      console.log(chalk.bold(`\nXiu - ${config.provider}/${config.model}`));
+      console.log(chalk.bold(`\nXiu - ${config.providerId}/${config.model}`));
       console.log(chalk.dim(`${localize(language, "工作区", "Workspace")}: ${config.cwd}\n`));
     } else {
       renderWelcome(config, packageJson.version, skillRegistry.list().length);
@@ -201,6 +282,10 @@ async function main(): Promise<void> {
       if (!restored) {
         console.log(chalk.dim(localize(language, "未选择会话，将开始新会话。\n", "No session selected. Starting a new session.\n")));
       }
+    }
+    if (restored?.providerId && !options.provider && !process.env.XIU_PROVIDER) {
+      const restoredProfile = providerRegistry.get(restored.providerId);
+      if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
     }
     if (restored?.model && restored.model !== config.model) {
       const previous = config.model;
@@ -436,7 +521,8 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const baseTools = [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(config), ...coordinatorTools];
+    const buildBaseTools = () => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(config), ...coordinatorTools];
+    let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
     const provider = createProvider(config);
 
@@ -533,6 +619,43 @@ async function main(): Promise<void> {
       checkpointManager,
       skillRegistry,
     );
+    const featureNames = (profile: ProviderProfile): string => {
+      const names = [localize(language, "文本", "text")];
+      if (profile.features.tools) names.push(localize(language, "工具", "tools"));
+      if (profile.features.vision) names.push(localize(language, "视觉", "vision"));
+      if (profile.features.image) names.push(localize(language, "生图", "image"));
+      if (profile.features.video) names.push(localize(language, "视频", "video"));
+      return names.join("/");
+    };
+    const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string): Promise<boolean> => {
+      status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
+      try {
+        const nextConfig = profileConfig(profile, preferredModel ?? profile.model);
+        const probe = await probeProvider(nextConfig);
+        const nextProvider = probe.provider;
+        const discovered = probe.models;
+        if (nextConfig.model === "local-model" && discovered[0]?.id) {
+          nextConfig.model = discovered[0].id;
+          if (nextConfig.capabilities) {
+            nextConfig.capabilities.text = discovered[0].id;
+            if (profile.features.vision) nextConfig.capabilities.vision = discovered[0].id;
+          }
+        }
+        await agent.replaceProvider(nextConfig, nextProvider);
+        baseTools = buildBaseTools();
+        agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+        if (persist) await providerRegistry.setActive(profile.id);
+        status.stop();
+        console.log(chalk.green(localize(language, `Provider 已切换为 ${profile.name}，模型 ${nextConfig.model}。`, `Provider changed to ${profile.name}, model ${nextConfig.model}.`)));
+        console.log(chalk.dim(localize(language, `能力：${featureNames(profile)}${discovered.length ? ` · 发现 ${discovered.length} 个模型` : ""}\n`, `Capabilities: ${featureNames(profile)}${discovered.length ? ` · discovered ${discovered.length} models` : ""}\n`)));
+        if (probe.discoveryError) console.log(chalk.dim(localize(language, "该服务未提供兼容的模型列表接口；已通过最小聊天请求验证连接。\n", "The service has no compatible model-list endpoint; connection verified with a minimal chat request.\n")));
+        return true;
+      } catch (error) {
+        status.stop();
+        console.error(chalk.red(`${localize(language, "Provider 连接失败", "Provider connection failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        return false;
+      }
+    };
 
     const onSigint = () => {
       status.stop();
@@ -832,10 +955,164 @@ async function main(): Promise<void> {
         const selected = await chooseSession(config.cwd, language);
         if (!selected) console.log(chalk.dim(localize(language, "未选择会话。\n", "No session selected.\n")));
         else {
+          if (selected.providerId && selected.providerId !== config.providerId) {
+            const selectedProfile = providerRegistry.get(selected.providerId);
+            if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
+              console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，会话未切换。\n", "Could not restore the session provider; the session was not changed.\n")));
+              continue;
+            }
+          }
           agent.restoreSession(selected);
           awaitingReply = undefined;
           renderReplay(selected);
         }
+        continue;
+      }
+      if (task === "/providers") {
+        const profiles = providerRegistry.list();
+        const selected = await selectTerminalOption(localize(language, "选择 Provider", "Choose a provider"), profiles.map((profile) => ({
+          label: `${profile.name}${profile.id === config.providerId ? localize(language, "（当前）", " (current)") : ""}`,
+          description: `${profile.id} · ${profile.kind} · ${profile.model} · ${featureNames(profile)}${profile.baseURL ? ` · ${profile.baseURL}` : ""}`,
+          value: profile.id,
+        })), language);
+        if (!selected) console.log(chalk.dim(localize(language, "已取消 Provider 选择。\n", "Provider selection cancelled.\n")));
+        else if (selected === config.providerId) console.log(chalk.dim(localize(language, `当前已是 ${selected}。\n`, `${selected} is already active.\n`)));
+        else await switchProviderProfile(providerRegistry.get(selected)!);
+        continue;
+      }
+      if (task === "/provider test") {
+        status.start(localize(language, "正在测试当前 Provider", "Testing the current provider"));
+        try {
+          const probe = await probeProvider(config);
+          status.stop();
+          console.log(chalk.green(localize(language, `连接成功：${config.providerId}，发现 ${probe.models.length} 个模型。`, `Connected to ${config.providerId}; discovered ${probe.models.length} model(s).`)));
+          if (probe.discoveryError) console.log(chalk.dim(localize(language, "模型列表接口不可用；已通过最小聊天请求验证连接。\n", "The model-list endpoint is unavailable; connection verified with a minimal chat request.\n")));
+          else console.log();
+        } catch (error) {
+          status.stop();
+          console.error(chalk.red(`${localize(language, "连接测试失败", "Connection test failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/provider key") {
+        const profiles = providerRegistry.list();
+        const selected = await selectTerminalOption(localize(language, "为哪个 Provider 保存 Key？", "Save a key for which provider?"), profiles.map((profile) => ({
+          label: profile.name,
+          description: `${profile.id} · ${profile.apiKey ? localize(language, "已有本地 Key", "local key saved") : profile.apiKeyEnv ? `${localize(language, "环境变量", "environment")}: ${profile.apiKeyEnv}` : localize(language, "未配置 Key", "no key configured")}`,
+          value: profile.id,
+        })), language);
+        if (!selected) {
+          console.log(chalk.dim(localize(language, "已取消 Key 配置。\n", "Key configuration cancelled.\n")));
+          continue;
+        }
+        try {
+          const apiKey = await askSecret(localize(language, "输入 API Key（输入内容不会显示）：", "API key (input is hidden): "));
+          if (!apiKey) throw new Error(localize(language, "API Key 不能为空。", "API key cannot be empty."));
+          await providerRegistry.setApiKey(selected, apiKey);
+          console.log(chalk.green(localize(language, `Key 已保存到本机 Xiu 配置，正在测试 ${selected}……`, `Key saved in the local Xiu configuration. Testing ${selected}...`)));
+          if (selected === config.providerId) await switchProviderProfile(providerRegistry.get(selected)!, true, config.model);
+          else console.log(chalk.dim(localize(language, "切换到该 Provider 时会使用此 Key。\n", "This key will be used when that provider is selected.\n")));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "保存 Key 失败", "Could not save key")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/provider add") {
+        console.log(chalk.cyan(localize(language, "添加 OpenAI-compatible Provider（Key 可保存在本机配置，也可使用环境变量）", "Add an OpenAI-compatible provider (save the key locally or use an environment variable)")));
+        try {
+          const id = (await askQuestion(localize(language, "Provider ID：", "Provider ID: "))).trim();
+          const name = (await askQuestion(localize(language, "显示名称：", "Display name: "))).trim() || id;
+          const baseURL = (await askQuestion(localize(language, "API Base URL（需包含 /v1）：", "API base URL (include /v1): "))).trim();
+          const model = (await askQuestion(localize(language, "默认模型 ID：", "Default model ID: "))).trim();
+          const apiKeyEnv = (await askQuestion(localize(language, "密钥环境变量名（本地无认证可留空）：", "API-key environment variable (blank for unauthenticated local servers): "))).trim() || undefined;
+          const apiKey = await askSecret(localize(language, "本地保存的 API Key（可留空，输入内容不会显示）：", "Locally saved API key (optional; input is hidden): ")) || undefined;
+          const contextText = (await askQuestion(localize(language, "上下文窗口 Token 数（留空使用 128K）：", "Context-window tokens (blank for 128K): "))).trim();
+          const visionText = (await askQuestion(localize(language, "该端点和模型确认支持视觉？[y/N]：", "Does this endpoint and model definitely support vision? [y/N]: "))).trim();
+          const profile: ProviderProfile = {
+            id, name, kind: "openai-compatible", model, baseURL, apiKeyEnv, apiKey,
+            contextWindow: contextText ? Number(contextText) : undefined,
+            features: { text: true, tools: true, vision: /^(y|yes)$/i.test(visionText), image: false, video: false },
+          };
+          await providerRegistry.upsert(profile);
+          console.log(chalk.green(localize(language, `已保存 Provider ${id}。正在进行连接测试……`, `Saved provider ${id}. Testing the connection...`)));
+          await switchProviderProfile(providerRegistry.get(id)!);
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "添加 Provider 失败", "Could not add provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/provider edit") {
+        const editable = providerRegistry.list().filter((profile) => !profile.builtin);
+        if (!editable.length) {
+          console.log(chalk.dim(localize(language, "没有可编辑的自定义 Provider。请先使用 /provider add 添加。\n", "There are no custom providers to edit. Add one with /provider add first.\n")));
+          continue;
+        }
+        const selected = await selectTerminalOption(localize(language, "编辑哪个 Provider？", "Edit which provider?"), editable.map((profile) => ({
+          label: profile.name, description: `${profile.id} · ${profile.model} · ${profile.baseURL ?? ""}`, value: profile.id,
+        })), language);
+        if (!selected) {
+          console.log(chalk.dim(localize(language, "已取消编辑。\n", "Editing cancelled.\n")));
+          continue;
+        }
+        const current = providerRegistry.get(selected)!;
+        console.log(chalk.cyan(localize(language, "直接回车保留当前值；环境变量名或上下文窗口输入 - 可清空。本地 Key 请使用 /provider key 单独修改。", "Press Enter to keep the current value. Enter - to clear the environment variable or context window. Use /provider key to change the local key.")));
+        try {
+          const nameText = (await askQuestion(localize(language, `显示名称 [${current.name}]：`, `Display name [${current.name}]: `))).trim();
+          const baseURLText = (await askQuestion(localize(language, `API Base URL [${current.baseURL ?? ""}]：`, `API base URL [${current.baseURL ?? ""}]: `))).trim();
+          const modelText = (await askQuestion(localize(language, `默认模型 ID [${current.model}]：`, `Default model ID [${current.model}]: `))).trim();
+          const envText = (await askQuestion(localize(language, `密钥环境变量名 [${current.apiKeyEnv ?? "未设置"}]：`, `API-key environment variable [${current.apiKeyEnv ?? "not set"}]: `))).trim();
+          const contextText = (await askQuestion(localize(language, `上下文窗口 Token 数 [${current.contextWindow ?? "默认"}]：`, `Context-window tokens [${current.contextWindow ?? "default"}]: `))).trim();
+          const visionDefault = current.features.vision ? "Y/n" : "y/N";
+          const visionText = (await askQuestion(localize(language, `确认支持视觉？[${visionDefault}]：`, `Confirmed vision support? [${visionDefault}]: `))).trim();
+          const updated: ProviderProfile = {
+            ...current,
+            name: nameText || current.name,
+            baseURL: baseURLText || current.baseURL,
+            model: modelText || current.model,
+            apiKeyEnv: envText === "-" ? undefined : envText || current.apiKeyEnv,
+            contextWindow: contextText === "-" ? undefined : contextText ? Number(contextText) : current.contextWindow,
+            features: {
+              ...current.features,
+              vision: visionText ? /^(y|yes)$/i.test(visionText) : current.features.vision,
+            },
+          };
+          await providerRegistry.upsert(updated);
+          const saved = providerRegistry.get(selected)!;
+          console.log(chalk.green(localize(language, `已更新 Provider ${selected}，本地 Key 保持不变。正在测试连接……`, `Updated provider ${selected}; the local key was preserved. Testing the connection...`)));
+          if (selected === config.providerId) await switchProviderProfile(saved, true, saved.model);
+          else {
+            status.start(localize(language, `正在测试 ${saved.name} 连接`, `Testing ${saved.name}`));
+            const probe = await probeProvider(profileConfig(saved));
+            status.stop();
+            console.log(chalk.green(localize(language, `连接成功：${saved.name}。`, `Connected successfully: ${saved.name}.`)));
+            if (probe.discoveryError) console.log(chalk.dim(localize(language, "模型列表接口不可用；已通过最小聊天请求验证连接。\n", "The model-list endpoint is unavailable; connection verified with a minimal chat request.\n")));
+            else console.log();
+          }
+        } catch (error) {
+          status.stop();
+          console.error(chalk.red(`${localize(language, "编辑 Provider 失败", "Could not edit provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/provider remove") {
+        const removable = providerRegistry.list().filter((profile) => !profile.builtin);
+        if (!removable.length) {
+          console.log(chalk.dim(localize(language, "没有可删除的自定义 Provider。\n", "There are no custom providers to remove.\n")));
+          continue;
+        }
+        const selected = await selectTerminalOption(localize(language, "删除哪个 Provider？", "Remove which provider?"), removable.map((profile) => ({
+          label: profile.name, description: `${profile.id} · ${profile.baseURL ?? ""}`, value: profile.id,
+        })), language);
+        if (!selected) {
+          console.log(chalk.dim(localize(language, "已取消删除。\n", "Removal cancelled.\n")));
+          continue;
+        }
+        if (selected === config.providerId) {
+          console.log(chalk.yellow(localize(language, "不能删除当前 Provider；请先切换到其他 Provider。\n", "The active provider cannot be removed; switch providers first.\n")));
+          continue;
+        }
+        await providerRegistry.remove(selected);
+        console.log(chalk.green(localize(language, `已删除 Provider ${selected}。\n`, `Removed provider ${selected}.\n`)));
         continue;
       }
       if (task === "/clear") {
@@ -930,7 +1207,14 @@ async function main(): Promise<void> {
         const current = agent.status().model;
         const selected = await selectTerminalOption(localize(language, "选择模型", "Choose a model"), available.models.map((model) => ({
           label: `${model.id}${model.id === current ? localize(language, "（当前）", " (current)") : ""}`,
-          description: [model.name && model.name !== model.id ? model.name : "", model.description ?? "", model.source].filter(Boolean).join("  "),
+          description: [
+            model.name && model.name !== model.id ? model.name : "",
+            model.capabilities?.join("/"),
+            model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K ctx` : "",
+            model.providerId,
+            model.description ?? "",
+            model.source,
+          ].filter(Boolean).join("  ·  "),
           value: model.id,
         })), language);
         if (!selected || selected === current) console.log(chalk.dim(selected ? localize(language, `模型保持为 ${current}。\n`, `Model remains ${current}.\n`) : localize(language, "已取消模型选择。\n", "Model selection cancelled.\n")));
@@ -1049,7 +1333,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/model" || task.startsWith("/model ")) {
-        console.log(chalk.dim(localize(language, `使用 /models 选择模型。当前模型：${agent.status().model}\n`, `Use /models to choose a model. Current: ${agent.status().model}\n`)));
+        console.log(chalk.dim(localize(language, `使用 /models 选择模型。当前 Provider/模型：${config.providerId}/${agent.status().model}\n`, `Use /models to choose a model. Current provider/model: ${config.providerId}/${agent.status().model}\n`)));
         continue;
       }
       if (task === "/details") {
@@ -1088,7 +1372,7 @@ async function main(): Promise<void> {
         const indexStatusZh = `索引：${index?.files ?? 0} 个文件${index?.truncated ? "（已截断）" : ""} · ${index?.analyzedModules ?? 0} 个已分析模块 · ${index?.symbols ?? 0} 个符号 · ${index?.dependencies ?? 0} 条依赖 · ${indexModeZh} · ${index?.durationMs ?? 0} 毫秒${index?.dirty ? " · 等待刷新" : ""}`;
         const indexStatusEn = `Index: ${index?.files ?? 0} files${index?.truncated ? " (truncated)" : ""} · ${index?.analyzedModules ?? 0} analyzed modules · ${index?.symbols ?? 0} symbols · ${index?.dependencies ?? 0} dependencies · ${indexModeEn} · ${index?.durationMs ?? 0}ms${index?.dirty ? " · refresh pending" : ""}`;
         console.log(zh ? [
-          `会话：${current.sessionId ?? "尚未开始"}`, `模型：${current.model}`, `语言：简体中文`,
+          `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile)}`, `语言：简体中文`,
           `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${current.outcome}`,
           `轮次：${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : "（无限制）"}`, `待处理补充：${current.pendingSteering}`, `消息：${current.messages}`,
           `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${current.contextLimitMode}）`,
@@ -1099,7 +1383,7 @@ async function main(): Promise<void> {
           `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${listBackgroundProcesses().filter((item) => item.running).length} 个运行中`,
           `活动：${activities.list().length} 条记录（/details）`,
         ].join("\n") + "\n" : [
-          `Session: ${current.sessionId ?? "not started"}`, `Model: ${current.model}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
+          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
           `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`, `Pending steering: ${current.pendingSteering}`, `Messages: ${current.messages}`,
           `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${current.contextLimitMode})`,
           `Model window: ${current.contextWindow.toLocaleString()} tokens (${current.contextWindowSource})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,

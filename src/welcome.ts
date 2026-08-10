@@ -12,6 +12,9 @@ const LOGO = [
 ];
 
 function authState(config: AgentConfig): string {
+  if (config.apiKey) return "configured";
+  if (!config.apiKeyEnv && ["ollama", "lmstudio", "vllm", "openai-compatible"].includes(config.provider)) return "configured";
+  if (config.apiKeyEnv) return process.env[config.apiKeyEnv] ? "configured" : "missing API key";
   const configured = config.provider === "agnes"
     ? Boolean(process.env.AGNES_API_KEY)
     : config.provider === "anthropic"
@@ -103,7 +106,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     localize(language, "4. 使用 /skills 浏览已安装工作流", "4. Use /skills to browse installed workflows"),
   ];
   const session = [
-    `${localize(language, "模型", "Model")}      ${config.provider}/${config.model}`,
+    `${localize(language, "模型", "Model")}      ${config.providerId}/${config.model}`,
     `${localize(language, "上下文", "Context")}    ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · ${localize(language, "压缩点", "compact at")} ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
     `${localize(language, "认证", "Auth")}      ${authState(config) === "configured" ? localize(language, "已配置", "configured") : localize(language, "缺少 API Key", "missing API key")}`,
     `${localize(language, "审批", "Approval")}      ${config.autoApprove ? localize(language, "自动，危险操作除外", "automatic except dangerous") : localize(language, "按风险询问", "risk-based prompts")}`,

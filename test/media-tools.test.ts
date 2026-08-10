@@ -96,3 +96,11 @@ test("provider capability profiles only expose supported media tools", () => {
   assert.deepEqual(anthropic.map((tool) => tool.name), ["analyze_image"]);
   assert.deepEqual(agnes.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_video"]);
 });
+
+test("a compatible provider with vision disabled exposes no media tools", () => {
+  const tools = createMediaTools({
+    provider: "openai-compatible", providerId: "local", model: "coder", cwd: process.cwd(), autoApprove: true,
+    providerFeatures: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  assert.deepEqual(tools, []);
+});

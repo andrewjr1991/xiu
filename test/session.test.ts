@@ -65,6 +65,29 @@ test("the latest bounded task diagnostics restore with the session", async () =>
   assert.equal(restored.diagnostics?.phase.kind, "idle");
 });
 
+test("session restoration keeps the latest provider profile", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-resume-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "provider-session.jsonl"), [
+    JSON.stringify({ type: "task", task: "first", config: { provider: "openai", providerId: "openai", model: "gpt-5" } }),
+    JSON.stringify({ type: "provider_changed", provider: "ollama", providerId: "ollama", model: "qwen-coder" }),
+  ].join("\n") + "\n");
+  const restored = await loadSession(cwd, "provider-session");
+  assert.equal(restored.providerId, "ollama");
+  assert.equal(restored.model, "qwen-coder");
+});
+
+test("session logs redact locally saved provider credentials", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-secret-log-"));
+  const provider: ModelProvider = { async complete() { return { text: "done", toolCalls: [], raw: {} }; } };
+  await new Agent({ ...config(cwd), providerId: "private", apiKey: "never-write-this-secret" }, provider, [], async () => true).run("safe task");
+  const session = (await listSessions(cwd))[0]!;
+  const log = await fs.readFile(session.file, "utf8");
+  assert.doesNotMatch(log, /never-write-this-secret/);
+  assert.match(log, /"apiKey":"configured"/);
+});
+
 test("manual compaction replaces long history with a continuation brief", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-compact-"));
   const provider: ModelProvider = {

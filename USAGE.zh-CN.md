@@ -48,9 +48,24 @@ Get-Command xiu
 
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
-## 三、配置模型
+## 三、配置 Provider 与模型
 
-Xiu 支持 Agnes、OpenAI 和 Anthropic。至少要配置一个服务的 API Key。
+Xiu v0.10 支持 Agnes、OpenAI、Anthropic、Ollama、LM Studio、vLLM 和自定义 OpenAI-compatible 服务。云端服务需要各自的 API Key；本地服务不要求云端 Key。
+
+启动后输入：
+
+```text
+/providers
+```
+
+即可查看全部内置和自定义 Provider，通过上下键选择。Xiu 会先测试连接，成功后才切换，并把选择保存到 `~/.xiu/providers.json`。
+
+API Key 有两种配置方式：
+
+- 使用环境变量，配置文件只记录环境变量名。
+- 输入 `/provider key`，把 Key 直接保存在本机 `~/.xiu/providers.json`。
+
+`/provider key` 的输入会用星号隐藏。配置文件使用原子写入，在支持 Unix 文件模式的平台上限制为当前用户读写；Key 不会写入项目会话日志或显示在状态界面。不过它仍然是本机明文凭证：不要提交、同步或发送整个 `providers.json`，同一系统账号、管理员或恶意软件仍可能读取它。
 
 ### 3.1 Agnes
 
@@ -89,7 +104,43 @@ $env:ANTHROPIC_API_KEY = '你的实际 API Key'
 
 默认模型是 `claude-sonnet-4-20250514`。
 
-### 3.4 环境变量何时失效
+### 3.4 Ollama、LM Studio 和 vLLM
+
+先启动本地模型服务，再在 Xiu 中输入 `/providers`，选择对应预设：
+
+| Provider | 默认 OpenAI-compatible 地址 |
+| --- | --- |
+| Ollama | `http://127.0.0.1:11434/v1` |
+| LM Studio | `http://127.0.0.1:1234/v1` |
+| vLLM | `http://127.0.0.1:8000/v1` |
+
+切换时 Xiu 会读取服务的模型列表。如果预设尚未指定真实模型，会选用发现到的第一个模型；随后可输入 `/models` 选择其他模型。是否支持工具调用或视觉仍取决于具体服务启动参数和模型，Xiu 不会仅凭模型名称自动宣称支持。
+
+### 3.5 自定义 OpenAI-compatible 服务
+
+输入 `/provider add`，依次填写 Provider ID、显示名称、Base URL、默认模型、密钥环境变量名、可选的本地 Key、上下文窗口和视觉能力。示例环境变量：
+
+```powershell
+$env:OFFICE_MODEL_KEY = '你的实际 API Key'
+```
+
+如果选择环境变量方式，只填写 `OFFICE_MODEL_KEY` 这个名字；如果更重视配置方便，可以在隐藏输入提示中直接填写 Key。两者同时存在时，环境变量优先。其他命令：
+
+```text
+/provider test
+/provider key
+/provider edit
+/provider remove
+/models
+```
+
+`/provider edit` 用于修改已经保存的自定义 Provider。选择后会依次显示名称、Base URL、默认模型、密钥环境变量名、上下文窗口和视觉能力；直接回车保留当前值，环境变量名或上下文窗口输入 `-` 可清空。现有本地 Key 会保留，需要更换时使用 `/provider key`。
+
+连接测试会先尝试 OpenAI-compatible 模型列表接口。如果服务没有实现该接口，Xiu 会自动发送一次最小聊天请求验证连接，并明确提示“模型列表接口不可用”，不会把它误判成 Provider 整体不可用。
+
+命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。优先级为：命令行、环境变量、上次持久选择、默认 `openai`。
+
+### 3.6 环境变量何时失效
 
 使用 `$env:名称 = '值'` 设置的变量只在当前 PowerShell 窗口有效。关闭窗口后需要重新设置。
 

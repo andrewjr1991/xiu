@@ -73,7 +73,8 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
   };
 
   const tools: AgentTool[] = [];
-  if (suppliedBackend?.analyzeImage || config.provider === "agnes" || config.provider === "openai" || config.provider === "anthropic") tools.push({
+  const features = config.providerFeatures;
+  if (suppliedBackend?.analyzeImage || features?.vision || (!features && (config.provider === "agnes" || config.provider === "openai" || config.provider === "anthropic"))) tools.push({
       name: "analyze_image",
       description: "Analyze a workspace image or public image URL with the configured vision model. Use this when visual inspection is needed.",
       risk: "execute",
@@ -90,7 +91,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Vision model: ${models.vision}\n${result}`;
       },
     });
-  if ((suppliedBackend?.generateImage && suppliedBackend.download) || (config.provider === "agnes" && Boolean(models.image))) tools.push({
+  if ((suppliedBackend?.generateImage && suppliedBackend.download) || ((features?.image ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.image))) tools.push({
       name: "generate_image",
       description: "Generate or edit an image with the configured image model and save it in the workspace. Reference images may be workspace paths, URLs, or data URIs.",
       risk: "execute",
@@ -127,7 +128,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Generated image with ${models.image}\nSaved: ${saved}\n${result.url ? `Source URL: ${result.url}` : "Source: base64 response"}`;
       },
     });
-  if ((suppliedBackend?.createVideo && suppliedBackend.getVideo && suppliedBackend.download) || (config.provider === "agnes" && Boolean(models.video))) tools.push({
+  if ((suppliedBackend?.createVideo && suppliedBackend.getVideo && suppliedBackend.download) || ((features?.video ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.video))) tools.push({
       name: "generate_video",
       description: "Create a video asynchronously with the configured video model, report progress, and save the completed MP4 in the workspace. image_url and keyframe_urls must be public HTTP(S) URLs.",
       risk: "execute",

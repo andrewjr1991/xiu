@@ -110,3 +110,14 @@ test("multi-agent concurrency is bounded", () => {
   assert.throws(() => resolveConfig({ provider: "openai", agentConcurrency: "0" }), /agent-concurrency/);
   assert.throws(() => resolveConfig({ provider: "openai", agentConcurrency: "9" }), /agent-concurrency/);
 });
+
+test("local and OpenAI-compatible provider profiles do not overclaim media capabilities", () => {
+  const config = resolveConfig({
+    provider: "ollama", providerId: "ollama", model: "qwen-coder", baseURL: "http://127.0.0.1:11434/v1",
+    providerFeatures: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  assert.equal(config.providerId, "ollama");
+  assert.equal(config.baseURL, "http://127.0.0.1:11434/v1");
+  assert.equal(config.capabilities?.vision, "");
+  assert.equal(config.providerFeatures?.vision, false);
+});

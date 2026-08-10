@@ -2,7 +2,15 @@ import path from "node:path";
 import { resolveContextProfile, type ContextWindowSource } from "./context.js";
 import { defaultLanguage, normalizeLanguage, type UiLanguage } from "./i18n.js";
 
-export type ProviderName = "openai" | "anthropic" | "agnes";
+export type ProviderName = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
+
+export interface ProviderFeatureFlags {
+  text: true;
+  tools: boolean;
+  vision: boolean;
+  image: boolean;
+  video: boolean;
+}
 
 export interface CapabilityModels {
   text: string;
@@ -14,6 +22,11 @@ export interface CapabilityModels {
 
 export interface AgentConfig {
   provider: ProviderName;
+  providerId: string;
+  providerLabel?: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  providerFeatures?: ProviderFeatureFlags;
   model: string;
   cwd: string;
   /** Optional user-selected cap. Undefined means the primary agent may continue until completion or cancellation. */
@@ -50,17 +63,22 @@ export function resolveConfig(options: {
   contextWindow?: string;
   agentConcurrency?: string;
   language?: string;
+  providerId?: string;
+  providerLabel?: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  providerFeatures?: ProviderFeatureFlags;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
-  if (provider !== "openai" && provider !== "anthropic" && provider !== "agnes") {
-    throw new Error(`Unsupported provider: ${provider}. Use openai, anthropic, or agnes.`);
+  if (!["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"].includes(provider)) {
+    throw new Error(`Unsupported provider: ${provider}.`);
   }
 
   const defaultModel = provider === "anthropic"
     ? "claude-sonnet-4-20250514"
     : provider === "agnes"
       ? "agnes-2.5-flash"
-      : "gpt-5";
+      : provider === "openai" ? "gpt-5" : "local-model";
   const configuredMaxTurns = options.maxTurns ?? process.env.XIU_MAX_TURNS;
   const maxTurns = configuredMaxTurns === undefined ? undefined : Number(configuredMaxTurns);
   if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1)) {
@@ -82,10 +100,11 @@ export function resolveConfig(options: {
 
   const model = options.model ?? process.env.XIU_MODEL ?? defaultModel;
   const unified = options.unifiedModel ?? process.env.XIU_UNIFIED_MODEL;
+  const supportsVision = options.providerFeatures?.vision ?? (provider === "agnes" || provider === "openai" || provider === "anthropic");
   const capabilities: CapabilityModels = unified
     ? provider === "agnes"
       ? { text: unified, vision: unified, image: unified, video: unified, unified }
-      : { text: unified, vision: unified, unified }
+      : { text: unified, vision: supportsVision ? unified : "", unified }
     : provider === "agnes" ? {
         text: model,
         vision: options.visionModel ?? process.env.XIU_VISION_MODEL ?? model,
@@ -93,7 +112,7 @@ export function resolveConfig(options: {
         video: options.videoModel ?? process.env.XIU_VIDEO_MODEL ?? "agnes-video-v2.0",
       } : {
         text: model,
-        vision: model,
+        vision: supportsVision ? model : "",
         ...(options.imageModel ?? process.env.XIU_IMAGE_MODEL ? { image: options.imageModel ?? process.env.XIU_IMAGE_MODEL } : {}),
         ...(options.videoModel ?? process.env.XIU_VIDEO_MODEL ? { video: options.videoModel ?? process.env.XIU_VIDEO_MODEL } : {}),
       };
@@ -105,11 +124,22 @@ export function resolveConfig(options: {
   });
 
   const baseURL = options.baseURL
-    ?? (provider === "agnes" ? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1" : process.env.OPENAI_BASE_URL);
+    ?? (provider === "agnes"
+      ? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1"
+      : provider === "anthropic" ? process.env.ANTHROPIC_BASE_URL
+        : provider === "ollama" ? "http://127.0.0.1:11434/v1"
+          : provider === "lmstudio" ? "http://127.0.0.1:1234/v1"
+            : provider === "vllm" ? "http://127.0.0.1:8000/v1"
+              : process.env.OPENAI_BASE_URL);
   const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE) ?? defaultLanguage();
 
   return {
     provider,
+    providerId: options.providerId ?? provider,
+    providerLabel: options.providerLabel,
+    apiKeyEnv: options.apiKeyEnv,
+    apiKey: options.apiKey,
+    providerFeatures: options.providerFeatures,
     model: capabilities.text,
     cwd: path.resolve(options.cwd ?? process.cwd()),
     maxTurns,

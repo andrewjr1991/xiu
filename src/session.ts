@@ -22,6 +22,7 @@ export interface RestoredSession {
   createdAt: string;
   updatedAt: string;
   model?: string;
+  providerId?: string;
   messages: ConversationMessage[];
   stats: SessionStats;
   plan?: TaskPlan;
@@ -50,6 +51,7 @@ export interface SessionListItem {
   updatedAt: string;
   firstTask: string;
   model?: string;
+  providerId?: string;
   size: number;
 }
 
@@ -88,7 +90,8 @@ export async function listSessions(cwd: string): Promise<SessionListItem[]> {
       const file = path.join(directory, name);
       const [stat, events] = await Promise.all([fs.stat(file), readEvents(file)]);
       const firstTask = events.find((event) => event.type === "task");
-      const lastModel = [...events].reverse().find((event) => event.type === "model_changed" || event.type === "task");
+      const lastModel = [...events].reverse().find((event) => event.type === "model_changed" || event.type === "provider_changed" || event.type === "task");
+      const lastProvider = [...events].reverse().find((event) => event.type === "provider_changed" || event.type === "task");
       items.push({
         id: sessionId(file),
         file,
@@ -100,6 +103,13 @@ export async function listSessions(cwd: string): Promise<SessionListItem[]> {
           : typeof (lastModel?.config as Record<string, unknown> | undefined)?.model === "string"
             ? String((lastModel?.config as Record<string, unknown>).model)
             : undefined,
+        providerId: typeof lastProvider?.providerId === "string"
+          ? lastProvider.providerId
+          : typeof (lastProvider?.config as Record<string, unknown> | undefined)?.providerId === "string"
+            ? String((lastProvider?.config as Record<string, unknown>).providerId)
+            : typeof (lastProvider?.config as Record<string, unknown> | undefined)?.provider === "string"
+              ? String((lastProvider?.config as Record<string, unknown>).provider)
+              : undefined,
         size: stat.size,
       });
     }
@@ -122,6 +132,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
   let messages: ConversationMessage[] = [];
   let stats = emptySessionStats();
   let model = selected.model;
+  let providerId = selected.providerId;
   let plan: TaskPlan | undefined;
   let planMode = false;
   let diagnostics: TaskDiagnosticSnapshot | undefined;
@@ -139,6 +150,11 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
       const task = String(event.task ?? "");
       messages.push({ role: "user", content: String(event.contextualTask ?? task) });
       replayTurn = { task, inputKind: inferInputKind(task), supplements: [], changes: [], receipts: [], exact: false };
+      if (event.config && typeof event.config === "object") {
+        const saved = event.config as Record<string, unknown>;
+        if (typeof saved.providerId === "string") providerId = saved.providerId;
+        else if (typeof saved.provider === "string") providerId = saved.provider;
+      }
     }
     else if (event.type === "assistant") {
       const text = String(event.text ?? "");
@@ -155,6 +171,10 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     else if (event.type === "compact") messages = [{ role: "user", content: String(event.context ?? event.summary ?? "") }];
     else if (event.type === "stats" && event.stats) stats = { ...stats, ...event.stats as Partial<SessionStats> };
     else if (event.type === "model_changed" && typeof event.model === "string") model = event.model;
+    else if (event.type === "provider_changed") {
+      if (typeof event.providerId === "string") providerId = event.providerId;
+      if (typeof event.model === "string") model = event.model;
+    }
     else if (event.type === "plan" && event.plan) plan = event.plan as TaskPlan;
     else if (event.type === "plan_mode") planMode = Boolean(event.enabled);
     else if (event.type === "diagnostics") {
@@ -188,6 +208,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     createdAt: selected.createdAt,
     updatedAt: selected.updatedAt,
     model,
+    providerId,
     messages,
     stats,
     plan,

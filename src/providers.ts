@@ -7,9 +7,11 @@ import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider,
 class OpenAIProvider implements ModelProvider {
   private client: OpenAI;
   constructor(private config: AgentConfig) {
-    const apiKey = config.provider === "agnes" ? process.env.AGNES_API_KEY : process.env.OPENAI_API_KEY;
+    const apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined)
+      ?? config.apiKey
+      ?? (config.provider === "agnes" ? process.env.AGNES_API_KEY : process.env.OPENAI_API_KEY);
     this.client = new OpenAI({
-      apiKey,
+      apiKey: apiKey || "xiu-local",
       baseURL: config.baseURL,
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
@@ -17,12 +19,12 @@ class OpenAIProvider implements ModelProvider {
 
   async complete(system: string, messages: ConversationMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<AssistantTurn> {
     const formatted = this.formatMessages(system, messages);
+    const formattedTools = this.formatTools(tools);
 
     const response = await this.client.chat.completions.create({
       model: this.config.model,
       messages: formatted,
-      tools: this.formatTools(tools),
-      tool_choice: "auto",
+      ...(formattedTools.length ? { tools: formattedTools, tool_choice: "auto" as const } : {}),
     }, { signal });
     const message = response.choices[0]?.message;
     if (!message) throw new Error("Model returned no message");
@@ -49,11 +51,11 @@ class OpenAIProvider implements ModelProvider {
   }
 
   async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
+    const formattedTools = this.formatTools(tools);
     const response = await this.client.chat.completions.create({
       model: this.config.model,
       messages: this.formatMessages(system, messages),
-      tools: this.formatTools(tools),
-      tool_choice: "auto",
+      ...(formattedTools.length ? { tools: formattedTools, tool_choice: "auto" as const } : {}),
       stream: true,
     }, { signal });
     let text = "";
@@ -126,8 +128,15 @@ class OpenAIProvider implements ModelProvider {
 }
 
 class AnthropicProvider implements ModelProvider {
-  private client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  constructor(private config: AgentConfig) {}
+  private client: Anthropic;
+  constructor(private config: AgentConfig) {
+    const apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    this.client = new Anthropic({
+      apiKey,
+      baseURL: config.baseURL,
+      fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
+    });
+  }
 
   async complete(system: string, messages: ConversationMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<AssistantTurn> {
     const formatted = this.formatMessages(messages);
@@ -205,17 +214,46 @@ class AnthropicProvider implements ModelProvider {
 }
 
 export function createProvider(config: AgentConfig): ModelProvider {
+  const configuredKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey;
   if (config.provider === "anthropic") {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set");
+    const keyName = config.apiKeyEnv ?? "ANTHROPIC_API_KEY";
+    if (!(configuredKey ?? process.env.ANTHROPIC_API_KEY)) throw new Error(`${keyName} is not set`);
     return new AnthropicProvider(config);
   }
   if (config.provider === "agnes") {
-    if (!process.env.AGNES_API_KEY) throw new Error("AGNES_API_KEY is not set");
-    if (/[^\x20-\x7E]/.test(process.env.AGNES_API_KEY)) {
+    const keyName = config.apiKeyEnv ?? "AGNES_API_KEY";
+    const apiKey = configuredKey ?? process.env.AGNES_API_KEY;
+    if (!apiKey) throw new Error(`${keyName} is not set`);
+    if (/[^\x20-\x7E]/.test(apiKey)) {
       throw new Error("AGNES_API_KEY contains non-ASCII characters. Replace the placeholder with your real API key.");
     }
     return new OpenAIProvider(config);
   }
-  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
+  const local = config.provider === "ollama" || config.provider === "lmstudio" || config.provider === "vllm";
+  const keyName = config.apiKeyEnv ?? "OPENAI_API_KEY";
+  if (!local && config.provider !== "openai-compatible" && !(configuredKey ?? process.env.OPENAI_API_KEY)) throw new Error(`${keyName} is not set`);
+  if (config.provider === "openai-compatible" && config.apiKeyEnv && !configuredKey) throw new Error(`${config.apiKeyEnv} is not set and no local key is saved`);
   return new OpenAIProvider(config);
+}
+
+export interface ProviderProbeResult {
+  provider: ModelProvider;
+  models: AvailableModel[];
+  discoveryError?: string;
+}
+
+/** Verify a provider even when its OpenAI-compatible surface does not implement GET /models. */
+export async function probeProvider(config: AgentConfig, signal?: AbortSignal): Promise<ProviderProbeResult> {
+  const provider = createProvider(config);
+  if (!provider.listModels) {
+    await provider.complete("You are checking an API connection.", [{ role: "user", content: "Reply only: OK" }], [], signal);
+    return { provider, models: [] };
+  }
+  try {
+    return { provider, models: await provider.listModels() };
+  } catch (error) {
+    const discoveryError = error instanceof Error ? error.message : String(error);
+    await provider.complete("You are checking an API connection.", [{ role: "user", content: "Reply only: OK" }], [], signal);
+    return { provider, models: [], discoveryError };
+  }
 }
