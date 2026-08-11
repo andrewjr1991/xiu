@@ -47,3 +47,40 @@ test("local skill installation uses a recoverable backup when replacing", async 
   assert.match(await fs.readFile(path.join(globalRoot, "quality-check", "SKILL.md"), "utf8"), /Second version/);
   assert.match(await fs.readFile(path.join(second[0]!.backup!, "SKILL.md"), "utf8"), /First version/);
 });
+
+test("skill permission expansion requires acknowledgement and preserves the old install when declined", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-permissions-"));
+  const globalRoot = path.join(cwd, "installed");
+  const source = path.join(cwd, "source-skill");
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, "SKILL.md"), skillMarkdown("network-review", "Review")
+    .replace("description: Review", "description: Review\npermissions: workspace:read"));
+  const registry = new SkillRegistry(cwd, globalRoot);
+  const prompts: string[][] = [];
+  await registry.install(source, false, async ({ added }) => { prompts.push(added); return true; });
+  assert.deepEqual(prompts, [["workspace:read"]]);
+
+  await fs.writeFile(path.join(source, "SKILL.md"), skillMarkdown("network-review", "Review v2")
+    .replace("description: Review v2", "description: Review v2\npermissions: workspace:read, network:access"));
+  await assert.rejects(registry.install(source, true, async ({ added }) => {
+    assert.deepEqual(added, ["network:access"]);
+    return false;
+  }), /permission acknowledgement was declined/);
+  assert.match(await fs.readFile(path.join(globalRoot, "network-review", "SKILL.md"), "utf8"), /description: Review\n/);
+  assert.doesNotMatch(await fs.readFile(path.join(globalRoot, "network-review", "SKILL.md"), "utf8"), /network:access/);
+
+  await registry.install(source, true, async () => true);
+  assert.match(await fs.readFile(path.join(globalRoot, "network-review", "SKILL.md"), "utf8"), /network:access/);
+  await fs.rm(cwd, { recursive: true, force: true });
+});
+
+test("skill installation rejects unknown permission names", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-unknown-permission-"));
+  const source = path.join(cwd, "source-skill");
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, "SKILL.md"), skillMarkdown("unsafe", "Unsafe")
+    .replace("description: Unsafe", "description: Unsafe\npermissions: system:override"));
+  const registry = new SkillRegistry(cwd, path.join(cwd, "installed"));
+  await assert.rejects(registry.install(source, false, async () => true), /unknown permissions.*system:override/i);
+  await fs.rm(cwd, { recursive: true, force: true });
+});

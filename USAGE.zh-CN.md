@@ -815,7 +815,19 @@ Skills 是写在 `SKILL.md` 中的可复用工作流程。Xiu 从以下位置发
 /skills install https://github.com/obra/superpowers.git
 ```
 
-安装后当前会话会刷新指令。v0.9.9 在每次打开 `/skills` 前重新扫描，并在任务结束后发现外部命令新安装的 Skill，因此无需重启；只有被实际扫描到并加载的 Skill 才会报告为可用。只安装可信来源；Skill 会影响模型的工作方法。Xiu 启动时只加载 Skill 名称和描述，需要使用时才读取完整内容，以减少上下文占用。
+安装后当前会话会刷新指令。v0.9.9 在每次打开 `/skills` 前重新扫描，并在任务结束后发现外部命令新安装的 Skill，因此无需重启；只有被实际扫描到并加载的 Skill 才会报告为可用。只安装可信来源；Skill 会影响模型的工作方法。Xiu 启动时只加载 Skill 名称、描述和权限摘要，需要使用时才读取完整内容，以减少上下文占用。
+
+v0.12.2 起，Skill 可以在 `SKILL.md` frontmatter 中声明权限，例如：
+
+```yaml
+---
+name: deploy
+description: 部署工作流
+permissions: workspace:read, network:access
+---
+```
+
+可用权限包括 `instructions:load`、`workspace:read`、`workspace:write`、`process:execute`、`network:access`、`external:read`、`external:write` 和 `credentials:access`。未声明的旧 Skill 使用兼容的 `instructions:load` 基线；出现未知权限时安装会被阻止。首次安装或更新新增权限时，Xiu 会先展示差异并等待确认，拒绝后不会替换旧版本。Skill 声明只是风险说明和收紧依据，不能跳过工作区信任、Plan 模式或工具审批。
 
 ## 十五、MCP Server
 
@@ -847,7 +859,8 @@ Windows 示例：
       "toolChangesWorkspace": {
         "write_file": true,
         "edit_file": true
-      }
+      },
+      "permissions": ["process:execute", "external:read", "external:write", "workspace:write"]
     }
   }
 }
@@ -862,7 +875,8 @@ Windows 示例：
       "transport": "streamable-http",
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" },
-      "risk": "execute"
+      "risk": "execute",
+      "permissions": ["network:access", "external:write", "credentials:access"]
     }
   }
 }
@@ -883,6 +897,8 @@ Windows 示例：
 /mcp read cloudflare <resource-uri>
 /mcp prompts cloudflare
 /mcp prompt cloudflare <prompt-name> {"argument":"value"}
+/mcp permissions
+/mcp permissions approve cloudflare
 ```
 
 `/mcp add` 会让用户选择无认证、Bearer 环境变量或 OAuth，并明确默认风险等级。OAuth 配置只保存认证方式、Client ID、Scope 和回调端口等非敏感信息；Token 独立保存在用户目录的 `~/.xiu/mcp-auth.json`，不会进入项目配置、会话或模型上下文。
@@ -906,6 +922,10 @@ Access Token 临近到期时会自动刷新，同一身份的并发刷新只执�
 ```
 
 MCP 工具默认按 execute 风险处理并请求审批。只有确认工具不能修改文件或外部状态时，才应配置为 `read`。项目 MCP 只在工作区受信任后启动。
+
+v0.12.2 起，MCP 可声明 `process:execute`、`network:access`、`external:read`、`external:write`、`workspace:write` 和 `credentials:access`。Xiu 会根据 transport、认证、risk 和工作区变化配置推导最低权限；显式清单可以更严格，但不能少报。旧配置首次升级会建立兼容基线；新配置或权限扩大时保持断开，并提示使用 `/mcp permissions approve [名称]` 审批当前精确指纹。修改命令、端点、认证、风险、工作区副作用或权限都会使旧授权失效。授权摘要保存在 `~/.xiu/extension-permissions.json`，不会保存明文端点，也不会代替每次工具调用的核心安全审批。
+
+Windows stdio MCP 启动失败时，Xiu 会对 UTF-8、UTF-16LE 和常见 GB18030/GBK stderr 做有界解码，避免把本地中文错误显示为乱码；错误内容仍会截断并脱敏。
 
 v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mcp resources [名称]` 与 `/mcp prompts [名称]` 显示服务提供的目录；`/mcp read [名称] [URI]` 通过原 MCP 服务读取 Resource，Xiu 不会自行访问 URI；`/mcp prompt [名称] [Prompt] [JSON参数]` 获取并预览 Prompt，缺少必填参数时会逐项询问。
 
@@ -1026,6 +1046,10 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `/mcp remove [name]` | 删除用户级 MCP 配置 |
 | `/mcp test [name]` | 重连并测试一个或全部 MCP |
 | `/mcp reload` | 重载 MCP 配置 |
+| `/mcp resources` / `/mcp read` | 浏览和读取不可信的远端 Resource |
+| `/mcp prompts` / `/mcp prompt` | 浏览和预览不可信的远端 Prompt |
+| `/mcp permissions` | 查看 MCP 权限清单、来源和待批准差异 |
+| `/mcp permissions approve [name]` | 批准一个 MCP 当前精确权限指纹 |
 | `/agents` | 查看所有多 Agent 运行 |
 | `/agents <运行ID>` | 查看一个运行的详细状态 |
 | `/agents cancel <运行ID> <任务ID>` | 单独取消一个 Agent |

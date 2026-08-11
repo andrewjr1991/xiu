@@ -1,4 +1,10 @@
 import readline from "node:readline";
+import iconv from "iconv-lite";
+
+if (process.env.XIU_TEST_MCP_GBK_ERROR === "1") {
+  process.stderr.write(iconv.encode("下载失败：网络不可用", "gb18030"));
+  process.exit(1);
+}
 
 const input = readline.createInterface({ input: process.stdin, terminal: false });
 const pendingTimers = new Map();

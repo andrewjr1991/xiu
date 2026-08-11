@@ -78,6 +78,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
+    item("/mcp permissions", "查看或确认 MCP 权限清单", "Show or approve MCP permission manifests"),
     item("/mcp resources", "浏览 MCP 资源与模板", "Browse MCP resources and templates"),
     item("/mcp read", "读取一个 MCP 资源", "Read an MCP resource"),
     item("/mcp prompts", "浏览 MCP Prompt", "Browse MCP prompts"),
@@ -320,7 +321,8 @@ async function main(): Promise<void> {
     if (mcpStatuses.length) {
       const connected = mcpStatuses.filter((server) => server.state === "connected");
       const failed = mcpStatuses.filter((server) => server.state === "failed");
-      console.log(chalk.dim(localize(language, `MCP：${connected.length} 个已连接，${mcpManager.tools().length} 个工具${failed.length ? `，${failed.length} 个失败` : ""}。使用 /mcp 查看详情。\n`, `MCP: ${connected.length} connected, ${mcpManager.tools().length} tools${failed.length ? `, ${failed.length} failed` : ""}. Use /mcp for details.\n`)));
+      const permissions = mcpStatuses.filter((server) => server.state === "permission-required");
+      console.log(chalk.dim(localize(language, `MCP：${connected.length} 个已连接，${mcpManager.tools().length} 个工具${permissions.length ? `，${permissions.length} 个待确认权限` : ""}${failed.length ? `，${failed.length} 个失败` : ""}。使用 /mcp 查看详情。\n`, `MCP: ${connected.length} connected, ${mcpManager.tools().length} tools${permissions.length ? `, ${permissions.length} awaiting permission approval` : ""}${failed.length ? `, ${failed.length} failed` : ""}. Use /mcp for details.\n`)));
     }
     if (resumeRequested && !restored) {
       restored = await chooseSession(config.cwd, language);
@@ -1647,12 +1649,15 @@ async function main(): Promise<void> {
         }
         const selected = await selectTerminalOption(localize(language, "已安装技能", "Installed skills"), skills.map((skill) => ({
           label: skill.name,
-          description: `${skill.scope}  ${skill.description.slice(0, 100)}`,
+          description: `${skill.scope}  ${skill.permissions.join(", ")}  ${skill.description.slice(0, 80)}`,
           value: skill.name,
         })), language);
         if (selected) {
           const skill = skills.find((item) => item.name === selected)!;
-          console.log(`${chalk.cyan(skill.name)} ${chalk.dim(`[${skill.scope}]`)}\n${skill.description}\n${chalk.dim(skill.file)}\n`);
+          console.log(`${chalk.cyan(skill.name)} ${chalk.dim(`[${skill.scope}]`)}\n${skill.description}`);
+          console.log(chalk.dim(localize(language, `权限：${skill.permissions.join("、")}${skill.permissionsDeclared ? "（已声明）" : "（兼容默认）"}`, `Permissions: ${skill.permissions.join(", ")} ${skill.permissionsDeclared ? "(declared)" : "(compatibility default)"}`)));
+          if (skill.permissionWarnings.length) console.log(chalk.yellow(localize(language, `未知权限：${skill.permissionWarnings.join("、")}`, `Unknown permissions: ${skill.permissionWarnings.join(", ")}`)));
+          console.log(`${chalk.dim(skill.file)}\n`);
         }
         continue;
       }
@@ -1664,8 +1669,19 @@ async function main(): Promise<void> {
         }
         status.start(localize(language, "正在安装技能包", "Installing skill package"));
         try {
+          const confirmSkillPermissions = async ({ manifest, added, replacing }: { manifest: { name: string; permissions: string[] }; added: string[]; replacing: boolean }) => {
+            status.stop();
+            const preview = localize(language,
+              `${replacing ? "技能更新" : "新技能"} ${manifest.name} 请求以下新增权限：\n${added.map((permission) => `  + ${permission}`).join("\n")}\n权限声明不会绕过 Xiu 的工作区信任、审批或 Plan 模式。`,
+              `${replacing ? "Skill update" : "New skill"} ${manifest.name} requests these additional permissions:\n${added.map((permission) => `  + ${permission}`).join("\n")}\nThe declaration cannot bypass Xiu workspace trust, approvals, or Plan mode.`);
+            console.log(chalk.yellow(preview));
+            const answer = await askQuestion(chalk.yellow(localize(language, "确认并继续安装？[y/N] ", "Acknowledge and continue installation? [y/N] ")));
+            const accepted = /^(y|yes)$/i.test(answer.trim());
+            if (accepted) status.start(localize(language, "正在安装技能包", "Installing skill package"));
+            return accepted;
+          };
           let installed;
-          try { installed = await skillRegistry.install(source); }
+          try { installed = await skillRegistry.install(source, false, confirmSkillPermissions); }
           catch (error) {
             status.stop();
             if (!/Skill already exists:/i.test(error instanceof Error ? error.message : String(error))) throw error;
@@ -1675,12 +1691,13 @@ async function main(): Promise<void> {
               continue;
             }
             status.start(localize(language, "正在替换技能包", "Replacing skill package"));
-            installed = await skillRegistry.install(source, true);
+            installed = await skillRegistry.install(source, true, confirmSkillPermissions);
           }
           status.stop();
           agent.reloadInstructions();
           for (const skill of installed) {
             console.log(chalk.green(localize(language, `已安装技能 ${skill.name}`, `Installed skill ${skill.name}`)), chalk.dim(`-> ${skill.destination}`));
+            console.log(chalk.dim(localize(language, `权限：${skill.permissions.join("、")}`, `Permissions: ${skill.permissions.join(", ")}`)));
             if (skill.backup) console.log(chalk.dim(localize(language, `旧版本已备份到 ${skill.backup}`, `Previous version backed up at ${skill.backup}`)));
           }
           console.log();
@@ -1692,6 +1709,49 @@ async function main(): Promise<void> {
       }
       if (task === "/mcp") {
         console.log(`${mcpManager.summary(language)}\n`);
+        continue;
+      }
+      if (task === "/mcp permissions" || task.startsWith("/mcp permissions ")) {
+        const parts = task.trim().split(/\s+/);
+        const approving = parts[2]?.toLowerCase() === "approve";
+        const requested = approving ? parts[3] : parts[2];
+        try {
+          const manifests = await mcpManager.permissionManifests(projectMcpTrusted);
+          if (approving) {
+            const candidates = requested ? manifests.filter((item) => item.name === requested) : manifests.filter((item) => !item.approved);
+            const selected = requested ?? await selectTerminalOption(localize(language, "选择要确认权限的 MCP", "Choose an MCP permission manifest to approve"), candidates.map((item) => ({
+              label: item.name,
+              description: `${item.origin} · ${item.added.join(", ") || localize(language, "清单已变化", "manifest changed")}`,
+              value: item.name,
+            })), language);
+            if (!selected) { console.log(chalk.dim(localize(language, "没有待确认的 MCP 权限，或操作已取消。\n", "No MCP permissions await approval, or the operation was cancelled.\n"))); continue; }
+            const manifest = manifests.find((item) => item.name === selected);
+            if (!manifest) throw new Error(localize(language, `未找到 MCP ${selected}`, `MCP ${selected} was not found`));
+            if (manifest.approved) {
+              console.log(chalk.dim(localize(language, `MCP ${selected} 当前权限清单已经确认，无需重复操作。\n`, `MCP ${selected} already has approval for its current permission manifest.\n`)));
+              continue;
+            }
+            console.log(chalk.yellow(localize(language,
+              `MCP ${selected} 权限：\n${manifest.permissions.map((permission) => `  • ${permission}`).join("\n")}\n来源：${manifest.origin}\n确认只记录清单，不会绕过工具审批。`,
+              `MCP ${selected} permissions:\n${manifest.permissions.map((permission) => `  • ${permission}`).join("\n")}\nSource: ${manifest.origin}\nApproval records the manifest only and cannot bypass tool approvals.`)));
+            const answer = await askQuestion(chalk.yellow(localize(language, "确认此权限清单？[y/N] ", "Approve this permission manifest? [y/N] ")));
+            if (!/^(y|yes)$/i.test(answer.trim())) { console.log(chalk.dim(localize(language, "已取消权限确认。\n", "Permission approval cancelled.\n"))); continue; }
+            await mcpManager.approvePermissions(selected, projectMcpTrusted);
+            await mcpManager.start(projectMcpTrusted);
+            agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+            console.log(chalk.green(localize(language, `已确认 MCP ${selected} 权限并重新加载。\n`, `Approved MCP ${selected} permissions and reloaded it.\n`)));
+            continue;
+          }
+          if (!manifests.length) console.log(chalk.dim(localize(language, "未配置 MCP 权限清单。\n", "No MCP permission manifests are configured.\n")));
+          else console.log(`${manifests.filter((item) => !requested || item.name === requested).map((item) => [
+            `${item.approved ? chalk.green("✓") : chalk.yellow("!")} ${chalk.cyan(item.name)} · ${item.origin} · ${item.declared ? localize(language, "显式声明", "declared") : localize(language, "兼容推导", "compatibility-derived")}`,
+            `  ${localize(language, "权限", "Permissions")}: ${item.permissions.join(", ")}`,
+            ...(item.details?.length ? [`  ${localize(language, "依据", "Basis")}: ${item.details.join(", ")}`] : []),
+            ...(!item.approved ? [`  ${chalk.yellow(localize(language, `待确认变化：${item.added.join(", ") || "配置或清单指纹变化"}`, `Pending changes: ${item.added.join(", ") || "configuration or manifest fingerprint changed"}`))}`] : []),
+          ].join("\n")).join("\n") }\n`);
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "MCP 权限操作失败", "MCP permission operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
         continue;
       }
       if (task === "/mcp resources" || task.startsWith("/mcp resources ")) {
@@ -1955,6 +2015,8 @@ async function main(): Promise<void> {
           ? chalk.green(localize(language, `✓ ${server.name}：已连接 · ${server.transport} · ${server.tools} 个工具`, `✓ ${server.name}: connected · ${server.transport} · ${server.tools} tools`))
           : server.state === "auth-required"
             ? chalk.yellow(localize(language, `! ${server.name}：需要 OAuth 登录 · 运行 /mcp login ${server.name}`, `! ${server.name}: OAuth login required · run /mcp login ${server.name}`))
+            : server.state === "permission-required"
+              ? chalk.yellow(localize(language, `! ${server.name}：需要确认权限 · 运行 /mcp permissions approve ${server.name}`, `! ${server.name}: permission approval required · run /mcp permissions approve ${server.name}`))
             : chalk.red(localize(language, `× ${server.name}：连接失败 · ${server.error}`, `× ${server.name}: failed · ${server.error}`))).join("\n")}\n`);
         continue;
       }

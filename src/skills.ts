@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import fg from "fast-glob";
+import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -15,13 +16,23 @@ export interface XiuSkill {
   description: string;
   file: string;
   scope: "project" | "global" | "compatible";
+  permissions: ExtensionPermission[];
+  permissionWarnings: string[];
+  permissionsDeclared: boolean;
 }
 
 export interface InstalledSkill {
   name: string;
   destination: string;
   backup?: string;
+  permissions: ExtensionPermission[];
 }
+
+export type SkillPermissionConfirmation = (input: {
+  manifest: ExtensionPermissionManifest;
+  added: ExtensionPermission[];
+  replacing: boolean;
+}) => Promise<boolean>;
 
 function frontmatter(content: string): Record<string, string> {
   if (!content.startsWith("---")) return {};
@@ -39,6 +50,28 @@ function safeName(value: string): string {
   const normalized = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!normalized || normalized === "." || normalized === "..") throw new Error(`Invalid skill name: ${value}`);
   return normalized;
+}
+
+function skillPermissions(meta: Record<string, string>): { permissions: ExtensionPermission[]; unknown: string[]; declared: boolean } {
+  const declared = Object.hasOwn(meta, "permissions");
+  const parsed = parseExtensionPermissions(meta.permissions);
+  return {
+    permissions: parsed.permissions.length ? parsed.permissions : ["instructions:load"],
+    unknown: parsed.unknown,
+    declared,
+  };
+}
+
+function skillManifest(name: string, destination: string, meta: Record<string, string>): ExtensionPermissionManifest {
+  const parsed = skillPermissions(meta);
+  return {
+    kind: "skill",
+    name,
+    origin: path.resolve(destination),
+    permissions: parsed.permissions,
+    details: parsed.unknown.map((permission) => `unknown:${permission}`),
+    declared: parsed.declared,
+  };
 }
 
 async function copyTree(source: string, destination: string): Promise<void> {
@@ -68,7 +101,13 @@ async function copyTree(source: string, destination: string): Promise<void> {
 export class SkillRegistry {
   private skills: XiuSkill[] = [];
 
-  constructor(private readonly cwd: string, private readonly globalRoot?: string) {}
+  constructor(
+    private readonly cwd: string,
+    private readonly globalRoot?: string,
+    private readonly permissionStore = new PermissionGrantStore(globalRoot
+      ? path.join(path.dirname(globalRoot), "extension-permissions.json")
+      : path.join(os.homedir(), ".xiu", "extension-permissions.json")),
+  ) {}
 
   globalDirectory(): string { return this.globalRoot ?? path.join(os.homedir(), ".xiu", "skills"); }
 
@@ -89,12 +128,16 @@ export class SkillRegistry {
         try {
           const content = await fs.readFile(file, "utf8");
           const meta = frontmatter(content);
+          const permissionInfo = skillPermissions(meta);
           const folder = path.basename(path.dirname(file));
           discovered.push({
             name: meta.name || folder,
             description: meta.description || content.replace(/^---[\s\S]*?---\s*/, "").split(/\r?\n/).find((line) => line.trim())?.replace(/^#+\s*/, "") || "No description",
             file,
             scope: root.scope,
+            permissions: permissionInfo.permissions,
+            permissionWarnings: permissionInfo.unknown,
+            permissionsDeclared: permissionInfo.declared,
           });
         } catch { /* ignore unreadable skills */ }
       }
@@ -111,7 +154,7 @@ export class SkillRegistry {
     if (!this.skills.length) return "No Xiu skills are installed.";
     return [
       "Available Xiu skills (call read_skill before following a relevant skill):",
-      ...this.skills.map((skill) => `- ${skill.name} [${skill.scope}]: ${skill.description}`),
+      ...this.skills.map((skill) => `- ${skill.name} [${skill.scope}] [permissions: ${skill.permissions.join(", ")}${skill.permissionWarnings.length ? `; unknown: ${skill.permissionWarnings.join(", ")}` : ""}]: ${skill.description}`),
     ].join("\n");
   }
 
@@ -123,10 +166,10 @@ export class SkillRegistry {
     const skill = matches[0]!;
     const content = await fs.readFile(skill.file, "utf8");
     if (content.length > 120_000) throw new Error(`Skill is too large to load safely: ${skill.name}`);
-    return `Skill: ${skill.name}\nScope: ${skill.scope}\nSource: ${skill.file}\n\n${content}`;
+    return `Skill: ${skill.name}\nScope: ${skill.scope}\nPermissions: ${skill.permissions.join(", ")}\n${skill.permissionWarnings.length ? `Unknown permission declarations: ${skill.permissionWarnings.join(", ")}\n` : ""}Source: ${skill.file}\n\n${content}`;
   }
 
-  async install(source: string, overwrite = false): Promise<InstalledSkill[]> {
+  async install(source: string, overwrite = false, confirmPermissions?: SkillPermissionConfirmation): Promise<InstalledSkill[]> {
     const trimmed = source.trim().replace(/^['"]|['"]$/g, "");
     if (!trimmed) throw new Error("Skill source cannot be empty");
     let packageRoot = path.resolve(trimmed);
@@ -158,6 +201,21 @@ export class SkillRegistry {
         let backup: string | undefined;
         const exists = await fs.stat(destination).then(() => true, () => false);
         if (exists && !overwrite) throw new Error(`Skill already exists: ${name}`);
+        const manifest = skillManifest(name, destination, meta);
+        const unknown = (manifest.details ?? []).filter((item) => item.startsWith("unknown:"));
+        if (unknown.length) throw new Error(`Skill ${name} declares unknown permissions: ${unknown.map((item) => item.slice(8)).join(", ")}`);
+        let previous: ExtensionPermissionManifest | undefined;
+        if (exists) {
+          const previousContent = await fs.readFile(path.join(destination, "SKILL.md"), "utf8");
+          previous = skillManifest(name, destination, frontmatter(previousContent));
+          if (!await this.permissionStore.approvedManifest(previous)) await this.permissionStore.approve(previous);
+        }
+        const approved = await this.permissionStore.isApproved(manifest);
+        const added = addedPermissions(previous ?? await this.permissionStore.approvedManifest(manifest), manifest);
+        const requiresConfirmation = !approved && added.some((permission) => permission !== "instructions:load");
+        if (requiresConfirmation && (!confirmPermissions || !await confirmPermissions({ manifest, added, replacing: exists }))) {
+          throw new Error(`Skill permission acknowledgement was declined: ${name}`);
+        }
         if (exists) {
           backup = `${destination}.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
           await fs.rename(destination, backup);
@@ -168,7 +226,8 @@ export class SkillRegistry {
           if (backup) await fs.rename(backup, destination);
           throw error;
         }
-        installed.push({ name, destination, backup });
+        await this.permissionStore.approve(manifest);
+        installed.push({ name, destination, backup, permissions: manifest.permissions });
       }
       await this.refresh();
       return installed;

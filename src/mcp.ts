@@ -1,13 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Client, InsufficientScopeError, StreamableHTTPClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
+import iconv from "iconv-lite";
 import os from "node:os";
 import path from "node:path";
 import { localize, type UiLanguage } from "./i18n.js";
 import { McpAuthStore } from "./mcp-auth-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
+import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -33,6 +36,7 @@ export interface McpServerConfig {
   toolRisks?: Record<string, ToolRisk>;
   changesWorkspace?: boolean;
   toolChangesWorkspace?: Record<string, boolean>;
+  permissions?: ExtensionPermission[];
 }
 
 export interface McpOAuthConfig {
@@ -111,9 +115,10 @@ interface PendingRequest {
 export interface McpServerStatus {
   name: string;
   transport: "stdio" | "streamable-http";
-  state: "connected" | "auth-required" | "authorizing" | "refreshing" | "scope-required" | "failed";
+  state: "connected" | "permission-required" | "auth-required" | "authorizing" | "refreshing" | "scope-required" | "failed";
   tools: number;
   error?: string;
+  permissionChanges?: ExtensionPermission[];
 }
 
 function safeName(value: string): string {
@@ -215,7 +220,66 @@ function validateServer(name: string, value: unknown): McpServerConfig {
     || Array.isArray(config.toolChangesWorkspace) || Object.values(config.toolChangesWorkspace).some((item) => typeof item !== "boolean"))) {
     throw new Error(`MCP server ${name} toolChangesWorkspace must contain boolean values`);
   }
+  if (config.permissions !== undefined) {
+    if (!Array.isArray(config.permissions) || config.permissions.length > 32 || config.permissions.some((item) => typeof item !== "string")) {
+      throw new Error(`MCP server ${name} permissions must be an array of known permission strings`);
+    }
+    const parsed = parseExtensionPermissions(config.permissions);
+    if (parsed.unknown.length) throw new Error(`MCP server ${name} declares unknown permissions: ${parsed.unknown.join(", ")}`);
+    config.permissions = parsed.permissions;
+  }
   return config as unknown as McpServerConfig;
+}
+
+function inferredMcpPermissions(config: McpServerConfig): ExtensionPermission[] {
+  const permissions = new Set<ExtensionPermission>();
+  permissions.add(config.url ? "network:access" : "process:execute");
+  const risks = [config.risk ?? "execute", ...Object.values(config.toolRisks ?? {})];
+  for (const risk of risks) permissions.add(risk === "read" ? "external:read" : "external:write");
+  if (config.changesWorkspace || Object.values(config.toolChangesWorkspace ?? {}).some(Boolean)) permissions.add("workspace:write");
+  if (config.auth || Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization") || Object.keys(config.env ?? {}).length) permissions.add("credentials:access");
+  return [...permissions].sort();
+}
+
+function stableConfiguration(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableConfiguration).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableConfiguration(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function mcpConfigurationFingerprint(config: McpServerConfig): string {
+  return createHash("sha256").update(stableConfiguration({ ...config, enabled: undefined })).digest("hex");
+}
+
+function mcpManifest(name: string, origin: string, config: McpServerConfig): ExtensionPermissionManifest {
+  const inferred = inferredMcpPermissions(config);
+  const declared = config.permissions !== undefined;
+  if (declared) {
+    const missing = inferred.filter((permission) => !config.permissions!.includes(permission));
+    if (missing.length) throw new Error(`MCP server ${name} permission declaration omits required permissions: ${missing.join(", ")}`);
+  }
+  return {
+    kind: "mcp",
+    name,
+    origin,
+    permissions: declared ? [...config.permissions!] : inferred,
+    declared,
+    details: [
+      `configuration:${mcpConfigurationFingerprint(config)}`,
+      `transport:${transportOf(config)}`,
+      `risk:${config.risk ?? "execute"}`,
+      ...Object.entries(config.toolRisks ?? {}).map(([tool, risk]) => `tool-risk:${tool}:${risk}`),
+      ...((config.auth?.scopes ?? []).map((scope) => `oauth-scope:${scope}`)),
+      ...(config.changesWorkspace ? ["workspace-changes:all"] : []),
+      ...Object.entries(config.toolChangesWorkspace ?? {}).filter(([, changes]) => changes).map(([tool]) => `workspace-changes:${tool}`),
+    ],
+  };
 }
 
 async function readConfig(file: string): Promise<Record<string, McpServerConfig>> {
@@ -352,12 +416,23 @@ function methodUnsupported(error: unknown): boolean {
   return /method not (?:found|supported)|-32601/i.test(error instanceof Error ? error.message : String(error));
 }
 
+function decodeMcpStderr(value: Buffer): string {
+  if (!value.length) return "";
+  if (value[0] === 0xff && value[1] === 0xfe) return iconv.decode(value.subarray(2), "utf16le");
+  const utf8 = iconv.decode(value, "utf8");
+  if (!utf8.includes("\uFFFD")) return utf8;
+  if (process.platform !== "win32") return utf8;
+  const local = iconv.decode(value, "gb18030");
+  const score = (text: string) => (text.match(/\uFFFD/g)?.length ?? 0) * 10 + (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g)?.length ?? 0);
+  return score(local) < score(utf8) ? local : utf8;
+}
+
 class StdioMcpConnection implements McpConnectionLike {
   private child?: ChildProcessWithoutNullStreams;
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
   private stdoutBuffer = "";
-  private stderr = "";
+  private stderr = Buffer.alloc(0);
   private closed = false;
 
   constructor(private name: string, private config: McpServerConfig, private workspace: string) {}
@@ -376,13 +451,15 @@ class StdioMcpConnection implements McpConnectionLike {
       windowsHide: true,
     });
     this.child.stdout.setEncoding("utf8");
-    this.child.stderr.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.consume(chunk));
-    this.child.stderr.on("data", (chunk: string) => { this.stderr = truncate(`${this.stderr}${chunk}`); });
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_OUTPUT);
+    });
     this.child.stdin.on("error", (error) => this.failAll(error));
     this.child.on("error", (error) => this.failAll(error));
     this.child.on("exit", (code, signal) => {
-      if (!this.closed) this.failAll(new Error(`MCP server ${this.name} exited (${signal ?? code ?? "unknown"})${this.stderr ? `: ${this.stderr.trim()}` : ""}`));
+      const stderr = decodeMcpStderr(this.stderr).trim();
+      if (!this.closed) this.failAll(new Error(`MCP server ${this.name} exited (${signal ?? code ?? "unknown"})${stderr ? `: ${truncate(stderr)}` : ""}`));
     });
 
     await this.request("initialize", {
@@ -713,17 +790,23 @@ export class McpManager {
   private connections = new Map<string, McpConnectionLike>();
   private activeTools: AgentTool[] = [];
   private serverStatuses: McpServerStatus[] = [];
+  private serverOrigins = new Map<string, "user" | "project">();
 
   constructor(
     private workspace: string,
     private globalConfig = path.join(os.homedir(), ".xiu", "mcp.json"),
     private authStore = new McpAuthStore(),
     private stepUpInteraction: McpOAuthInteraction = {},
+    private permissionStore = new PermissionGrantStore(path.join(path.dirname(globalConfig), "extension-permissions.json")),
   ) {}
 
   private async configuredServers(includeProject = true): Promise<Record<string, McpServerConfig>> {
     const globalServers = await readConfig(this.globalConfig);
     const projectServers = includeProject ? await readConfig(path.join(this.workspace, ".xiu", "mcp.json")) : {};
+    this.serverOrigins = new Map([
+      ...Object.keys(globalServers).map((name) => [name, "user"] as const),
+      ...Object.keys(projectServers).map((name) => [name, "project"] as const),
+    ]);
     return { ...globalServers, ...projectServers };
   }
 
@@ -733,6 +816,16 @@ export class McpManager {
     for (const [name, config] of Object.entries(servers)) {
       if (config.enabled === false) continue;
       const transport = transportOf(config);
+      const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
+      const previous = await this.permissionStore.approvedManifest(manifest);
+      if (!previous && !manifest.declared) await this.permissionStore.approve(manifest);
+      else if (!await this.permissionStore.isApproved(manifest)) {
+        const permissionChanges = addedPermissions(previous, manifest);
+        this.serverStatuses.push({ name, transport, state: "permission-required", tools: 0,
+          permissionChanges,
+          error: "Permission manifest approval required" });
+        continue;
+      }
       if (config.auth?.type === "oauth") {
         const credentials = await this.authStore.find(config.url!);
         if (!credentials.some((record) => record.tokens)) {
@@ -826,6 +919,24 @@ export class McpManager {
     return [...this.connections.keys()].sort((left, right) => left.localeCompare(right));
   }
 
+  async permissionManifests(includeProject = true): Promise<Array<ExtensionPermissionManifest & { approved: boolean; added: ExtensionPermission[] }>> {
+    const servers = await this.configuredServers(includeProject);
+    return await Promise.all(Object.entries(servers).filter(([, config]) => config.enabled !== false).map(async ([name, config]) => {
+      const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
+      const previous = await this.permissionStore.approvedManifest(manifest);
+      return { ...manifest, approved: await this.permissionStore.isApproved(manifest), added: addedPermissions(previous, manifest) };
+    }));
+  }
+
+  async approvePermissions(name: string, includeProject = true): Promise<ExtensionPermissionManifest> {
+    const servers = await this.configuredServers(includeProject);
+    const config = servers[name];
+    if (!config || config.enabled === false) throw new Error(`MCP server ${name} was not found or is disabled`);
+    const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
+    await this.permissionStore.approve(manifest);
+    return manifest;
+  }
+
   private connection(name: string): McpConnectionLike {
     const connection = this.connections.get(name);
     if (!connection) throw new Error(`MCP server ${name} is not connected`);
@@ -913,21 +1024,25 @@ export class McpManager {
     const servers = await readConfig(this.globalConfig);
     if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
     if (bearerTokenEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearerTokenEnvironment)) throw new Error("MCP bearer token environment variable name is invalid");
-    const config = validateServer(name, {
+    const draft = {
       transport: "streamable-http",
       url,
       ...(bearerTokenEnvironment ? { headers: { Authorization: `Bearer \${${bearerTokenEnvironment}}` } } : {}),
       risk,
-    });
+    } as McpServerConfig;
+    const config = validateServer(name, { ...draft, permissions: inferredMcpPermissions(draft) });
     servers[name] = config;
     await this.writeUserConfig(servers);
+    await this.permissionStore.approve(mcpManifest(name, `user:${name}`, config));
   }
 
   async addUserOAuthServer(name: string, url: string, auth: McpOAuthConfig, risk: ToolRisk = "execute"): Promise<void> {
     const servers = await readConfig(this.globalConfig);
     if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
-    servers[name] = validateServer(name, { transport: "streamable-http", url, auth, risk });
+    const draft = { transport: "streamable-http", url, auth, risk } as McpServerConfig;
+    servers[name] = validateServer(name, { ...draft, permissions: inferredMcpPermissions(draft) });
     await this.writeUserConfig(servers);
+    await this.permissionStore.approve(mcpManifest(name, `user:${name}`, servers[name]!));
   }
 
   async removeUserServer(name: string): Promise<boolean> {
@@ -953,6 +1068,12 @@ export class McpManager {
     if (!this.serverStatuses.length) return localize(language, "未配置 MCP 服务器。", "No MCP servers configured.");
     return this.serverStatuses.map((server) => {
       if (server.state === "connected") return localize(language, `${server.name}：已连接（${server.tools} 个工具）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`);
+      if (server.state === "permission-required") {
+        const changes = server.permissionChanges?.join(", ");
+        return localize(language,
+          `${server.name}：需要确认权限清单${changes ? ` - 当前变化：${changes}` : ""}`,
+          `${server.name}: permission manifest approval required${changes ? ` - current changes: ${changes}` : ""}`);
+      }
       if (server.state === "auth-required") return localize(language, `${server.name}：需要 OAuth 登录`, `${server.name}: OAuth authentication required`);
       if (server.state === "authorizing") return localize(language, `${server.name}：正在等待 OAuth 授权`, `${server.name}: waiting for OAuth authorization`);
       if (server.state === "refreshing") return localize(language, `${server.name}：正在刷新 OAuth 凭证`, `${server.name}: refreshing OAuth credentials`);

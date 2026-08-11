@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.12.0` |
+| 当前已发布版本 | `0.12.1` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -449,7 +449,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 发布包检查发现并移除了误加入的 `@xiu-ai/cli: file:` 自依赖；使用官方 npm Registry 的隔离安装验证通过。
 - `@xiu-ai/cli@0.12.0` 已发布到 npm 官方 Registry，`latest` 已回读确认为 `0.12.0`。
 
-### 本地 v0.12.1 候选版本（尚未发布）
+### 已发布的 v0.12.1
 
 - 已完成 `V0.12.1_DESIGN.zh-CN.md`，将 MCP Resources/Prompts 收敛为显式只读浏览，不允许远端内容自动注入 Agent 或注册新工具。
 - stdio 与 Streamable HTTP 均已支持 `resources/list`、`resources/templates/list`、`resources/read`、`prompts/list` 和 `prompts/get`；OAuth、Session 和取消继续沿用现有连接边界。
@@ -457,7 +457,17 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 远端 Resource 与 Prompt 明确标为不可信内容；列表限制 20 页/500 项，文本限制单块 32K、单次 64K，Blob/图像/音频不输出 Base64。
 - 自动化已覆盖 stdio 与 Streamable HTTP 的目录、分页、读取、Prompt 参数、Blob 省略和超长文本截断；296 项全量测试、typecheck、build、pack 和隔离目录全局安装均已通过，安装后的 `xiu --version` 返回 `0.12.1`。
 - 官方 `@modelcontextprotocol/server-everything@2026.7.4` 已完成人工验收：stdio 重载后连接 13 个工具，列出 7 个静态 Resource、2 个 Resource Template 和 4 个 Prompt；动态文本读取、Blob 元数据省略、无参 Prompt 与 JSON 参数 Prompt 均符合不可信内容边界并返回正确结果。
-- v0.12.2 计划继续 MCP/Skill 权限清单：先展示声明的风险、外部副作用、工作区变化、OAuth Scope 与来源，再设计可持久化策略，不能仅依据第三方自报自动放权。
+- `@xiu-ai/cli@0.12.1` 已由维护者发布并完成真实 Everything Server Resource/Prompt 人工验收。
+
+### 本地 v0.12.2 候选版本（尚未发布）
+
+- 已完成 `V0.12.2_DESIGN.zh-CN.md`，权限声明只用于展示、阻止少报和检测扩权，不能成为绕过核心安全策略的授权通道。
+- MCP 会根据 transport、认证、risk 与工作区变化推导最低权限；显式清单少报会拒绝加载，新配置或权限扩大保持断开，必须通过 `/mcp permissions approve [name]` 批准精确指纹。
+- Skill 支持 frontmatter 权限声明；安装与更新显示新增权限，拒绝后保留原安装，未知权限阻止安装。旧 Skill 使用 `instructions:load` 兼容基线。
+- 权限摘要以版本化、原子写入的 `~/.xiu/extension-permissions.json` 保存；授权键与清单均使用 SHA-256 稳定摘要，不保存明文来源端点。
+- Windows stdio MCP stderr 支持 UTF-8、UTF-16LE 与常见 GB18030/GBK 的有界解码，修复首次 `npx` 下载失败时的中文乱码。
+- 发布级自动验证已通过：303 项测试全部通过，并完成 TypeScript 类型检查、正式构建、npm 打包预览和使用 npm 官方 Registry 的隔离目录全局安装；安装包 `xiu --version` 返回 `0.12.2`。
+- 下一安全切片计划进入系统凭证库、日志脱敏与凭证生命周期设计；不得在没有迁移、回退和企业策略兼容方案时直接替换现有本地配置。
 
 ### 当前自动化基线
 
@@ -801,10 +811,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.0`；本地候选版本为 `0.12.1`，不得覆盖已发布版本。
-2. v0.12.1 已完成 MCP Resources/Prompts 只读浏览实现、发布级自动验证和官方 Everything Server 人工验收；当前可以提交、推送并发布候选版本。
-3. stdio 首次通过 `npx` 下载失败时曾暴露 Windows 本地编码 stderr 乱码；这不影响后续连接与协议能力，但应作为后续稳定性补丁处理。
-4. v0.12.1 发布后进入 v0.12.2 MCP/Skill 权限清单设计与实现；权限声明只用于展示和收紧，不能让第三方静默扩大权限。
+1. 当前公开版本为维护者已发布的 `0.12.1`；本地候选版本为 `0.12.2`，不得覆盖已发布版本。
+2. 完成 v0.12.2 权限清单的发布级自动验证和人工验收后，提交、推送并发布该候选版本。
+3. v0.12.2 发布后进入系统凭证库与凭证生命周期设计，优先解决安全存储、迁移、回退、脱敏和企业受限环境兼容，不能破坏现有 Provider/MCP 配置。
+4. 后续再推进 MCP/Skill 沙箱、审计日志和项目/用户/组织级策略；每个切片都必须保留工作区信任、Plan 模式、核心审批、检查点和危险操作确认。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

@@ -290,3 +290,71 @@ test("user MCP add and remove update configuration atomically", async () => {
     await fs.rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("MCP permission expansion blocks connection until explicitly approved", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-permissions-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  const base = {
+    command: process.execPath,
+    args: [fixture],
+    risk: "read",
+    permissions: ["process:execute", "external:read"],
+  };
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { guarded: base } }));
+  const manager = new McpManager(workspace, globalConfig);
+  try {
+    assert.equal((await manager.start(false))[0]?.state, "permission-required");
+    assert.equal(manager.tools().length, 0);
+    assert.match(manager.summary("zh-CN"), /需要确认权限清单/);
+    assert.doesNotMatch(manager.summary("zh-CN"), /Additional permissions/i);
+    await manager.approvePermissions("guarded", false);
+    assert.equal((await manager.start(false))[0]?.state, "connected");
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { guarded: { ...base, args: [fixture, "--changed-command"] } } }));
+    assert.equal((await manager.start(false))[0]?.state, "permission-required");
+    assert.equal(manager.tools().length, 0);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { guarded: base } }));
+    assert.equal((await manager.start(false))[0]?.state, "connected");
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { guarded: {
+      ...base,
+      risk: "write",
+      permissions: ["process:execute", "external:read", "external:write"],
+    } } }));
+    assert.equal((await manager.start(false))[0]?.state, "permission-required");
+    assert.equal(manager.tools().length, 0);
+    const manifest = (await manager.permissionManifests(false))[0]!;
+    assert.deepEqual(manifest.added, ["external:write"]);
+    assert.equal(manifest.approved, false);
+  } finally {
+    await manager.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("MCP permission declaration cannot omit inferred capabilities", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-underdeclared-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { hidden: {
+    command: process.execPath, args: [fixture], risk: "write", permissions: ["process:execute"],
+  } } }));
+  const manager = new McpManager(workspace, globalConfig);
+  await assert.rejects(manager.start(false), /omits required permissions.*external:write/i);
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+test("stdio MCP decodes Windows local-codepage stderr into readable text", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-local-stderr-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { broken: {
+    command: process.execPath, args: [fixture], env: { XIU_TEST_MCP_GBK_ERROR: "1" }, risk: "read",
+  } } }));
+  const manager = new McpManager(workspace, globalConfig);
+  try {
+    const status = (await manager.start(false))[0]!;
+    assert.equal(status.state, "failed");
+    assert.match(status.error ?? "", /下载失败：网络不可用/);
+    assert.doesNotMatch(status.error ?? "", /�/);
+  } finally {
+    await manager.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});

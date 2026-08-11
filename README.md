@@ -64,6 +64,8 @@ Version 0.12.0 adds the complete secure OAuth lifecycle for remote MCP servers. 
 
 Version 0.12.1 adds read-only MCP Resource and Prompt browsing over both stdio and Streamable HTTP. `/mcp resources`, `/mcp read`, `/mcp prompts`, and `/mcp prompt` use bounded pagination and output limits. Binary payloads are summarized instead of printing Base64, and all remote content is explicitly marked untrusted. Browsing never auto-injects remote content into the Agent or registers a new Agent tool.
 
+Version 0.12.2 adds permission manifests for MCP servers and Skills. Xiu derives the minimum permissions implied by an MCP transport, authentication, risk and workspace-change settings, rejects manifests that under-declare those permissions, and requires explicit approval when a new or changed extension expands its permission set. Skill frontmatter can declare permissions such as `workspace:read` or `network:access`; unknown permissions block installation. Grants are fingerprinted and stored locally in `~/.xiu/extension-permissions.json`, without replacing workspace trust, Plan mode, risk approval, checkpoints, or dangerous-action confirmation. `/mcp permissions` shows each manifest and `/mcp permissions approve [name]` approves the exact current fingerprint. Windows stdio MCP failures now decode UTF-8, UTF-16LE and common GB18030/GBK stderr instead of exposing mojibake.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -211,6 +213,9 @@ Interactive session commands:
 /mcp remove [name]  remove a user-level MCP server
 /mcp test [name]    reconnect and test one or all MCP servers
 /mcp reload         reload user and project MCP configuration
+/mcp resources|read browse untrusted MCP resources
+/mcp prompts|prompt browse untrusted MCP prompts
+/mcp permissions    inspect or approve MCP permission manifests
 /agents             show all saved multi-agent runs
 /agents <run>       show one run and every specialist task
 /agents cancel ...  cancel one task without stopping unrelated agents
@@ -277,6 +282,8 @@ Browse or install skills interactively:
 
 Remote sources must use HTTPS Git URLs. Packages are limited to 20 MB and 1,000 files, symbolic links are rejected, and replacing an existing global skill requires confirmation. The old version is renamed to a timestamped backup instead of being deleted. Skills are executable instructions for the model, so install only packages you trust.
 
+A Skill may declare permissions in its frontmatter, for example `permissions: workspace:read, network:access`. Skills without a declaration retain the compatible `instructions:load` baseline. Installation displays new permissions before making changes; declining an update leaves the existing installation untouched, and unknown permission names block installation. The declaration describes requested capability but never bypasses Xiu's tool approvals.
+
 ## MCP servers
 
 Xiu loads stdio and Streamable HTTP MCP servers after the workspace trust check. User configuration lives at `~/.xiu/mcp.json`; a project can add or override servers in `<project>/.xiu/mcp.json`. Project configuration wins when both files contain the same server name, and `"enabled": false` disables an inherited server.
@@ -296,7 +303,8 @@ Xiu loads stdio and Streamable HTTP MCP servers after the workspace trust check.
       "toolChangesWorkspace": {
         "write_file": true,
         "edit_file": true
-      }
+      },
+      "permissions": ["process:execute", "external:read", "external:write", "workspace:write", "credentials:access"]
     }
   }
 }
@@ -311,7 +319,8 @@ A remote Streamable HTTP server uses one endpoint. Keep credentials in an enviro
       "transport": "streamable-http",
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${DOCS_MCP_TOKEN}" },
-      "risk": "execute"
+      "risk": "execute",
+      "permissions": ["network:access", "external:write", "credentials:access"]
     }
   }
 }
@@ -319,11 +328,13 @@ A remote Streamable HTTP server uses one endpoint. Keep credentials in an enviro
 
 For OAuth, choose OAuth in `/mcp add`, then run `/mcp login [name]`. Use `/mcp auth [name]` to inspect the issuer, scopes, and expiry without exposing tokens, and `/mcp logout [name]` to revoke and clear authorization. `/mcp test [name]` never opens a browser implicitly. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials.
 
-On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, and `changesWorkspace` / `toolChangesWorkspace` hints for diff and verification tracking. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
+On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, `changesWorkspace` / `toolChangesWorkspace` hints, and an optional `permissions` manifest. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
+
+The MCP permission vocabulary is `process:execute`, `network:access`, `external:read`, `external:write`, `workspace:write`, and `credentials:access`. Xiu computes the required minimum from the configuration; an explicit list may be stricter but cannot omit an inferred permission. Existing pre-v0.12.2 configurations receive a compatibility baseline on first load. New explicit manifests and later permission expansion remain disconnected until approved with `/mcp permissions approve [name]`. An approval applies only to the exact manifest fingerprint; changing the endpoint, command, authentication, risk, workspace behavior, or permissions requires review again.
 
 Discovered tools are exposed as `mcp__<server>__<tool>` to prevent collisions. The safe default is `execute`, which requires approval; mark a server or tool `read` only when it cannot change files or external state. Tool arguments are shown in the approval preview. Non-read MCP calls are blocked in Plan mode. Ctrl+C cancellation is forwarded to an active MCP request, binary result data is omitted from model context, text output is capped, and child processes are closed when Xiu exits. For one-shot use in a workspace that has never been trusted, user-level MCP servers still load but project-level MCP configuration is skipped.
 
-Use `/mcp` to inspect connection failures and tool counts after launch. Edit either configuration file and run `/mcp reload` to reconnect without restarting Xiu.
+Use `/mcp` to inspect connection failures and tool counts after launch. Use `/mcp permissions` to inspect permission sources and pending additions. Edit either configuration file and run `/mcp reload` to reconnect without restarting Xiu.
 
 ## Real-time execution and planning
 
