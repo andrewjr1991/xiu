@@ -227,6 +227,10 @@ test("MCP OAuth cancellation closes the callback listener and errors are redacte
   const hidden = sanitizeOAuthError(new Error("Bearer abc123 https://x.test/?code=secret&access_token=topsecret"));
   assert.doesNotMatch(hidden.message, /abc123|secret|topsecret/);
   assert.match(hidden.message, /REDACTED/);
+  const opaqueCanary = "opaque-canary-value-without-a-known-token-shape";
+  const opaqueHidden = sanitizeOAuthError(new Error(`remote failure echoed ${opaqueCanary}`), [opaqueCanary]);
+  assert.doesNotMatch(opaqueHidden.message, new RegExp(opaqueCanary));
+  assert.match(opaqueHidden.message, /REDACTED/);
 });
 
 test("MCP OAuth cancellation aborts discovery instead of waiting for the network timeout", async () => {

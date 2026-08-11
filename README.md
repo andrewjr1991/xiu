@@ -66,7 +66,9 @@ Version 0.12.1 adds read-only MCP Resource and Prompt browsing over both stdio a
 
 Version 0.12.2 adds permission manifests for MCP servers and Skills. Xiu derives the minimum permissions implied by an MCP transport, authentication, risk and workspace-change settings, rejects manifests that under-declare those permissions, and requires explicit approval when a new or changed extension expands its permission set. Skill frontmatter can declare permissions such as `workspace:read` or `network:access`; unknown permissions block installation. Grants are fingerprinted and stored locally in `~/.xiu/extension-permissions.json`, without replacing workspace trust, Plan mode, risk approval, checkpoints, or dangerous-action confirmation. `/mcp permissions` shows each manifest and `/mcp permissions approve [name]` approves the exact current fingerprint. Windows stdio MCP failures now decode UTF-8, UTF-16LE and common GB18030/GBK stderr instead of exposing mojibake.
 
-Version 0.12.3 phase A introduces a typed credential-store boundary for Provider API keys, environment credentials, and MCP OAuth records while preserving the existing `providers.json` and `mcp-auth.json` formats. It centralizes secret redaction before diagnostics, failover errors, OAuth errors, and session persistence, and invalidates capability-probe work with a non-secret credential revision instead of credential content. `/credentials` and `/credentials status` report backend availability and entry counts without displaying keys or tokens. This compatibility phase does not migrate, delete, or encrypt existing credentials; the current local files remain plaintext and the system-secure backend is deliberately deferred until it has passed real Windows and enterprise-policy validation.
+Version 0.12.3 phase A introduces a typed credential-store boundary for Provider API keys, environment credentials, and MCP OAuth records. It centralizes secret redaction before diagnostics, failover errors, OAuth errors, and session persistence, and invalidates capability-probe work with a non-secret credential revision instead of credential content. `/credentials` reports backend availability and entry counts without displaying keys or tokens. Phase B adds an optional Windows Credential Manager backend powered by `@napi-rs/keyring`; `/credentials probe` performs an explicitly confirmed random canary write/read/delete test and leaves existing credentials untouched. Phase C adds an explicit Provider API-key lifecycle with independently confirmed migration, cleanup, rollback, and forget operations. Phase D adds the same reversible lifecycle for MCP OAuth through `/mcp credentials`: only Access/Refresh/ID tokens and Client Secret are stored as one atomic bounded system record, while large non-secret Scope and registration metadata stay in `mcp-auth.json`. Refresh rotation updates that atomic secret record; logout clears active system and retained legacy copies. Migration never deletes plaintext, cleanup requires typing the full MCP name, a system reference never silently falls back, and rollback can restore a cleaned compatibility copy from the active system credential.
+
+Phase E closes the automated security gate: active Provider and OAuth credential values are redacted from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features
 
@@ -218,7 +220,13 @@ Interactive session commands:
 /mcp resources|read browse untrusted MCP resources
 /mcp prompts|prompt browse untrusted MCP prompts
 /mcp permissions    inspect or approve MCP permission manifests
+/mcp credentials [status|migrate|cleanup|rollback] [name]  manage MCP OAuth secure storage
 /credentials        inspect credential backend status without revealing secrets
+/credentials probe  explicitly test Windows Credential Manager with a temporary canary
+/credentials migrate [id|--all]  copy, verify, and switch Provider keys to Windows secure storage
+/credentials cleanup [id]        separately remove one verified legacy plaintext copy
+/credentials rollback [id]       switch back, restoring plaintext from the active system key if needed
+/credentials forget [id]         remove every local key copy after confirmation
 /agents             show all saved multi-agent runs
 /agents <run>       show one run and every specialist task
 /agents cancel ...  cancel one task without stopping unrelated agents
@@ -329,7 +337,7 @@ A remote Streamable HTTP server uses one endpoint. Keep credentials in an enviro
 }
 ```
 
-For OAuth, choose OAuth in `/mcp add`, then run `/mcp login [name]`. Use `/mcp auth [name]` to inspect the issuer, scopes, and expiry without exposing tokens, and `/mcp logout [name]` to revoke and clear authorization. `/mcp test [name]` never opens a browser implicitly. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials.
+For OAuth, choose OAuth in `/mcp add`, then run `/mcp login [name]`. Use `/mcp auth [name]` to inspect the issuer, scopes, and expiry without exposing tokens, and `/mcp logout [name]` to revoke and clear authorization. `/mcp credentials` shows storage state; `migrate`, `cleanup`, and `rollback` move one server's secrets through a verified, reversible Windows Credential Manager flow. Large scopes remain non-secret metadata and therefore do not consume the 2400-byte system-secret budget. `/mcp test [name]` never opens a browser implicitly. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials.
 
 On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, `changesWorkspace` / `toolChangesWorkspace` hints, and an optional `permissions` manifest. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
 

@@ -92,5 +92,8 @@
     "multi-agent",
     "worktree",
     "mcp"
-  ]
+  ],
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.3.0"
+  }
 }

@@ -480,8 +480,17 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 能力探测并发键改用非秘密 revision；Provider Key 通过保存与编辑路径轮换时会使旧探测缓存失效，不再让秘密或秘密哈希参与身份与缓存键。
 - 已建立共享 `redactSecrets` / `sanitizeSecrets` 出口并覆盖诊断、Provider 故障转移、MCP OAuth 错误和 Session JSONL 持久化；Canary Secret 回归测试验证不会落入这些输出。
 - `/credentials` 与 `/credentials status` 只读展示 environment、Provider 和 MCP OAuth 后端状态及条目数，不显示 Key、Token、Client Secret 或其哈希。
-- 发布级自动验证已通过：312 项测试全部通过，并完成 TypeScript 类型检查、正式构建、npm 打包预览和隔离目录全局安装；安装包 `xiu --version` 返回 `0.12.3`。
-- Windows 安全后端推迟到阶段 B 做真实技术验证；不预先绑定可能被企业策略拦截的 helper、PowerShell/.NET 调用或未经验证的原生依赖。
+- 阶段 A 发布级自动验证已通过：312 项测试全部通过，并完成 TypeScript 类型检查、正式构建、npm 打包预览和隔离目录全局安装；安装包 `xiu --version` 返回 `0.12.3`。
+- 阶段 B 已完成 Windows 安全后端候选比较：`cmdkey.exe` 缺少可靠秘密回读能力，PowerShell/.NET DPAPI 在 `ConstrainedLanguage` 下会被策略阻断；当前选择可选 `@napi-rs/keyring` 原生模块连接 Windows Credential Manager。
+- 新增实验性 `WindowsSystemCredentialStore` 与 `/credentials probe`。普通状态检查不写凭证；显式探针经确认后使用随机 Canary 完成写入、回读、删除和残留检查，且不会自动选择、迁移或删除现有凭证。
+- 当前 Windows x64、PowerShell `ConstrainedLanguage` 机器已在 Node 22 与 Node 20.20.2 下通过真实写入、回读、删除探针且无残留；Windows ARM64 和另一台企业策略机器仍待验收。可选原生模块缺失或被拦截时，Xiu 必须继续使用现有兼容路径并正常启动。
+- 阶段 B 自动基线为 316 项测试，并通过 TypeScript 类型检查、正式构建、npm 打包预览和 Node 22 独立安装；正常安装可加载系统后端，`--omit=optional` 安装仍可启动并安全报告后端不可用。Node 20 使用通过官方 SHA-256 校验的便携版完成验证，不切换全局 Node。
+- Windows Credential Manager 后端限制单条序列化记录为 2400 UTF-8 字节。Provider Key 可直接迁移；MCP OAuth 在阶段 D 采用秘密/公开元数据分层，系统记录不包含可能很大的 Scope 与注册元数据。
+- 阶段 C 已实现 Provider API Key 显式生命周期：`/credentials migrate [ID|--all]` 完成复制、回读和原子引用切换，并始终保留旧明文；`cleanup` 与 `forget` 必须独立执行、输入完整 Provider ID 且不受 `-y` 自动确认；`rollback` 可显式切回，旧副本已清理时会从有效系统凭据重新生成兼容文件副本。
+- Provider 配置格式升级为 v3，仅为迁移项保存 system 引用、revision 和非秘密迁移回执。环境变量继续优先；system 引用生效后不因后端缺失、记录丢失或损坏而静默回退到保留的旧明文。
+- 阶段 C 自动化新增单项迁移、重启恢复、独立清理、批量失败回滚、禁止静默降级、显式回退、清理后恢复、全部遗忘、迁移后轮换与中断恢复测试。
+- 阶段 D 已完成 MCP OAuth 分层存储与显式迁移命令：Access/Refresh/ID Token 和 Client Secret 作为一个原子系统秘密，Scope、到期时间和公开注册元数据留在 `mcp-auth.json`；迁移、单独清理、清理后回退、轮换和注销均保持可恢复。Windows stdio MCP 的 `npm`/`npx` 启动会绕过 `.cmd` shim，由 Node 直接执行 npm CLI，修复权限确认后出现的 `spawn EINVAL`。当前完整基线为 326 项测试全部通过；TypeScript 类型检查、正式构建和 npm 打包预览均通过。真实 Cloudflare OAuth 迁移、重启读取与注销仍待用户验收。
+- 阶段 E 自动化收口已完成：Provider、媒体、MCP 启动/工具/Resource/Prompt 与 OAuth 刷新/注销错误会使用运行时真实 Key、Token 和 Client Secret 进行脱敏，不只依赖格式猜测；新增不规则 Canary、MCP 迁移中断续跑和损坏系统副本拒绝清理测试。当前 329 项全量测试、类型检查、正式构建、200 文件 npm 包审计和使用 npm 官方 Registry 的隔离安装均通过，安装包 `xiu --version` 返回 `0.12.3`。另一台企业策略机器、Windows ARM64 及真实 Cloudflare OAuth 迁移/重启/注销仍是发布前外部验收项。
 - 完整目标、威胁模型、迁移事务、失败恢复和验收标准记录在 `V0.12.3_DESIGN.zh-CN.md`。
 
 ### 当前自动化基线
@@ -827,9 +836,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 如果用户没有改变优先级，后续应按以下顺序继续：
 
 1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.2`，不得覆盖已发布版本。
-2. v0.12.3 阶段 A 已完成实现、发布级自动验证和本地候选准备；代码可以提交并推送，但暂不发布 npm，也不改变公开 `latest`。
-3. 继续阶段 B，真实验证 Windows Credential Manager、DPAPI 封装和可信原生模块的安装、用户绑定、Node 20+、x64/ARM64 与企业策略表现；验证前不设置默认安全后端。
-4. 继续完成 MCP/Skill 沙箱、审计日志和项目/用户/组织级策略。待 v0.12 大版本的计划切片、兼容性测试和真实环境验收整体完成后，再确定最终发布版本并一次性发布；每个切片都必须保留工作区信任、Plan 模式、核心审批、检查点和危险操作确认。
+2. v0.12.3 阶段 A 已提交并推送；阶段 B 已实现可选 Windows Credential Manager 候选并通过当前 x64、Node 22、`ConstrainedLanguage` 机器的真实 Canary 探针。整个 v0.12.3 暂不发布 npm，也不改变公开 `latest`。
+3. 阶段 B 的 Node 20、x64、可选依赖缺失降级和打包验收已完成；Windows ARM64 与另一台企业策略机器保留为外部真实环境验收项。在外部证据完成前不设置默认安全后端。
+4. 阶段 C 的 Provider API Key 显式迁移、清理、回退和遗忘链路已实现，并完成 325 项当前全量测试基线、正式构建和 npm 打包预览；真实测试 Key 的迁移与误删恢复也已通过。不得迁移任何真实生产 Key 作为测试。
+5. 阶段 E 的脱敏扫描、故障注入和发布包自动验收已完成：329 项全量测试、构建、200 文件打包审计与官方 Registry 隔离安装通过。下一步是另一台企业策略机器、Windows ARM64 和真实 Cloudflare OAuth 迁移/重启/注销外部验收；验收前不把系统凭证后端设为默认，整个 v0.12.3 仍暂不发布。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

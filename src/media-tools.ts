@@ -185,7 +185,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           try {
             bytes = await getBackend().download!(operation.url, context.signal);
           } catch (error) {
-            throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error)}`);
+            throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
         }
         if (!bytes) {
@@ -194,7 +194,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           try {
             result = await getBackend().generateImage!(request, context.signal);
           } catch (error) {
-            const reason = safeProviderErrorMessage(error);
+            const reason = safeProviderErrorMessage(error, [config.apiKey ?? ""]);
             const status = mediaStatus(error);
             if (status !== undefined) {
               const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
@@ -213,7 +213,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
             try {
               bytes = await getBackend().download!(result.url!, context.signal);
             } catch (error) {
-              throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error)}`);
+              throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
             }
           }
         }
@@ -299,7 +299,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           try {
             task = await getBackend().createVideo!(request, context.signal);
           } catch (error) {
-            const reason = safeProviderErrorMessage(error);
+            const reason = safeProviderErrorMessage(error, [config.apiKey ?? ""]);
             const status = mediaStatus(error);
             if (status !== undefined) {
               const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
@@ -328,13 +328,13 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
             const status = mediaStatus(error);
             if (isRetryableMediaStatus(status)) {
               const waitMs = retryDelay(error, true);
-              if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${task.id} is still preserved, but polling could not recover before the ${timeoutMs / 1000}s timeout: ${safeProviderErrorMessage(error)}`);
+              if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${task.id} is still preserved, but polling could not recover before the ${timeoutMs / 1000}s timeout: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
               context.reportProgress?.(`Video ${task.id}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
               await delay(waitMs, context.signal);
               resumePollImmediately = true;
               continue;
             }
-            throw new Error(`Could not poll video task ${task.id}. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error)}`);
+            throw new Error(`Could not poll video task ${task.id}. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
           operation = await operations.update(key, {
             status: task.url ? "asset_ready" : "submitted",
@@ -354,7 +354,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           try {
             bytes = await getBackend().download!(task.url, context.signal);
           } catch (error) {
-            throw new Error(`Video task ${task.id} completed, but its asset could not be downloaded. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error)}`);
+            throw new Error(`Video task ${task.id} completed, but its asset could not be downloaded. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
         }
         const cachedAsset = await operations.cacheAsset(operation.requestId, ".mp4", bytes);
@@ -448,9 +448,9 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
             task = await backend.getVideo(taskId, context.signal);
           } catch (error) {
             const status = mediaStatus(error);
-            if (!isRetryableMediaStatus(status)) throw new Error(`Could not resume video task ${taskId}: ${safeProviderErrorMessage(error)}`);
+            if (!isRetryableMediaStatus(status)) throw new Error(`Could not resume video task ${taskId}: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
             const waitMs = retryDelay(error, true);
-            if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${taskId} remains preserved, but polling could not recover before timeout: ${safeProviderErrorMessage(error)}`);
+            if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${taskId} remains preserved, but polling could not recover before timeout: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
             context.reportProgress?.(`Video ${taskId}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
             await delay(waitMs, context.signal);
             continue;

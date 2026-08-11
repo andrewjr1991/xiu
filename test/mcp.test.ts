@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { McpManager } from "../src/mcp.js";
+import { McpManager, resolveStdioLaunch } from "../src/mcp.js";
 
 const fixture = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
 
@@ -62,6 +62,14 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
     await manager.close();
     await fs.rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("stdio MCP resolves npx through Node on Windows instead of spawning the cmd shim", { skip: process.platform !== "win32" }, async () => {
+  const args = ["--yes", "@modelcontextprotocol/server-everything"];
+  const launch = await resolveStdioLaunch("npx", args);
+  assert.equal(launch.command, process.execPath);
+  assert.match(launch.args[0]!, /node_modules[\\/]npm[\\/]bin[\\/]npx-cli\.js$/i);
+  assert.deepEqual(launch.args.slice(1), args);
 });
 
 test("project MCP configuration overrides a global server and can disable it", async () => {

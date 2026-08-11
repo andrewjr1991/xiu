@@ -40,7 +40,7 @@ export function isTransientProviderError(error: unknown): boolean {
   return /APIConnection(?:Error|TimeoutError)|APITimeoutError|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_(?:CONNECT_TIMEOUT|SOCKET)|fetch failed|connection error|network error|connection (?:reset|refused|closed|terminated|timed? ?out)|connect timeout|temporar|rate limit|socket hang up/i.test(detail);
 }
 
-export function safeProviderErrorMessage(error: unknown): string {
+export function safeProviderErrorMessage(error: unknown, sensitiveValues: readonly string[] = []): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return redactSecrets(raw).slice(0, 500);
+  return redactSecrets(raw, sensitiveValues).slice(0, 500);
 }

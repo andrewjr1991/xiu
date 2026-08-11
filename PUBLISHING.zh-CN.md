@@ -217,6 +217,9 @@ npm.cmd pack --dry-run
 - 包含 `dist`、`README.md`、`PUBLISHING.zh-CN.md` 和 `package.json`。
 - 不包含 `.env`、API Key、`.xiu/sessions`、测试项目、日志或个人文件。
 - `dist/cli.js` 已生成。
+- 如果版本新增可选原生依赖，应在真正位于项目目录之外的两个干净目录分别执行普通安装和 `--omit=optional` 安装；普通安装要验证对应能力，省略可选依赖时也必须能启动并给出可解释的降级状态。
+- 涉及凭证迁移时，只能使用随机 Canary 或专用测试 Key/Token：Provider 要验证复制后回读、重启恢复、旧副本默认保留、单项清理、显式回退、全部遗忘和批量失败回滚；MCP OAuth 还要验证超长 Scope 不进入系统秘密、刷新轮换、Scope 升权、保留 Client 的注销、全部注销、清理后回退和系统后端不可用时不静默降级。不得用真实用户凭证做发布自动化，也不得把 `~/.xiu/providers.json`、`~/.xiu/mcp-auth.json` 或 Windows 凭证导出物放入安装包。
+- v0.12.3 及以后发布前还必须执行不规则 Canary 出口测试，覆盖 Provider/媒体错误、MCP 启动与工具调用、Resource/Prompt、OAuth 刷新/注销、诊断、故障转移和 Session；同时注入迁移中断与损坏系统记录，确认清理被拒绝且旧副本未被覆盖。完成 `typecheck`、全量测试、构建、`npm pack --dry-run --json` 包清单检查和指定 npm 官方 Registry 的隔离安装后，才可发布。
 
 生成可以离线发送的真实安装包：
 
@@ -420,6 +423,7 @@ npm.cmd dist-tag add '@xiu-ai/cli@0.5.0' latest --registry='https://registry.npm
 [ ] 已选择正确的 patch / minor / major 版本
 [ ] package.json 与 package-lock.json 版本一致
 [ ] npm pack --dry-run 内容正确
+[ ] 可选原生依赖已完成普通安装与 --omit=optional 降级安装验证
 [ ] npm whoami 是正确账号
 [ ] npm publish 使用官方 registry 和 --access public
 [ ] npm view 显示新版本与正确的 latest/beta 标签

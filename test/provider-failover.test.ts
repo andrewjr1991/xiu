@@ -18,3 +18,10 @@ test("provider failover receipts redact credential-shaped error details", () => 
   assert.doesNotMatch(message, /secret-token|top-secret|1234567890/);
   assert.match(message, /REDACTED/);
 });
+
+test("provider failure redaction removes opaque active API keys", () => {
+  const key = "opaque-provider-canary-without-standard-prefix";
+  const message = safeProviderErrorMessage(new Error(`upstream echoed ${key}`), [key]);
+  assert.doesNotMatch(message, new RegExp(key));
+  assert.match(message, /REDACTED/);
+});

@@ -864,17 +864,18 @@ export class Agent {
         await this.checkpointDiagnostics();
         return { response, streamed };
       } catch (error) {
+        const safeError = safeProviderErrorMessage(error, [this.config.apiKey ?? ""]);
         if (signal.aborted) {
           this.taskDiagnostics?.cancelActive();
           await this.checkpointDiagnostics();
           throw error;
         }
-        this.taskDiagnostics?.finishModel(undefined, false, error instanceof Error ? error.message : String(error));
+        this.taskDiagnostics?.finishModel(undefined, false, safeError);
         await this.checkpointDiagnostics();
         const transient = isTransientProviderError(error);
         if (emitted || !transient) {
-          if (reportFailure) this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
-          throw error;
+          if (reportFailure) this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${safeError}`, `Model request failed: ${safeError}`));
+          throw new Error(safeError);
         }
         if (attempt < maxAttempts) {
           const delayMs = 500 * 2 ** (attempt - 1);
@@ -889,6 +890,7 @@ export class Agent {
 
         const failedProviderId = this.config.providerId;
         const failedModel = this.config.model;
+        const failedApiKey = this.config.apiKey;
         let resolution;
         try {
           resolution = await this.failoverController?.resolve({
@@ -907,9 +909,9 @@ export class Agent {
           const reason = resolution?.reason ?? localize(this.config.language ?? "en-US", "没有配置可用的备用 Provider", "No usable fallback provider is configured");
           if (reportFailure) {
             this.events.onProviderFailoverUnavailable?.({ providerId: failedProviderId, model: failedModel, reason, skipped: resolution?.skipped ?? [] });
-            this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${error instanceof Error ? error.message : String(error)}`, `Model request failed: ${error instanceof Error ? error.message : String(error)}`));
+            this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${safeError}`, `Model request failed: ${safeError}`));
           }
-          throw error;
+          throw new Error(safeError);
         }
 
         const candidate = resolution.candidate;
@@ -917,7 +919,7 @@ export class Agent {
         this.provider = candidate.provider;
         this.tools = [...candidate.tools];
         this.taskAttemptedProviders.add(candidate.config.providerId);
-        const reason = safeProviderErrorMessage(error);
+        const reason = safeProviderErrorMessage(error, [failedApiKey ?? ""]);
         this.taskDiagnostics?.recordProviderFailover(failedProviderId, failedModel, candidate.config.providerId, candidate.config.model, reason);
         if (this.sessionPath) await this.log(this.sessionPath, {
           type: "provider_failover",

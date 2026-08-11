@@ -28,7 +28,15 @@ export interface CredentialStore<T, K extends CredentialKind = CredentialKind> {
   status(): CredentialBackendStatus;
 }
 
-export type CredentialStoreErrorCode = "invalid-reference" | "backend-mismatch" | "kind-mismatch" | "read-only";
+export type CredentialStoreErrorCode =
+  | "invalid-reference"
+  | "backend-mismatch"
+  | "kind-mismatch"
+  | "read-only"
+  | "backend-unavailable"
+  | "operation-failed"
+  | "corrupted-value"
+  | "size-limit";
 
 export class CredentialStoreError extends Error {
   constructor(readonly code: CredentialStoreErrorCode, message: string) {

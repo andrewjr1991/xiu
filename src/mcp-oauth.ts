@@ -56,9 +56,18 @@ function scopeList(value?: string): string[] {
   return [...new Set((value ?? "").split(/\s+/).filter(Boolean))].sort();
 }
 
-function sanitizedError(error: unknown): Error {
+function sanitizedError(error: unknown, sensitiveValues: readonly string[] = []): Error {
   const raw = error instanceof Error ? error.message : String(error);
-  return new Error(redactSecrets(raw));
+  return new Error(redactSecrets(raw, sensitiveValues));
+}
+
+function recordSecrets(record: McpAuthRecord): string[] {
+  return [
+    record.tokens?.access_token,
+    record.tokens?.refresh_token,
+    record.tokens?.id_token,
+    record.clientInformation?.client_secret,
+  ].filter((value): value is string => typeof value === "string" && value.length >= 4);
 }
 
 function boundedOAuthFetch(signal?: AbortSignal, timeoutMs = OAUTH_REQUEST_TIMEOUT_MS): typeof fetch {
@@ -280,7 +289,7 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
           await this.store.clearCredentials(record, "tokens");
           throw new Error("OAuth credentials expired; run /mcp login");
         }
-        throw sanitizedError(error);
+        throw sanitizedError(error, recordSecrets(record));
       }
     })();
     refreshFlights.set(key, flight);
@@ -389,7 +398,7 @@ export async function logoutMcpOAuth(provider: XiuMcpOAuthProvider, forgetClient
         if (!response.ok) throw new Error(`revocation endpoint returned ${response.status}`);
         revoked = true;
       }
-    } catch (error) { warning = sanitizedError(error).message; }
+    } catch (error) { warning = sanitizedError(error, recordSecrets(record)).message; }
   }
   const cleared = await provider.store.clearResource(canonicalResource(provider.serverUrl), forgetClient);
   return { cleared, revoked, ...(warning ? { warning } : {}) };

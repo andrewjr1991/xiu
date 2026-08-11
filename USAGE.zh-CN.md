@@ -67,7 +67,19 @@ API Key 有两种配置方式：
 
 `/provider key` 的输入会用星号隐藏。配置文件使用原子写入，在支持 Unix 文件模式的平台上限制为当前用户读写；Key 不会写入项目会话日志或显示在状态界面。不过它仍然是本机明文凭证：不要提交、同步或发送整个 `providers.json`，同一系统账号、管理员或恶意软件仍可能读取它。
 
-v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider Legacy File 和 MCP OAuth Legacy File 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。此阶段只提供兼容层，不会迁移、删除或加密已有凭证，`providers.json` 与 `mcp-auth.json` 仍是本机明文文件；系统安全凭证后端将在真实 Windows 和企业策略环境验证后另行启用。
+v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider、MCP OAuth 和 Windows 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。
+
+阶段 B 加入了可选的 Windows Credential Manager 后端。普通 `/credentials` 只检查原生模块能否加载，不会写入系统凭证库；`/credentials probe` 会先要求明确确认，再写入一个名称和内容均随机的临时 Canary，完成回读校验后立即删除，用来验证当前 Windows、Node.js、架构和企业策略是否真正允许使用该后端。探测不会迁移、覆盖或删除现有 Provider/MCP 凭证。若可选原生模块没有安装或被企业策略拦截，Xiu 会报告后端不可用，但现有 Legacy File 路径和普通启动不受影响。
+
+阶段 E 起，Xiu 会把当前运行时实际使用的 Provider Key、MCP Access/Refresh/ID Token 和 Client Secret 作为脱敏词表，仅在内存中用于清理错误文本；它们不会被写入诊断、会话、故障转移回执或 MCP Resource/Prompt 错误。系统凭证损坏、缺失或无法读取时，`cleanup` 会拒绝删除旧副本；迁移中断后可重新执行相同迁移继续，不需要手工编辑配置。
+
+阶段 C 只为 Provider API Key 提供显式迁移。输入 `/credentials migrate` 可选择一个 Key；`/credentials migrate --all` 会批量复制，但只有所有 Key 均写入并回读一致后才切换全部引用。迁移流程永远保留旧明文，不再连带提供删除选项；请先重启并确认系统凭证可用，再单独使用 `/credentials cleanup [Provider ID]` 删除。`cleanup` 和 `forget` 都要求再次输入完整 Provider ID，且不会被 `-y` 自动确认。`/credentials rollback [Provider ID]` 可显式切回；旧明文已经清理时，它会从仍然有效的系统凭据重新生成兼容文件副本后再切换。`/credentials forget [Provider ID]` 会在影响确认后删除系统与兼容文件中的所有本地副本，环境变量不受影响。
+
+解析顺序保持为：Profile 明确配置的环境变量、已迁移的系统引用、尚未迁移的 Legacy File、Provider 默认环境变量。系统引用一旦生效，即使旧明文仍在，系统后端缺失、记录丢失或损坏时也不会静默退回明文。可重新启用系统后端、执行显式回退，或重新保存 Key。`providers.json` 现在只为已迁移项保存非秘密引用、revision 和迁移回执；Key 本身位于 Windows Credential Manager。迁移失败会保留原引用和旧 Key，错误与回执不包含秘密或秘密哈希。
+
+阶段 D 将 MCP OAuth 拆成“秘密”和“公开元数据”两层：Access Token、Refresh Token、ID Token 与 Client Secret 作为一个原子记录进入 Windows Credential Manager；Scope、Token 类型、到期时间和 Client 注册元数据继续保存在 `mcp-auth.json`。这样 Cloudflare 一类超长 Scope 不会占用系统凭证单条 `2400` 字节安全上限，也不会被截断。`/mcp credentials migrate [名称]` 复制并回读校验后切换引用，默认保留旧明文；重启验证后使用 `cleanup` 并输入完整 MCP 名称删除旧副本；`rollback` 即使旧副本已清理，也能从有效系统凭证恢复兼容文件。刷新轮换始终整体替换秘密记录，退出登录同时清除系统和保留的旧 Token，避免以后回退时复活已注销凭证。
+
+当前 Windows x64 已在 Node 22 和 Node 20.20.2 下完成真实读写删除探针；Windows ARM64 与另一台企业策略机器仍需外部验收。系统后端不是默认来源，只有成功的显式迁移引用才会选择它。
 
 ### 3.1 Agnes
 
@@ -927,6 +939,8 @@ MCP 工具默认按 execute 风险处理并请求审批。只有确认工具不�
 
 v0.12.2 起，MCP 可声明 `process:execute`、`network:access`、`external:read`、`external:write`、`workspace:write` 和 `credentials:access`。Xiu 会根据 transport、认证、risk 和工作区变化配置推导最低权限；显式清单可以更严格，但不能少报。旧配置首次升级会建立兼容基线；新配置或权限扩大时保持断开，并提示使用 `/mcp permissions approve [名称]` 审批当前精确指纹。修改命令、端点、认证、风险、工作区副作用或权限都会使旧授权失效。授权摘要保存在 `~/.xiu/extension-permissions.json`，不会保存明文端点，也不会代替每次工具调用的核心安全审批。
 
+OAuth 登录后可使用 `/mcp credentials [status] [名称]` 查看来源，但不会看到 Token。`/mcp credentials migrate [名称]` 将秘密复制到 Windows Credential Manager 并校验，`cleanup` 单独删除旧明文，`rollback` 显式切回兼容文件。迁移不会自动清理，`-y` 也不能跳过 cleanup 的完整 MCP 名称确认。系统引用生效后若后端不可用，Xiu 不会静默读取保留明文；应恢复系统后端或显式回退。
+
 Windows stdio MCP 启动失败时，Xiu 会对 UTF-8、UTF-16LE 和常见 GB18030/GBK stderr 做有界解码，避免把本地中文错误显示为乱码；错误内容仍会截断并脱敏。
 
 v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mcp resources [名称]` 与 `/mcp prompts [名称]` 显示服务提供的目录；`/mcp read [名称] [URI]` 通过原 MCP 服务读取 Resource，Xiu 不会自行访问 URI；`/mcp prompt [名称] [Prompt] [JSON参数]` 获取并预览 Prompt，缺少必填参数时会逐项询问。
@@ -1052,7 +1066,16 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `/mcp prompts` / `/mcp prompt` | 浏览和预览不可信的远端 Prompt |
 | `/mcp permissions` | 查看 MCP 权限清单、来源和待批准差异 |
 | `/mcp permissions approve [name]` | 批准一个 MCP 当前精确权限指纹 |
+| `/mcp credentials [status] [name]` | 查看 MCP OAuth 凭证来源和副本状态，不显示秘密 |
+| `/mcp credentials migrate [name]` | 复制、回读校验并切换一个 MCP 的 OAuth Token 与 Client Secret，保留旧明文 |
+| `/mcp credentials cleanup [name]` | 再次校验系统副本并输入完整 MCP 名称后删除旧明文 |
+| `/mcp credentials rollback [name]` | 显式切回兼容文件；必要时从系统凭证恢复已清理副本 |
 | `/credentials` / `/credentials status` | 查看凭证后端状态与条目数，不显示 Key 或 Token |
+| `/credentials probe` | 经确认后使用随机临时 Canary 验证 Windows Credential Manager 写入、回读与清理 |
+| `/credentials migrate [ID\|--all]` | 复制、回读验证并切换一个或显式批量 Provider Key；默认保留旧明文 |
+| `/credentials cleanup [ID]` | 再次验证系统副本并输入完整 Provider ID 后，单独删除一个旧明文 Key |
+| `/credentials rollback [ID]` | 切回 Legacy File；旧副本已清理时先从系统凭据显式恢复，再尝试删除系统副本 |
+| `/credentials forget [ID]` | 经影响确认并输入完整 Provider ID 后，删除该 Provider 的全部本地 Key 副本 |
 | `/agents` | 查看所有多 Agent 运行 |
 | `/agents <运行ID>` | 查看一个运行的详细状态 |
 | `/agents cancel <运行ID> <任务ID>` | 单独取消一个 Agent |

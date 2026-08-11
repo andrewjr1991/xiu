@@ -15,12 +15,14 @@ import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type Capabi
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
+import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
+import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
@@ -85,6 +87,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/mcp prompts", "浏览 MCP Prompt", "Browse MCP prompts"),
     item("/mcp prompt", "获取并预览 MCP Prompt", "Get and preview an MCP prompt"),
     item("/mcp auth", "查看 OAuth 状态（不显示 Token）", "Show OAuth status without tokens"),
+    item("/mcp credentials", "查看或迁移 MCP OAuth 凭证", "Show or migrate MCP OAuth credentials"),
     item("/mcp login", "登录需要 OAuth 的 MCP 服务", "Log in to an OAuth-protected MCP server"),
     item("/mcp logout", "撤销并清除 MCP OAuth 登录", "Revoke and clear an MCP OAuth login"),
     item("/mcp add", "添加用户级远程 MCP 服务", "Add a user-level remote MCP server"),
@@ -98,6 +101,11 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/details", "浏览完整工具与 Agent 活动", "Browse complete tool and Agent activity details"),
     item("/diagnostics", "查看当前或最近任务的诊断报告", "Show diagnostics for the current or most recent task"),
     item("/credentials", "查看凭证后端状态（不显示凭证）", "Show credential backend status without secrets"),
+    item("/credentials probe", "显式验证 Windows 系统凭证库读写与清理", "Explicitly verify Windows system credential write, read, and cleanup"),
+    item("/credentials migrate", "将一个 Provider Key 迁移到 Windows 凭证库", "Migrate one Provider key to Windows Credential Manager"),
+    item("/credentials cleanup", "确认系统副本后删除一个旧明文 Key", "Delete one legacy plaintext key after verifying its system copy"),
+    item("/credentials rollback", "切回一个 Provider 保留的旧明文 Key", "Switch one Provider back to its retained legacy key"),
+    item("/credentials forget", "删除一个 Provider 的所有本地 Key 副本", "Delete every local key copy for one Provider"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/queue", "查看或安排下一项任务", "Show or schedule the next task"),
     item("/clear-queue", "清空运行期排队任务", "Clear queued follow-ups while a task is running"),
@@ -222,7 +230,13 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
-  const providerRegistry = new ProviderRegistry();
+  let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
+  try { systemCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+  catch { /* The CLI remains usable with environment and legacy credentials. */ }
+  let mcpSystemCredentialStore: WindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> | undefined;
+  try { mcpSystemCredentialStore = await createWindowsSystemCredentialStore("mcp-oauth-record"); }
+  catch { /* OAuth remains usable through the compatibility store until explicitly migrated. */ }
+  const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
   await providerRegistry.load();
   const runtimeProfile = (profile: ProviderProfile, model = profile.model): ProviderProfile => ({
     ...profile,
@@ -268,7 +282,7 @@ async function main(): Promise<void> {
 
   const status = new StatusLine();
   const activities = new ActivityLog();
-  const mcpManager = new McpManager(config.cwd);
+  const mcpManager = new McpManager(config.cwd, undefined, new McpAuthStore(undefined, mcpSystemCredentialStore));
   const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
     const storage = backend.backend === "environment"
       ? localize(language, "进程环境变量", "process environment")
@@ -285,15 +299,30 @@ async function main(): Promise<void> {
     });
     const providerCredentials = providerRegistry.credentialStatus();
     const mcpCredentials = await mcpManager.credentialStatus();
+    const systemCredentials = await probeWindowsSystemCredentialStore(false);
+    const providerDetails = providerRegistry.credentialInfo().filter((item) => item.source !== "missing" || item.legacyCopyPresent || item.systemCopyPresent);
     console.log([
       chalk.cyan(localize(language, "凭证状态（不会显示 Key 或 Token）", "Credential status (keys and tokens are never shown)")),
       formatCredentialBackend("Provider env", environmentCredentials.status()),
       formatCredentialBackend("Provider", providerCredentials),
       formatCredentialBackend("MCP OAuth", mcpCredentials),
+      formatCredentialBackend("Windows", systemCredentials.status),
+      ...(providerDetails.length ? [
+        chalk.cyan(localize(language, "Provider 凭证引用", "Provider credential references")),
+        ...providerDetails.map((item) => `  ${item.providerName} (${item.providerId}) · ${item.source}${item.systemCopyPresent ? localize(language, " · 有系统副本", " · system copy present") : ""}${item.legacyCopyPresent ? localize(language, " · 有旧明文副本", " · legacy plaintext copy present") : ""}${item.interruptedMigration ? localize(language, " · 有可恢复的中断迁移", " · interrupted migration recoverable") : ""}`),
+      ] : []),
       chalk.dim(localize(language,
-        "系统安全后端尚未启用；v0.12.3 阶段 A 保持现有文件兼容，不会自动迁移或删除凭证。",
-        "The system-secure backend is not enabled yet; v0.12.3 phase A keeps legacy files compatible and never migrates or deletes credentials automatically.")),
+        "迁移与清理必须显式执行；Xiu 不会自动移动或删除凭证。使用 /credentials migrate 开始。",
+        "Migration and cleanup are explicit; Xiu never moves or deletes credentials automatically. Use /credentials migrate to begin.")),
     ].join("\n") + "\n");
+  };
+  const formatCredentialProbe = (probe: WindowsCredentialProbeResult): string => {
+    const check = (value: boolean | undefined) => value === undefined ? "-" : value ? "✓" : "!";
+    return [
+      formatCredentialBackend("Windows", probe.status),
+      `${localize(language, "探测", "Probe")}: module ${check(probe.checks.module)} · write ${check(probe.checks.write)} · read ${check(probe.checks.read)} · delete ${check(probe.checks.delete)}`,
+      `${localize(language, "时间", "Time")}: ${probe.testedAt}`,
+    ].join("\n");
   };
   try {
     if (options.listSessions) {
@@ -1160,6 +1189,14 @@ async function main(): Promise<void> {
             catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
             continue;
           }
+          if (followUp === "/credentials probe") {
+            console.log(chalk.dim(localize(language, "/credentials probe 请在当前任务结束后执行。\n", "Run /credentials probe after the current task finishes.\n")));
+            continue;
+          }
+          if (followUp.startsWith("/credentials migrate") || followUp.startsWith("/credentials cleanup") || followUp.startsWith("/credentials rollback") || followUp.startsWith("/credentials forget")) {
+            console.log(chalk.dim(localize(language, "凭证修改请在当前任务结束后执行。\n", "Change credentials after the current task finishes.\n")));
+            continue;
+          }
           if (followUp === "/paste") {
             try {
               const pasted = await clipboard.paste();
@@ -1872,6 +1909,92 @@ async function main(): Promise<void> {
         } catch (error) { console.error(chalk.red(`${localize(language, "获取 MCP Prompt 失败", "Failed to get MCP prompt")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
+      if (task === "/mcp credentials" || task.startsWith("/mcp credentials ")) {
+        const parts = task.trim().split(/\s+/);
+        const action = parts[2] ?? "status";
+        const requested = parts[3];
+        try {
+          const names = await mcpManager.oauthServerNames(projectMcpTrusted);
+          if (action === "status") {
+            const selectedNames = requested ? names.filter((name) => name === requested) : names;
+            if (!selectedNames.length) {
+              console.log(chalk.dim(localize(language, "没有匹配的 OAuth MCP。\n", "No matching OAuth MCP server.\n")));
+              continue;
+            }
+            const sections: string[] = [];
+            for (const name of selectedNames) {
+              const records = await mcpManager.oauthCredentialInfo(name, projectMcpTrusted);
+              if (!records.length) {
+                sections.push(`${chalk.cyan(name)}\n${localize(language, "  尚无本地 OAuth 凭证", "  No local OAuth credentials")}`);
+                continue;
+              }
+              sections.push(`${chalk.cyan(name)}\n${records.map((record) => localize(language,
+                `  ${record.source} · 旧明文 ${record.legacyCopyPresent ? "有" : "无"} · 系统副本 ${record.systemCopyPresent ? "可用" : record.source === "system" ? "不可用" : "无"}${record.interruptedMigration ? " · 迁移待恢复" : ""}`,
+                `  ${record.source} · legacy plaintext ${record.legacyCopyPresent ? "present" : "absent"} · system copy ${record.systemCopyPresent ? "available" : record.source === "system" ? "unavailable" : "absent"}${record.interruptedMigration ? " · migration recovery pending" : ""}`)).join("\n")}`);
+            }
+            console.log(`${sections.join("\n\n")}\n`);
+            continue;
+          }
+          if (!["migrate", "cleanup", "rollback"].includes(action)) {
+            console.log(chalk.yellow(localize(language,
+              "用法：/mcp credentials [status|migrate|cleanup|rollback] [name]\n",
+              "Usage: /mcp credentials [status|migrate|cleanup|rollback] [name]\n")));
+            continue;
+          }
+          const candidateNames: string[] = [];
+          for (const name of names) {
+            const records = await mcpManager.oauthCredentialInfo(name, projectMcpTrusted);
+            const eligible = action === "migrate"
+              ? records.some((record) => record.source === "legacy-file")
+              : action === "cleanup"
+                ? records.some((record) => record.source === "system" && record.legacyCopyPresent)
+                : records.some((record) => record.source === "system" && Boolean(record.migratedAt));
+            if (eligible) candidateNames.push(name);
+          }
+          const name = requested ?? await selectTerminalOption(localize(language, "选择 OAuth MCP", "Choose an OAuth MCP server"), candidateNames.map((item) => ({ label: item, value: item })), language);
+          if (!name || !candidateNames.includes(name)) {
+            console.log(chalk.dim(localize(language, "没有符合条件的 OAuth MCP，或操作已取消。\n", "No eligible OAuth MCP server is available, or the operation was cancelled.\n")));
+            continue;
+          }
+          if (action === "migrate") {
+            const confirmed = await selectTerminalOption(localize(language,
+              `将 ${name} 的 OAuth Token 与 Client Secret 复制到 Windows Credential Manager，校验后切换引用；Scope 等非秘密元数据仍保留在配置文件。继续？`,
+              `Copy OAuth tokens and the client secret for ${name} to Windows Credential Manager, verify them, and switch the reference? Non-secret metadata such as scopes remains in the config file.`), [
+              { label: localize(language, "继续迁移（保留旧明文）", "Migrate and retain legacy plaintext"), value: "yes" },
+              { label: localize(language, "取消", "Cancel"), value: "no" },
+            ], language);
+            if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消迁移。\n", "Migration cancelled.\n"))); continue; }
+            mcpSystemCredentialStore ??= await createWindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record");
+            mcpManager.attachOAuthCredentialStore(mcpSystemCredentialStore);
+            const count = await mcpManager.migrateOAuthCredentials(name, mcpSystemCredentialStore, projectMcpTrusted);
+            console.log(chalk.green(localize(language,
+              `已迁移并校验 ${count} 条 OAuth 凭证。旧明文暂时保留；重启验证成功后运行 /mcp credentials cleanup ${name}。\n`,
+              `Migrated and verified ${count} OAuth credential record(s). Legacy plaintext remains; after verifying a restart, run /mcp credentials cleanup ${name}.\n`)));
+            continue;
+          }
+          if (action === "cleanup") {
+            const typed = await askQuestion(chalk.yellow(localize(language,
+              `将再次校验系统副本并永久删除 ${name} 的旧明文 Token。请输入 MCP 名称“${name}”确认：`,
+              `The system copy will be verified again and legacy plaintext tokens for ${name} will be permanently deleted. Type the MCP name "${name}" to confirm: `)));
+            if (typed.trim() !== name) { console.log(chalk.dim(localize(language, "MCP 名称不匹配，已取消清理。\n", "MCP name did not match; cleanup cancelled.\n"))); continue; }
+            const count = await mcpManager.cleanupOAuthCredentials(name, projectMcpTrusted);
+            console.log(chalk.green(localize(language, `已安全删除 ${count} 条旧明文 OAuth 凭证。\n`, `Safely deleted ${count} legacy plaintext OAuth credential record(s).\n`)));
+            continue;
+          }
+          const confirmed = await selectTerminalOption(localize(language,
+            `将 ${name} 切回本机兼容文件，并删除系统凭证引用；若旧明文已清理，会先从系统凭证恢复。继续？`,
+            `Switch ${name} back to the compatibility file and remove its system reference? If plaintext was cleaned, it will first be restored from the system credential.`), [
+            { label: localize(language, "确认回退", "Roll back"), value: "yes" },
+            { label: localize(language, "取消", "Cancel"), value: "no" },
+          ], language);
+          if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消回退。\n", "Rollback cancelled.\n"))); continue; }
+          const count = await mcpManager.rollbackOAuthCredentials(name, projectMcpTrusted);
+          console.log(chalk.green(localize(language, `已回退 ${count} 条 OAuth 凭证到兼容文件。\n`, `Rolled back ${count} OAuth credential record(s) to the compatibility file.\n`)));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "MCP OAuth 凭证操作失败", "MCP OAuth credential operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
       if (task === "/mcp auth" || task.startsWith("/mcp auth ")) {
         const requested = task.trim().split(/\s+/)[2];
         const entries = await mcpManager.authStatus(requested, projectMcpTrusted);
@@ -2127,6 +2250,116 @@ async function main(): Promise<void> {
       if (task === "/credentials" || task === "/credentials status") {
         try { await printCredentialStatus(); }
         catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/credentials probe") {
+        const confirmed = await askQuestion(chalk.yellow(localize(language,
+          "将在 Windows Credential Manager 写入一个随机临时 Canary，回读验证后立即删除。继续？[y/N] ",
+          "A random temporary canary will be written to Windows Credential Manager, verified, and immediately deleted. Continue? [y/N] ")));
+        if (!/^(y|yes)$/i.test(confirmed.trim())) {
+          console.log(chalk.dim(localize(language, "已取消系统凭证库探测。\n", "System credential probe cancelled.\n")));
+          continue;
+        }
+        const probe = await probeWindowsSystemCredentialStore(true);
+        console.log(`${probe.status.available ? chalk.green(formatCredentialProbe(probe)) : chalk.red(formatCredentialProbe(probe))}\n`);
+        continue;
+      }
+      if (task === "/credentials migrate" || task.startsWith("/credentials migrate ")) {
+        try {
+          const argument = task.slice("/credentials migrate".length).trim();
+          const candidates = providerRegistry.migrationCandidates();
+          if (!candidates.length) {
+            console.log(chalk.dim(localize(language, "没有可迁移的 Provider 明文 Key。\n", "No legacy Provider API keys are available to migrate.\n")));
+            continue;
+          }
+          let ids: string[];
+          if (argument === "--all") ids = candidates.map((item) => item.providerId);
+          else if (argument) ids = [argument];
+          else {
+            const selected = await selectTerminalOption(localize(language, "选择要迁移的 Provider Key", "Choose a Provider key to migrate"), candidates.map((item) => ({ label: item.providerName, description: item.providerId, value: item.providerId })), language);
+            if (!selected) { console.log(chalk.dim(localize(language, "已取消迁移。\n", "Migration cancelled.\n"))); continue; }
+            ids = [selected];
+          }
+          const names = ids.join(", ");
+          const confirmed = await selectTerminalOption(localize(language,
+            `将 ${names} 的 Key 复制到 Windows Credential Manager，回读校验后切换引用；暂不删除旧明文。继续？`,
+            `Copy keys for ${names} to Windows Credential Manager, verify them, and switch references without deleting plaintext yet?`), [
+            { label: localize(language, "继续迁移", "Migrate"), value: "yes" },
+            { label: localize(language, "取消", "Cancel"), value: "no" },
+          ], language);
+          if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消迁移。\n", "Migration cancelled.\n"))); continue; }
+          systemCredentialStore ??= await createWindowsSystemCredentialStore("provider-api-key");
+          providerRegistry.attachSystemCredentialStore(systemCredentialStore);
+          await providerRegistry.migrateApiKeysToSystem(ids, systemCredentialStore);
+          if (ids.includes(config.providerId)) await switchProviderProfile(providerRegistry.get(config.providerId)!, true, config.model);
+          console.log(chalk.green(localize(language,
+            `已迁移并校验 ${ids.length} 个 Provider Key；运行时已切换到系统凭证库，旧明文仍保留，可用 /credentials cleanup 单独清理。\n`,
+            `Migrated and verified ${ids.length} Provider key(s). Runtime now uses the system store; plaintext remains until /credentials cleanup.\n`)));
+          console.log(chalk.dim(localize(language,
+            "为避免误删，迁移流程不会连带删除旧明文。确认重启后系统凭证可用，再单独运行 /credentials cleanup。\n",
+            "To prevent accidental deletion, migration never removes plaintext. After verifying the system credential across a restart, run /credentials cleanup separately.\n")));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "凭证迁移失败；原引用与旧明文保持不变", "Credential migration failed; the original reference and plaintext remain unchanged")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
+      if (task === "/credentials cleanup" || task.startsWith("/credentials cleanup ")) {
+        try {
+          const argument = task.slice("/credentials cleanup".length).trim();
+          const candidates = providerRegistry.credentialInfo().filter((item) => item.migration && (item.legacyCopyPresent || item.systemCopyPresent));
+          const selected = argument || await selectTerminalOption(localize(language, "选择要清理旧明文的 Provider", "Choose a Provider whose plaintext copy should be removed"), candidates.map((item) => ({ label: item.providerName, description: item.providerId, value: item.providerId })), language);
+          if (!selected) { console.log(chalk.dim(localize(language, "没有选择凭证，未做更改。\n", "No credential selected; nothing changed.\n"))); continue; }
+          const confirmed = await selectTerminalOption(localize(language, `确认删除 ${selected} 的旧明文 Key？系统副本会先被再次校验。`, `Delete the legacy plaintext key for ${selected}? The system copy will be verified again first.`), [
+            { label: localize(language, "删除旧明文", "Delete plaintext"), value: "yes" }, { label: localize(language, "取消", "Cancel"), value: "no" },
+          ], language);
+          if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消清理。\n", "Cleanup cancelled.\n"))); continue; }
+          const typed = await askQuestion(chalk.yellow(localize(language,
+            `这是不可逆操作。请输入 Provider ID “${selected}” 再次确认：`,
+            `This cannot be undone. Type the Provider ID "${selected}" to confirm: `)));
+          if (typed.trim() !== selected) { console.log(chalk.dim(localize(language, "Provider ID 不匹配，已取消清理。\n", "Provider ID did not match; cleanup cancelled.\n"))); continue; }
+          await providerRegistry.cleanupLegacyApiKey(selected);
+          console.log(chalk.green(localize(language, "旧明文副本已安全删除。\n", "Legacy plaintext copy safely deleted.\n")));
+        } catch (error) { console.error(chalk.red(`${localize(language, "凭证清理失败", "Credential cleanup failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/credentials rollback" || task.startsWith("/credentials rollback ")) {
+        try {
+          const argument = task.slice("/credentials rollback".length).trim();
+          const candidates = providerRegistry.credentialInfo().filter((item) => item.migration && item.legacyCopyPresent);
+          const selected = argument || await selectTerminalOption(localize(language, "选择要回退的 Provider", "Choose a Provider to roll back"), candidates.map((item) => ({ label: item.providerName, description: item.providerId, value: item.providerId })), language);
+          if (!selected) { console.log(chalk.dim(localize(language, "没有选择凭证，未做更改。\n", "No credential selected; nothing changed.\n"))); continue; }
+          const confirmed = await selectTerminalOption(localize(language, `将 ${selected} 切回保留的旧明文 Key，并尝试删除系统副本。继续？`, `Switch ${selected} back to its retained plaintext key and try to delete the system copy?`), [
+            { label: localize(language, "确认回退", "Roll back"), value: "yes" }, { label: localize(language, "取消", "Cancel"), value: "no" },
+          ], language);
+          if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消回退。\n", "Rollback cancelled.\n"))); continue; }
+          const systemDeleted = await providerRegistry.rollbackSystemApiKey(selected);
+          if (selected === config.providerId) await switchProviderProfile(providerRegistry.get(selected)!, true, config.model);
+          console.log((systemDeleted ? chalk.green : chalk.yellow)(localize(language,
+            systemDeleted ? "已切回旧明文 Key，系统副本已删除。\n" : "已切回旧明文 Key，但系统副本未能删除；可稍后使用 /credentials forget 明确清理。\n",
+            systemDeleted ? "Rolled back to the legacy key and deleted the system copy.\n" : "Rolled back to the legacy key, but the system copy could not be deleted; use /credentials forget to clean it explicitly.\n")));
+        } catch (error) { console.error(chalk.red(`${localize(language, "凭证回退失败", "Credential rollback failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/credentials forget" || task.startsWith("/credentials forget ")) {
+        try {
+          const argument = task.slice("/credentials forget".length).trim();
+          const candidates = providerRegistry.credentialInfo().filter((item) => item.legacyCopyPresent || item.systemCopyPresent || item.migration || item.interruptedMigration);
+          const selected = argument || await selectTerminalOption(localize(language, "选择要遗忘本地 Key 的 Provider", "Choose a Provider whose local keys should be forgotten"), candidates.map((item) => ({ label: item.providerName, description: `${item.providerId} · ${item.source}`, value: item.providerId })), language);
+          if (!selected) { console.log(chalk.dim(localize(language, "没有选择凭证，未做更改。\n", "No credential selected; nothing changed.\n"))); continue; }
+          const confirmed = await selectTerminalOption(chalk.yellow(localize(language,
+            `将删除 ${selected} 在系统凭证库和兼容文件中的所有本地 Key；环境变量不会改变。确认？`,
+            `Delete every local key for ${selected} from the system store and compatibility file? Environment variables are unchanged.`)), [
+            { label: localize(language, "永久遗忘本地 Key", "Forget local keys"), value: "yes" }, { label: localize(language, "取消", "Cancel"), value: "no" },
+          ], language);
+          if (confirmed !== "yes") { console.log(chalk.dim(localize(language, "已取消。\n", "Cancelled.\n"))); continue; }
+          const typed = await askQuestion(chalk.yellow(localize(language,
+            `这将删除全部本地 Key 副本。请输入 Provider ID “${selected}” 再次确认：`,
+            `This deletes every local key copy. Type the Provider ID "${selected}" to confirm: `)));
+          if (typed.trim() !== selected) { console.log(chalk.dim(localize(language, "Provider ID 不匹配，已取消遗忘。\n", "Provider ID did not match; forget cancelled.\n"))); continue; }
+          await providerRegistry.forgetLocalApiKey(selected);
+          if (selected === config.providerId) await switchProviderProfile(providerRegistry.get(selected)!, true, config.model);
+          console.log(chalk.green(localize(language, "本地 Provider Key 已遗忘。\n", "Local Provider keys forgotten.\n")));
+        } catch (error) { console.error(chalk.red(`${localize(language, "遗忘凭证失败", "Could not forget credential")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {

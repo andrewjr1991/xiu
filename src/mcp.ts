@@ -7,8 +7,8 @@ import iconv from "iconv-lite";
 import os from "node:os";
 import path from "node:path";
 import { localize, type UiLanguage } from "./i18n.js";
-import { McpAuthStore } from "./mcp-auth-store.js";
-import type { CredentialBackendStatus } from "./credential-store.js";
+import { McpAuthStore, type McpAuthCredentialInfo, type McpAuthSecretRecord } from "./mcp-auth-store.js";
+import type { CredentialBackendStatus, CredentialStore } from "./credential-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
@@ -136,6 +136,29 @@ function expandEnvironment(value: string): string {
     if (resolved === undefined) throw new Error(`MCP environment variable ${name} is not set`);
     return resolved;
   });
+}
+
+interface StdioLaunch {
+  command: string;
+  args: string[];
+}
+
+export async function resolveStdioLaunch(command: string, args: string[]): Promise<StdioLaunch> {
+  if (process.platform !== "win32") return { command, args };
+  const executable = path.basename(command).toLowerCase().replace(/\.(?:cmd|bat|exe|com)$/i, "");
+  if (executable !== "npm" && executable !== "npx") return { command, args };
+  const script = executable === "npm" ? "npm-cli.js" : "npx-cli.js";
+  const candidates = [
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", script),
+    ...(process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", "node_modules", "npm", "bin", script)] : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return { command: process.execPath, args: [candidate, ...args] };
+    } catch { /* try the next standard Node/npm layout */ }
+  }
+  return { command, args };
 }
 
 const RESERVED_HTTP_HEADERS = new Set(["accept", "content-type", "mcp-session-id", "mcp-protocol-version"]);
@@ -442,7 +465,8 @@ class StdioMcpConnection implements McpConnectionLike {
     const configuredCwd = this.config.cwd
       ? path.resolve(this.workspace, this.config.cwd)
       : this.workspace;
-    this.child = spawn(this.config.command!, this.config.args ?? [], {
+    const launch = await resolveStdioLaunch(this.config.command!, this.config.args ?? []);
+    this.child = spawn(launch.command, launch.args, {
       cwd: configuredCwd,
       env: {
         ...process.env,
@@ -792,6 +816,7 @@ export class McpManager {
   private activeTools: AgentTool[] = [];
   private serverStatuses: McpServerStatus[] = [];
   private serverOrigins = new Map<string, "user" | "project">();
+  private activeConfigs = new Map<string, McpServerConfig>();
 
   constructor(
     private workspace: string,
@@ -814,6 +839,7 @@ export class McpManager {
   async start(includeProject = true): Promise<McpServerStatus[]> {
     const servers = await this.configuredServers(includeProject);
     await this.close();
+    this.activeConfigs = new Map(Object.entries(servers));
     for (const [name, config] of Object.entries(servers)) {
       if (config.enabled === false) continue;
       const transport = transportOf(config);
@@ -856,7 +882,7 @@ export class McpManager {
         this.serverStatuses.push({ name, transport, state: "connected", tools: tools.length });
       } catch (error) {
         await connection.close();
-        const reason = sanitizeOAuthError(error).message;
+        const reason = sanitizeOAuthError(error, await this.redactionValues(config.url)).message;
         const authRequired = Boolean(config.auth && /oauth|unauthori[sz]ed|credentials expired|run \/mcp login/i.test(reason));
         this.serverStatuses.push({ name, transport, state: authRequired ? "auth-required" : "failed", tools: 0, error: reason });
       }
@@ -882,7 +908,9 @@ export class McpManager {
       execute: async (input, context) => {
         try { return await connection.callTool(definition.name, input, context.signal); }
         catch (error) {
-          if (!(error instanceof InsufficientScopeError) || !config.auth || !config.url) throw config.auth ? sanitizeOAuthError(error) : error;
+          if (!(error instanceof InsufficientScopeError) || !config.auth || !config.url) {
+            throw sanitizeOAuthError(error, await this.redactionValues(config.url));
+          }
           const required = [...new Set((error.requiredScope ?? "").split(/\s+/).filter(Boolean))];
           const existing = (await new XiuMcpOAuthProvider(config.url, config.auth, this.authStore).status()).scopes;
           const added = required.filter((scope) => !existing.includes(scope));
@@ -918,6 +946,34 @@ export class McpManager {
 
   async credentialStatus(): Promise<CredentialBackendStatus> { return await this.authStore.status(); }
 
+  attachOAuthCredentialStore(store: CredentialStore<McpAuthSecretRecord, "mcp-oauth-record">): void {
+    this.authStore.attachSystemCredentialStore(store);
+  }
+
+  private async oauthResource(name: string, includeProject = true): Promise<string> {
+    const config = (await this.configuredServers(includeProject))[name];
+    if (!config?.url || config.auth?.type !== "oauth") throw new Error(`MCP server ${name} is not configured for OAuth`);
+    return config.url;
+  }
+
+  async oauthCredentialInfo(name: string, includeProject = true): Promise<McpAuthCredentialInfo[]> {
+    return await this.authStore.credentialInfo(await this.oauthResource(name, includeProject));
+  }
+
+  async migrateOAuthCredentials(name: string, store: CredentialStore<McpAuthSecretRecord, "mcp-oauth-record">, includeProject = true): Promise<number> {
+    const migrated = await this.authStore.migrateResource(await this.oauthResource(name, includeProject), store);
+    this.authStore.attachSystemCredentialStore(store);
+    return migrated;
+  }
+
+  async cleanupOAuthCredentials(name: string, includeProject = true): Promise<number> {
+    return await this.authStore.cleanupResource(await this.oauthResource(name, includeProject));
+  }
+
+  async rollbackOAuthCredentials(name: string, includeProject = true): Promise<number> {
+    return await this.authStore.rollbackResource(await this.oauthResource(name, includeProject));
+  }
+
   connectedServerNames(): string[] {
     return [...this.connections.keys()].sort((left, right) => left.localeCompare(right));
   }
@@ -946,28 +1002,38 @@ export class McpManager {
     return connection;
   }
 
+  private async redactionValues(resource?: string): Promise<string[]> {
+    if (!resource) return [];
+    try { return await this.authStore.redactionValues(resource); }
+    catch { return []; }
+  }
+
+  private async serverRedactionValues(name: string): Promise<string[]> {
+    return await this.redactionValues(this.activeConfigs.get(name)?.url);
+  }
+
   async listResources(name: string, signal?: AbortSignal): Promise<McpResourceCatalog> {
     try {
       const result = await this.connection(name).listResources(signal);
       return { server: name, ...result };
-    } catch (error) { throw sanitizeOAuthError(error); }
+    } catch (error) { throw sanitizeOAuthError(error, await this.serverRedactionValues(name)); }
   }
 
   async readResource(name: string, uri: string, signal?: AbortSignal): Promise<McpRenderedContent> {
     try { return await this.connection(name).readResource(uri, signal); }
-    catch (error) { throw sanitizeOAuthError(error); }
+    catch (error) { throw sanitizeOAuthError(error, await this.serverRedactionValues(name)); }
   }
 
   async listPrompts(name: string, signal?: AbortSignal): Promise<McpPromptCatalog> {
     try {
       const result = await this.connection(name).listPrompts(signal);
       return { server: name, ...result };
-    } catch (error) { throw sanitizeOAuthError(error); }
+    } catch (error) { throw sanitizeOAuthError(error, await this.serverRedactionValues(name)); }
   }
 
   async getPrompt(name: string, prompt: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpRenderedContent> {
     try { return await this.connection(name).getPrompt(prompt, args, signal); }
-    catch (error) { throw sanitizeOAuthError(error); }
+    catch (error) { throw sanitizeOAuthError(error, await this.serverRedactionValues(name)); }
   }
 
   async userServerNames(): Promise<string[]> {
@@ -992,7 +1058,7 @@ export class McpManager {
       const interactive = { ...interaction, interactive: true };
       await loginMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore, interactive), interactive);
     } catch (error) {
-      const sanitized = sanitizeOAuthError(error);
+      const sanitized = sanitizeOAuthError(error, await this.redactionValues(config.url));
       if (existing) {
         existing.state = "auth-required";
         existing.error = sanitized.message;
