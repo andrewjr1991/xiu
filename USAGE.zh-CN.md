@@ -69,6 +69,8 @@ API Key 有两种配置方式：
 
 v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider、MCP OAuth 和 Windows 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。
 
+v0.13.0 阶段 A 起，Xiu 在用户目录 `~/.xiu/security-audit.jsonl` 追加本机安全审计记录。输入 `/audit` 查看最近 50 条，或使用 `/audit approvals`、`/audit credentials` 按类别筛选。记录只包含时间、事件类型、结果、风险、决策来源和非秘密配置 ID；不会保存命令正文、工具参数、Prompt、模型回复、文件内容、完整工作区路径或任何凭证。日志写入失败不会改变既有审批决定，`/audit` 会显示本进程最近的写入错误。
+
 阶段 B 加入了可选的 Windows Credential Manager 后端。普通 `/credentials` 只检查原生模块能否加载，不会写入系统凭证库；`/credentials probe` 会先要求明确确认，再写入一个名称和内容均随机的临时 Canary，完成回读校验后立即删除，用来验证当前 Windows、Node.js、架构和企业策略是否真正允许使用该后端。探测不会迁移、覆盖或删除现有 Provider/MCP 凭证。若可选原生模块没有安装或被企业策略拦截，Xiu 会报告后端不可用，但现有 Legacy File 路径和普通启动不受影响。
 
 阶段 E 起，Xiu 会把当前运行时实际使用的 Provider Key、MCP Access/Refresh/ID Token 和 Client Secret 作为脱敏词表，仅在内存中用于清理错误文本；它们不会被写入诊断、会话、故障转移回执或 MCP Resource/Prompt 错误。系统凭证损坏、缺失或无法读取时，`cleanup` 会拒绝删除旧副本；迁移中断后可重新执行相同迁移继续，不需要手工编辑配置。
