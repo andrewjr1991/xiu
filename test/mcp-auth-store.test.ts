@@ -43,6 +43,10 @@ test("MCP auth store persists versioned credentials bound to resource, issuer, a
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { version: number; entries: Record<string, unknown> };
     assert.equal(parsed.version, 1);
     assert.equal(Object.keys(parsed.entries).length, 2);
+    assert.equal(typeof (parsed as { revisions?: Record<string, number> }).revisions, "object");
+    assert.deepEqual(await reloaded.status(), {
+      backend: "legacy-file", available: true, secure: false, location: file, entries: 2,
+    });
     assert.doesNotMatch(JSON.stringify(parsed), /code_verifier|authorization_code|\"state\"/i);
 
     assert.equal(await reloaded.clearCredentials(first, "tokens"), true);

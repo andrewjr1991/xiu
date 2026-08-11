@@ -29,6 +29,7 @@ test("provider registry can persist a local credential separately from shareable
   const saved = await fs.readFile(filename, "utf8");
   assert.match(saved, /OFFICE_MODEL_KEY/);
   assert.match(saved, /"credentials"/);
+  assert.match(saved, /"credentialRevisions"/);
   assert.match(saved, /saved-local-secret/);
   assert.doesNotMatch(saved, /"apiKey"/);
 
@@ -38,6 +39,10 @@ test("provider registry can persist a local credential separately from shareable
   assert.equal(restored.activeModel("office-gateway"), "coder-v2");
   assert.equal(restored.get("office-gateway")?.baseURL, "https://models.example.test/v1");
   assert.equal(restored.get("office-gateway")?.apiKey, "saved-local-secret");
+  assert.equal(restored.credentialRevision("office-gateway"), 1);
+  assert.deepEqual(restored.credentialStatus(), {
+    backend: "legacy-file", available: true, secure: false, location: filename, entries: 1,
+  });
 
   await restored.upsert({
     ...restored.get("office-gateway")!, name: "Edited Gateway", apiKey: undefined,
@@ -144,6 +149,12 @@ test("versioned capability cache is fingerprinted and invalidated when credentia
   assert.equal(registry.capabilityProbe("fingerprint", "coder")?.tools, "supported");
   await registry.setApiKey("fingerprint", "second-key");
   assert.equal(registry.capabilityProbe("fingerprint", "coder"), undefined);
+  await registry.setCapabilityProbe({ providerId: "fingerprint", model: "coder", checkedAt: "2026-08-11T00:01:00.000Z", text: "supported", tools: "supported", vision: "unsupported" });
+  await registry.upsert({
+    id: "fingerprint", name: "Fingerprint", kind: "openai-compatible", model: "coder", baseURL: "https://cache.example/v1", apiKey: "third-key",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  assert.equal(registry.capabilityProbe("fingerprint", "coder"), undefined);
 });
 
 test("provider registry persists ordered failover chains and removes stale references", async () => {
@@ -162,6 +173,21 @@ test("provider registry persists ordered failover chains and removes stale refer
   assert.deepEqual(restored.failoverChain("agnes"), ["backup-one", "openai"]);
   await restored.remove("backup-one");
   assert.deepEqual(restored.failoverChain("agnes"), ["openai"]);
+});
+
+test("provider registry serializes concurrent writes without corrupting the compatibility file", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-concurrent-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  await Promise.all(["one", "two"].map((id) => registry.upsert({
+    id, name: id, kind: "openai-compatible", model: "coder", baseURL: `http://127.0.0.1:${id === "one" ? 9010 : 9020}/v1`,
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  })));
+  const restored = new ProviderRegistry(filename);
+  await restored.load();
+  assert.ok(restored.get("one"));
+  assert.ok(restored.get("two"));
 });
 
 test("provider registry persists stage routing and removes stale targets", async () => {

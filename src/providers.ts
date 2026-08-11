@@ -3,13 +3,13 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { ProxyAgent } from "undici";
 import type { AgentConfig } from "./config.js";
+import { readEnvironmentCredential } from "./credential-store.js";
 import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolDefinition } from "./types.js";
 import { SafeRequestCache } from "./request-cache.js";
 
 const modelDiscoveryCache = new SafeRequestCache(60_000, 100);
 
 function requestFingerprint(config: AgentConfig): string {
-  const credential = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? "";
   return createHash("sha256").update(JSON.stringify({
     providerId: config.providerId,
     provider: config.provider,
@@ -17,7 +17,7 @@ function requestFingerprint(config: AgentConfig): string {
     baseURL: config.baseURL,
     proxy: config.proxy,
     apiKeyEnv: config.apiKeyEnv,
-    credential,
+    credentialRevision: config.credentialRevision ?? 0,
   })).digest("hex").slice(0, 24);
 }
 
@@ -61,9 +61,9 @@ function canRetryForcedToolProbeWithAuto(error: unknown): boolean {
 class OpenAIProvider implements ModelProvider {
   private client: OpenAI;
   constructor(private config: AgentConfig) {
-    const apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined)
+    const apiKey = readEnvironmentCredential(config.apiKeyEnv)
       ?? config.apiKey
-      ?? (config.provider === "agnes" ? process.env.AGNES_API_KEY : process.env.OPENAI_API_KEY);
+      ?? readEnvironmentCredential(config.provider === "agnes" ? "AGNES_API_KEY" : "OPENAI_API_KEY");
     this.client = new OpenAI({
       apiKey: apiKey || "xiu-local",
       baseURL: config.baseURL,
@@ -219,7 +219,7 @@ class OpenAIProvider implements ModelProvider {
 class AnthropicProvider implements ModelProvider {
   private client: Anthropic;
   constructor(private config: AgentConfig) {
-    const apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
     this.client = new Anthropic({
       apiKey,
       baseURL: config.baseURL,
@@ -330,15 +330,15 @@ class AnthropicProvider implements ModelProvider {
 }
 
 export function createProvider(config: AgentConfig): ModelProvider {
-  const configuredKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey;
+  const configuredKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey;
   if (config.provider === "anthropic") {
     const keyName = config.apiKeyEnv ?? "ANTHROPIC_API_KEY";
-    if (!(configuredKey ?? process.env.ANTHROPIC_API_KEY)) throw new Error(`${keyName} is not set`);
+    if (!(configuredKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"))) throw new Error(`${keyName} is not set`);
     return new AnthropicProvider(config);
   }
   if (config.provider === "agnes") {
     const keyName = config.apiKeyEnv ?? "AGNES_API_KEY";
-    const apiKey = configuredKey ?? process.env.AGNES_API_KEY;
+    const apiKey = configuredKey ?? readEnvironmentCredential("AGNES_API_KEY");
     if (!apiKey) throw new Error(`${keyName} is not set`);
     if (/[^\x20-\x7E]/.test(apiKey)) {
       throw new Error("AGNES_API_KEY contains non-ASCII characters. Replace the placeholder with your real API key.");
@@ -347,7 +347,7 @@ export function createProvider(config: AgentConfig): ModelProvider {
   }
   const local = config.provider === "ollama" || config.provider === "lmstudio" || config.provider === "vllm";
   const keyName = config.apiKeyEnv ?? "OPENAI_API_KEY";
-  if (!local && config.provider !== "openai-compatible" && !(configuredKey ?? process.env.OPENAI_API_KEY)) throw new Error(`${keyName} is not set`);
+  if (!local && config.provider !== "openai-compatible" && !(configuredKey ?? readEnvironmentCredential("OPENAI_API_KEY"))) throw new Error(`${keyName} is not set`);
   if (config.provider === "openai-compatible" && config.apiKeyEnv && !configuredKey) throw new Error(`${config.apiKeyEnv} is not set and no local key is saved`);
   return new OpenAIProvider(config);
 }

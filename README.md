@@ -66,6 +66,8 @@ Version 0.12.1 adds read-only MCP Resource and Prompt browsing over both stdio a
 
 Version 0.12.2 adds permission manifests for MCP servers and Skills. Xiu derives the minimum permissions implied by an MCP transport, authentication, risk and workspace-change settings, rejects manifests that under-declare those permissions, and requires explicit approval when a new or changed extension expands its permission set. Skill frontmatter can declare permissions such as `workspace:read` or `network:access`; unknown permissions block installation. Grants are fingerprinted and stored locally in `~/.xiu/extension-permissions.json`, without replacing workspace trust, Plan mode, risk approval, checkpoints, or dangerous-action confirmation. `/mcp permissions` shows each manifest and `/mcp permissions approve [name]` approves the exact current fingerprint. Windows stdio MCP failures now decode UTF-8, UTF-16LE and common GB18030/GBK stderr instead of exposing mojibake.
 
+Version 0.12.3 phase A introduces a typed credential-store boundary for Provider API keys, environment credentials, and MCP OAuth records while preserving the existing `providers.json` and `mcp-auth.json` formats. It centralizes secret redaction before diagnostics, failover errors, OAuth errors, and session persistence, and invalidates capability-probe work with a non-secret credential revision instead of credential content. `/credentials` and `/credentials status` report backend availability and entry counts without displaying keys or tokens. This compatibility phase does not migrate, delete, or encrypt existing credentials; the current local files remain plaintext and the system-secure backend is deliberately deferred until it has passed real Windows and enterprise-policy validation.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -216,6 +218,7 @@ Interactive session commands:
 /mcp resources|read browse untrusted MCP resources
 /mcp prompts|prompt browse untrusted MCP prompts
 /mcp permissions    inspect or approve MCP permission manifests
+/credentials        inspect credential backend status without revealing secrets
 /agents             show all saved multi-agent runs
 /agents <run>       show one run and every specialist task
 /agents cancel ...  cancel one task without stopping unrelated agents

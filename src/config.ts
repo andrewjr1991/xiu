@@ -26,6 +26,8 @@ export interface AgentConfig {
   providerLabel?: string;
   apiKeyEnv?: string;
   apiKey?: string;
+  /** Non-secret local revision used to invalidate credential-dependent in-memory work. */
+  credentialRevision?: number;
   providerFeatures?: ProviderFeatureFlags;
   model: string;
   cwd: string;
@@ -67,6 +69,7 @@ export function resolveConfig(options: {
   providerLabel?: string;
   apiKeyEnv?: string;
   apiKey?: string;
+  credentialRevision?: number;
   providerFeatures?: ProviderFeatureFlags;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
@@ -139,6 +142,7 @@ export function resolveConfig(options: {
     providerLabel: options.providerLabel,
     apiKeyEnv: options.apiKeyEnv,
     apiKey: options.apiKey,
+    credentialRevision: options.credentialRevision,
     providerFeatures: options.providerFeatures,
     model: capabilities.text,
     cwd: path.resolve(options.cwd ?? process.cwd()),

@@ -80,8 +80,8 @@ test("session restoration keeps the latest provider profile", async () => {
 
 test("session logs redact locally saved provider credentials", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-secret-log-"));
-  const provider: ModelProvider = { async complete() { return { text: "done", toolCalls: [], raw: {} }; } };
-  await new Agent({ ...config(cwd), providerId: "private", apiKey: "never-write-this-secret" }, provider, [], async () => true).run("safe task");
+  const provider: ModelProvider = { async complete() { return { text: "request mentioned never-write-this-secret", toolCalls: [], raw: {} }; } };
+  await new Agent({ ...config(cwd), providerId: "private", apiKey: "never-write-this-secret" }, provider, [], async () => true).run("check never-write-this-secret safely");
   const session = (await listSessions(cwd))[0]!;
   const log = await fs.readFile(session.file, "utf8");
   assert.doesNotMatch(log, /never-write-this-secret/);

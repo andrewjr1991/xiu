@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { localize, type UiLanguage } from "./i18n.js";
 import { PROVIDER_ROUTING_PHASES, type ProviderRoutingPhase } from "./provider-routing.js";
+import { isSecretField, redactSecrets } from "./secret-redaction.js";
 
 export type DiagnosticPhaseKind = "idle" | "model" | "tool" | "approval";
 export type DiagnosticHealthState = "healthy" | "waiting" | "attention" | "stalled";
@@ -106,26 +107,13 @@ function bounded(value: string, maximum: number): string {
   return normalized.length <= maximum ? normalized : `${normalized.slice(0, maximum - 3)}...`;
 }
 
-function credentialKey(key: string): boolean {
-  return /(?:api[-_]?key|token|password|passwd|secret|authorization|cookie|credential)/i.test(key);
-}
-
-function redactText(value: string, sensitiveValues: string[] = []): string {
-  let result = value;
-  for (const secret of sensitiveValues.filter((item) => item.length >= 4)) result = result.split(secret).join("[REDACTED]");
-  return result
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
-    .replace(/((?:api[-_]?key|token|password|secret|authorization|cookie)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]");
-}
-
 function sanitizeValue(value: unknown, key: string, sensitive: string[], depth = 0): unknown {
-  if (credentialKey(key)) {
+  if (isSecretField(key)) {
     if (typeof value === "string") sensitive.push(value);
     return "[REDACTED]";
   }
   if (depth >= 3) return "[bounded]";
-  if (typeof value === "string") return bounded(redactText(value), 240);
+  if (typeof value === "string") return bounded(redactSecrets(value), 240);
   if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
   if (Array.isArray(value)) return value.slice(0, 12).map((item) => sanitizeValue(item, "", sensitive, depth + 1));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 20).map(([childKey, child]) => [childKey, sanitizeValue(child, childKey, sensitive, depth + 1)]));
@@ -359,7 +347,7 @@ export class TaskDiagnostics {
     this.approvals.checks++;
     this.approvalStartedAt = now;
     this.activeBeforeApproval = this.active;
-    this.active = { kind: "approval", operation: bounded(redactText(operation, this.activeTool?.sensitiveValues), MAX_OPERATION_CHARACTERS), startedAt: now };
+    this.active = { kind: "approval", operation: bounded(redactSecrets(operation, this.activeTool?.sensitiveValues), MAX_OPERATION_CHARACTERS), startedAt: now };
   }
 
   finishApproval(approved: boolean, source: "prompted" | "automatic" | "remembered" = "prompted"): void {
@@ -388,7 +376,7 @@ export class TaskDiagnostics {
       fromModel: bounded(fromModel, 200),
       toProviderId: bounded(toProviderId, 100),
       toModel: bounded(toModel, 200),
-      reason: bounded(redactText(reason), MAX_MESSAGE_CHARACTERS),
+      reason: bounded(redactSecrets(reason), MAX_MESSAGE_CHARACTERS),
     });
     if (this.providerFailovers.events.length > 12) this.providerFailovers.events.shift();
     this.markProgress();
@@ -402,7 +390,7 @@ export class TaskDiagnostics {
       fromProviderId: bounded(fromProviderId, 100), fromModel: bounded(fromModel, 200),
       toProviderId: bounded(toProviderId, 100),
       ...(toModel ? { toModel: bounded(toModel, 200) } : {}),
-      reason: bounded(redactText(reason), MAX_MESSAGE_CHARACTERS),
+      reason: bounded(redactSecrets(reason), MAX_MESSAGE_CHARACTERS),
     });
     if (this.providerRoutes.events.length > 20) this.providerRoutes.events.shift();
     this.markProgress();
@@ -471,7 +459,7 @@ export class TaskDiagnostics {
     const health = this.health(now, phase.kind, phase.activeMs);
     return {
       version: 1,
-      task: bounded(redactText(this.task), MAX_TASK_CHARACTERS),
+      task: bounded(redactSecrets(this.task), MAX_TASK_CHARACTERS),
       startedAt: iso(this.startedAtMs),
       updatedAt: iso(Math.max(this.updatedAtMs, now)),
       ...(this.completedAtMs === undefined ? {} : { completedAt: iso(this.completedAtMs) }),
@@ -509,8 +497,8 @@ export class TaskDiagnostics {
   }
 
   private addFailure(category: DiagnosticFailure["category"], operation: string, message: string, durationMs: number, sensitiveValues: string[] = []): void {
-    const firstLine = redactText(message, sensitiveValues).split(/\r?\n/, 1)[0] ?? "Failure";
-    this.failures.push({ at: iso(this.now()), category, operation: bounded(redactText(operation, sensitiveValues), MAX_OPERATION_CHARACTERS), message: bounded(firstLine, MAX_MESSAGE_CHARACTERS), durationMs });
+    const firstLine = redactSecrets(message, sensitiveValues).split(/\r?\n/, 1)[0] ?? "Failure";
+    this.failures.push({ at: iso(this.now()), category, operation: bounded(redactSecrets(operation, sensitiveValues), MAX_OPERATION_CHARACTERS), message: bounded(firstLine, MAX_MESSAGE_CHARACTERS), durationMs });
     if (this.failures.length > MAX_FAILURES) this.failures.shift();
   }
 

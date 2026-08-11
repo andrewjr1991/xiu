@@ -67,6 +67,8 @@ API Key 有两种配置方式：
 
 `/provider key` 的输入会用星号隐藏。配置文件使用原子写入，在支持 Unix 文件模式的平台上限制为当前用户读写；Key 不会写入项目会话日志或显示在状态界面。不过它仍然是本机明文凭证：不要提交、同步或发送整个 `providers.json`，同一系统账号、管理员或恶意软件仍可能读取它。
 
+v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider Legacy File 和 MCP OAuth Legacy File 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。此阶段只提供兼容层，不会迁移、删除或加密已有凭证，`providers.json` 与 `mcp-auth.json` 仍是本机明文文件；系统安全凭证后端将在真实 Windows 和企业策略环境验证后另行启用。
+
 ### 3.1 Agnes
 
 ```powershell
@@ -1050,6 +1052,7 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `/mcp prompts` / `/mcp prompt` | 浏览和预览不可信的远端 Prompt |
 | `/mcp permissions` | 查看 MCP 权限清单、来源和待批准差异 |
 | `/mcp permissions approve [name]` | 批准一个 MCP 当前精确权限指纹 |
+| `/credentials` / `/credentials status` | 查看凭证后端状态与条目数，不显示 Key 或 Token |
 | `/agents` | 查看所有多 Agent 运行 |
 | `/agents <运行ID>` | 查看一个运行的详细状态 |
 | `/agents cancel <运行ID> <任务ID>` | 单独取消一个 Agent |

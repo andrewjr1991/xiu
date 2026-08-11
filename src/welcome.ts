@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { AgentConfig } from "./config.js";
+import { readEnvironmentCredential } from "./credential-store.js";
 import { localize, type UiLanguage } from "./i18n.js";
 import { terminalCharacterWidth } from "./interactive-ui.js";
 
@@ -14,12 +15,12 @@ const LOGO = [
 function authState(config: AgentConfig): string {
   if (config.apiKey) return "configured";
   if (!config.apiKeyEnv && ["ollama", "lmstudio", "vllm", "openai-compatible"].includes(config.provider)) return "configured";
-  if (config.apiKeyEnv) return process.env[config.apiKeyEnv] ? "configured" : "missing API key";
+  if (config.apiKeyEnv) return readEnvironmentCredential(config.apiKeyEnv) ? "configured" : "missing API key";
   const configured = config.provider === "agnes"
-    ? Boolean(process.env.AGNES_API_KEY)
+    ? Boolean(readEnvironmentCredential("AGNES_API_KEY"))
     : config.provider === "anthropic"
-      ? Boolean(process.env.ANTHROPIC_API_KEY)
-      : Boolean(process.env.OPENAI_API_KEY);
+      ? Boolean(readEnvironmentCredential("ANTHROPIC_API_KEY"))
+      : Boolean(readEnvironmentCredential("OPENAI_API_KEY"));
   return configured ? "configured" : "missing API key";
 }
 

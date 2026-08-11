@@ -103,9 +103,21 @@ async function executeCapabilityProbe(config: AgentConfig, options: CapabilityPr
 }
 
 export async function probeModelCapabilities(config: AgentConfig, options: CapabilityProbeOptions = {}): Promise<ModelCapabilityProbe> {
-  const credential = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? "";
-  const key = createHash("sha256").update(JSON.stringify({ providerId: config.providerId, provider: config.provider, model: config.model, baseURL: config.baseURL, proxy: config.proxy, apiKeyEnv: config.apiKeyEnv, credential, includeVision: options.includeVision !== false })).digest("hex");
+  const key = capabilityProbeFlightKey(config, options.includeVision !== false);
   return capabilityProbeFlights.run(key, () => executeCapabilityProbe(config, options), false);
+}
+
+export function capabilityProbeFlightKey(config: AgentConfig, includeVision = true): string {
+  return createHash("sha256").update(JSON.stringify({
+    providerId: config.providerId,
+    provider: config.provider,
+    model: config.model,
+    baseURL: config.baseURL,
+    proxy: config.proxy,
+    apiKeyEnv: config.apiKeyEnv,
+    credentialRevision: config.credentialRevision ?? 0,
+    includeVision,
+  })).digest("hex");
 }
 
 export function probeIsFresh(probe: ModelCapabilityProbe | undefined, now = Date.now(), maximumAgeMs = 7 * 24 * 60 * 60 * 1000): boolean {

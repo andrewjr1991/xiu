@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { localize, type UiLanguage } from "./i18n.js";
 import { McpAuthStore } from "./mcp-auth-store.js";
+import type { CredentialBackendStatus } from "./credential-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
@@ -914,6 +915,8 @@ export class McpManager {
 
   tools(): AgentTool[] { return [...this.activeTools]; }
   status(): McpServerStatus[] { return this.serverStatuses.map((item) => ({ ...item })); }
+
+  async credentialStatus(): Promise<CredentialBackendStatus> { return await this.authStore.status(); }
 
   connectedServerNames(): string[] {
     return [...this.connections.keys()].sort((left, right) => left.localeCompare(right));

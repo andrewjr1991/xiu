@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ProviderName } from "./config.js";
 import type { CapabilityProbeState, ModelCapabilityProbe } from "./capability-probe.js";
+import { LegacyCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "./provider-routing.js";
 
 export interface ProviderFeatures {
@@ -37,6 +38,7 @@ interface ProviderFile {
   routing?: ProviderRoutingPolicy;
   profiles: ProviderProfile[];
   credentials?: Record<string, string>;
+  credentialRevisions?: Record<string, number>;
   probes?: ModelCapabilityProbe[];
 }
 
@@ -151,9 +153,14 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
 }
 
 export class ProviderRegistry {
-  private file: ProviderFile = { version: 2, profiles: [], credentials: {} };
+  private file: ProviderFile = { version: 2, profiles: [] };
+  private credentials: LegacyCredentialStore<string, "provider-api-key">;
+  private saveOperation: Promise<void> = Promise.resolve();
+  private saveSequence = 0;
 
-  constructor(private readonly filename = path.join(os.homedir(), ".xiu", "providers.json")) {}
+  constructor(private readonly filename = path.join(os.homedir(), ".xiu", "providers.json")) {
+    this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: filename });
+  }
 
   async load(): Promise<void> {
     try {
@@ -212,12 +219,17 @@ export class ProviderRegistry {
           }
         }
       }
-      this.file = { version: 2, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentials, probes: [...uniqueProbes.values()] };
+      this.credentials = new LegacyCredentialStore({
+        kind: "provider-api-key", location: this.filename, values: credentials,
+        revisions: parsed.credentialRevisions && typeof parsed.credentialRevisions === "object" ? parsed.credentialRevisions : undefined,
+      });
+      this.file = { version: 2, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, probes: [...uniqueProbes.values()] };
       if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
       if (sourceVersion === 1) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.file = { version: 2, profiles: [], credentials: {} };
+        this.file = { version: 2, profiles: [] };
+        this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
         return;
       }
       throw new Error(`Could not read Xiu provider settings: ${error instanceof Error ? error.message : String(error)}`);
@@ -227,7 +239,7 @@ export class ProviderRegistry {
   list(): ProviderProfile[] {
     return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles].map((profile) => ({
       ...profile,
-      apiKey: this.file.credentials?.[profile.id],
+      apiKey: this.credentials.get(this.credentials.ref(profile.id)),
       features: { ...profile.features },
     }));
   }
@@ -239,6 +251,10 @@ export class ProviderRegistry {
   activeId(): string | undefined { return this.file.active; }
 
   activeModel(id: string): string | undefined { return this.file.activeModels?.[id]; }
+
+  credentialRevision(id: string): number { return this.credentials.ref(id).revision; }
+
+  credentialStatus(): CredentialBackendStatus { return this.credentials.status(); }
 
   failoverChain(id: string): string[] { return [...(this.file.failoverChains?.[id] ?? [])]; }
 
@@ -301,8 +317,8 @@ export class ProviderRegistry {
     const previous = existing >= 0 ? this.file.profiles[existing] : undefined;
     if (existing >= 0) this.file.profiles[existing] = storedProfile as ProviderProfile;
     else this.file.profiles.push(storedProfile as ProviderProfile);
-    if (apiKey) (this.file.credentials ??= {})[normalized.id] = apiKey;
-    if (!previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
+    if (apiKey) this.credentials.set(this.credentials.ref(normalized.id), apiKey);
+    if (apiKey || !previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
       this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
     }
     await this.save();
@@ -311,9 +327,8 @@ export class ProviderRegistry {
   async setApiKey(id: string, apiKey?: string): Promise<void> {
     if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
     if (apiKey !== undefined && (!apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey))) throw new Error("apiKey must be 1-4096 characters without line breaks");
-    this.file.credentials ??= {};
-    if (apiKey) this.file.credentials[id] = apiKey;
-    else delete this.file.credentials[id];
+    if (apiKey) this.credentials.set(this.credentials.ref(id), apiKey);
+    else this.credentials.delete(this.credentials.ref(id));
     this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     await this.save();
   }
@@ -323,7 +338,7 @@ export class ProviderRegistry {
     const next = this.file.profiles.filter((profile) => profile.id !== id);
     if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
     this.file.profiles = next;
-    if (this.file.credentials) delete this.file.credentials[id];
+    this.credentials.delete(this.credentials.ref(id));
     if (this.file.activeModels) delete this.file.activeModels[id];
     if (this.file.failoverChains) {
       delete this.file.failoverChains[id];
@@ -340,19 +355,28 @@ export class ProviderRegistry {
   }
 
   private async save(): Promise<void> {
-    await fs.mkdir(path.dirname(this.filename), { recursive: true });
-    const temporary = `${this.filename}.${process.pid}.tmp`;
-    const safeFile: ProviderFile = {
-      version: 2,
-      active: this.file.active,
-      activeModels: { ...this.file.activeModels },
-      failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
-      routing: { enabled: this.file.routing?.enabled === true, phases: { ...(this.file.routing?.phases ?? {}) } },
-      profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),
-      credentials: { ...this.file.credentials },
-      probes: [...(this.file.probes ?? [])],
-    };
-    await fs.writeFile(temporary, `${JSON.stringify(safeFile, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    await fs.rename(temporary, this.filename);
+    const operation = this.saveOperation.then(async () => {
+      await fs.mkdir(path.dirname(this.filename), { recursive: true });
+      const temporary = `${this.filename}.${process.pid}.${++this.saveSequence}.tmp`;
+      const safeFile: ProviderFile = {
+        version: 2,
+        active: this.file.active,
+        activeModels: { ...this.file.activeModels },
+        failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
+        routing: { enabled: this.file.routing?.enabled === true, phases: { ...(this.file.routing?.phases ?? {}) } },
+        profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),
+        credentials: this.credentials.exportLegacyValues(),
+        credentialRevisions: this.credentials.exportRevisions(),
+        probes: [...(this.file.probes ?? [])],
+      };
+      await fs.writeFile(temporary, `${JSON.stringify(safeFile, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      try { await fs.rename(temporary, this.filename); }
+      catch (error) {
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    });
+    this.saveOperation = operation.then(() => undefined, () => undefined);
+    await operation;
   }
 }

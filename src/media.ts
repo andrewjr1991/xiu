@@ -2,6 +2,7 @@ import { fetch, ProxyAgent } from "undici";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
+import { readEnvironmentCredential } from "./credential-store.js";
 
 export interface ImageGenerationRequest {
   prompt: string;
@@ -91,7 +92,7 @@ export class AgnesMediaBackend implements MediaBackend {
   private readonly dispatcher?: ProxyAgent;
 
   constructor(private readonly config: AgentConfig) {
-    this.apiKey = (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.AGNES_API_KEY ?? "";
+    this.apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("AGNES_API_KEY") ?? "";
     if (!this.apiKey) throw new Error("AGNES_API_KEY is required for Xiu media tools");
     this.baseURL = trimSlash(config.mediaBaseURL ?? process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1");
     this.dispatcher = config.proxy ? new ProxyAgent(config.proxy) : undefined;
@@ -208,7 +209,7 @@ export class OpenAIVisionBackend implements MediaBackend {
 
   constructor(private readonly config: AgentConfig) {
     this.client = new OpenAI({
-      apiKey: ((config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.OPENAI_API_KEY) || "xiu-local",
+      apiKey: (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local",
       baseURL: config.baseURL,
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
@@ -236,7 +237,7 @@ export class AnthropicVisionBackend implements MediaBackend {
 
   constructor(private readonly config: AgentConfig) {
     this.client = new Anthropic({
-      apiKey: (config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined) ?? config.apiKey ?? process.env.ANTHROPIC_API_KEY,
+      apiKey: readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"),
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
   }

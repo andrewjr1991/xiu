@@ -1,5 +1,6 @@
 import type { AgentConfig } from "./config.js";
 import type { AgentTool, ModelProvider } from "./types.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 export interface ProviderFailoverRequest {
   originProviderId: string;
@@ -41,9 +42,5 @@ export function isTransientProviderError(error: unknown): boolean {
 
 export function safeProviderErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return raw
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
-    .replace(/((?:api[-_]?key|token|password|secret|authorization|cookie)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]")
-    .slice(0, 500);
+  return redactSecrets(raw).slice(0, 500);
 }

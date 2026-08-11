@@ -14,6 +14,7 @@ import { CheckpointManager } from "./checkpoint.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
+import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
@@ -96,6 +97,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/agents integrate", "审查并集成 Worktree Agent", "Review and integrate a Worktree agent"),
     item("/details", "浏览完整工具与 Agent 活动", "Browse complete tool and Agent activity details"),
     item("/diagnostics", "查看当前或最近任务的诊断报告", "Show diagnostics for the current or most recent task"),
+    item("/credentials", "查看凭证后端状态（不显示凭证）", "Show credential backend status without secrets"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/queue", "查看或安排下一项任务", "Show or schedule the next task"),
     item("/clear-queue", "清空运行期排队任务", "Clear queued follow-ups while a task is running"),
@@ -238,6 +240,7 @@ async function main(): Promise<void> {
       providerLabel: effective.name,
       apiKeyEnv: effective.apiKeyEnv,
       apiKey: effective.apiKey,
+      credentialRevision: providerRegistry.credentialRevision(effective.id),
       providerFeatures: effective.features,
       baseURL: options.baseURL ?? effective.baseURL,
       proxy: options.proxy ?? effective.proxy,
@@ -266,6 +269,32 @@ async function main(): Promise<void> {
   const status = new StatusLine();
   const activities = new ActivityLog();
   const mcpManager = new McpManager(config.cwd);
+  const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
+    const storage = backend.backend === "environment"
+      ? localize(language, "进程环境变量", "process environment")
+      : backend.secure
+      ? localize(language, "系统安全存储", "system secure storage")
+      : localize(language, "本机明文兼容存储", "local plaintext compatibility storage");
+    const state = backend.available ? localize(language, "可用", "available") : localize(language, "不可用", "unavailable");
+    return `${label}: ${backend.backend} · ${state} · ${backend.entries} ${localize(language, "项", "item(s)")} · ${storage}${backend.reason ? ` · ${backend.reason}` : ""}`;
+  };
+  const printCredentialStatus = async (): Promise<void> => {
+    const environmentCredentials = new EnvironmentCredentialStore({
+      kind: "provider-api-key",
+      ids: [...new Set(providerRegistry.list().map((profile) => profile.apiKeyEnv).filter((id): id is string => Boolean(id)))],
+    });
+    const providerCredentials = providerRegistry.credentialStatus();
+    const mcpCredentials = await mcpManager.credentialStatus();
+    console.log([
+      chalk.cyan(localize(language, "凭证状态（不会显示 Key 或 Token）", "Credential status (keys and tokens are never shown)")),
+      formatCredentialBackend("Provider env", environmentCredentials.status()),
+      formatCredentialBackend("Provider", providerCredentials),
+      formatCredentialBackend("MCP OAuth", mcpCredentials),
+      chalk.dim(localize(language,
+        "系统安全后端尚未启用；v0.12.3 阶段 A 保持现有文件兼容，不会自动迁移或删除凭证。",
+        "The system-secure backend is not enabled yet; v0.12.3 phase A keeps legacy files compatible and never migrates or deletes credentials automatically.")),
+    ].join("\n") + "\n");
+  };
   try {
     if (options.listSessions) {
       const sessions = await listSessions(config.cwd);
@@ -1124,6 +1153,11 @@ async function main(): Promise<void> {
           }
           if (followUp === "/diagnostics") {
             console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
+            continue;
+          }
+          if (followUp === "/credentials" || followUp === "/credentials status") {
+            try { await printCredentialStatus(); }
+            catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
             continue;
           }
           if (followUp === "/paste") {
@@ -2088,6 +2122,11 @@ async function main(): Promise<void> {
       }
       if (task === "/diagnostics") {
         console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
+        continue;
+      }
+      if (task === "/credentials" || task === "/credentials status") {
+        try { await printCredentialStatus(); }
+        catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {

@@ -16,6 +16,7 @@ import {
 import { McpAuthStore, type McpAuthRecord } from "./mcp-auth-store.js";
 import type { McpOAuthConfig } from "./mcp.js";
 import { createSafeOAuthFetch, validateOAuthUrl } from "./oauth-url-policy.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 const DEFAULT_CALLBACK_PORT = 53_121;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
@@ -57,10 +58,7 @@ function scopeList(value?: string): string[] {
 
 function sanitizedError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
-  return new Error(raw
-    .replace(/(bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
-    .replace(/([?&](?:code|token|access_token|refresh_token|client_secret)=)[^&#\s]+/gi, "$1[REDACTED]")
-    .replace(/("?(?:access_token|refresh_token|id_token|client_secret)"?\s*[:=]\s*"?)[^"\s,}]+/gi, "$1[REDACTED]"));
+  return new Error(redactSecrets(raw));
 }
 
 function boundedOAuthFetch(signal?: AbortSignal, timeoutMs = OAUTH_REQUEST_TIMEOUT_MS): typeof fetch {

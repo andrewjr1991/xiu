@@ -20,6 +20,8 @@ import { executeTool, formatProcessInvocation, looksLikeVerification } from "./t
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
+import { sanitizeSecrets } from "./secret-redaction.js";
+import { readEnvironmentCredential } from "./credential-store.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
 
@@ -949,6 +951,11 @@ export class Agent {
   }
 
   private async log(file: string, value: unknown): Promise<void> {
-    await fs.appendFile(file, `${JSON.stringify({ timestamp: new Date().toISOString(), ...value as object })}\n`, "utf8");
+    const activeSecrets = [
+      this.config.apiKey,
+      readEnvironmentCredential(this.config.apiKeyEnv),
+    ].filter((item): item is string => Boolean(item));
+    const event = sanitizeSecrets({ timestamp: new Date().toISOString(), ...value as object }, activeSecrets);
+    await fs.appendFile(file, `${JSON.stringify(event)}\n`, "utf8");
   }
 }

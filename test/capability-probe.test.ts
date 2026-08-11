@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyCapabilityProbe, CAPABILITY_PROBE_PROTOCOL_VERSION, probeIsFresh, probeModelCapabilities } from "../src/capability-probe.js";
+import { applyCapabilityProbe, capabilityProbeFlightKey, CAPABILITY_PROBE_PROTOCOL_VERSION, probeIsFresh, probeModelCapabilities } from "../src/capability-probe.js";
 import { resolveConfig } from "../src/config.js";
 import type { MediaBackend } from "../src/media.js";
 import type { ModelProvider } from "../src/types.js";
@@ -8,6 +8,14 @@ import type { ModelProvider } from "../src/types.js";
 const config = resolveConfig({
   provider: "openai-compatible", providerId: "private", model: "coder", baseURL: "https://example.test/v1", apiKey: "test",
   providerFeatures: { text: true, tools: true, vision: true, image: false, video: false },
+});
+
+test("capability probe single-flight key uses credential revision without deriving from the secret", () => {
+  const first = { ...config, apiKey: "first-secret", credentialRevision: 7 };
+  const rotatedWithoutRevision = { ...config, apiKey: "second-secret", credentialRevision: 7 };
+  const rotated = { ...config, apiKey: "second-secret", credentialRevision: 8 };
+  assert.equal(capabilityProbeFlightKey(first), capabilityProbeFlightKey(rotatedWithoutRevision));
+  assert.notEqual(capabilityProbeFlightKey(first), capabilityProbeFlightKey(rotated));
 });
 
 function provider(probe: () => Promise<boolean>): ModelProvider {

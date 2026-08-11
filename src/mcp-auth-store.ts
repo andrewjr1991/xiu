@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { StoredOAuthClientInformation, StoredOAuthTokens } from "@modelcontextprotocol/client";
+import { LegacyCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 
 const STORE_VERSION = 1;
 const MAX_ENTRIES = 256;
@@ -25,6 +26,7 @@ export interface McpAuthRecord extends McpAuthIdentity {
 interface McpAuthFile {
   version: 1;
   entries: Record<string, McpAuthRecord>;
+  revisions?: Record<string, number>;
 }
 
 function boundedString(value: unknown, label: string, maximum = MAX_STRING): string {
@@ -127,11 +129,11 @@ export class McpAuthStore {
     return await result;
   }
 
-  private async read(): Promise<McpAuthFile> {
+  private async read(): Promise<LegacyCredentialStore<McpAuthRecord, "mcp-oauth-record">> {
     let content: string;
     try { content = await fs.readFile(this.file, "utf8"); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: STORE_VERSION, entries: {} };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new LegacyCredentialStore({ kind: "mcp-oauth-record", location: this.file });
       throw error;
     }
     let parsed: unknown;
@@ -150,13 +152,17 @@ export class McpAuthStore {
       if (keyOf(record) !== key) throw new Error("MCP auth store entry identity does not match its key");
       entries[key] = record;
     }
-    return { version: STORE_VERSION, entries };
+    const revisions = source.revisions && typeof source.revisions === "object" && !Array.isArray(source.revisions)
+      ? source.revisions as Record<string, number>
+      : undefined;
+    return new LegacyCredentialStore({ kind: "mcp-oauth-record", location: this.file, values: entries, revisions });
   }
 
-  private async write(store: McpAuthFile): Promise<void> {
+  private async write(store: LegacyCredentialStore<McpAuthRecord, "mcp-oauth-record">): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(store, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    const document: McpAuthFile = { version: STORE_VERSION, entries: store.exportLegacyValues(), revisions: store.exportRevisions() };
+    await fs.writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     try { await fs.rename(temporary, this.file); }
     catch (error) {
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -167,8 +173,8 @@ export class McpAuthStore {
 
   async get(identity: McpAuthIdentity): Promise<McpAuthRecord | undefined> {
     return await this.exclusive(async () => {
-      const record = (await this.read()).entries[keyOf(identity)];
-      return record ? structuredClone(record) : undefined;
+      const store = await this.read();
+      return store.get(store.ref(keyOf(identity)));
     });
   }
 
@@ -176,7 +182,7 @@ export class McpAuthStore {
     const normalizedResource = safeUrl(resource, "resource");
     const normalizedIssuer = issuer === undefined ? undefined : safeUrl(issuer, "issuer");
     const normalizedClientId = clientId === undefined ? undefined : boundedString(clientId, "client ID", 2_048);
-    return await this.exclusive(async () => Object.values((await this.read()).entries)
+    return await this.exclusive(async () => Object.values((await this.read()).exportLegacyValues())
       .filter((record) => record.resource === normalizedResource
         && (normalizedIssuer === undefined || record.issuer === normalizedIssuer)
         && (normalizedClientId === undefined || record.clientId === normalizedClientId))
@@ -189,8 +195,9 @@ export class McpAuthStore {
       const store = await this.read();
       const sanitized = sanitizeRecord(record);
       const key = keyOf(sanitized);
-      if (!store.entries[key] && Object.keys(store.entries).length >= MAX_ENTRIES) throw new Error("MCP auth store contains too many entries");
-      store.entries[key] = sanitized;
+      const ref = store.ref(key);
+      if (!store.has(ref) && store.list().length >= MAX_ENTRIES) throw new Error("MCP auth store contains too many entries");
+      store.set(ref, sanitized);
       await this.write(store);
     });
   }
@@ -199,8 +206,8 @@ export class McpAuthStore {
     return await this.exclusive(async () => {
       const store = await this.read();
       const key = keyOf(identity);
-      if (!store.entries[key]) return false;
-      delete store.entries[key];
+      const ref = store.ref(key);
+      if (!store.delete(ref)) return false;
       await this.write(store);
       return true;
     });
@@ -210,17 +217,18 @@ export class McpAuthStore {
     return await this.exclusive(async () => {
       const store = await this.read();
       const key = keyOf(identity);
-      const existing = store.entries[key];
+      const ref = store.ref(key);
+      const existing = store.get(ref);
       if (!existing) return false;
-      if (scope === "all") delete store.entries[key];
+      if (scope === "all") store.delete(ref);
       else {
         const next = { ...existing, updatedAt: new Date().toISOString() };
         if (scope === "tokens") {
           delete next.tokens;
           delete next.expiresAt;
         } else delete next.clientInformation;
-        if (!next.tokens && !next.clientInformation) delete store.entries[key];
-        else store.entries[key] = next;
+        if (!next.tokens && !next.clientInformation) store.delete(ref);
+        else store.set(ref, next);
       }
       await this.write(store);
       return true;
@@ -232,20 +240,25 @@ export class McpAuthStore {
     return await this.exclusive(async () => {
       const store = await this.read();
       let changed = 0;
-      for (const [key, record] of Object.entries(store.entries)) {
+      for (const [key, record] of Object.entries(store.exportLegacyValues())) {
         if (record.resource !== normalizedResource) continue;
         changed += 1;
-        if (forgetClients) delete store.entries[key];
+        const ref = store.ref(key);
+        if (forgetClients) store.delete(ref);
         else {
           const next = { ...record, updatedAt: new Date().toISOString() };
           delete next.tokens;
           delete next.expiresAt;
-          if (!next.clientInformation) delete store.entries[key];
-          else store.entries[key] = next;
+          if (!next.clientInformation) store.delete(ref);
+          else store.set(ref, next);
         }
       }
       if (changed) await this.write(store);
       return changed;
     });
+  }
+
+  async status(): Promise<CredentialBackendStatus> {
+    return await this.exclusive(async () => (await this.read()).status());
   }
 }

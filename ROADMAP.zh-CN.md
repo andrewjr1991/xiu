@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.12.1` |
+| 当前已发布版本 | `0.12.2` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -459,7 +459,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 官方 `@modelcontextprotocol/server-everything@2026.7.4` 已完成人工验收：stdio 重载后连接 13 个工具，列出 7 个静态 Resource、2 个 Resource Template 和 4 个 Prompt；动态文本读取、Blob 元数据省略、无参 Prompt 与 JSON 参数 Prompt 均符合不可信内容边界并返回正确结果。
 - `@xiu-ai/cli@0.12.1` 已由维护者发布并完成真实 Everything Server Resource/Prompt 人工验收。
 
-### 本地 v0.12.2 候选版本（尚未发布）
+### 已发布的 v0.12.2
 
 - 已完成 `V0.12.2_DESIGN.zh-CN.md`，权限声明只用于展示、阻止少报和检测扩权，不能成为绕过核心安全策略的授权通道。
 - MCP 会根据 transport、认证、risk 与工作区变化推导最低权限；显式清单少报会拒绝加载，新配置或权限扩大保持断开，必须通过 `/mcp permissions approve [name]` 批准精确指纹。
@@ -467,7 +467,22 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 权限摘要以版本化、原子写入的 `~/.xiu/extension-permissions.json` 保存；授权键与清单均使用 SHA-256 稳定摘要，不保存明文来源端点。
 - Windows stdio MCP stderr 支持 UTF-8、UTF-16LE 与常见 GB18030/GBK 的有界解码，修复首次 `npx` 下载失败时的中文乱码。
 - 发布级自动验证已通过：303 项测试全部通过，并完成 TypeScript 类型检查、正式构建、npm 打包预览和使用 npm 官方 Registry 的隔离目录全局安装；安装包 `xiu --version` 返回 `0.12.2`。
+- `@xiu-ai/cli@0.12.2` 已发布到 npm 官方 Registry，版本与 `latest` 已回读确认为 `0.12.2`。
 - 下一安全切片计划进入系统凭证库、日志脱敏与凭证生命周期设计；不得在没有迁移、回退和企业策略兼容方案时直接替换现有本地配置。
+
+### 本地 v0.12.3 候选版本（尚未发布）
+
+- 已完成当前凭证链路审计：Provider API Key 位于 `~/.xiu/providers.json`，MCP OAuth Token 与动态客户端 Secret 位于 `~/.xiu/mcp-auth.json`；两者已有原子写入、用户级权限和基础脱敏，但仍属于本机明文兼容存储。
+- 设计统一 `CredentialStore`、稳定凭证引用和 environment / legacy-file / system 三类后端；配置只保存不含秘密的引用与 revision。
+- 迁移采用“预检、复制、回读验证、原子切换引用、再次确认后清理旧副本”，任何阶段都不得静默删除、静默降级或把秘密复制回明文。
+- 阶段 A 只建立统一接口、Legacy File 兼容层、共享脱敏出口和只读状态诊断，不迁移、不删除、不加密真实用户凭证，也不改变现有文件路径。
+- 已实现类型安全的 `CredentialStore`、Environment 与 Legacy File 后端、稳定引用、凭证 revision 和可解释错误；Provider Registry 与 MCP OAuth Store 已接入兼容层。
+- 能力探测并发键改用非秘密 revision；Provider Key 通过保存与编辑路径轮换时会使旧探测缓存失效，不再让秘密或秘密哈希参与身份与缓存键。
+- 已建立共享 `redactSecrets` / `sanitizeSecrets` 出口并覆盖诊断、Provider 故障转移、MCP OAuth 错误和 Session JSONL 持久化；Canary Secret 回归测试验证不会落入这些输出。
+- `/credentials` 与 `/credentials status` 只读展示 environment、Provider 和 MCP OAuth 后端状态及条目数，不显示 Key、Token、Client Secret 或其哈希。
+- 发布级自动验证已通过：312 项测试全部通过，并完成 TypeScript 类型检查、正式构建、npm 打包预览和隔离目录全局安装；安装包 `xiu --version` 返回 `0.12.3`。
+- Windows 安全后端推迟到阶段 B 做真实技术验证；不预先绑定可能被企业策略拦截的 helper、PowerShell/.NET 调用或未经验证的原生依赖。
+- 完整目标、威胁模型、迁移事务、失败恢复和验收标准记录在 `V0.12.3_DESIGN.zh-CN.md`。
 
 ### 当前自动化基线
 
@@ -811,10 +826,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. 当前公开版本为维护者已发布的 `0.12.1`；本地候选版本为 `0.12.2`，不得覆盖已发布版本。
-2. 完成 v0.12.2 权限清单的发布级自动验证和人工验收后，提交、推送并发布该候选版本。
-3. v0.12.2 发布后进入系统凭证库与凭证生命周期设计，优先解决安全存储、迁移、回退、脱敏和企业受限环境兼容，不能破坏现有 Provider/MCP 配置。
-4. 后续再推进 MCP/Skill 沙箱、审计日志和项目/用户/组织级策略；每个切片都必须保留工作区信任、Plan 模式、核心审批、检查点和危险操作确认。
+1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.2`，不得覆盖已发布版本。
+2. v0.12.3 阶段 A 已完成实现、发布级自动验证和本地候选准备；代码可以提交并推送，但暂不发布 npm，也不改变公开 `latest`。
+3. 继续阶段 B，真实验证 Windows Credential Manager、DPAPI 封装和可信原生模块的安装、用户绑定、Node 20+、x64/ARM64 与企业策略表现；验证前不设置默认安全后端。
+4. 继续完成 MCP/Skill 沙箱、审计日志和项目/用户/组织级策略。待 v0.12 大版本的计划切片、兼容性测试和真实环境验收整体完成后，再确定最终发布版本并一次性发布；每个切片都必须保留工作区信任、Plan 模式、核心审批、检查点和危险操作确认。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 
