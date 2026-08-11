@@ -78,7 +78,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
+    item("/mcp auth", "查看 OAuth 状态（不显示 Token）", "Show OAuth status without tokens"),
     item("/mcp login", "登录需要 OAuth 的 MCP 服务", "Log in to an OAuth-protected MCP server"),
+    item("/mcp logout", "撤销并清除 MCP OAuth 登录", "Revoke and clear an MCP OAuth login"),
     item("/mcp add", "添加用户级远程 MCP 服务", "Add a user-level remote MCP server"),
     item("/mcp remove", "删除用户级 MCP 服务", "Remove a user-level MCP server"),
     item("/mcp test", "测试 MCP 服务连接", "Test an MCP server connection"),
@@ -1688,6 +1690,22 @@ async function main(): Promise<void> {
         console.log(`${mcpManager.summary(language)}\n`);
         continue;
       }
+      if (task === "/mcp auth" || task.startsWith("/mcp auth ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const entries = await mcpManager.authStatus(requested, projectMcpTrusted);
+        if (!entries.length) console.log(chalk.dim(localize(language, "没有匹配的 OAuth MCP。\n", "No matching OAuth MCP server.\n")));
+        else console.log(`${entries.map((entry) => {
+          const expiry = entry.expiresAt ? new Date(entry.expiresAt).toLocaleString() : localize(language, "未知", "unknown");
+          return [
+            chalk.cyan(entry.name),
+            localize(language, `状态：${entry.authenticated ? entry.expired ? "已过期" : "已登录" : "未登录"}`, `Status: ${entry.authenticated ? entry.expired ? "expired" : "authenticated" : "not authenticated"}`),
+            localize(language, `Issuer：${entry.issuer ?? "未知"}`, `Issuer: ${entry.issuer ?? "unknown"}`),
+            localize(language, `Scope：${entry.scopes.join(" ") || "（默认）"}`, `Scopes: ${entry.scopes.join(" ") || "(default)"}`),
+            localize(language, `到期：${expiry}`, `Expires: ${expiry}`),
+          ].join("\n");
+        }).join("\n\n")}\n`);
+        continue;
+      }
       if (task === "/mcp login" || task.startsWith("/mcp login ")) {
         const requested = task.trim().split(/\s+/)[2];
         const names = await mcpManager.oauthServerNames(projectMcpTrusted);
@@ -1696,9 +1714,13 @@ async function main(): Promise<void> {
           console.log(chalk.dim(localize(language, "没有可登录的 OAuth MCP，或操作已取消。\n", "No OAuth MCP server is available, or login was cancelled.\n")));
           continue;
         }
+        const loginController = new AbortController();
+        const cancelLogin = (): void => loginController.abort();
+        process.once("SIGINT", cancelLogin);
         try {
           console.log(chalk.cyan(localize(language, `正在为 MCP ${name} 启动安全登录，回调仅监听 127.0.0.1。`, `Starting secure login for MCP ${name}; the callback listens only on 127.0.0.1.`)));
           await mcpManager.login(name, {
+            signal: loginController.signal,
             confirmAuthorizationServer: async (authorizationServer, resource, details) => {
               const crossOrigin = authorizationServer.origin !== resource.origin;
               console.log(localize(language,
@@ -1727,6 +1749,29 @@ async function main(): Promise<void> {
           console.log(chalk.green(localize(language, `MCP ${name} 登录成功，已连接 ${server.tools} 个工具。\n`, `MCP ${name} login succeeded with ${server.tools} tools.\n`)));
         } catch (error) {
           console.error(chalk.red(`${localize(language, "MCP 登录失败", "MCP login failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        } finally { process.removeListener("SIGINT", cancelLogin); }
+        continue;
+      }
+      if (task === "/mcp logout" || task.startsWith("/mcp logout ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const names = await mcpManager.oauthServerNames(projectMcpTrusted);
+        const name = requested ?? await selectTerminalOption(localize(language, "选择要退出登录的 MCP 服务", "Choose an MCP server to log out"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有可退出的 OAuth MCP，或操作已取消。\n", "No OAuth MCP server is available, or logout was cancelled.\n"))); continue; }
+        const confirmed = await selectTerminalOption(localize(language, `撤销并清除 MCP ${name} 的本地 Token？`, `Revoke and clear local tokens for MCP ${name}?`), [
+          { label: localize(language, "撤销并退出（保留 Client 注册）", "Revoke and log out (keep client registration)"), value: "tokens" as const },
+          { label: localize(language, "同时忘记 Client 注册", "Also forget client registration"), value: "all" as const },
+          { label: localize(language, "取消", "Cancel"), value: "cancel" as const },
+        ], language);
+        if (!confirmed || confirmed === "cancel") { console.log(chalk.dim(localize(language, "已取消退出登录。\n", "Logout cancelled.\n"))); continue; }
+        try {
+          const result = await mcpManager.logout(name, confirmed === "all", projectMcpTrusted);
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+          console.log(chalk.green(localize(language, `MCP ${name} 已退出登录，本地授权已清除。`, `MCP ${name} logged out; local authorization was cleared.`)));
+          if (result.warning) console.log(chalk.yellow(localize(language, `远端撤销未确认：${result.warning}`, `Remote revocation was not confirmed: ${result.warning}`)));
+          else if (!result.revoked) console.log(chalk.dim(localize(language, "授权服务器未提供撤销端点；本地 Token 已清除。", "The authorization server did not expose a revocation endpoint; local tokens were cleared.")));
+          console.log();
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "MCP 退出登录失败", "MCP logout failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
         }
         continue;
       }

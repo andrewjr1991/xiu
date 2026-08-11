@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.11.3` |
+| 当前已发布版本 | `0.11.4` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -423,7 +423,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - v0.11.4 暂不实现交互式 OAuth、Resources、Prompts 和 Sampling，避免用不完整实现冒充协议支持。
 - 设计与验收记录在 `V0.11.4_DESIGN.zh-CN.md`。
 
-### v0.12.0 阶段 A-B 已完成（尚未发布）
+### v0.12.0 阶段 A-C 已完成（尚未发布）
 
 - v0.12.0 收敛为 v0.12 安全能力的第一个交付切片：远程 MCP OAuth 与新旧协议安全兼容，不同时塞入全部团队治理功能。
 - 目标基线更新为 MCP `2026-07-28`：支持 RFC 9728/RFC 8414/OIDC 发现、PKCE S256、Issuer 与 Resource 绑定、预注册/CIMD/DCR 兼容、Token 刷新、Scope 升权和注销。
@@ -439,7 +439,11 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 阶段 B 已完成安全登录闭环：逐跳 URL/重定向/SSRF 防护、RFC 9728 与 RFC 8414/OIDC 发现、Issuer/resource 绑定、预注册/CIMD/DCR、PKCE S256、一次性 state、本地回调、浏览器授权确认和 `/mcp login`。
 - `/mcp add` 已支持选择 OAuth 并配置预注册 Client、CIMD 或 DCR 兼容路径；授权 Token 独立持久化后可重建连接，并通过本地模拟 OAuth MCP 完成真实工具发现和调用。
 - 阶段 B 已通过 Cloudflare 官方远程 MCP 的真实人工验收：DCR、PKCE、浏览器回调、Token 复用、重连、3 个工具发现和只读查询均成功；远程 `write` 风险与本地 `changesWorkspace` 现已严格分离，避免无文件变化时误触发验证门禁。
-- 阶段 B 自动化基线为 290 项测试全部通过；下一步进入阶段 C，完成刷新 single-flight、Scope 升权、logout/revoke、取消、超时、脱敏与诊断失败矩阵。
+- 阶段 C 已完成 Token 绝对到期时间与提前刷新、按 resource/Issuer/Client ID 隔离的 single-flight、Refresh Token 轮换原子替换、无 Refresh Token 与明确失效凭证清理。
+- `403 insufficient_scope` 现在会计算新增 Scope、经过现有审批边界并启动显式浏览器授权；只有授权成功后才把服务端明确拒绝的请求重试一次，超时、断网和不确定响应不会重放。
+- 新增 `/mcp auth [name]` 与 `/mcp logout [name]`：认证状态不显示 Token；注销优先按 Refresh Token、Access Token 顺序调用撤销端点，无论远端是否支持都按用户确认清理本地 Token，并可选择保留或忘记 Client 注册。
+- OAuth 登录和 Scope 升权支持 Ctrl+C/AbortSignal 与五分钟超时；回调监听器在启动竞态、取消、超时和完成路径都能关闭。OAuth 状态、连接错误与工具错误统一脱敏 Bearer、Token、授权码和 Client Secret。
+- 阶段 C 自动化基线为 295 项测试全部通过，同时通过 TypeScript 类型检查；下一步进入阶段 D，完成构建、打包、干净安装和真实 OAuth MCP 的刷新/注销人工验收后再发布。
 
 ### 当前自动化基线
 
@@ -783,10 +787,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. 确认 npm 上的真实版本；若 v0.11.4 尚未发布，先按既有人工验收结果完成发布收尾并更新版本记录。
-2. 阶段 A-B 已完成；按 `V0.12_DESIGN.zh-CN.md` 进入阶段 C，实现过期判断与 single-flight 刷新、Refresh Token 旋转安全保存和失效凭证清理。
-3. 随后完成 Scope 升权确认、`/mcp logout`/revoke、Ctrl+C 取消、超时、脱敏与诊断失败矩阵。
-4. v0.12.0 真实 OAuth MCP 验收并发布后，再进入 Resources/Prompts 只读支持与 MCP/Skill 权限清单。
+1. npm 官方 Registry 已确认当前公开版本为 `0.11.4`；本地候选版本为 `0.12.0`，尚未发布。
+2. 阶段 A-C 已完成；进入阶段 D，运行 typecheck、295 项全量测试、build、pack 与干净全局安装验证。
+3. 使用真实 OAuth MCP 验收重启复用、`/mcp auth`、Ctrl+C、刷新或重新登录、Scope 拒绝/允许与 `/mcp logout`。真实服务无法稳定制造 Token 过期或 Scope Challenge 时，以本地反向自动化覆盖作为补充证据。
+4. 用户确认 v0.12.0 验收并发布后，再进入 Resources/Prompts 只读支持与 MCP/Skill 权限清单。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

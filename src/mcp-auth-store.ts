@@ -205,4 +205,47 @@ export class McpAuthStore {
       return true;
     });
   }
+
+  async clearCredentials(identity: McpAuthIdentity, scope: "tokens" | "client" | "all" = "tokens"): Promise<boolean> {
+    return await this.exclusive(async () => {
+      const store = await this.read();
+      const key = keyOf(identity);
+      const existing = store.entries[key];
+      if (!existing) return false;
+      if (scope === "all") delete store.entries[key];
+      else {
+        const next = { ...existing, updatedAt: new Date().toISOString() };
+        if (scope === "tokens") {
+          delete next.tokens;
+          delete next.expiresAt;
+        } else delete next.clientInformation;
+        if (!next.tokens && !next.clientInformation) delete store.entries[key];
+        else store.entries[key] = next;
+      }
+      await this.write(store);
+      return true;
+    });
+  }
+
+  async clearResource(resource: string, forgetClients = false): Promise<number> {
+    const normalizedResource = safeUrl(resource, "resource");
+    return await this.exclusive(async () => {
+      const store = await this.read();
+      let changed = 0;
+      for (const [key, record] of Object.entries(store.entries)) {
+        if (record.resource !== normalizedResource) continue;
+        changed += 1;
+        if (forgetClients) delete store.entries[key];
+        else {
+          const next = { ...record, updatedAt: new Date().toISOString() };
+          delete next.tokens;
+          delete next.expiresAt;
+          if (!next.clientInformation) delete store.entries[key];
+          else store.entries[key] = next;
+        }
+      }
+      if (changed) await this.write(store);
+      return changed;
+    });
+  }
 }

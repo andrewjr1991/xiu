@@ -60,6 +60,8 @@ Version 0.11.3 adds safe prompt-cache observability and request deduplication wi
 
 Version 0.11.4 adds official Streamable HTTP MCP transport alongside stdio. Remote servers support JSON or SSE responses, protocol sessions, cancellation, clean session termination, environment-backed bearer headers, and the same Xiu risk approvals and Plan-mode boundary as local tools. `/mcp add`, `/mcp remove`, and `/mcp test` manage user-level remote servers without restarting Xiu. Remote endpoints require HTTPS except for loopback development addresses; OAuth remains a later milestone.
 
+Version 0.12.0 adds the complete secure OAuth lifecycle for remote MCP servers. Xiu uses the official MCP client for protected-resource and authorization-server discovery, public clients with PKCE S256, exact issuer/resource binding, pre-registered clients, configured Client ID Metadata Documents, and compatibility DCR. Tokens are stored separately in `~/.xiu/mcp-auth.json`, refreshed before expiry with per-identity single-flight coordination, and never shown by `/mcp auth`. A confirmed `403 insufficient_scope` presents the new scopes for explicit approval and retries that rejected request at most once; ambiguous network failures are never replayed. `/mcp logout` attempts standards-based refresh-token and access-token revocation before clearing local tokens. Login waits are bounded and cancellable with Ctrl+C, OAuth URLs and redirects use SSRF protections, and diagnostics redact authorization codes, tokens, and secrets. OAuth authentication does not bypass workspace trust, Plan mode, risk approval, checkpoints, or dangerous-action confirmation.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -313,7 +315,7 @@ A remote Streamable HTTP server uses one endpoint. Keep credentials in an enviro
 }
 ```
 
-Use `/mcp add` for an interactive setup, `/mcp test [name]` to reconnect and inspect the result, and `/mcp remove [name]` to remove only a user-level entry. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials. Interactive OAuth is not yet supported.
+For OAuth, choose OAuth in `/mcp add`, then run `/mcp login [name]`. Use `/mcp auth [name]` to inspect the issuer, scopes, and expiry without exposing tokens, and `/mcp logout [name]` to revoke and clear authorization. `/mcp test [name]` never opens a browser implicitly. Plain HTTP is accepted only for `localhost`, `127.0.0.1`, and `::1`. Xiu rejects reserved protocol-header overrides and never prints expanded credentials.
 
 On macOS or Linux, use `npx` instead of `npx.cmd`. Each server supports `command`, optional `args`, `cwd`, `env`, `enabled`, a default `risk`, per-tool `toolRisks`, and `changesWorkspace` / `toolChangesWorkspace` hints for diff and verification tracking. Environment values can reference existing variables as `${NAME}`, so secrets do not need to be committed. Valid risk levels are `read`, `write`, `execute`, and `dangerous`.
 
@@ -468,7 +470,7 @@ npm run build
 
 - Shell commands rely on approval and the operating-system account rather than a container sandbox.
 - Precise checkpoint restore currently covers Xiu's focused file tools and generated outputs; arbitrary shell-command side effects require Git or project-specific recovery.
-- MCP supports stdio and Streamable HTTP transport; OAuth discovery, resources, prompts, and sampling remain future extensions.
+- MCP supports stdio, Streamable HTTP, and interactive OAuth. Resources, prompts, and sampling remain future extensions.
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { McpAuthStore } from "../src/mcp-auth-store.js";
-import { loginMcpOAuth, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
+import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, waitForOAuthCallback, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
 import { McpManager } from "../src/mcp.js";
 
 async function listen(server: http.Server, port = 0): Promise<number> {
@@ -126,4 +126,189 @@ test("MCP OAuth keeps login available when the system browser cannot be opened",
   const authorizationUrl = new URL("http://127.0.0.1:53122/authorize?state=test");
   await provider.redirectToAuthorization(authorizationUrl);
   assert.equal(fallback?.toString(), authorizationUrl.toString());
+});
+
+test("MCP OAuth refresh is single-flight, rotates credentials, and records absolute expiry", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-refresh-"));
+  const store = new McpAuthStore(path.join(directory, "mcp-auth.json"));
+  let origin = "";
+  let refreshes = 0;
+  const server = http.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const send = (status: number, value: unknown): void => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(value));
+    };
+    if (request.url === "/.well-known/oauth-protected-resource/mcp") return send(200, { resource: `${origin}/mcp`, authorization_servers: [origin] });
+    if (request.url === "/.well-known/oauth-authorization-server") return send(200, {
+      issuer: origin,
+      authorization_endpoint: `${origin}/authorize`,
+      token_endpoint: `${origin}/token`,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["none"],
+    });
+    if (request.url === "/token" && body.includes("grant_type=refresh_token")) {
+      refreshes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return send(200, { access_token: "fresh-access", refresh_token: "rotated-refresh", token_type: "Bearer", expires_in: 600, scope: "read" });
+    }
+    return send(404, {});
+  });
+  const port = await listen(server);
+  origin = `http://127.0.0.1:${port}`;
+  const identity = { resource: `${origin}/mcp`, issuer: `${origin}/`, clientId: "xiu-client" };
+  try {
+    await store.save({ ...identity, clientInformation: { client_id: identity.clientId, token_endpoint_auth_method: "none" }, tokens: { access_token: "expired", refresh_token: "old-refresh", token_type: "Bearer", issuer: identity.issuer, scope: "read" }, expiresAt: Date.now() - 1 });
+    const provider = new XiuMcpOAuthProvider(`${origin}/mcp`, { type: "oauth", clientId: identity.clientId }, store);
+    await Promise.all([provider.ensureFresh(), provider.ensureFresh(), provider.ensureFresh()]);
+    const refreshed = await store.get(identity);
+    assert.equal(refreshes, 1);
+    assert.equal(refreshed?.tokens?.access_token, "fresh-access");
+    assert.equal(refreshed?.tokens?.refresh_token, "rotated-refresh");
+    assert.ok((refreshed?.expiresAt ?? 0) > Date.now());
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("MCP OAuth logout revokes refresh then access token and always clears local tokens", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-logout-"));
+  const store = new McpAuthStore(path.join(directory, "mcp-auth.json"));
+  const revoked: string[] = [];
+  let origin = "";
+  const server = http.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    if (request.url === "/.well-known/oauth-authorization-server") {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(JSON.stringify({ issuer: origin, authorization_endpoint: `${origin}/authorize`, token_endpoint: `${origin}/token`, revocation_endpoint: `${origin}/revoke`, response_types_supported: ["code"], code_challenge_methods_supported: ["S256"] }));
+    }
+    if (request.url === "/revoke") {
+      revoked.push(new URLSearchParams(body).get("token") ?? "");
+      response.writeHead(200).end();
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  origin = `http://127.0.0.1:${port}`;
+  const identity = { resource: `${origin}/mcp`, issuer: `${origin}/`, clientId: "logout-client" };
+  try {
+    await store.save({ ...identity, clientInformation: { client_id: identity.clientId }, tokens: { access_token: "access-secret", refresh_token: "refresh-secret", token_type: "Bearer" } });
+    const result = await logoutMcpOAuth(new XiuMcpOAuthProvider(`${origin}/mcp`, { type: "oauth", clientId: identity.clientId }, store));
+    assert.deepEqual(revoked, ["refresh-secret", "access-secret"]);
+    assert.equal(result.revoked, true);
+    assert.equal((await store.get(identity))?.tokens, undefined);
+    assert.equal((await store.get(identity))?.clientInformation?.client_id, identity.clientId);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("MCP OAuth cancellation closes the callback listener and errors are redacted", async () => {
+  const port = await availablePort();
+  const controller = new AbortController();
+  const waiting = waitForOAuthCallback(new URL(`http://127.0.0.1:${port}/oauth/callback`), controller.signal, 10_000);
+  controller.abort();
+  await assert.rejects(waiting, /cancelled/i);
+  const hidden = sanitizeOAuthError(new Error("Bearer abc123 https://x.test/?code=secret&access_token=topsecret"));
+  assert.doesNotMatch(hidden.message, /abc123|secret|topsecret/);
+  assert.match(hidden.message, /REDACTED/);
+});
+
+test("MCP OAuth cancellation aborts discovery instead of waiting for the network timeout", async () => {
+  const callbackPort = await availablePort();
+  const server = http.createServer(() => {});
+  const port = await listen(server);
+  const controller = new AbortController();
+  const provider = new XiuMcpOAuthProvider(
+    `http://127.0.0.1:${port}/mcp`,
+    { type: "oauth", clientId: "cancel-client", callbackPort },
+    new McpAuthStore(path.join(os.tmpdir(), `xiu-cancel-${Date.now()}.json`)),
+    { interactive: true, signal: controller.signal, confirmAuthorizationServer: async () => true },
+  );
+  try {
+    const started = Date.now();
+    const login = loginMcpOAuth(provider, { interactive: true, signal: controller.signal, timeoutMs: 10_000 });
+    setTimeout(() => controller.abort(), 30);
+    await assert.rejects(login, /abort|cancel/i);
+    assert.ok(Date.now() - started < 2_000);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("MCP OAuth scope elevation requires approval and retries the rejected call once", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-scope-"));
+  const callbackPort = await availablePort();
+  const store = new McpAuthStore(path.join(directory, "mcp-auth.json"));
+  let origin = "";
+  let tokenExchanges = 0;
+  let toolCalls = 0;
+  const server = http.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const send = (status: number, value: unknown, headers: Record<string, string> = {}): void => {
+      response.writeHead(status, { "content-type": "application/json", ...headers });
+      response.end(JSON.stringify(value));
+    };
+    if (request.url === "/.well-known/oauth-protected-resource/mcp") return send(200, { resource: `${origin}/mcp`, authorization_servers: [origin] });
+    if (request.url === "/.well-known/oauth-authorization-server") return send(200, {
+      issuer: origin,
+      authorization_endpoint: `${origin}/authorize`, token_endpoint: `${origin}/token`, registration_endpoint: `${origin}/register`,
+      response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"],
+    });
+    if (request.url === "/register") return send(201, { ...JSON.parse(body), client_id: "scope-client", token_endpoint_auth_method: "none" });
+    if (request.url === "/token") {
+      tokenExchanges += 1;
+      return send(200, { access_token: tokenExchanges === 1 ? "basic-token" : "elevated-token", refresh_token: `refresh-${tokenExchanges}`, token_type: "Bearer", expires_in: 3600, scope: tokenExchanges === 1 ? "read" : "read write" });
+    }
+    if (request.url === "/mcp" && request.method === "POST") {
+      const message = JSON.parse(body) as { id?: number; method: string };
+      if (message.id === undefined) return void response.writeHead(202).end();
+      if (message.method === "server/discover") return send(200, { jsonrpc: "2.0", id: message.id, result: { supportedVersions: ["2026-07-28"], capabilities: { tools: {} } } });
+      if (message.method === "tools/list") return send(200, { jsonrpc: "2.0", id: message.id, result: { resultType: "complete", ttlMs: 0, cacheScope: "private", tools: [{ name: "write", inputSchema: { type: "object", properties: {} } }] } });
+      toolCalls += 1;
+      if (request.headers.authorization !== "Bearer elevated-token") return send(403, { error: "insufficient_scope" }, { "www-authenticate": `Bearer error="insufficient_scope", scope="write"` });
+      return send(200, { jsonrpc: "2.0", id: message.id, result: { resultType: "complete", content: [{ type: "text", text: "elevated" }] } });
+    }
+    return send(404, {});
+  });
+  const port = await listen(server);
+  origin = `http://127.0.0.1:${port}`;
+  const interaction = {
+    interactive: true,
+    confirmAuthorizationServer: async () => true,
+    openBrowser: async (url: URL) => {
+      const callback = new URL(`http://127.0.0.1:${callbackPort}/oauth/callback`);
+      callback.searchParams.set("code", `code-${tokenExchanges + 1}`);
+      callback.searchParams.set("state", url.searchParams.get("state") ?? "");
+      callback.searchParams.set("iss", origin);
+      await fetch(callback);
+    },
+  };
+  const globalConfig = path.join(directory, "mcp.json");
+  try {
+    const authConfig = { type: "oauth" as const, registration: "auto" as const, callbackPort, scopes: ["read"] };
+    await loginMcpOAuth(new XiuMcpOAuthProvider(`${origin}/mcp`, authConfig, store, interaction), interaction);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { secure: { url: `${origin}/mcp`, auth: authConfig, risk: "execute" } } }));
+    const manager = new McpManager(directory, globalConfig, store, interaction);
+    try {
+      await manager.start(false);
+      let approvals = 0;
+      const output = await manager.tools()[0]!.execute({}, { cwd: directory, approve: async () => { approvals += 1; return true; } });
+      assert.equal(output, "elevated");
+      assert.equal(approvals, 1);
+      assert.equal(tokenExchanges, 2);
+      assert.equal(toolCalls, 2);
+    } finally { await manager.close(); }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

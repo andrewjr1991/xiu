@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import {
   auth,
+  discoverAuthorizationServerMetadata,
   resourceUrlFromServerUrl,
   type OAuthClientInformationContext,
   type OAuthClientMetadata,
@@ -18,6 +19,24 @@ import { createSafeOAuthFetch, validateOAuthUrl } from "./oauth-url-policy.js";
 
 const DEFAULT_CALLBACK_PORT = 53_121;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
+const OAUTH_REQUEST_TIMEOUT_MS = 30_000;
+const REFRESH_SKEW_MS = 60_000;
+const refreshFlights = new Map<string, Promise<void>>();
+
+export interface McpOAuthStatus {
+  authenticated: boolean;
+  issuer?: string;
+  clientId?: string;
+  scopes: string[];
+  expiresAt?: number;
+  expired: boolean;
+}
+
+export interface McpOAuthLogoutResult {
+  cleared: number;
+  revoked: boolean;
+  warning?: string;
+}
 
 export interface McpOAuthInteraction {
   confirmAuthorizationServer?(authorizationServer: URL, resource: URL, details: { scopes: string[]; callback: URL }): Promise<boolean>;
@@ -30,6 +49,27 @@ export interface McpOAuthInteraction {
 
 function canonicalResource(serverUrl: string): string {
   return resourceUrlFromServerUrl(serverUrl).toString();
+}
+
+function scopeList(value?: string): string[] {
+  return [...new Set((value ?? "").split(/\s+/).filter(Boolean))].sort();
+}
+
+function sanitizedError(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  return new Error(raw
+    .replace(/(bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:code|token|access_token|refresh_token|client_secret)=)[^&#\s]+/gi, "$1[REDACTED]")
+    .replace(/("?(?:access_token|refresh_token|id_token|client_secret)"?\s*[:=]\s*"?)[^"\s,}]+/gi, "$1[REDACTED]"));
+}
+
+function boundedOAuthFetch(signal?: AbortSignal, timeoutMs = OAUTH_REQUEST_TIMEOUT_MS): typeof fetch {
+  const safe = createSafeOAuthFetch();
+  return async (input, init = {}) => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signals = [signal, init.signal, timeout].filter((item): item is AbortSignal => Boolean(item));
+    return await safe(input, { ...init, signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) });
+  };
 }
 
 async function spawnDetached(command: string, args: string[]): Promise<void> {
@@ -135,7 +175,8 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     if (!issuer || !client?.client_id) throw new Error("OAuth tokens were not bound to an issuer and client");
     this.recentIssuer = issuer;
     const identity = { resource: canonicalResource(this.serverUrl), issuer, clientId: client.client_id };
-    await this.store.save(mergeRecord(await this.store.get(identity), { ...identity, tokens, clientInformation: client }));
+    const expiresAt = tokens.expires_in === undefined ? undefined : Date.now() + tokens.expires_in * 1_000;
+    await this.store.save(mergeRecord(await this.store.get(identity), { ...identity, tokens, clientInformation: client, ...(expiresAt ? { expiresAt } : {}) }));
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
@@ -169,6 +210,58 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
     if (scope === "verifier" || scope === "all") this.verifier = undefined;
     if (scope === "discovery" || scope === "all") this.discovery = undefined;
+    if (scope === "tokens" || scope === "client" || scope === "all") {
+      const matches = await this.store.find(canonicalResource(this.serverUrl), this.recentIssuer, this.recentClient?.client_id);
+      await Promise.all(matches.map(async (record) => await this.store.clearCredentials(record, scope === "all" ? "all" : scope)));
+      if (scope === "client" || scope === "all") this.recentClient = undefined;
+    }
+  }
+
+  async status(): Promise<McpOAuthStatus> {
+    const records = await this.store.find(canonicalResource(this.serverUrl));
+    const record = records.find((item) => item.tokens) ?? records[0];
+    return {
+      authenticated: Boolean(record?.tokens?.access_token),
+      ...(record?.issuer ? { issuer: record.issuer } : {}),
+      ...(record?.clientId ? { clientId: record.clientId } : {}),
+      scopes: scopeList(record?.tokens?.scope),
+      ...(record?.expiresAt ? { expiresAt: record.expiresAt } : {}),
+      expired: Boolean(record?.expiresAt && record.expiresAt <= Date.now()),
+    };
+  }
+
+  async ensureFresh(signal?: AbortSignal, force = false): Promise<void> {
+    const records = await this.store.find(canonicalResource(this.serverUrl));
+    const record = records.find((item) => item.tokens);
+    if (!record?.tokens) return;
+    if (!force && (!record.expiresAt || record.expiresAt - Date.now() > REFRESH_SKEW_MS)) return;
+    if (!record.tokens.refresh_token) {
+      await this.store.clearCredentials(record, "tokens");
+      throw new Error("OAuth credentials expired; run /mcp login");
+    }
+    const key = `${record.resource}\n${record.issuer}\n${record.clientId}`;
+    const existing = refreshFlights.get(key);
+    if (existing) return await existing;
+    const flight = (async () => {
+      if (signal?.aborted) throw new Error("OAuth refresh was cancelled");
+      try {
+        const result = await auth(this, {
+          serverUrl: this.serverUrl,
+          scope: record.tokens?.scope,
+          fetchFn: boundedOAuthFetch(signal),
+        });
+        if (result !== "AUTHORIZED") throw new Error("OAuth credentials expired; run /mcp login");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/invalid_grant|invalid token|refresh token.*(?:invalid|expired|revoked)/i.test(message)) {
+          await this.store.clearCredentials(record, "tokens");
+          throw new Error("OAuth credentials expired; run /mcp login");
+        }
+        throw sanitizedError(error);
+      }
+    })();
+    refreshFlights.set(key, flight);
+    try { await flight; } finally { if (refreshFlights.get(key) === flight) refreshFlights.delete(key); }
   }
 
   validateCallback(url: URL): { code: string; iss?: string } {
@@ -212,13 +305,15 @@ export async function waitForOAuthCallback(redirectUrl: URL, signal?: AbortSigna
     const timer = setTimeout(() => finish(new Error(`OAuth login timed out after ${Math.ceil(timeoutMs / 60_000)} minute(s)`)), timeoutMs);
     timer.unref();
     signal?.addEventListener("abort", abort, { once: true });
-    server.listen(Number(redirectUrl.port), "127.0.0.1");
+    server.listen(Number(redirectUrl.port), "127.0.0.1", () => {
+      if (settled) server.close();
+    });
     if (signal?.aborted) abort();
   });
 }
 
-export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: McpOAuthInteraction = {}): Promise<void> {
-  const safeFetch = createSafeOAuthFetch();
+export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: McpOAuthInteraction = {}, scopes?: string[]): Promise<void> {
+  const safeFetch = boundedOAuthFetch(interaction.signal, interaction.timeoutMs ?? LOGIN_TIMEOUT_MS);
   const callbackController = new AbortController();
   const cancelCallback = (): void => callbackController.abort();
   interaction.signal?.addEventListener("abort", cancelCallback, { once: true });
@@ -228,7 +323,7 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
   try {
     const result = await auth(provider, {
       serverUrl: provider.serverUrl,
-      scope: provider.config.scopes?.join(" "),
+      scope: (scopes ?? provider.config.scopes)?.join(" "),
       fetchFn: safeFetch,
     });
     if (result === "AUTHORIZED") return;
@@ -238,7 +333,7 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
       serverUrl: provider.serverUrl,
       authorizationCode: code,
       iss,
-      scope: provider.config.scopes?.join(" "),
+      scope: (scopes ?? provider.config.scopes)?.join(" "),
       fetchFn: safeFetch,
     });
     if (exchanged !== "AUTHORIZED") throw new Error("OAuth token exchange did not complete authorization");
@@ -247,3 +342,34 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
     callbackController.abort();
   }
 }
+
+export async function logoutMcpOAuth(provider: XiuMcpOAuthProvider, forgetClient = false): Promise<McpOAuthLogoutResult> {
+  const records = await provider.store.find(canonicalResource(provider.serverUrl));
+  let revoked = false;
+  let warning: string | undefined;
+  for (const record of records) {
+    if (!record.tokens) continue;
+    try {
+      const safeFetch = boundedOAuthFetch(undefined, 15_000);
+      const metadata = await discoverAuthorizationServerMetadata(record.issuer, { fetchFn: safeFetch });
+      const endpoint = (metadata as unknown as { revocation_endpoint?: string } | undefined)?.revocation_endpoint;
+      if (!endpoint) continue;
+      const checked = await validateOAuthUrl(endpoint);
+      for (const [token, hint] of [[record.tokens.refresh_token, "refresh_token"], [record.tokens.access_token, "access_token"]] as const) {
+        if (!token) continue;
+        const body = new URLSearchParams({ token, token_type_hint: hint, client_id: record.clientId });
+        const response = await safeFetch(checked, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body,
+        });
+        if (!response.ok) throw new Error(`revocation endpoint returned ${response.status}`);
+        revoked = true;
+      }
+    } catch (error) { warning = sanitizedError(error).message; }
+  }
+  const cleared = await provider.store.clearResource(canonicalResource(provider.serverUrl), forgetClient);
+  return { cleared, revoked, ...(warning ? { warning } : {}) };
+}
+
+export { sanitizedError as sanitizeOAuthError };

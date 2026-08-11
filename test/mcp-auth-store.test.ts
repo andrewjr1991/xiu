@@ -29,8 +29,8 @@ test("MCP auth store persists versioned credentials bound to resource, issuer, a
       clientInformation: { client_id: second.clientId },
     });
     await Promise.all([
-      store.save({ ...first, tokens: { access_token: "access-a2", token_type: "Bearer" } }),
-      store.save({ ...second, tokens: { access_token: "access-b2", token_type: "Bearer" } }),
+      store.save({ ...first, tokens: { access_token: "access-a2", token_type: "Bearer" }, clientInformation: { client_id: first.clientId } }),
+      store.save({ ...second, tokens: { access_token: "access-b2", token_type: "Bearer" }, clientInformation: { client_id: second.clientId } }),
     ]);
 
     const reloaded = new McpAuthStore(file);
@@ -44,6 +44,11 @@ test("MCP auth store persists versioned credentials bound to resource, issuer, a
     assert.equal(parsed.version, 1);
     assert.equal(Object.keys(parsed.entries).length, 2);
     assert.doesNotMatch(JSON.stringify(parsed), /code_verifier|authorization_code|\"state\"/i);
+
+    assert.equal(await reloaded.clearCredentials(first, "tokens"), true);
+    assert.equal((await reloaded.get(first))?.tokens, undefined);
+    assert.equal((await reloaded.get(first))?.clientInformation?.client_id, first.clientId);
+    await reloaded.save({ ...first, tokens: { access_token: "restored", token_type: "Bearer" }, clientInformation: { client_id: first.clientId } });
 
     assert.equal(await reloaded.delete(first), true);
     assert.equal(await reloaded.get(first), undefined);

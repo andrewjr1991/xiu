@@ -1,12 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { Client, InsufficientScopeError, StreamableHTTPClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { localize, type UiLanguage } from "./i18n.js";
 import { McpAuthStore } from "./mcp-auth-store.js";
-import { loginMcpOAuth, XiuMcpOAuthProvider, type McpOAuthInteraction } from "./mcp-oauth.js";
+import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 
@@ -367,10 +367,15 @@ class HttpMcpConnection implements McpConnectionLike {
   constructor(private name: string, private config: McpServerConfig, private authProvider?: XiuMcpOAuthProvider) {}
 
   async start(): Promise<McpToolDefinition[]> {
+    await this.authProvider?.ensureFresh();
     const headers = Object.fromEntries(Object.entries(this.config.headers ?? {}).map(([key, value]) => [key, expandEnvironment(value)]));
+    const transportAuth: AuthProvider | undefined = this.authProvider ? {
+      token: async () => (await this.authProvider!.tokens())?.access_token,
+      onUnauthorized: async () => await this.authProvider!.ensureFresh(undefined, true),
+    } : undefined;
     const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), {
       requestInit: { headers },
-      ...(this.authProvider ? { authProvider: this.authProvider, fetch: createSafeOAuthFetch() } : {}),
+      ...(transportAuth ? { authProvider: transportAuth, fetch: createSafeOAuthFetch(), onInsufficientScope: "throw" as const } : {}),
     });
     const client = new Client({ name: "xiu", version: packageJson.version }, {
       versionNegotiation: { mode: "auto", probe: { timeoutMs: 5_000, maxRetries: 0 } },
@@ -395,6 +400,7 @@ class HttpMcpConnection implements McpConnectionLike {
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     if (!this.client) throw new Error(`MCP server ${this.name} is not connected`);
+    await this.authProvider?.ensureFresh(signal);
     const result = await this.client.callTool({ name, arguments: args }, { signal, timeout: 120_000, maxTotalTimeout: 120_000 });
     return formatToolResult(result as unknown as Record<string, unknown>);
   }
@@ -418,6 +424,7 @@ export class McpManager {
     private workspace: string,
     private globalConfig = path.join(os.homedir(), ".xiu", "mcp.json"),
     private authStore = new McpAuthStore(),
+    private stepUpInteraction: McpOAuthInteraction = {},
   ) {}
 
   private async configuredServers(includeProject = true): Promise<Record<string, McpServerConfig>> {
@@ -461,7 +468,9 @@ export class McpManager {
         this.serverStatuses.push({ name, transport, state: "connected", tools: tools.length });
       } catch (error) {
         await connection.close();
-        this.serverStatuses.push({ name, transport, state: "failed", tools: 0, error: error instanceof Error ? error.message : String(error) });
+        const reason = sanitizeOAuthError(error).message;
+        const authRequired = Boolean(config.auth && /oauth|unauthori[sz]ed|credentials expired|run \/mcp login/i.test(reason));
+        this.serverStatuses.push({ name, transport, state: authRequired ? "auth-required" : "failed", tools: 0, error: reason });
       }
     }
     return this.status();
@@ -482,7 +491,37 @@ export class McpManager {
       changesWorkspace,
       describe: (input) => `call MCP tool ${name}/${definition.name} with ${truncate(JSON.stringify(input)).slice(0, 500)}`,
       preview: async (input) => truncate(JSON.stringify(input, null, 2)).slice(0, 4_000),
-      execute: async (input, context) => await connection.callTool(definition.name, input, context.signal),
+      execute: async (input, context) => {
+        try { return await connection.callTool(definition.name, input, context.signal); }
+        catch (error) {
+          if (!(error instanceof InsufficientScopeError) || !config.auth || !config.url) throw config.auth ? sanitizeOAuthError(error) : error;
+          const required = [...new Set((error.requiredScope ?? "").split(/\s+/).filter(Boolean))];
+          const existing = (await new XiuMcpOAuthProvider(config.url, config.auth, this.authStore).status()).scopes;
+          const added = required.filter((scope) => !existing.includes(scope));
+          const scopes = [...new Set([...existing, ...required])];
+          const approved = await context.approve({
+            risk: "execute",
+            description: `authorize additional OAuth scope for MCP ${name}`,
+            preview: `New scopes: ${added.join(" ") || required.join(" ") || "server-defined"}\nThe rejected request will be retried once only after authorization succeeds.`,
+          });
+          if (!approved) throw new Error(`Additional OAuth scope was declined for MCP ${name}`);
+          context.reportProgress?.(`Authorizing additional OAuth scope for MCP ${name}: ${added.join(" ") || "server-defined"}`);
+          const interaction: McpOAuthInteraction = {
+            ...this.stepUpInteraction,
+            interactive: true,
+            signal: context.signal,
+            confirmAuthorizationServer: async () => true,
+            authorizationUrlReady: async (url, opened, browserError) => {
+              await this.stepUpInteraction.authorizationUrlReady?.(url, opened, browserError);
+              context.reportProgress?.(opened
+                ? `Browser opened for MCP ${name} authorization`
+                : `Open this URL to authorize MCP ${name}: ${url.toString()} (${browserError?.message ?? "browser unavailable"})`);
+            },
+          };
+          await loginMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore, interaction), interaction, scopes);
+          return await connection.callTool(definition.name, input, context.signal);
+        }
+      },
     };
   }
 
@@ -511,12 +550,35 @@ export class McpManager {
       const interactive = { ...interaction, interactive: true };
       await loginMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore, interactive), interactive);
     } catch (error) {
+      const sanitized = sanitizeOAuthError(error);
       if (existing) {
         existing.state = "auth-required";
-        existing.error = error instanceof Error ? error.message : String(error);
+        existing.error = sanitized.message;
       }
-      throw error;
+      throw sanitized;
     }
+  }
+
+  async authStatus(name?: string, includeProject = true): Promise<Array<McpOAuthStatus & { name: string }>> {
+    const servers = await this.configuredServers(includeProject);
+    const entries = Object.entries(servers).filter(([serverName, config]) => (!name || serverName === name) && config.auth?.type === "oauth" && config.url);
+    return await Promise.all(entries.map(async ([serverName, config]) => ({
+      name: serverName,
+      ...await new XiuMcpOAuthProvider(config.url!, config.auth!, this.authStore).status(),
+    })));
+  }
+
+  async logout(name: string, forgetClient = false, includeProject = true): Promise<{ cleared: number; revoked: boolean; warning?: string }> {
+    const config = (await this.configuredServers(includeProject))[name];
+    if (!config?.url || config.auth?.type !== "oauth") throw new Error(`MCP server ${name} is not configured for OAuth`);
+    const result = await logoutMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore), forgetClient);
+    const connection = this.connections.get(name);
+    if (connection) await connection.close();
+    this.connections.delete(name);
+    this.activeTools = this.activeTools.filter((tool) => !tool.name.startsWith(`mcp__${safeName(name)}__`));
+    const status = this.serverStatuses.find((item) => item.name === name);
+    if (status) Object.assign(status, { state: "auth-required", tools: 0, error: undefined });
+    return result;
   }
 
   async addUserHttpServer(name: string, url: string, bearerTokenEnvironment?: string, risk: ToolRisk = "execute"): Promise<void> {

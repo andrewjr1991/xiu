@@ -873,12 +873,21 @@ Windows 示例：
 ```text
 /mcp add
 /mcp add docs https://example.com/mcp DOCS_MCP_TOKEN
+/mcp login cloudflare
+/mcp auth cloudflare
+/mcp logout cloudflare
 /mcp test docs
 /mcp remove docs
 /mcp reload
 ```
 
-`/mcp add` 会让用户明确选择默认风险等级，保存后立即连接并刷新工具；`/mcp remove` 只删除 `~/.xiu/mcp.json` 中的用户级条目，不会改项目配置；`/mcp test` 会显示传输类型、工具数和连接错误。公网地址必须使用 HTTPS，明文 HTTP 只允许 `localhost`、`127.0.0.1` 和 `::1`。Xiu 会管理 MCP 协议 Header、会话 ID、取消和关闭，不允许配置覆盖保留 Header，也不会在界面或日志中展开 Token。当前版本尚不支持交互式 MCP OAuth。
+`/mcp add` 会让用户选择无认证、Bearer 环境变量或 OAuth，并明确默认风险等级。OAuth 配置只保存认证方式、Client ID、Scope 和回调端口等非敏感信息；Token 独立保存在用户目录的 `~/.xiu/mcp-auth.json`，不会进入项目配置、会话或模型上下文。
+
+OAuth MCP 保存后执行 `/mcp login [名称]`。Xiu 会展示 MCP、授权服务器、Scope 和回调地址，确认后使用 PKCE S256 打开浏览器并只在 `127.0.0.1` 等待回调；等待最长 5 分钟，按 Ctrl+C 可以取消。`/mcp auth [名称]` 只显示登录状态、Issuer、Scope 和到期时间，不显示 Token。`/mcp logout [名称]` 会先尝试撤销 Refresh Token 和 Access Token，再清除本地 Token；即使远端没有撤销端点，本地退出仍会完成，可选择是否同时忘记动态 Client 注册。
+
+Access Token 临近到期时会自动刷新，同一身份的并发刷新只执行一次。服务端明确返回 `403 insufficient_scope` 时，Xiu 会列出新增 Scope 并再次请求用户批准；批准并完成浏览器授权后，仅重试刚被明确拒绝的请求一次。超时、断网或结果不确定时不会自动重放可能产生副作用的 MCP 工具。`/mcp test` 只测试连接，未登录时提示运行 `/mcp login`，不会自动弹出浏览器。
+
+公网地址必须使用 HTTPS，明文 HTTP 只允许 `localhost`、`127.0.0.1` 和 `::1`。OAuth 发现端点与每次重定向都经过 URL、DNS 和 SSRF 校验。Xiu 不允许配置覆盖保留 Header，也会在错误、状态和诊断中脱敏 Token、授权码和 Secret。
 
 查看连接情况：
 
