@@ -25,7 +25,7 @@
 | 全局命令 | `xiu` |
 | npm 组织 scope | `xiu-ai` |
 | 公开 npm 页面 | `https://www.npmjs.com/package/@xiu-ai/cli` |
-| 当前已发布版本 | `0.11.4` |
+| 当前已发布版本 | `0.12.0` |
 | 主要运行时 | Node.js 20+ / TypeScript |
 | 当前重点平台 | Windows PowerShell |
 
@@ -423,7 +423,7 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - v0.11.4 暂不实现交互式 OAuth、Resources、Prompts 和 Sampling，避免用不完整实现冒充协议支持。
 - 设计与验收记录在 `V0.11.4_DESIGN.zh-CN.md`。
 
-### v0.12.0 发布候选已完成（尚未发布）
+### 已发布的 v0.12.0
 
 - v0.12.0 收敛为 v0.12 安全能力的第一个交付切片：远程 MCP OAuth 与新旧协议安全兼容，不同时塞入全部团队治理功能。
 - 目标基线更新为 MCP `2026-07-28`：支持 RFC 9728/RFC 8414/OIDC 发现、PKCE S256、Issuer 与 Resource 绑定、预注册/CIMD/DCR 兼容、Token 刷新、Scope 升权和注销。
@@ -446,7 +446,8 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 阶段 D 已完成：自动化基线增至 296 项测试并全部通过，同时通过 TypeScript 类型检查、正式构建、npm 打包和隔离目录干净全局安装；安装包 `xiu --version` 返回 `0.12.0`。
 - Cloudflare 真实人工验收已覆盖 `/mcp auth`、3 个工具连接、注销、重新登录、浏览器回调和凭证复用；真实服务难以稳定制造的 Token 过期与 Scope Challenge 继续由本地反向自动化覆盖。
 - Windows 浏览器启动改为优先调用系统 URL 协议处理器并检查分发结果，Explorer 仅作为后备；终端始终输出完整授权链接，避免企业策略静默拦截时误报“浏览器已打开”。
-- 发布包检查发现并移除了误加入的 `@xiu-ai/cli: file:` 自依赖；使用官方 npm Registry 的隔离安装验证通过。v0.12.0 现已达到候选发布标准，等待用户执行 npm 发布。
+- 发布包检查发现并移除了误加入的 `@xiu-ai/cli: file:` 自依赖；使用官方 npm Registry 的隔离安装验证通过。
+- `@xiu-ai/cli@0.12.0` 已发布到 npm 官方 Registry，`latest` 已回读确认为 `0.12.0`。
 
 ### 当前自动化基线
 
@@ -790,10 +791,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. npm 官方 Registry 已确认当前公开版本为 `0.11.4`；本地候选版本为 `0.12.0`，尚未发布。
+1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.0`。
 2. v0.12.0 阶段 A-D 已完成：296 项全量测试、typecheck、build、pack、官方 Registry 隔离安装和 `xiu --version` 冒烟全部通过。
 3. Cloudflare 真实 OAuth 已完成状态查看、连接、注销、重新登录、浏览器回调和 Token 复用；刷新、Scope 拒绝/允许、取消与失败路径由本地反向自动化补充覆盖。
-4. 下一步等待用户发布 `0.12.0` 并回读 npm Registry；发布确认后进入 Resources/Prompts 只读支持与 MCP/Skill 权限清单。
+4. 下一阶段进入 MCP Resources/Prompts 只读支持与 MCP/Skill 权限清单；先设计协议边界、用户交互、分页与内容安全，再开始实现。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 
