@@ -879,6 +879,10 @@ Windows 示例：
 /mcp test docs
 /mcp remove docs
 /mcp reload
+/mcp resources cloudflare
+/mcp read cloudflare <resource-uri>
+/mcp prompts cloudflare
+/mcp prompt cloudflare <prompt-name> {"argument":"value"}
 ```
 
 `/mcp add` 会让用户选择无认证、Bearer 环境变量或 OAuth，并明确默认风险等级。OAuth 配置只保存认证方式、Client ID、Scope 和回调端口等非敏感信息；Token 独立保存在用户目录的 `~/.xiu/mcp-auth.json`，不会进入项目配置、会话或模型上下文。
@@ -902,6 +906,10 @@ Access Token 临近到期时会自动刷新，同一身份的并发刷新只执�
 ```
 
 MCP 工具默认按 execute 风险处理并请求审批。只有确认工具不能修改文件或外部状态时，才应配置为 `read`。项目 MCP 只在工作区受信任后启动。
+
+v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mcp resources [名称]` 与 `/mcp prompts [名称]` 显示服务提供的目录；`/mcp read [名称] [URI]` 通过原 MCP 服务读取 Resource，Xiu 不会自行访问 URI；`/mcp prompt [名称] [Prompt] [JSON参数]` 获取并预览 Prompt，缺少必填参数时会逐项询问。
+
+这些远端内容一律按“不可信内容”展示，不会自动注入当前任务或变成模型指令。列表最多读取 20 页、500 项；文本单块最多 32K 字符、单次最多 64K 字符；Blob、图片和音频只显示 MIME 与估算大小，不输出 Base64。要让模型使用其中信息，应由用户检查后明确转述或引用，避免第三方内容静默扩大权限。
 
 ## 十六、项目级指令
 

@@ -449,6 +449,16 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - 发布包检查发现并移除了误加入的 `@xiu-ai/cli: file:` 自依赖；使用官方 npm Registry 的隔离安装验证通过。
 - `@xiu-ai/cli@0.12.0` 已发布到 npm 官方 Registry，`latest` 已回读确认为 `0.12.0`。
 
+### 本地 v0.12.1 候选版本（尚未发布）
+
+- 已完成 `V0.12.1_DESIGN.zh-CN.md`，将 MCP Resources/Prompts 收敛为显式只读浏览，不允许远端内容自动注入 Agent 或注册新工具。
+- stdio 与 Streamable HTTP 均已支持 `resources/list`、`resources/templates/list`、`resources/read`、`prompts/list` 和 `prompts/get`；OAuth、Session 和取消继续沿用现有连接边界。
+- 新增 `/mcp resources`、`/mcp read`、`/mcp prompts`、`/mcp prompt`，支持 Server/Resource/Prompt 交互选择和 Prompt 必填参数询问。
+- 远端 Resource 与 Prompt 明确标为不可信内容；列表限制 20 页/500 项，文本限制单块 32K、单次 64K，Blob/图像/音频不输出 Base64。
+- 自动化已覆盖 stdio 与 Streamable HTTP 的目录、分页、读取、Prompt 参数、Blob 省略和超长文本截断；296 项全量测试、typecheck、build、pack 和隔离目录全局安装均已通过，安装后的 `xiu --version` 返回 `0.12.1`。
+- 官方 `@modelcontextprotocol/server-everything@2026.7.4` 已完成人工验收：stdio 重载后连接 13 个工具，列出 7 个静态 Resource、2 个 Resource Template 和 4 个 Prompt；动态文本读取、Blob 元数据省略、无参 Prompt 与 JSON 参数 Prompt 均符合不可信内容边界并返回正确结果。
+- v0.12.2 计划继续 MCP/Skill 权限清单：先展示声明的风险、外部副作用、工作区变化、OAuth Scope 与来源，再设计可持久化策略，不能仅依据第三方自报自动放权。
+
 ### 当前自动化基线
 
 - 自动化测试覆盖本机保存 Key 的真实鉴权请求、每次连接测试的最小文本调用、无副作用工具探测、推理模型自动选择回退、文本伪工具调用拒绝、视觉内容校验及成功/拒绝/瞬时失败分类、Provider/模型跨进程选择优先级、按模型缓存和 Profile 变更失效、有序备用链与阶段路由持久化、瞬时故障分类与脱敏、阶段切换/能力跳过/任务结束恢复、压缩请求安全切换、流式输出后禁止不安全切换，以及媒体请求去重、未知提交阻断和资源恢复。
@@ -791,10 +801,10 @@ v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基�
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.0`。
-2. v0.12.0 阶段 A-D 已完成：296 项全量测试、typecheck、build、pack、官方 Registry 隔离安装和 `xiu --version` 冒烟全部通过。
-3. Cloudflare 真实 OAuth 已完成状态查看、连接、注销、重新登录、浏览器回调和 Token 复用；刷新、Scope 拒绝/允许、取消与失败路径由本地反向自动化补充覆盖。
-4. 下一阶段进入 MCP Resources/Prompts 只读支持与 MCP/Skill 权限清单；先设计协议边界、用户交互、分页与内容安全，再开始实现。
+1. npm 官方 Registry 已确认当前公开版本和 `latest` 均为 `0.12.0`；本地候选版本为 `0.12.1`，不得覆盖已发布版本。
+2. v0.12.1 已完成 MCP Resources/Prompts 只读浏览实现、发布级自动验证和官方 Everything Server 人工验收；当前可以提交、推送并发布候选版本。
+3. stdio 首次通过 `npx` 下载失败时曾暴露 Windows 本地编码 stderr 乱码；这不影响后续连接与协议能力，但应作为后续稳定性补丁处理。
+4. v0.12.1 发布后进入 v0.12.2 MCP/Skill 权限清单设计与实现；权限声明只用于展示和收紧，不能让第三方静默扩大权限。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

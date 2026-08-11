@@ -41,6 +41,23 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
     await assert.rejects(pending, /cancelled/);
     assert.match(manager.summary(), /test: connected \(2 tools\)/);
     assert.match(manager.summary("zh-CN"), /test：已连接（2 个工具）/);
+    const resources = await manager.listResources("test");
+    assert.deepEqual(resources.resources.map((resource) => resource.uri), ["test://greeting", "test://second"]);
+    assert.deepEqual(resources.templates.map((template) => template.uriTemplate), ["test://docs/{id}"]);
+    assert.equal(resources.truncated, false);
+    const resource = await manager.readResource("test", "test://greeting");
+    assert.match(resource.text, /resource:test:\/\/greeting/);
+    assert.match(resource.text, /binary content omitted.*5 bytes/);
+    assert.equal(resource.truncated, false);
+    const largeResource = await manager.readResource("test", "test://large");
+    assert.equal(largeResource.truncated, true);
+    assert.ok(largeResource.text.length < 33_000);
+    const prompts = await manager.listPrompts("test");
+    assert.deepEqual(prompts.prompts, [{ name: "review", description: "Review code", arguments: [{ name: "target", required: true }] }]);
+    const prompt = await manager.getPrompt("test", "review", { target: "src/mcp.ts" });
+    assert.match(prompt.text, /review:src\/mcp\.ts/);
+    await assert.rejects(manager.getPrompt("test", "review", { target: "x".repeat(20_001) }), /bounded|safety/i);
+    await assert.rejects(manager.readResource("test", "x".repeat(8_193)), /8192/);
   } finally {
     await manager.close();
     await fs.rm(workspace, { recursive: true, force: true });
@@ -92,10 +109,20 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
     const toolMessage = message.params?.arguments && (message.params.arguments as Record<string, unknown>).message;
     if (message.method === "tools/call" && toolMessage === "slow") await new Promise((resolve) => setTimeout(resolve, 250));
     const result = message.method === "initialize"
-      ? { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote-test", version: "1.0.0" } }
+      ? { protocolVersion: "2025-06-18", capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: "remote-test", version: "1.0.0" } }
       : message.method === "tools/list"
         ? { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object", properties: { message: { type: "string" } } } }] }
-        : { content: [{ type: "text", text: `remote:${String(message.params?.arguments && (message.params.arguments as Record<string, unknown>).message)}` }] };
+        : message.method === "resources/list"
+          ? { resources: [{ name: "Remote docs", uri: "remote://docs", mimeType: "text/plain" }] }
+          : message.method === "resources/templates/list"
+            ? { resourceTemplates: [] }
+            : message.method === "resources/read"
+              ? { contents: [{ uri: "remote://docs", mimeType: "text/plain", text: "remote docs" }] }
+              : message.method === "prompts/list"
+                ? { prompts: [{ name: "summarize", arguments: [] }] }
+                : message.method === "prompts/get"
+                  ? { messages: [{ role: "user", content: { type: "text", text: "summarize this" } }] }
+                  : { content: [{ type: "text", text: `remote:${String(message.params?.arguments && (message.params.arguments as Record<string, unknown>).message)}` }] };
     response.writeHead(200, {
       "content-type": "application/json",
       ...(message.method === "initialize" ? { "mcp-session-id": sessionId } : {}),
@@ -119,6 +146,10 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
     assert.equal(tool.risk, "write");
     assert.equal(tool.changesWorkspace, false);
     assert.equal(await tool.execute({ message: "hello" }, { cwd: workspace, approve: async () => true }), "remote:hello");
+    assert.deepEqual((await manager.listResources("remote")).resources.map((item) => item.uri), ["remote://docs"]);
+    assert.match((await manager.readResource("remote", "remote://docs")).text, /remote docs/);
+    assert.deepEqual((await manager.listPrompts("remote")).prompts.map((item) => item.name), ["summarize"]);
+    assert.match((await manager.getPrompt("remote", "summarize", {})).text, /summarize this/);
     const controller = new AbortController();
     const pending = tool.execute({ message: "slow" }, { cwd: workspace, approve: async () => true, signal: controller.signal });
     controller.abort();

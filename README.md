@@ -62,6 +62,8 @@ Version 0.11.4 adds official Streamable HTTP MCP transport alongside stdio. Remo
 
 Version 0.12.0 adds the complete secure OAuth lifecycle for remote MCP servers. Xiu uses the official MCP client for protected-resource and authorization-server discovery, public clients with PKCE S256, exact issuer/resource binding, pre-registered clients, configured Client ID Metadata Documents, and compatibility DCR. Tokens are stored separately in `~/.xiu/mcp-auth.json`, refreshed before expiry with per-identity single-flight coordination, and never shown by `/mcp auth`. A confirmed `403 insufficient_scope` presents the new scopes for explicit approval and retries that rejected request at most once; ambiguous network failures are never replayed. `/mcp logout` attempts standards-based refresh-token and access-token revocation before clearing local tokens. Login waits are bounded and cancellable with Ctrl+C; Xiu requests the platform URL handler to open the browser and always prints the complete authorization URL as an enterprise-policy fallback. OAuth URLs and redirects use SSRF protections, and diagnostics redact authorization codes, tokens, and secrets. OAuth authentication does not bypass workspace trust, Plan mode, risk approval, checkpoints, or dangerous-action confirmation.
 
+Version 0.12.1 adds read-only MCP Resource and Prompt browsing over both stdio and Streamable HTTP. `/mcp resources`, `/mcp read`, `/mcp prompts`, and `/mcp prompt` use bounded pagination and output limits. Binary payloads are summarized instead of printing Base64, and all remote content is explicitly marked untrusted. Browsing never auto-injects remote content into the Agent or registers a new Agent tool.
+
 ## Features
 
 - Persistent OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible Provider profiles
@@ -470,7 +472,7 @@ npm run build
 
 - Shell commands rely on approval and the operating-system account rather than a container sandbox.
 - Precise checkpoint restore currently covers Xiu's focused file tools and generated outputs; arbitrary shell-command side effects require Git or project-specific recovery.
-- MCP supports stdio, Streamable HTTP, and interactive OAuth. Resources, prompts, and sampling remain future extensions.
+- MCP supports stdio, Streamable HTTP, interactive OAuth, and explicit read-only Resource/Prompt browsing. Sampling remains a future extension.
 - Session replay is resumable, but deterministic step-by-step replay and branch/fork controls are not yet exposed.
 - Multi-agent status is streamed in the foreground and available through `/agents`; a fixed full-screen task panel is planned for the professional TUI milestone.
 - v0.6 preserves Agent Worktrees for recovery and does not automatically solve merge conflicts or clean branches.

@@ -13,6 +13,10 @@ import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 const PROTOCOL_VERSION = "2025-06-18";
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 const MAX_OUTPUT = 60_000;
+const MAX_MCP_PAGES = 20;
+const MAX_MCP_ITEMS = 500;
+const MAX_CONTENT_BLOCK = 32_000;
+const MAX_CONTENT_TOTAL = 64_000;
 const VALID_RISKS = new Set<ToolRisk>(["read", "write", "execute", "dangerous"]);
 
 export interface McpServerConfig {
@@ -48,6 +52,52 @@ interface McpToolDefinition {
   name: string;
   description?: string;
   inputSchema?: JsonSchema;
+}
+
+export interface McpResource {
+  name: string;
+  uri: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpResourceTemplate {
+  name: string;
+  uriTemplate: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpPromptArgument {
+  name: string;
+  description?: string;
+  required: boolean;
+}
+
+export interface McpPrompt {
+  name: string;
+  description?: string;
+  arguments: McpPromptArgument[];
+}
+
+export interface McpResourceCatalog {
+  server: string;
+  resources: McpResource[];
+  templates: McpResourceTemplate[];
+  truncated: boolean;
+}
+
+export interface McpPromptCatalog {
+  server: string;
+  prompts: McpPrompt[];
+  truncated: boolean;
+}
+
+export interface McpRenderedContent {
+  server: string;
+  label: string;
+  text: string;
+  truncated: boolean;
 }
 
 interface PendingRequest {
@@ -187,7 +237,101 @@ async function readConfig(file: string): Promise<Record<string, McpServerConfig>
 interface McpConnectionLike {
   start(): Promise<McpToolDefinition[]>;
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  listResources(signal?: AbortSignal): Promise<{ resources: McpResource[]; templates: McpResourceTemplate[]; truncated: boolean }>;
+  readResource(uri: string, signal?: AbortSignal): Promise<McpRenderedContent>;
+  listPrompts(signal?: AbortSignal): Promise<{ prompts: McpPrompt[]; truncated: boolean }>;
+  getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpRenderedContent>;
   close(): Promise<void>;
+}
+
+function boundedText(value: string, remaining: number): { text: string; used: number; truncated: boolean } {
+  const limit = Math.max(0, Math.min(MAX_CONTENT_BLOCK, remaining));
+  if (value.length <= limit) return { text: value, used: value.length, truncated: false };
+  return { text: `${value.slice(0, limit)}\n... [MCP content truncated]`, used: limit, truncated: true };
+}
+
+function estimatedBase64Bytes(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor(value.length * 3 / 4) - padding);
+}
+
+function renderContentBlocks(blocks: unknown[], fallback: string): { text: string; truncated: boolean } {
+  const output: string[] = [];
+  let used = 0;
+  let truncated = false;
+  for (const raw of blocks) {
+    if (!raw || typeof raw !== "object") continue;
+    const block = raw as Record<string, unknown>;
+    if (typeof block.text === "string") {
+      const bounded = boundedText(block.text, MAX_CONTENT_TOTAL - used);
+      output.push(bounded.text);
+      used += bounded.used;
+      truncated ||= bounded.truncated;
+    } else if (typeof block.blob === "string" || typeof block.data === "string") {
+      const data = String(block.blob ?? block.data);
+      output.push(`[binary content omitted: ${String(block.mimeType ?? "unknown type")}, approximately ${estimatedBase64Bytes(data)} bytes]`);
+    } else {
+      const serialized = JSON.stringify(block, null, 2);
+      const bounded = boundedText(serialized, MAX_CONTENT_TOTAL - used);
+      output.push(bounded.text);
+      used += bounded.used;
+      truncated ||= bounded.truncated;
+    }
+    if (used >= MAX_CONTENT_TOTAL) { truncated = true; break; }
+  }
+  return { text: output.filter(Boolean).join("\n\n") || fallback, truncated };
+}
+
+function parseResources(value: unknown, server: string): McpResource[] {
+  if (!Array.isArray(value)) throw new Error(`MCP server ${server} returned an invalid resources/list response`);
+  return value.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new Error(`MCP server ${server} returned an invalid resource`);
+    const item = raw as Record<string, unknown>;
+    if (typeof item.uri !== "string" || !item.uri || item.uri.length > 8_192) throw new Error(`MCP server ${server} returned an invalid resource URI`);
+    return { name: typeof item.name === "string" && item.name ? item.name : item.uri, uri: item.uri,
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}) };
+  });
+}
+
+function parseTemplates(value: unknown, server: string): McpResourceTemplate[] {
+  if (!Array.isArray(value)) throw new Error(`MCP server ${server} returned an invalid resources/templates/list response`);
+  return value.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new Error(`MCP server ${server} returned an invalid resource template`);
+    const item = raw as Record<string, unknown>;
+    if (typeof item.uriTemplate !== "string" || !item.uriTemplate || item.uriTemplate.length > 8_192) throw new Error(`MCP server ${server} returned an invalid resource template URI`);
+    return { name: typeof item.name === "string" && item.name ? item.name : item.uriTemplate, uriTemplate: item.uriTemplate,
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}) };
+  });
+}
+
+function parsePrompts(value: unknown, server: string): McpPrompt[] {
+  if (!Array.isArray(value)) throw new Error(`MCP server ${server} returned an invalid prompts/list response`);
+  return value.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new Error(`MCP server ${server} returned an invalid prompt`);
+    const item = raw as Record<string, unknown>;
+    if (typeof item.name !== "string" || !item.name || item.name.length > 256) throw new Error(`MCP server ${server} returned an invalid prompt name`);
+    const args = item.arguments === undefined ? [] : item.arguments;
+    if (!Array.isArray(args)) throw new Error(`MCP server ${server} returned invalid prompt arguments`);
+    return { name: item.name, ...(typeof item.description === "string" ? { description: item.description } : {}), arguments: args.map((rawArg) => {
+      if (!rawArg || typeof rawArg !== "object" || typeof (rawArg as Record<string, unknown>).name !== "string") throw new Error(`MCP server ${server} returned an invalid prompt argument`);
+      const argument = rawArg as Record<string, unknown>;
+      return { name: String(argument.name), required: argument.required === true,
+        ...(typeof argument.description === "string" ? { description: argument.description } : {}) };
+    }) };
+  });
+}
+
+function validatePromptArguments(args: Record<string, string>): void {
+  const entries = Object.entries(args);
+  if (entries.length > 64) throw new Error("MCP prompt accepts at most 64 arguments");
+  let total = 0;
+  for (const [name, value] of entries) {
+    if (!name || name.length > 256 || typeof value !== "string" || value.length > 20_000) throw new Error("MCP prompt arguments must use bounded string names and values");
+    total += name.length + value.length;
+  }
+  if (total > 64_000) throw new Error("MCP prompt arguments exceed the 64000-character safety limit");
 }
 
 function formatToolResult(result: Record<string, unknown>): string {
@@ -202,6 +346,10 @@ function formatToolResult(result: Record<string, unknown>): string {
   if (result?.structuredContent !== undefined) sections.push(JSON.stringify(result.structuredContent, null, 2));
   const output = truncate(sections.filter(Boolean).join("\n") || "MCP tool completed without text output.");
   return result?.isError ? `Tool error: ${output}` : output;
+}
+
+function methodUnsupported(error: unknown): boolean {
+  return /method not (?:found|supported)|-32601/i.test(error instanceof Error ? error.message : String(error));
 }
 
 class StdioMcpConnection implements McpConnectionLike {
@@ -327,6 +475,65 @@ class StdioMcpConnection implements McpConnectionLike {
     throw new Error(`MCP server ${this.name} returned too many tool pages`);
   }
 
+  private async paged(method: string, field: string, signal?: AbortSignal): Promise<{ items: unknown[]; truncated: boolean }> {
+    const items: unknown[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_MCP_PAGES; page += 1) {
+      const result = await this.request(method, cursor ? { cursor } : {}, 15_000, signal) as Record<string, unknown>;
+      if (!Array.isArray(result?.[field])) throw new Error(`MCP server ${this.name} returned an invalid ${method} response`);
+      items.push(...result[field] as unknown[]);
+      if (items.length >= MAX_MCP_ITEMS) return { items: items.slice(0, MAX_MCP_ITEMS), truncated: true };
+      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
+      if (!cursor) return { items, truncated: false };
+      if (seen.has(cursor)) throw new Error(`MCP server ${this.name} returned a repeated pagination cursor for ${method}`);
+      seen.add(cursor);
+    }
+    return { items, truncated: true };
+  }
+
+  async listResources(signal?: AbortSignal): Promise<{ resources: McpResource[]; templates: McpResourceTemplate[]; truncated: boolean }> {
+    let resources = { items: [] as unknown[], truncated: false };
+    let templates = { items: [] as unknown[], truncated: false };
+    try { resources = await this.paged("resources/list", "resources", signal); }
+    catch (error) { if (!methodUnsupported(error)) throw error; }
+    try { templates = await this.paged("resources/templates/list", "resourceTemplates", signal); }
+    catch (error) { if (!methodUnsupported(error)) throw error; }
+    return { resources: parseResources(resources.items, this.name), templates: parseTemplates(templates.items, this.name), truncated: resources.truncated || templates.truncated };
+  }
+
+  async readResource(uri: string, signal?: AbortSignal): Promise<McpRenderedContent> {
+    if (!uri || uri.length > 8_192) throw new Error("MCP resource URI must be between 1 and 8192 characters");
+    const result = await this.request("resources/read", { uri }, 30_000, signal) as Record<string, unknown>;
+    if (!Array.isArray(result?.contents)) throw new Error(`MCP server ${this.name} returned an invalid resources/read response`);
+    const rendered = renderContentBlocks(result.contents, "MCP resource contained no displayable content.");
+    return { server: this.name, label: uri, ...rendered };
+  }
+
+  async listPrompts(signal?: AbortSignal): Promise<{ prompts: McpPrompt[]; truncated: boolean }> {
+    try {
+      const result = await this.paged("prompts/list", "prompts", signal);
+      return { prompts: parsePrompts(result.items, this.name), truncated: result.truncated };
+    } catch (error) {
+      if (methodUnsupported(error)) return { prompts: [], truncated: false };
+      throw error;
+    }
+  }
+
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpRenderedContent> {
+    if (!name || name.length > 256) throw new Error("MCP prompt name must be between 1 and 256 characters");
+    validatePromptArguments(args);
+    const result = await this.request("prompts/get", { name, arguments: args }, 30_000, signal) as Record<string, unknown>;
+    if (!Array.isArray(result?.messages)) throw new Error(`MCP server ${this.name} returned an invalid prompts/get response`);
+    const blocks = (result.messages as Array<Record<string, unknown>>).flatMap((message) => {
+      const role = message.role === "assistant" ? "assistant" : "user";
+      const content = message.content;
+      return Array.isArray(content) ? content.map((block) => ({ role, ...(block as Record<string, unknown>) })) : [{ role, ...((content && typeof content === "object") ? content as Record<string, unknown> : { text: String(content ?? "") }) }];
+    });
+    const rendered = renderContentBlocks(blocks, "MCP prompt contained no displayable messages.");
+    return { server: this.name, label: name, ...rendered };
+  }
+
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const result = await this.request("tools/call", { name, arguments: args }, 120_000, signal) as Record<string, unknown>;
     return formatToolResult(result);
@@ -403,6 +610,93 @@ class HttpMcpConnection implements McpConnectionLike {
     await this.authProvider?.ensureFresh(signal);
     const result = await this.client.callTool({ name, arguments: args }, { signal, timeout: 120_000, maxTotalTimeout: 120_000 });
     return formatToolResult(result as unknown as Record<string, unknown>);
+  }
+
+  private connectedClient(): Client {
+    if (!this.client) throw new Error(`MCP server ${this.name} is not connected`);
+    return this.client;
+  }
+
+  async listResources(signal?: AbortSignal): Promise<{ resources: McpResource[]; templates: McpResourceTemplate[]; truncated: boolean }> {
+    const client = this.connectedClient();
+    await this.authProvider?.ensureFresh(signal);
+    const resources: unknown[] = [];
+    const templates: unknown[] = [];
+    let truncated = false;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    try {
+      for (let page = 0; page < MAX_MCP_PAGES; page += 1) {
+        const result = await client.listResources(cursor ? { cursor } : undefined, { signal, timeout: 15_000, maxTotalTimeout: 30_000 });
+        resources.push(...result.resources);
+        if (resources.length >= MAX_MCP_ITEMS) { resources.length = MAX_MCP_ITEMS; truncated = true; break; }
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        if (seen.has(cursor)) throw new Error(`MCP server ${this.name} returned a repeated pagination cursor for resources/list`);
+        seen.add(cursor);
+        if (page === MAX_MCP_PAGES - 1) truncated = true;
+      }
+    } catch (error) { if (!methodUnsupported(error)) throw error; }
+    cursor = undefined;
+    seen.clear();
+    try {
+      for (let page = 0; page < MAX_MCP_PAGES; page += 1) {
+        const result = await client.listResourceTemplates(cursor ? { cursor } : undefined, { signal, timeout: 15_000, maxTotalTimeout: 30_000 });
+        templates.push(...result.resourceTemplates);
+        if (templates.length >= MAX_MCP_ITEMS) { templates.length = MAX_MCP_ITEMS; truncated = true; break; }
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        if (seen.has(cursor)) throw new Error(`MCP server ${this.name} returned a repeated pagination cursor for resources/templates/list`);
+        seen.add(cursor);
+        if (page === MAX_MCP_PAGES - 1) truncated = true;
+      }
+    } catch (error) { if (!methodUnsupported(error)) throw error; }
+    return { resources: parseResources(resources, this.name), templates: parseTemplates(templates, this.name), truncated };
+  }
+
+  async readResource(uri: string, signal?: AbortSignal): Promise<McpRenderedContent> {
+    if (!uri || uri.length > 8_192) throw new Error("MCP resource URI must be between 1 and 8192 characters");
+    const client = this.connectedClient();
+    await this.authProvider?.ensureFresh(signal);
+    const result = await client.readResource({ uri }, { signal, timeout: 30_000, maxTotalTimeout: 30_000 });
+    const rendered = renderContentBlocks(result.contents, "MCP resource contained no displayable content.");
+    return { server: this.name, label: uri, ...rendered };
+  }
+
+  async listPrompts(signal?: AbortSignal): Promise<{ prompts: McpPrompt[]; truncated: boolean }> {
+    const client = this.connectedClient();
+    await this.authProvider?.ensureFresh(signal);
+    const prompts: unknown[] = [];
+    let truncated = false;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    try {
+      for (let page = 0; page < MAX_MCP_PAGES; page += 1) {
+        const result = await client.listPrompts(cursor ? { cursor } : undefined, { signal, timeout: 15_000, maxTotalTimeout: 30_000 });
+        prompts.push(...result.prompts);
+        if (prompts.length >= MAX_MCP_ITEMS) { prompts.length = MAX_MCP_ITEMS; truncated = true; break; }
+        cursor = result.nextCursor;
+        if (!cursor) break;
+        if (seen.has(cursor)) throw new Error(`MCP server ${this.name} returned a repeated pagination cursor for prompts/list`);
+        seen.add(cursor);
+        if (page === MAX_MCP_PAGES - 1) truncated = true;
+      }
+    } catch (error) { if (methodUnsupported(error)) return { prompts: [], truncated: false }; throw error; }
+    return { prompts: parsePrompts(prompts, this.name), truncated };
+  }
+
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpRenderedContent> {
+    if (!name || name.length > 256) throw new Error("MCP prompt name must be between 1 and 256 characters");
+    validatePromptArguments(args);
+    const client = this.connectedClient();
+    await this.authProvider?.ensureFresh(signal);
+    const result = await client.getPrompt({ name, arguments: args }, { signal, timeout: 30_000, maxTotalTimeout: 30_000 });
+    const blocks = result.messages.flatMap((message) => {
+      const content = message.content as unknown;
+      return Array.isArray(content) ? content : [content];
+    });
+    const rendered = renderContentBlocks(blocks, "MCP prompt contained no displayable messages.");
+    return { server: this.name, label: name, ...rendered };
   }
 
   async close(): Promise<void> {
@@ -527,6 +821,40 @@ export class McpManager {
 
   tools(): AgentTool[] { return [...this.activeTools]; }
   status(): McpServerStatus[] { return this.serverStatuses.map((item) => ({ ...item })); }
+
+  connectedServerNames(): string[] {
+    return [...this.connections.keys()].sort((left, right) => left.localeCompare(right));
+  }
+
+  private connection(name: string): McpConnectionLike {
+    const connection = this.connections.get(name);
+    if (!connection) throw new Error(`MCP server ${name} is not connected`);
+    return connection;
+  }
+
+  async listResources(name: string, signal?: AbortSignal): Promise<McpResourceCatalog> {
+    try {
+      const result = await this.connection(name).listResources(signal);
+      return { server: name, ...result };
+    } catch (error) { throw sanitizeOAuthError(error); }
+  }
+
+  async readResource(name: string, uri: string, signal?: AbortSignal): Promise<McpRenderedContent> {
+    try { return await this.connection(name).readResource(uri, signal); }
+    catch (error) { throw sanitizeOAuthError(error); }
+  }
+
+  async listPrompts(name: string, signal?: AbortSignal): Promise<McpPromptCatalog> {
+    try {
+      const result = await this.connection(name).listPrompts(signal);
+      return { server: name, ...result };
+    } catch (error) { throw sanitizeOAuthError(error); }
+  }
+
+  async getPrompt(name: string, prompt: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpRenderedContent> {
+    try { return await this.connection(name).getPrompt(prompt, args, signal); }
+    catch (error) { throw sanitizeOAuthError(error); }
+  }
 
   async userServerNames(): Promise<string[]> {
     return Object.keys(await readConfig(this.globalConfig)).sort((left, right) => left.localeCompare(right));

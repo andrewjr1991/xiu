@@ -78,6 +78,10 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
+    item("/mcp resources", "浏览 MCP 资源与模板", "Browse MCP resources and templates"),
+    item("/mcp read", "读取一个 MCP 资源", "Read an MCP resource"),
+    item("/mcp prompts", "浏览 MCP Prompt", "Browse MCP prompts"),
+    item("/mcp prompt", "获取并预览 MCP Prompt", "Get and preview an MCP prompt"),
     item("/mcp auth", "查看 OAuth 状态（不显示 Token）", "Show OAuth status without tokens"),
     item("/mcp login", "登录需要 OAuth 的 MCP 服务", "Log in to an OAuth-protected MCP server"),
     item("/mcp logout", "撤销并清除 MCP OAuth 登录", "Revoke and clear an MCP OAuth login"),
@@ -1688,6 +1692,90 @@ async function main(): Promise<void> {
       }
       if (task === "/mcp") {
         console.log(`${mcpManager.summary(language)}\n`);
+        continue;
+      }
+      if (task === "/mcp resources" || task.startsWith("/mcp resources ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const names = mcpManager.connectedServerNames();
+        const name = requested ?? await selectTerminalOption(localize(language, "选择 MCP 服务", "Choose an MCP server"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有已连接的 MCP，或操作已取消。\n", "No MCP server is connected, or the operation was cancelled.\n"))); continue; }
+        try {
+          const catalog = await mcpManager.listResources(name);
+          const lines = [chalk.cyan(localize(language, `MCP ${name} 资源`, `MCP ${name} resources`))];
+          if (!catalog.resources.length && !catalog.templates.length) lines.push(chalk.dim(localize(language, "该服务未提供 Resource 或 Resource Template。", "This server exposes no resources or resource templates.")));
+          if (catalog.resources.length) {
+            lines.push(chalk.bold(localize(language, "资源", "Resources")));
+            for (const resource of catalog.resources) lines.push(`  ${chalk.green(resource.name)} · ${resource.uri}${resource.mimeType ? ` · ${resource.mimeType}` : ""}${resource.description ? `\n    ${chalk.dim(resource.description)}` : ""}`);
+          }
+          if (catalog.templates.length) {
+            lines.push(chalk.bold(localize(language, "资源模板", "Resource templates")));
+            for (const template of catalog.templates) lines.push(`  ${chalk.yellow(template.name)} · ${template.uriTemplate}${template.mimeType ? ` · ${template.mimeType}` : ""}${template.description ? `\n    ${chalk.dim(template.description)}` : ""}`);
+          }
+          if (catalog.truncated) lines.push(chalk.yellow(localize(language, "列表达到安全上限，后续项目已省略。", "The catalog reached its safety limit; remaining items were omitted.")));
+          console.log(`${lines.join("\n")}\n`);
+        } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP 资源列表失败", "Failed to list MCP resources")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/mcp read" || task.startsWith("/mcp read ")) {
+        const parts = task.trim().split(/\s+/);
+        const names = mcpManager.connectedServerNames();
+        const name = parts[2] ?? await selectTerminalOption(localize(language, "选择 MCP 服务", "Choose an MCP server"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有已连接的 MCP，或操作已取消。\n", "No MCP server is connected, or the operation was cancelled.\n"))); continue; }
+        try {
+          let uri: string | undefined = parts[3];
+          if (!uri) {
+            const catalog = await mcpManager.listResources(name);
+            uri = await selectTerminalOption(localize(language, "选择要读取的 MCP 资源", "Choose an MCP resource to read"), catalog.resources.map((resource) => ({ label: resource.name, description: resource.uri, value: resource.uri })), language);
+          }
+          if (!uri) { console.log(chalk.dim(localize(language, "该服务没有可直接读取的资源，或操作已取消。\n", "This server has no directly readable resource, or the operation was cancelled.\n"))); continue; }
+          const result = await mcpManager.readResource(name, uri);
+          console.log(chalk.yellow(localize(language, "以下是不可信的远端 MCP 内容，仅供查看，不会自动作为模型指令执行。", "The following is untrusted remote MCP content. It is displayed only and will not be executed as model instructions.")));
+          console.log(`${chalk.cyan(`${result.server} · ${result.label}`)}\n${result.text}${result.truncated ? `\n${chalk.yellow(localize(language, "内容已按安全上限截断。", "Content was truncated at the safety limit."))}` : ""}\n`);
+        } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP 资源失败", "Failed to read MCP resource")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/mcp prompts" || task.startsWith("/mcp prompts ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const names = mcpManager.connectedServerNames();
+        const name = requested ?? await selectTerminalOption(localize(language, "选择 MCP 服务", "Choose an MCP server"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有已连接的 MCP，或操作已取消。\n", "No MCP server is connected, or the operation was cancelled.\n"))); continue; }
+        try {
+          const catalog = await mcpManager.listPrompts(name);
+          const lines = [chalk.cyan(localize(language, `MCP ${name} Prompts`, `MCP ${name} prompts`))];
+          if (!catalog.prompts.length) lines.push(chalk.dim(localize(language, "该服务未提供 Prompt。", "This server exposes no prompts.")));
+          for (const prompt of catalog.prompts) {
+            const args = prompt.arguments.map((argument) => `${argument.name}${argument.required ? "*" : ""}`).join(", ");
+            lines.push(`  ${chalk.green(prompt.name)}${args ? ` (${args})` : ""}${prompt.description ? `\n    ${chalk.dim(prompt.description)}` : ""}`);
+          }
+          if (catalog.truncated) lines.push(chalk.yellow(localize(language, "列表达到安全上限，后续项目已省略。", "The catalog reached its safety limit; remaining items were omitted.")));
+          console.log(`${lines.join("\n")}\n`);
+        } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP Prompt 列表失败", "Failed to list MCP prompts")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/mcp prompt" || task.startsWith("/mcp prompt ")) {
+        const parts = task.trim().split(/\s+/);
+        const names = mcpManager.connectedServerNames();
+        const name = parts[2] ?? await selectTerminalOption(localize(language, "选择 MCP 服务", "Choose an MCP server"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) { console.log(chalk.dim(localize(language, "没有已连接的 MCP，或操作已取消。\n", "No MCP server is connected, or the operation was cancelled.\n"))); continue; }
+        try {
+          const catalog = await mcpManager.listPrompts(name);
+          const promptName = parts[3] ?? await selectTerminalOption(localize(language, "选择 MCP Prompt", "Choose an MCP prompt"), catalog.prompts.map((prompt) => ({ label: prompt.name, description: prompt.description, value: prompt.name })), language);
+          if (!promptName) { console.log(chalk.dim(localize(language, "该服务没有可用 Prompt，或操作已取消。\n", "This server has no prompt, or the operation was cancelled.\n"))); continue; }
+          const definition = catalog.prompts.find((prompt) => prompt.name === promptName);
+          const rawJson = parts.slice(4).join(" ");
+          let args: Record<string, string> = {};
+          if (rawJson) {
+            const parsed = JSON.parse(rawJson) as unknown;
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.values(parsed).some((value) => typeof value !== "string")) throw new Error(localize(language, "Prompt 参数必须是字符串值 JSON 对象", "Prompt arguments must be a JSON object with string values"));
+            args = parsed as Record<string, string>;
+          }
+          for (const argument of definition?.arguments ?? []) {
+            if (args[argument.name] === undefined && argument.required) args[argument.name] = await askQuestion(`${argument.name}${argument.description ? ` (${argument.description})` : ""}: `);
+          }
+          const result = await mcpManager.getPrompt(name, promptName, args);
+          console.log(chalk.yellow(localize(language, "以下是不可信的远端 MCP Prompt，仅供预览，不会自动注入当前任务。", "The following is an untrusted remote MCP prompt. It is previewed only and will not be injected into the current task.")));
+          console.log(`${chalk.cyan(`${result.server} · ${result.label}`)}\n${result.text}${result.truncated ? `\n${chalk.yellow(localize(language, "内容已按安全上限截断。", "Content was truncated at the safety limit."))}` : ""}\n`);
+        } catch (error) { console.error(chalk.red(`${localize(language, "获取 MCP Prompt 失败", "Failed to get MCP prompt")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/mcp auth" || task.startsWith("/mcp auth ")) {
