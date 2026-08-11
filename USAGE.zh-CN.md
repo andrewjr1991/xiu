@@ -883,7 +883,7 @@ Windows 示例：
 
 `/mcp add` 会让用户选择无认证、Bearer 环境变量或 OAuth，并明确默认风险等级。OAuth 配置只保存认证方式、Client ID、Scope 和回调端口等非敏感信息；Token 独立保存在用户目录的 `~/.xiu/mcp-auth.json`，不会进入项目配置、会话或模型上下文。
 
-OAuth MCP 保存后执行 `/mcp login [名称]`。Xiu 会展示 MCP、授权服务器、Scope 和回调地址，确认后使用 PKCE S256 打开浏览器并只在 `127.0.0.1` 等待回调；等待最长 5 分钟，按 Ctrl+C 可以取消。`/mcp auth [名称]` 只显示登录状态、Issuer、Scope 和到期时间，不显示 Token。`/mcp logout [名称]` 会先尝试撤销 Refresh Token 和 Access Token，再清除本地 Token；即使远端没有撤销端点，本地退出仍会完成，可选择是否同时忘记动态 Client 注册。
+OAuth MCP 保存后执行 `/mcp login [名称]`。Xiu 会展示 MCP、授权服务器、Scope 和回调地址，确认后使用 PKCE S256 请求系统浏览器打开授权页，并只在 `127.0.0.1` 等待回调；终端始终同时显示完整授权链接，因此浏览器未自动打开或被安全策略拦截时可以手动复制。等待最长 5 分钟，按 Ctrl+C 可以取消。`/mcp auth [名称]` 只显示登录状态、Issuer、Scope 和到期时间，不显示 Token。`/mcp logout [名称]` 会先尝试撤销 Refresh Token 和 Access Token，再清除本地 Token；即使远端没有撤销端点，本地退出仍会完成，可选择是否同时忘记动态 Client 注册。
 
 Access Token 临近到期时会自动刷新，同一身份的并发刷新只执行一次。服务端明确返回 `403 insufficient_scope` 时，Xiu 会列出新增 Scope 并再次请求用户批准；批准并完成浏览器授权后，仅重试刚被明确拒绝的请求一次。超时、断网或结果不确定时不会自动重放可能产生副作用的 MCP 工具。`/mcp test` 只测试连接，未登录时提示运行 `/mcp login`，不会自动弹出浏览器。
 

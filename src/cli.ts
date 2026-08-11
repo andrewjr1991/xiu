@@ -1734,7 +1734,9 @@ async function main(): Promise<void> {
             },
             authorizationUrlReady: (url, opened, error) => {
               if (opened) {
-                console.log(chalk.dim(localize(language, "已打开浏览器，正在等待授权回调……", "Browser opened; waiting for the authorization callback...")));
+                console.log(chalk.dim(localize(language,
+                  `已请求系统打开浏览器，正在等待授权回调……\n如果浏览器没有自动打开，请复制以下链接完成授权：\n${url.toString()}`,
+                  `Asked the system to open a browser; waiting for the authorization callback...\nIf no browser opened, copy this URL to authorize:\n${url.toString()}`)));
                 return;
               }
               console.log(chalk.yellow(localize(language,

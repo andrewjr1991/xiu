@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { McpAuthStore } from "../src/mcp-auth-store.js";
-import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, waitForOAuthCallback, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
+import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, waitForOAuthCallback, windowsBrowserOpenAttempts, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
 import { McpManager } from "../src/mcp.js";
 
 async function listen(server: http.Server, port = 0): Promise<number> {
@@ -126,6 +126,15 @@ test("MCP OAuth keeps login available when the system browser cannot be opened",
   const authorizationUrl = new URL("http://127.0.0.1:53122/authorize?state=test");
   await provider.redirectToAuthorization(authorizationUrl);
   assert.equal(fallback?.toString(), authorizationUrl.toString());
+});
+
+test("Windows OAuth browser launch prefers the URL protocol handler over Explorer", () => {
+  const url = new URL("https://auth.example.com/authorize?state=one&scope=read%20write");
+  const attempts = windowsBrowserOpenAttempts(url, "C:\\Windows");
+  assert.equal(attempts[0]?.[0], path.join("C:\\Windows", "System32", "rundll32.exe"));
+  assert.deepEqual(attempts[0]?.[1], ["url.dll,FileProtocolHandler", url.toString()]);
+  assert.equal(attempts[0]?.[2], true);
+  assert.equal(attempts[1]?.[0], path.join("C:\\Windows", "explorer.exe"));
 });
 
 test("MCP OAuth refresh is single-flight, rotates credentials, and records absolute expiry", async () => {

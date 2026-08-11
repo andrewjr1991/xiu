@@ -514,7 +514,7 @@ export class McpManager {
             authorizationUrlReady: async (url, opened, browserError) => {
               await this.stepUpInteraction.authorizationUrlReady?.(url, opened, browserError);
               context.reportProgress?.(opened
-                ? `Browser opened for MCP ${name} authorization`
+                ? `Browser launch requested for MCP ${name}; manual URL: ${url.toString()}`
                 : `Open this URL to authorize MCP ${name}: ${url.toString()} (${browserError?.message ?? "browser unavailable"})`);
             },
           };

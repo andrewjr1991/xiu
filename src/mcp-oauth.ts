@@ -81,17 +81,42 @@ async function spawnDetached(command: string, args: string[]): Promise<void> {
   child.unref();
 }
 
+async function dispatchWindowsUrl(command: string, args: string[]): Promise<void> {
+  const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.unref();
+      resolve();
+    }, 2_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(`${path.basename(command)} exited with code ${code ?? "unknown"}`));
+    });
+  });
+}
+
+export function windowsBrowserOpenAttempts(url: URL, windowsRoot: string): Array<[string, string[], boolean]> {
+  return [
+    [path.join(windowsRoot, "System32", "rundll32.exe"), ["url.dll,FileProtocolHandler", url.toString()], true],
+    [path.join(windowsRoot, "explorer.exe"), [url.toString()], false],
+  ];
+}
+
 async function defaultOpenBrowser(url: URL): Promise<void> {
   if (process.platform === "win32") {
     const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows";
-    const attempts: Array<[string, string[]]> = [
-      [path.join(windowsRoot, "explorer.exe"), [url.toString()]],
-      [path.join(windowsRoot, "System32", "rundll32.exe"), ["url.dll,FileProtocolHandler", url.toString()]],
-    ];
     let failure: Error | undefined;
-    for (const [command, args] of attempts) {
-      try { await spawnDetached(command, args); return; }
-      catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
+    for (const [command, args, waitForDispatch] of windowsBrowserOpenAttempts(url, windowsRoot)) {
+      try {
+        if (waitForDispatch) await dispatchWindowsUrl(command, args);
+        else await spawnDetached(command, args);
+        return;
+      } catch (error) { failure = error instanceof Error ? error : new Error(String(error)); }
     }
     throw failure ?? new Error("No Windows URL opener is available");
   }
