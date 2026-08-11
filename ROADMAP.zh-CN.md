@@ -423,6 +423,24 @@ v0.7.1 聚焦解决长任务运行时无法继续输入的问题：
 - v0.11.4 暂不实现交互式 OAuth、Resources、Prompts 和 Sampling，避免用不完整实现冒充协议支持。
 - 设计与验收记录在 `V0.11.4_DESIGN.zh-CN.md`。
 
+### v0.12.0 阶段 A-B 已完成（尚未发布）
+
+- v0.12.0 收敛为 v0.12 安全能力的第一个交付切片：远程 MCP OAuth 与新旧协议安全兼容，不同时塞入全部团队治理功能。
+- 目标基线更新为 MCP `2026-07-28`：支持 RFC 9728/RFC 8414/OIDC 发现、PKCE S256、Issuer 与 Resource 绑定、预注册/CIMD/DCR 兼容、Token 刷新、Scope 升权和注销。
+- 新规范已取消传输层握手与 Session；实现 OAuth 前先建立新旧 Streamable HTTP 兼容测试，不继续把 Session 当作连接必要条件。
+- OAuth 凭证将独立保存在用户级敏感存储，项目配置只能声明认证方式，不能读取 Token；登录不会绕过信任、审批、Plan 模式和危险操作确认。
+- DCR 只用于旧 Server 兼容；Xiu 拥有稳定 HTTPS Client Metadata URL 前不冒充内置 CIMD。
+- URL、重定向、SSRF、浏览器启动、state/PKCE/iss、取消和不重复副作用均列为发布阻断验收项。
+- 完整设计与验收矩阵记录在 `V0.12_DESIGN.zh-CN.md`。
+- 阶段 A 已显式启用 SDK 的 `server/discover` 自动协商：旧 Server 明确回退到 initialize + Session，新版 `2026-07-28` Server 无 initialize、无 Session 也可发现和调用工具。
+- OAuth 配置已采用严格字段白名单，拒绝 stdio OAuth、Authorization Header 冲突、非法 Scope/回调端口和配置内 Client Secret；配置 OAuth 的 Server 在显式登录闭环完成前安全停留在 `auth-required`，不会启动浏览器或阻塞其他能力。
+- 新增用户级版本化 `mcp-auth.json` 存储，凭证按 canonical resource、Issuer 和 Client ID 三元绑定，使用 SHA-256 稳定键、原子写入、用户权限、并发串行化和严格读取校验；不接受授权码、state 或 PKCE verifier 字段。
+- 阶段 A 全量基线为 284 项测试全部通过，同时通过 TypeScript 类型检查和正式构建。
+- 阶段 B 已完成安全登录闭环：逐跳 URL/重定向/SSRF 防护、RFC 9728 与 RFC 8414/OIDC 发现、Issuer/resource 绑定、预注册/CIMD/DCR、PKCE S256、一次性 state、本地回调、浏览器授权确认和 `/mcp login`。
+- `/mcp add` 已支持选择 OAuth 并配置预注册 Client、CIMD 或 DCR 兼容路径；授权 Token 独立持久化后可重建连接，并通过本地模拟 OAuth MCP 完成真实工具发现和调用。
+- 阶段 B 已通过 Cloudflare 官方远程 MCP 的真实人工验收：DCR、PKCE、浏览器回调、Token 复用、重连、3 个工具发现和只读查询均成功；远程 `write` 风险与本地 `changesWorkspace` 现已严格分离，避免无文件变化时误触发验证门禁。
+- 阶段 B 自动化基线为 290 项测试全部通过；下一步进入阶段 C，完成刷新 single-flight、Scope 升权、logout/revoke、取消、超时、脱敏与诊断失败矩阵。
+
 ### 当前自动化基线
 
 - 自动化测试覆盖本机保存 Key 的真实鉴权请求、每次连接测试的最小文本调用、无副作用工具探测、推理模型自动选择回退、文本伪工具调用拒绝、视觉内容校验及成功/拒绝/瞬时失败分类、Provider/模型跨进程选择优先级、按模型缓存和 Profile 变更失效、有序备用链与阶段路由持久化、瞬时故障分类与脱敏、阶段切换/能力跳过/任务结束恢复、压缩请求安全切换、流式输出后禁止不安全切换，以及媒体请求去重、未知提交阻断和资源恢复。
@@ -643,6 +661,8 @@ v0.8 的首个里程碑根据真实长任务失败数据调整为“可靠上下
 
 ## 十一、v0.12：安全与团队能力
 
+v0.12 采用分片交付。v0.12.0 先完成远程 MCP OAuth 与协议安全基线；后续小版本再逐步推进权限清单、系统凭证库、沙箱、审计和组织策略，避免一次发布无法充分验证的安全功能集合。
+
 ### 计划能力
 
 - 命令沙箱和进程资源限制。
@@ -763,9 +783,10 @@ v0.8 的首个里程碑根据真实长任务失败数据调整为“可靠上下
 
 如果用户没有改变优先级，后续应按以下顺序继续：
 
-1. 使用本机测试 Server 和一个真实远程 MCP 验收 Streamable HTTP 的连接、工具调用、取消、会话关闭与凭证脱敏。
-2. 修复人工验收发现的阻断问题；执行完整自动化、构建、打包和干净安装后发布 v0.11.4。
-3. 发布后设计 MCP OAuth 与 Resources/Prompts 支持，再进入 Skills 生命周期管理与稳定扩展接口。
+1. 确认 npm 上的真实版本；若 v0.11.4 尚未发布，先按既有人工验收结果完成发布收尾并更新版本记录。
+2. 阶段 A-B 已完成；按 `V0.12_DESIGN.zh-CN.md` 进入阶段 C，实现过期判断与 single-flight 刷新、Refresh Token 旋转安全保存和失效凭证清理。
+3. 随后完成 Scope 升权确认、`/mcp logout`/revoke、Ctrl+C 取消、超时、脱敏与诊断失败矩阵。
+4. v0.12.0 真实 OAuth MCP 验收并发布后，再进入 Resources/Prompts 只读支持与 MCP/Skill 权限清单。
 
 如果用户提出新的高优先级 Bug、安全问题或发布阻断问题，应先处理这些问题，再回到上述顺序，并在本文档记录优先级变化。
 

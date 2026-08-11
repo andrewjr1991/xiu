@@ -42,7 +42,8 @@
     "V0.11.1_DESIGN.zh-CN.md",
     "V0.11.2_DESIGN.zh-CN.md",
     "V0.11.3_DESIGN.zh-CN.md",
-    "V0.11.4_DESIGN.zh-CN.md"
+    "V0.11.4_DESIGN.zh-CN.md",
+    "V0.12_DESIGN.zh-CN.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -163,6 +163,17 @@ test("terminal selector clips long skill descriptions so Esc can clear every phy
   assert.match(lines[1] ?? "", /\.\.\./);
 });
 
+test("terminal selector counts every line in a multiline title", () => {
+  const lines = terminalOptionFrameLines("MCP：https://mcp.example.com\n授权服务器：https://login.example.com\nScope：（默认）", [{
+    label: "允许本次登录",
+    value: true,
+  }], 0, 10, 100, "zh-CN");
+  assert.equal(lines.length, 5);
+  assert.match(lines[0] ?? "", /^MCP：/);
+  assert.match(lines[2] ?? "", /^Scope：/);
+  assert.match(lines[3] ?? "", /允许本次登录/);
+});
+
 test("terminal selector stays compact when Windows reports a wider buffer than viewport", () => {
   const lines = terminalOptionFrameLines("选择 Provider", [{
     label: "阿里云百炼",

@@ -81,6 +81,14 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
     const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id?: number; method: string; params?: Record<string, unknown> };
     requests.push({ method: message.method, session: request.headers["mcp-session-id"] as string | undefined, authorization: request.headers.authorization });
     if (message.id === undefined) { response.writeHead(202).end(); return; }
+    if (message.method === "server/discover") {
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32601, message: "Method not found" },
+      }));
+      return;
+    }
     const toolMessage = message.params?.arguments && (message.params.arguments as Record<string, unknown>).message;
     if (message.method === "tools/call" && toolMessage === "slow") await new Promise((resolve) => setTimeout(resolve, 250));
     const result = message.method === "initialize"
@@ -101,13 +109,15 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
     transport: "streamable-http",
     url: `http://127.0.0.1:${address.port}/mcp`,
     headers: { Authorization: "Bearer ${XIU_TEST_MCP_TOKEN}" },
-    risk: "read",
+    risk: "write",
   } } }));
   const manager = new McpManager(workspace, globalConfig);
   try {
     assert.deepEqual(await manager.start(false), [{ name: "remote", transport: "streamable-http", state: "connected", tools: 1 }]);
     const tool = manager.tools()[0]!;
     assert.equal(tool.name, "mcp__remote__echo");
+    assert.equal(tool.risk, "write");
+    assert.equal(tool.changesWorkspace, false);
     assert.equal(await tool.execute({ message: "hello" }, { cwd: workspace, approve: async () => true }), "remote:hello");
     const controller = new AbortController();
     const pending = tool.execute({ message: "slow" }, { cwd: workspace, approve: async () => true, signal: controller.signal });
@@ -123,6 +133,58 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
     await fs.rm(workspace, { recursive: true, force: true });
   }
   assert.ok(requests.some((item) => item.method === "DELETE" && item.session === sessionId));
+  assert.ok(requests.some((item) => item.method === "server/discover"));
+  assert.ok(requests.some((item) => item.method === "initialize"));
+});
+
+test("MCP manager negotiates modern Streamable HTTP without initialize or sessions", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-modern-http-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  const requests: Array<{ httpMethod?: string; method: string; session?: string; protocol?: string }> = [];
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "GET" || request.method === "DELETE") {
+      requests.push({ httpMethod: request.method, method: request.method, session: request.headers["mcp-session-id"] as string | undefined });
+      response.writeHead(405).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id?: number; method: string; params?: Record<string, unknown> };
+    requests.push({
+      method: message.method,
+      session: request.headers["mcp-session-id"] as string | undefined,
+      protocol: request.headers["mcp-protocol-version"] as string | undefined,
+    });
+    if (message.id === undefined) { response.writeHead(202).end(); return; }
+    const result = message.method === "server/discover"
+      ? { supportedVersions: ["2026-07-28"], capabilities: { tools: {} } }
+      : message.method === "tools/list"
+        ? { resultType: "complete", ttlMs: 0, cacheScope: "private", tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object", properties: { message: { type: "string" } } } }] }
+        : { resultType: "complete", content: [{ type: "text", text: `modern:${String(message.params?.arguments && (message.params.arguments as Record<string, unknown>).message)}` }] };
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { modern: {
+    transport: "streamable-http",
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    risk: "read",
+  } } }));
+  const manager = new McpManager(workspace, globalConfig);
+  try {
+    assert.deepEqual(await manager.start(false), [{ name: "modern", transport: "streamable-http", state: "connected", tools: 1 }]);
+    assert.equal(await manager.tools()[0]!.execute({ message: "hello" }, { cwd: workspace, approve: async () => true }), "modern:hello");
+  } finally {
+    await manager.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+  assert.ok(requests.some((item) => item.method === "server/discover"));
+  assert.ok(requests.some((item) => item.method === "tools/list" && item.protocol === "2026-07-28"));
+  assert.ok(requests.every((item) => item.method !== "initialize"));
+  assert.ok(requests.every((item) => item.session === undefined));
+  assert.ok(requests.every((item) => item.httpMethod !== "DELETE"));
 });
 
 test("MCP remote configuration rejects unsafe URLs and conflicting transports", async () => {
@@ -136,6 +198,44 @@ test("MCP remote configuration rejects unsafe URLs and conflicting transports", 
     await assert.rejects(manager.start(false), /command.*url|exactly one/i);
     await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { reserved: { url: "https://example.com/mcp", headers: { Accept: "text/plain" } } } }));
     await assert.rejects(manager.start(false), /reserved MCP header/i);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { stdioOauth: { command: "node", auth: { type: "oauth" } } } }));
+    await assert.rejects(manager.start(false), /OAuth.*streamable HTTP/i);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { oauthHeader: { url: "https://example.com/mcp", auth: { type: "oauth" }, headers: { Authorization: "Bearer token" } } } }));
+    await assert.rejects(manager.start(false), /OAuth.*Authorization header/i);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { badScopes: { url: "https://example.com/mcp", auth: { type: "oauth", scopes: ["files:read write"] } } } }));
+    await assert.rejects(manager.start(false), /scope/i);
+    await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { secret: { url: "https://example.com/mcp", auth: { type: "oauth", clientSecret: "must-not-be-accepted" } } } }));
+    await assert.rejects(manager.start(false), /unsupported OAuth field clientSecret/i);
+  } finally {
+    await manager.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("OAuth MCP configuration is validated and remains auth-required until explicit login", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-oauth-config-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { secure: {
+    transport: "streamable-http",
+    url: "https://example.com/mcp",
+    auth: {
+      type: "oauth",
+      registration: "pre-registered",
+      clientId: "xiu-public-client",
+      scopes: ["files:read"],
+      callbackPort: 43119,
+    },
+  } } }));
+  const manager = new McpManager(workspace, globalConfig);
+  try {
+    assert.deepEqual(await manager.start(false), [{
+      name: "secure",
+      transport: "streamable-http",
+      state: "auth-required",
+      tools: 0,
+    }]);
+    assert.equal(manager.tools().length, 0);
+    assert.match(manager.summary(), /authentication required/i);
   } finally {
     await manager.close();
     await fs.rm(workspace, { recursive: true, force: true });

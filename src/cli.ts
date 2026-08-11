@@ -20,7 +20,7 @@ import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
-import { McpManager } from "./mcp.js";
+import { McpManager, type McpOAuthConfig } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
@@ -78,6 +78,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
+    item("/mcp login", "登录需要 OAuth 的 MCP 服务", "Log in to an OAuth-protected MCP server"),
     item("/mcp add", "添加用户级远程 MCP 服务", "Add a user-level remote MCP server"),
     item("/mcp remove", "删除用户级 MCP 服务", "Remove a user-level MCP server"),
     item("/mcp test", "测试 MCP 服务连接", "Test an MCP server connection"),
@@ -1687,11 +1688,83 @@ async function main(): Promise<void> {
         console.log(`${mcpManager.summary(language)}\n`);
         continue;
       }
+      if (task === "/mcp login" || task.startsWith("/mcp login ")) {
+        const requested = task.trim().split(/\s+/)[2];
+        const names = await mcpManager.oauthServerNames(projectMcpTrusted);
+        const name = requested ?? await selectTerminalOption(localize(language, "选择要登录的 MCP 服务", "Choose an MCP server to log in to"), names.map((item) => ({ label: item, value: item })), language);
+        if (!name) {
+          console.log(chalk.dim(localize(language, "没有可登录的 OAuth MCP，或操作已取消。\n", "No OAuth MCP server is available, or login was cancelled.\n")));
+          continue;
+        }
+        try {
+          console.log(chalk.cyan(localize(language, `正在为 MCP ${name} 启动安全登录，回调仅监听 127.0.0.1。`, `Starting secure login for MCP ${name}; the callback listens only on 127.0.0.1.`)));
+          await mcpManager.login(name, {
+            confirmAuthorizationServer: async (authorizationServer, resource, details) => {
+              const crossOrigin = authorizationServer.origin !== resource.origin;
+              console.log(localize(language,
+                `MCP：${resource.origin}\n授权服务器：${authorizationServer.origin}${crossOrigin ? "（不同来源）" : ""}\nScope：${details.scopes.join(" ") || "（默认）"}\n回调：${details.callback.toString()}`,
+                `MCP: ${resource.origin}\nAuthorization server: ${authorizationServer.origin}${crossOrigin ? " (cross-origin)" : ""}\nScopes: ${details.scopes.join(" ") || "(default)"}\nCallback: ${details.callback.toString()}`));
+              const choice = await selectTerminalOption(localize(language, "是否允许本次 OAuth 登录？", "Allow this OAuth login?"), [
+                { label: localize(language, "允许本次登录", "Allow this login"), value: true },
+                { label: localize(language, "取消", "Cancel"), value: false },
+              ], language);
+              return choice === true;
+            },
+            authorizationUrlReady: (url, opened, error) => {
+              if (opened) {
+                console.log(chalk.dim(localize(language, "已打开浏览器，正在等待授权回调……", "Browser opened; waiting for the authorization callback...")));
+                return;
+              }
+              console.log(chalk.yellow(localize(language,
+                `无法自动打开浏览器（${error?.message ?? "未知错误"}）。请复制以下链接到浏览器完成授权：\n${url.toString()}`,
+                `Could not open a browser (${error?.message ?? "unknown error"}). Copy this URL into a browser to authorize:\n${url.toString()}`)));
+            },
+          }, projectMcpTrusted);
+          await mcpManager.start(projectMcpTrusted);
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+          const server = mcpManager.status().find((item) => item.name === name);
+          if (server?.state !== "connected") throw new Error(server?.error ?? localize(language, "授权后连接失败", "connection failed after authorization"));
+          console.log(chalk.green(localize(language, `MCP ${name} 登录成功，已连接 ${server.tools} 个工具。\n`, `MCP ${name} login succeeded with ${server.tools} tools.\n`)));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "MCP 登录失败", "MCP login failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        continue;
+      }
       if (task === "/mcp add" || task.startsWith("/mcp add ")) {
         const parts = task.trim().split(/\s+/);
         const name = parts[2] ?? (await askQuestion(localize(language, "MCP 名称：", "MCP name: "))).trim();
         const url = parts[3] ?? (await askQuestion(localize(language, "Streamable HTTP 地址：", "Streamable HTTP URL: "))).trim();
-        const bearerEnv = (parts[4] ?? (await askQuestion(localize(language, "Bearer Token 环境变量名（无需认证可留空）：", "Bearer-token environment variable (blank for no authentication): "))).trim()) || undefined;
+        const positionalBearer = parts[4];
+        const authentication = positionalBearer ? "bearer" : await selectTerminalOption(localize(language, "选择 MCP 认证方式", "Choose MCP authentication"), [
+          { label: localize(language, "无需认证", "No authentication"), value: "none" as const },
+          { label: localize(language, "Bearer 环境变量", "Bearer environment variable"), value: "bearer" as const },
+          { label: "OAuth", value: "oauth" as const },
+        ], language);
+        if (!authentication) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); continue; }
+        const bearerEnv = authentication === "bearer"
+          ? (positionalBearer ?? (await askQuestion(localize(language, "Bearer Token 环境变量名：", "Bearer-token environment variable: "))).trim()) || undefined
+          : undefined;
+        let oauth: McpOAuthConfig | undefined;
+        if (authentication === "oauth") {
+          const registration = await selectTerminalOption(localize(language, "选择 OAuth Client 注册方式", "Choose OAuth client registration"), [
+            { label: localize(language, "预注册 Client ID", "Pre-registered client ID"), value: "pre-registered" as const },
+            { label: "Client ID Metadata Document (CIMD)", value: "cimd" as const },
+            { label: localize(language, "自动兼容注册（DCR）", "Automatic compatibility registration (DCR)"), value: "auto" as const },
+          ], language);
+          if (!registration) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); continue; }
+          const clientId = registration === "pre-registered" ? (await askQuestion(localize(language, "Client ID：", "Client ID: "))).trim() : undefined;
+          const clientMetadataUrl = registration === "cimd" ? (await askQuestion(localize(language, "HTTPS Client Metadata URL：", "HTTPS client metadata URL: "))).trim() : undefined;
+          const scopeInput = (await askQuestion(localize(language, "Scope（空格或逗号分隔，可留空）：", "Scopes (space/comma separated, optional): "))).trim();
+          const callbackInput = (await askQuestion(localize(language, "固定回调端口（留空使用 53121）：", "Fixed callback port (blank for 53121): "))).trim();
+          oauth = {
+            type: "oauth",
+            registration: registration === "pre-registered" ? "pre-registered" : "auto",
+            ...(clientId ? { clientId } : {}),
+            ...(clientMetadataUrl ? { clientMetadataUrl } : {}),
+            ...(scopeInput ? { scopes: scopeInput.split(/[\s,]+/).filter(Boolean) } : {}),
+            ...(callbackInput ? { callbackPort: Number(callbackInput) } : {}),
+          };
+        }
         const risk = await selectTerminalOption(localize(language, "选择 MCP 工具的默认风险等级", "Choose the default MCP tool risk"), [
           { label: localize(language, "执行（推荐）", "Execute (recommended)"), description: localize(language, "调用前按现有风险规则审批", "Use existing risk-based approval before calls"), value: "execute" as const },
           { label: localize(language, "只读", "Read-only"), description: localize(language, "仅当该服务的所有工具确实只读时选择", "Only when every tool on this server is truly read-only"), value: "read" as const },
@@ -1700,13 +1773,16 @@ async function main(): Promise<void> {
         if (!risk) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); continue; }
         status.start(localize(language, `正在添加并连接 MCP ${name}`, `Adding and connecting MCP ${name}`));
         try {
-          await mcpManager.addUserHttpServer(name, url, bearerEnv, risk);
-          await mcpManager.start();
+          if (oauth) await mcpManager.addUserOAuthServer(name, url, oauth, risk);
+          else await mcpManager.addUserHttpServer(name, url, bearerEnv, risk);
+          await mcpManager.start(projectMcpTrusted);
           agent.replaceTools([...baseTools, ...mcpManager.tools()]);
           status.stop();
           const server = mcpManager.status().find((item) => item.name === name);
           const result = server?.state === "connected"
             ? localize(language, `MCP ${name} 已添加并连接，发现 ${server.tools} 个工具。`, `MCP ${name} added and connected with ${server.tools} tools.`)
+            : server?.state === "auth-required"
+              ? localize(language, `MCP ${name} 已保存，需要执行 /mcp login ${name} 完成 OAuth 登录。`, `MCP ${name} was saved; run /mcp login ${name} to complete OAuth login.`)
             : localize(language, `MCP ${name} 已保存，但连接失败：${server?.error ?? "未知错误"}`, `MCP ${name} was saved, but connection failed: ${server?.error ?? "unknown error"}`);
           console.log(`${server?.state === "connected" ? chalk.green(result) : chalk.yellow(result)}\n`);
         } catch (error) {
@@ -1724,7 +1800,7 @@ async function main(): Promise<void> {
         if (!/^(y|yes)$/i.test(confirmed)) { console.log(chalk.dim(localize(language, "已取消删除 MCP。\n", "MCP removal cancelled.\n"))); continue; }
         try {
           if (!await mcpManager.removeUserServer(name)) throw new Error(localize(language, `用户配置中不存在 ${name}`, `${name} does not exist in user configuration`));
-          await mcpManager.start();
+          await mcpManager.start(projectMcpTrusted);
           agent.replaceTools([...baseTools, ...mcpManager.tools()]);
           console.log(chalk.green(localize(language, `已删除 MCP ${name}。\n`, `Removed MCP ${name}.\n`)));
         } catch (error) {
@@ -1735,20 +1811,22 @@ async function main(): Promise<void> {
       if (task === "/mcp test" || task.startsWith("/mcp test ")) {
         const requested = task.trim().split(/\s+/)[2];
         status.start(localize(language, "正在测试 MCP 连接", "Testing MCP connections"));
-        await mcpManager.start();
+        await mcpManager.start(projectMcpTrusted);
         agent.replaceTools([...baseTools, ...mcpManager.tools()]);
         status.stop();
         const servers = requested ? mcpManager.status().filter((item) => item.name === requested) : mcpManager.status();
         if (!servers.length) console.log(chalk.yellow(localize(language, `未找到 MCP ${requested ?? "服务"}。\n`, `MCP ${requested ?? "server"} was not found.\n`)));
         else console.log(`${servers.map((server) => server.state === "connected"
           ? chalk.green(localize(language, `✓ ${server.name}：已连接 · ${server.transport} · ${server.tools} 个工具`, `✓ ${server.name}: connected · ${server.transport} · ${server.tools} tools`))
-          : chalk.red(localize(language, `✗ ${server.name}：连接失败 · ${server.error}`, `✗ ${server.name}: failed · ${server.error}`))).join("\n")}\n`);
+          : server.state === "auth-required"
+            ? chalk.yellow(localize(language, `! ${server.name}：需要 OAuth 登录 · 运行 /mcp login ${server.name}`, `! ${server.name}: OAuth login required · run /mcp login ${server.name}`))
+            : chalk.red(localize(language, `× ${server.name}：连接失败 · ${server.error}`, `× ${server.name}: failed · ${server.error}`))).join("\n")}\n`);
         continue;
       }
       if (task === "/mcp reload") {
         status.start(localize(language, "正在重新加载 MCP 服务", "Reloading MCP servers"));
         try {
-          await mcpManager.start();
+          await mcpManager.start(projectMcpTrusted);
           agent.replaceTools([...baseTools, ...mcpManager.tools()]);
           status.stop();
           console.log(`${chalk.green(localize(language, "MCP 配置已重新加载。", "MCP configuration reloaded."))}\n${mcpManager.summary(language)}\n`);

@@ -421,7 +421,8 @@ export function terminalOptionFrameLines<T>(
   const lineWidth = Math.max(19, Math.min(columns - 4, 88));
   const start = Math.min(Math.max(0, selected - visibleCount + 1), Math.max(0, options.length - visibleCount));
   const visible = options.slice(start, start + visibleCount);
-  const lines = [chalk.bold(truncateDisplay(title, lineWidth))];
+  const titleLines = title.split(/\r?\n/).map((line) => chalk.bold(truncateDisplay(line, lineWidth)));
+  const lines = titleLines.length ? titleLines : [""];
   for (const [offset, option] of visible.entries()) {
     const index = start + offset;
     const pointer = index === selected ? chalk.green(">") : " ";

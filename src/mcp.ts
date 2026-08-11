@@ -5,6 +5,9 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { localize, type UiLanguage } from "./i18n.js";
+import { McpAuthStore } from "./mcp-auth-store.js";
+import { loginMcpOAuth, XiuMcpOAuthProvider, type McpOAuthInteraction } from "./mcp-oauth.js";
+import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -20,11 +23,21 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpOAuthConfig;
   enabled?: boolean;
   risk?: ToolRisk;
   toolRisks?: Record<string, ToolRisk>;
   changesWorkspace?: boolean;
   toolChangesWorkspace?: Record<string, boolean>;
+}
+
+export interface McpOAuthConfig {
+  type: "oauth";
+  registration?: "auto" | "pre-registered";
+  clientId?: string;
+  clientMetadataUrl?: string;
+  scopes?: string[];
+  callbackPort?: number;
 }
 
 interface McpConfigFile {
@@ -48,7 +61,7 @@ interface PendingRequest {
 export interface McpServerStatus {
   name: string;
   transport: "stdio" | "streamable-http";
-  state: "connected" | "failed";
+  state: "connected" | "auth-required" | "authorizing" | "refreshing" | "scope-required" | "failed";
   tools: number;
   error?: string;
 }
@@ -113,6 +126,35 @@ function validateServer(name: string, value: unknown): McpServerConfig {
   }
   if (hasCommand && config.headers !== undefined) throw new Error(`MCP server ${name} stdio transport does not accept headers`);
   if (hasUrl && (config.args !== undefined || config.cwd !== undefined || config.env !== undefined)) throw new Error(`MCP server ${name} streamable HTTP transport does not accept command process options`);
+  if (config.auth !== undefined) {
+    if (!config.auth || typeof config.auth !== "object" || Array.isArray(config.auth)) throw new Error(`MCP server ${name} OAuth configuration must be an object`);
+    if (!hasUrl) throw new Error(`MCP server ${name} OAuth requires streamable HTTP transport`);
+    const auth = config.auth as Record<string, unknown>;
+    const allowedAuthFields = new Set(["type", "registration", "clientId", "clientMetadataUrl", "scopes", "callbackPort"]);
+    const unknownAuthField = Object.keys(auth).find((field) => !allowedAuthFields.has(field));
+    if (unknownAuthField) throw new Error(`MCP server ${name} has an unsupported OAuth field ${unknownAuthField}`);
+    if (auth.type !== "oauth") throw new Error(`MCP server ${name} has an invalid OAuth type`);
+    if (auth.registration !== undefined && !["auto", "pre-registered"].includes(String(auth.registration))) throw new Error(`MCP server ${name} has an invalid OAuth registration mode`);
+    if (auth.clientId !== undefined && (typeof auth.clientId !== "string" || !auth.clientId || auth.clientId.length > 2_048)) throw new Error(`MCP server ${name} has an invalid OAuth client ID`);
+    if (auth.registration === "pre-registered" && !auth.clientId) throw new Error(`MCP server ${name} pre-registered OAuth requires a client ID`);
+    if (auth.clientMetadataUrl !== undefined) {
+      if (typeof auth.clientMetadataUrl !== "string") throw new Error(`MCP server ${name} has an invalid OAuth client metadata URL`);
+      const metadataUrl = validateRemoteUrl(auth.clientMetadataUrl, `${name} OAuth client metadata`);
+      if (!metadataUrl.startsWith("https:")) throw new Error(`MCP server ${name} OAuth client metadata URL must use HTTPS`);
+      auth.clientMetadataUrl = metadataUrl;
+    }
+    if (auth.scopes !== undefined && (!Array.isArray(auth.scopes) || auth.scopes.length > 64
+      || auth.scopes.some((scope) => typeof scope !== "string" || !scope || scope.length > 256 || /\s/.test(scope))
+      || new Set(auth.scopes).size !== auth.scopes.length)) {
+      throw new Error(`MCP server ${name} OAuth scopes must be unique bounded strings without whitespace`);
+    }
+    if (auth.callbackPort !== undefined && (!Number.isInteger(auth.callbackPort) || Number(auth.callbackPort) < 1_024 || Number(auth.callbackPort) > 65_535)) {
+      throw new Error(`MCP server ${name} has an invalid OAuth callback port`);
+    }
+    if (config.headers && Object.keys(config.headers).some((key) => key.toLowerCase() === "authorization")) {
+      throw new Error(`MCP server ${name} OAuth cannot be combined with an Authorization header`);
+    }
+  }
   if (config.risk !== undefined && !VALID_RISKS.has(config.risk as ToolRisk)) throw new Error(`MCP server ${name} has invalid risk`);
   if (config.toolRisks !== undefined && (!config.toolRisks || typeof config.toolRisks !== "object" || Array.isArray(config.toolRisks)
     || Object.values(config.toolRisks).some((item) => !VALID_RISKS.has(item as ToolRisk)))) {
@@ -322,12 +364,17 @@ class HttpMcpConnection implements McpConnectionLike {
   private client?: Client;
   private transport?: StreamableHTTPClientTransport;
 
-  constructor(private name: string, private config: McpServerConfig) {}
+  constructor(private name: string, private config: McpServerConfig, private authProvider?: XiuMcpOAuthProvider) {}
 
   async start(): Promise<McpToolDefinition[]> {
     const headers = Object.fromEntries(Object.entries(this.config.headers ?? {}).map(([key, value]) => [key, expandEnvironment(value)]));
-    const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), { requestInit: { headers } });
-    const client = new Client({ name: "xiu", version: packageJson.version });
+    const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), {
+      requestInit: { headers },
+      ...(this.authProvider ? { authProvider: this.authProvider, fetch: createSafeOAuthFetch() } : {}),
+    });
+    const client = new Client({ name: "xiu", version: packageJson.version }, {
+      versionNegotiation: { mode: "auto", probe: { timeoutMs: 5_000, maxRetries: 0 } },
+    });
     this.client = client;
     this.transport = transport;
     try {
@@ -370,18 +417,30 @@ export class McpManager {
   constructor(
     private workspace: string,
     private globalConfig = path.join(os.homedir(), ".xiu", "mcp.json"),
+    private authStore = new McpAuthStore(),
   ) {}
 
-  async start(includeProject = true): Promise<McpServerStatus[]> {
+  private async configuredServers(includeProject = true): Promise<Record<string, McpServerConfig>> {
     const globalServers = await readConfig(this.globalConfig);
     const projectServers = includeProject ? await readConfig(path.join(this.workspace, ".xiu", "mcp.json")) : {};
-    const servers = { ...globalServers, ...projectServers };
+    return { ...globalServers, ...projectServers };
+  }
+
+  async start(includeProject = true): Promise<McpServerStatus[]> {
+    const servers = await this.configuredServers(includeProject);
     await this.close();
     for (const [name, config] of Object.entries(servers)) {
       if (config.enabled === false) continue;
       const transport = transportOf(config);
+      if (config.auth?.type === "oauth") {
+        const credentials = await this.authStore.find(config.url!);
+        if (!credentials.some((record) => record.tokens)) {
+          this.serverStatuses.push({ name, transport, state: "auth-required", tools: 0 });
+          continue;
+        }
+      }
       const connection: McpConnectionLike = transport === "streamable-http"
-        ? new HttpMcpConnection(name, config)
+        ? new HttpMcpConnection(name, config, config.auth ? new XiuMcpOAuthProvider(config.url!, config.auth, this.authStore) : undefined)
         : new StdioMcpConnection(name, config, this.workspace);
       try {
         const definitions = await connection.start();
@@ -410,7 +469,10 @@ export class McpManager {
 
   private adaptTool(name: string, config: McpServerConfig, connection: McpConnectionLike, definition: McpToolDefinition): AgentTool {
     const risk = config.toolRisks?.[definition.name] ?? config.risk ?? "execute";
-    const changesWorkspace = config.toolChangesWorkspace?.[definition.name] ?? config.changesWorkspace ?? risk === "write";
+    // Risk describes the side effects of a remote call (including external
+    // account changes). Workspace verification is a separate boundary and is
+    // enabled only when the MCP configuration explicitly declares it.
+    const changesWorkspace = config.toolChangesWorkspace?.[definition.name] ?? config.changesWorkspace ?? false;
     const toolName = `mcp__${safeName(name)}__${safeName(definition.name)}`.slice(0, 64);
     return {
       name: toolName,
@@ -431,6 +493,32 @@ export class McpManager {
     return Object.keys(await readConfig(this.globalConfig)).sort((left, right) => left.localeCompare(right));
   }
 
+  async oauthServerNames(includeProject = true): Promise<string[]> {
+    const servers = await this.configuredServers(includeProject);
+    return Object.entries(servers)
+      .filter(([, config]) => config.enabled !== false && config.auth?.type === "oauth")
+      .map(([name]) => name)
+      .sort((left, right) => left.localeCompare(right));
+  }
+
+  async login(name: string, interaction: McpOAuthInteraction = {}, includeProject = true): Promise<void> {
+    const config = (await this.configuredServers(includeProject))[name];
+    if (!config) throw new Error(`MCP server ${name} was not found`);
+    if (!config.url || config.auth?.type !== "oauth") throw new Error(`MCP server ${name} is not configured for OAuth`);
+    const existing = this.serverStatuses.find((server) => server.name === name);
+    if (existing) existing.state = "authorizing";
+    try {
+      const interactive = { ...interaction, interactive: true };
+      await loginMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore, interactive), interactive);
+    } catch (error) {
+      if (existing) {
+        existing.state = "auth-required";
+        existing.error = error instanceof Error ? error.message : String(error);
+      }
+      throw error;
+    }
+  }
+
   async addUserHttpServer(name: string, url: string, bearerTokenEnvironment?: string, risk: ToolRisk = "execute"): Promise<void> {
     const servers = await readConfig(this.globalConfig);
     if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
@@ -442,6 +530,13 @@ export class McpManager {
       risk,
     });
     servers[name] = config;
+    await this.writeUserConfig(servers);
+  }
+
+  async addUserOAuthServer(name: string, url: string, auth: McpOAuthConfig, risk: ToolRisk = "execute"): Promise<void> {
+    const servers = await readConfig(this.globalConfig);
+    if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
+    servers[name] = validateServer(name, { transport: "streamable-http", url, auth, risk });
     await this.writeUserConfig(servers);
   }
 
@@ -466,9 +561,14 @@ export class McpManager {
 
   summary(language: UiLanguage = "en-US"): string {
     if (!this.serverStatuses.length) return localize(language, "未配置 MCP 服务器。", "No MCP servers configured.");
-    return this.serverStatuses.map((server) => server.state === "connected"
-      ? localize(language, `${server.name}：已连接（${server.tools} 个工具）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`)
-      : localize(language, `${server.name}：连接失败 - ${server.error}`, `${server.name}: failed - ${server.error}`)).join("\n");
+    return this.serverStatuses.map((server) => {
+      if (server.state === "connected") return localize(language, `${server.name}：已连接（${server.tools} 个工具）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`);
+      if (server.state === "auth-required") return localize(language, `${server.name}：需要 OAuth 登录`, `${server.name}: OAuth authentication required`);
+      if (server.state === "authorizing") return localize(language, `${server.name}：正在等待 OAuth 授权`, `${server.name}: waiting for OAuth authorization`);
+      if (server.state === "refreshing") return localize(language, `${server.name}：正在刷新 OAuth 凭证`, `${server.name}: refreshing OAuth credentials`);
+      if (server.state === "scope-required") return localize(language, `${server.name}：需要额外 OAuth Scope`, `${server.name}: additional OAuth scope required`);
+      return localize(language, `${server.name}：连接失败 - ${server.error}`, `${server.name}: failed - ${server.error}`);
+    }).join("\n");
   }
 
   async close(): Promise<void> {
