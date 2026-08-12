@@ -82,6 +82,8 @@ Version 0.13.5 adds bounded execution reports assembled from durable task-run ev
 
 Version 0.13.6 is a security hardening release. One-shot commands can no longer bypass first-use workspace trust, and project instructions, project Skills, and project MCP configuration stay unloaded until trust is confirmed. Workspace file access now verifies real filesystem containment and rejects symlink, junction, reparse-point, absolute-glob, and parent-traversal escapes. Every new MCP permission manifest requires explicit first-use approval. Multi-agent cancellation and retry are classified as side-effecting execute operations, session logs use owner-only permissions where supported, and common GitHub, Slack, AWS, private-key, Provider, and OAuth secrets are redacted before persistence.
 
+Version 0.13.7 fixes first-run Provider setup. Fresh installs with no API key remain in interactive setup mode instead of exiting: users can enter the current Provider key, choose another Provider, or configure later with `/provider key` and `/providers`. One-shot tasks without credentials fail with a concise setup instruction instead of a stack trace.
+
 The credential-hardening security gate redacts active Provider and OAuth credential values from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features

@@ -40,7 +40,7 @@ import { builtinTools, classifyCommand } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
-import type { AgentTool } from "./types.js";
+import type { AgentTool, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-routing.js";
 import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome } from "./security-audit.js";
@@ -810,7 +810,20 @@ async function main(): Promise<void> {
     const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...coordinatorTools];
     let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
-    const provider = createProvider(config);
+    let startupProviderError: Error | undefined;
+    let provider: ModelProvider;
+    try {
+      provider = createProvider(config);
+    } catch (error) {
+      startupProviderError = error instanceof Error ? error : new Error(String(error));
+      provider = {
+        async complete(): Promise<never> {
+          throw new Error(localize(language,
+            `当前 Provider 尚未配置：${startupProviderError?.message ?? "缺少凭证"}。请使用 /provider key 或 /providers 完成配置。`,
+            `The current provider is not configured: ${startupProviderError?.message ?? "missing credentials"}. Use /provider key or /providers to finish setup.`));
+        },
+      };
+    }
 
     let activeToolActivity: string | undefined;
     let activeToolDetails: { name: string; description: string; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" } | undefined;
@@ -1117,6 +1130,62 @@ async function main(): Promise<void> {
       }
     };
 
+    const configureStartupProvider = async (): Promise<void> => {
+      if (!startupProviderError) return;
+      console.log(chalk.yellow(localize(language,
+        `当前 Provider ${config.providerLabel ?? config.providerId} 尚未配置（${startupProviderError.message}）。Xiu 已进入配置模式，不会退出。`,
+        `The current provider ${config.providerLabel ?? config.providerId} is not configured (${startupProviderError.message}). Xiu is staying open in setup mode.`)));
+      console.log(chalk.dim(localize(language,
+        "你可以现在完成引导，也可以稍后使用 /provider key 保存 Key，或使用 /providers 切换服务。\n",
+        "You can finish the guided setup now, or later use /provider key to save a key or /providers to switch services.\n")));
+
+      // Piped/non-interactive sessions must remain scriptable. They receive the
+      // same setup guidance, but no prompt is forced in front of their input.
+      if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+
+      const action = await selectTerminalOption(localize(language, "首次使用配置", "First-run setup"), [
+        {
+          label: localize(language, `配置 ${config.providerLabel ?? config.providerId} 的 API Key`, `Configure the API key for ${config.providerLabel ?? config.providerId}`),
+          description: localize(language, "Key 仅保存在本机凭证配置中，输入内容不会显示", "The key stays in local credential storage and input is hidden"),
+          value: "key" as const,
+        },
+        {
+          label: localize(language, "选择其他 Provider", "Choose another provider"),
+          description: localize(language, "可选择 Agnes、本地模型或已经配置的服务", "Choose Agnes, a local model, or another configured service"),
+          value: "provider" as const,
+        },
+        {
+          label: localize(language, "稍后配置", "Configure later"),
+          description: localize(language, "先进入 xiu>，不会关闭程序", "Continue to xiu> without closing the program"),
+          value: "later" as const,
+        },
+      ], language);
+
+      if (action === "key") {
+        try {
+          const apiKey = await askSecret(localize(language, "输入 API Key（输入内容不会显示，直接回车取消）：", "API key (input is hidden; press Enter to cancel): "));
+          if (!apiKey) return;
+          await providerRegistry.setApiKey(config.providerId, apiKey);
+          const saved = providerRegistry.get(config.providerId);
+          if (!saved) throw new Error(localize(language, "Provider 配置不存在。", "Provider profile not found."));
+          if (await switchProviderProfile(saved, true, config.model)) startupProviderError = undefined;
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "配置 Provider 失败", "Could not configure provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
+        return;
+      }
+
+      if (action === "provider") {
+        const profiles = providerRegistry.list();
+        const selected = await selectTerminalOption(localize(language, "选择 Provider", "Choose a provider"), profiles.map((profile) => ({
+          label: profile.name,
+          description: `${profile.id} · ${profile.kind} · ${profile.model} · ${featureNames(profile)}`,
+          value: profile.id,
+        })), language);
+        if (selected && await switchProviderProfile(providerRegistry.get(selected)!)) startupProviderError = undefined;
+      }
+    };
+
     const onSigint = () => {
       status.stop();
       if (agent.cancel()) {
@@ -1126,6 +1195,16 @@ async function main(): Promise<void> {
       else console.log(chalk.dim(localize(language, "\n使用 /exit 退出 Xiu。", "\nUse /exit to leave Xiu.")));
     };
     process.on("SIGINT", onSigint);
+
+    if (startupProviderError && initialTask) {
+      console.error(chalk.red(localize(language,
+        `当前 Provider 尚未配置：${startupProviderError.message}。请先运行 xiu，并按引导配置 Provider 后再执行一次性任务。`,
+        `The current provider is not configured: ${startupProviderError.message}. Run xiu first and complete provider setup before starting a one-shot task.`)));
+      process.exitCode = 1;
+      return;
+    }
+
+    await configureStartupProvider();
 
     if (initialTask) {
       try {

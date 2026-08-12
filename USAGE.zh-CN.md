@@ -54,6 +54,8 @@ Get-Command xiu
 
 Xiu v0.10 支持 Agnes、OpenAI、Anthropic、Ollama、LM Studio、vLLM 和自定义 OpenAI-compatible 服务。云端服务需要各自的 API Key；本地服务不要求云端 Key。
 
+从 v0.13.7 起，新安装如果尚未配置当前 Provider 的 API Key，Xiu 不会报错退出，而会保持在交互式配置模式。终端会提供“配置当前 Provider Key”“选择其他 Provider”“稍后配置”三种选择；即使选择稍后配置，也可以正常进入 `xiu>`，再使用 `/provider key` 或 `/providers` 完成设置。带任务参数的一次性命令无法交互配置，因此会给出明确提示并安全退出；请先单独运行一次 `xiu` 完成配置。
+
 启动后输入：
 
 ```text

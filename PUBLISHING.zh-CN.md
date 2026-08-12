@@ -478,3 +478,13 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 4. `cancel_agent` 和 `retry_agent` 经过执行风险审批，且不会被通用瞬时错误策略自动重放。
 5. 会话日志使用本机私有文件权限（平台支持时），常见 Provider/OAuth、GitHub、Slack、AWS 与私钥样式不会进入持久日志。
 6. 完整测试、构建、包预览和干净目录安装全部通过后，才允许发布并回读 Registry。
+
+## 十七、0.13.7 首次启动修复发布门禁
+
+发布 `0.13.7` 前除通用流程外，还必须在隔离用户目录中验证：
+
+1. 没有当前 Provider API Key 时，单独运行 `xiu` 不显示未处理异常，也不会自动退出。
+2. 交互终端提供“配置当前 Provider Key”“选择其他 Provider”“稍后配置”三种路径；取消或稍后配置仍能进入 `xiu>`。
+3. `/provider key` 保存并验证 Key 后可在当前进程立即切换为可用 Provider。
+4. 带任务参数的一次性命令缺少凭证时，输出明确的首次配置说明并以失败状态退出。
+5. 回归测试、类型检查、构建、包预览和干净目录安装全部通过后，才允许发布并回读 Registry。
