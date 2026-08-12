@@ -840,6 +840,7 @@ export class McpManager {
     const servers = await this.configuredServers(includeProject);
     await this.close();
     this.activeConfigs = new Map(Object.entries(servers));
+    const ready: Array<{ name: string; config: McpServerConfig; transport: "stdio" | "streamable-http" }> = [];
     for (const [name, config] of Object.entries(servers)) {
       if (config.enabled === false) continue;
       const transport = transportOf(config);
@@ -860,15 +861,29 @@ export class McpManager {
           continue;
         }
       }
+      ready.push({ name, config, transport });
+    }
+    type ConnectionResult =
+      | { name: string; config: McpServerConfig; transport: "stdio" | "streamable-http"; connection: McpConnectionLike; definitions: McpToolDefinition[] }
+      | { name: string; config: McpServerConfig; transport: "stdio" | "streamable-http"; error: string; authRequired: boolean };
+    const results: ConnectionResult[] = await Promise.all(ready.map(async ({ name, config, transport }): Promise<ConnectionResult> => {
       const connection: McpConnectionLike = transport === "streamable-http"
         ? new HttpMcpConnection(name, config, config.auth ? new XiuMcpOAuthProvider(config.url!, config.auth, this.authStore) : undefined)
         : new StdioMcpConnection(name, config, this.workspace);
-      try {
-        const definitions = await connection.start();
-        this.connections.set(name, connection);
-        const usedNames = new Set(this.activeTools.map((tool) => tool.name));
-        const tools = definitions.map((definition) => {
-          const tool = this.adaptTool(name, config, connection, definition);
+      try { return { name, config, transport, connection, definitions: await connection.start() }; }
+      catch (error) {
+        await connection.close();
+        const reason = sanitizeOAuthError(error, await this.redactionValues(config.url)).message;
+        const authRequired = Boolean(config.auth && /oauth|unauthori[sz]ed|credentials expired|run \/mcp login/i.test(reason));
+        return { name, config, transport, error: reason, authRequired };
+      }
+    }));
+    const usedNames = new Set<string>();
+    for (const result of results) {
+      if ("definitions" in result) {
+        this.connections.set(result.name, result.connection);
+        const tools = result.definitions.map((definition) => {
+          const tool = this.adaptTool(result.name, result.config, result.connection, definition);
           const original = tool.name;
           let suffix = 2;
           while (usedNames.has(tool.name)) {
@@ -879,13 +894,8 @@ export class McpManager {
           return tool;
         });
         this.activeTools.push(...tools);
-        this.serverStatuses.push({ name, transport, state: "connected", tools: tools.length });
-      } catch (error) {
-        await connection.close();
-        const reason = sanitizeOAuthError(error, await this.redactionValues(config.url)).message;
-        const authRequired = Boolean(config.auth && /oauth|unauthori[sz]ed|credentials expired|run \/mcp login/i.test(reason));
-        this.serverStatuses.push({ name, transport, state: authRequired ? "auth-required" : "failed", tools: 0, error: reason });
-      }
+        this.serverStatuses.push({ name: result.name, transport: result.transport, state: "connected", tools: tools.length });
+      } else this.serverStatuses.push({ name: result.name, transport: result.transport, state: result.authRequired ? "auth-required" : "failed", tools: 0, error: result.error });
     }
     return this.status();
   }

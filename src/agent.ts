@@ -24,6 +24,7 @@ import { sanitizeSecrets } from "./secret-redaction.js";
 import { readEnvironmentCredential } from "./credential-store.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
+import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -82,6 +83,8 @@ export class Agent {
   private taskRoutingOrigin?: { config: AgentConfig; provider: ModelProvider; tools: AgentTool[] };
   private taskWasRouted = false;
   private taskRouteNotices = new Set<string>();
+  private recoverySource?: InterruptedTaskRun;
+  private blockedRecoveryOperations = new Set<string>();
 
   constructor(
     private config: AgentConfig,
@@ -94,6 +97,7 @@ export class Agent {
     private planManager?: TaskPlanManager,
     private checkpointManager?: CheckpointManager,
     private skillRegistry?: SkillRegistry,
+    private taskRunJournal?: TaskRunJournal,
   ) {
     if (restored) {
       this.messages = restored.messages;
@@ -123,16 +127,29 @@ export class Agent {
     this.taskRoutingOrigin = { config: structuredClone(this.config), provider: this.provider, tools: [...this.tools] };
     this.taskWasRouted = false;
     this.taskRouteNotices.clear();
+    this.ensureSession();
     try {
-      return await this.runWithSignal(task, controller.signal);
+      await this.taskRunJournal?.begin({
+        sessionId: this.sessionId!,
+        task,
+        providerId: this.config.providerId,
+        model: this.config.model,
+        ...(this.recoverySource ? { resumedFrom: this.recoverySource.runId } : {}),
+      });
+      const response = await this.runWithSignal(task, controller.signal);
+      const terminalOutcome = this.lastRunOutcome as AgentRunOutcome;
+      await this.taskRunJournal?.complete(terminalOutcome === "unverified" ? "unverified" : terminalOutcome === "failed" ? "failed" : "completed");
+      return response;
     } catch (error) {
       if (controller.signal.aborted) {
         this.lastRunOutcome = "cancelled";
         this.taskDiagnostics?.complete("cancelled");
+        if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("cancelled");
         throw new Error("Task cancelled.");
       }
       this.lastRunOutcome = "failed";
       this.taskDiagnostics?.complete("failed");
+      if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("failed");
       throw error;
     } finally {
       this.stats.activeMs += Date.now() - startedAt;
@@ -155,7 +172,18 @@ export class Agent {
       this.taskRoutingOrigin = undefined;
       this.taskWasRouted = false;
       this.taskRouteNotices.clear();
+      this.recoverySource = undefined;
+      this.blockedRecoveryOperations.clear();
     }
+  }
+
+  setRecoverySource(run: InterruptedTaskRun | undefined): void {
+    if (this.activeController) throw new Error("Cannot change recovery state while a task is running.");
+    this.recoverySource = run;
+    this.blockedRecoveryOperations = new Set(run?.operations
+      .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "succeeded"))
+      .map((operation) => operation.signature)
+      .filter((value): value is string => Boolean(value)) ?? []);
   }
 
   cancel(): boolean {
@@ -175,6 +203,7 @@ export class Agent {
 
   replaceTools(tools: AgentTool[]): void {
     this.tools = [...tools];
+    this.system = undefined;
   }
 
   setFailoverController(controller: ProviderFailoverController | undefined): void {
@@ -214,15 +243,11 @@ export class Agent {
     const contextualTask = prepared ? `${task}\n\n${prepared}` : task;
     this.messages.push({ role: "user", content: contextualTask });
     this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US");
-    if (!this.sessionPath) {
-      this.sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
-      const namespace = this.config.sessionNamespace ?? "sessions";
-      if (!/^[a-zA-Z0-9_-]+$/.test(namespace)) throw new Error("Invalid session namespace.");
-      this.sessionPath = path.join(this.config.cwd, ".xiu", namespace, `${this.sessionId}.jsonl`);
-    }
+    this.ensureSession();
+    const sessionPath = this.sessionPath!;
     this.checkpointManager?.setSession(this.sessionId!);
-    await fs.mkdir(path.dirname(this.sessionPath), { recursive: true });
-    await this.log(this.sessionPath, {
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await this.log(sessionPath, {
       type: "task",
       task,
       contextualTask,
@@ -235,9 +260,9 @@ export class Agent {
     });
     await this.checkpointDiagnostics();
     if (this.planManager) {
-      await this.log(this.sessionPath, { type: "plan_mode", enabled: this.planManager.mode() });
+      await this.log(sessionPath, { type: "plan_mode", enabled: this.planManager.mode() });
       const existingPlan = this.planManager.snapshot();
-      if (existingPlan) await this.log(this.sessionPath, { type: "plan", plan: existingPlan });
+      if (existingPlan) await this.log(sessionPath, { type: "plan", plan: existingPlan });
     }
 
     let workspaceChanged = false;
@@ -263,6 +288,7 @@ export class Agent {
       this.events.onModelStart?.(turn);
       let response;
       let streamed = false;
+      const modelOperation = await this.taskRunJournal?.beginOperation({ kind: "model", name: `turn ${turn}`, sideEffect: "none" });
       try {
         // Buffer Chinese output so it can be normalized before anything is
         // rendered. Streaming partial tokens cannot be converted reliably.
@@ -276,6 +302,9 @@ export class Agent {
         const requested = await this.requestModel(signal, !identityQuestion && this.config.language !== "zh-CN", true, undefined, undefined, routing.phase, routing.reason);
         response = requested.response;
         streamed = requested.streamed;
+      } catch (error) {
+        if (modelOperation) await this.taskRunJournal?.finishOperation(modelOperation, signal.aborted ? "cancelled" : "failed", error instanceof Error ? error.message : String(error));
+        throw error;
       } finally {
         this.events.onModelEnd?.();
       }
@@ -295,7 +324,11 @@ export class Agent {
       if (streamed && response.text) this.events.onTextStreamEnd?.();
       if (response.text) this.events.onAssistantTurn?.(response.text, response.toolCalls.length > 0);
       this.messages.push({ role: "assistant", content: response.text, raw: response.raw, toolCalls: response.toolCalls });
-      await this.log(this.sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, usage: response.usage });
+      await this.log(sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, usage: response.usage });
+      if (modelOperation) {
+        await this.taskRunJournal?.finishOperation(modelOperation, "succeeded", `assistant turn ${turn} persisted`);
+        await this.taskRunJournal?.recoveryPoint("assistant", `assistant turn ${turn} completed`, modelOperation);
+      }
 
       if (response.toolCalls.length === 0) {
         if (await this.applyPendingSteering(turn)) continue;
@@ -303,7 +336,7 @@ export class Agent {
         if (unfinishedPlan && !this.planManager?.mode() && !planReminderSent) {
           const reminder = "Plan gate: the visible task plan still has pending or in-progress steps. Complete the work or update blocked steps with an explanation before finishing.";
           this.messages.push({ role: "user", content: reminder });
-          await this.log(this.sessionPath, { type: "plan_gate", turn, message: reminder });
+          await this.log(sessionPath, { type: "plan_gate", turn, message: reminder });
           this.events.onCompletionGate?.(reminder);
           planReminderSent = true;
           continue;
@@ -311,7 +344,7 @@ export class Agent {
         if (this.steeringHistory.length > auditedSteeringCount) {
           const gate = `Task-contract completion audit: do not finish merely because you answered the latest steering. Re-check every required outcome below against concrete evidence. If any item is incomplete, continue using tools now. Only finish after the PRIMARY GOAL and all ADDITIONAL REQUIREMENTS are complete.\n\nPRIMARY GOAL (still mandatory):\n${this.primaryTask}\n\nADDITIONAL REQUIREMENTS:\n${this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
           this.messages.push({ role: "user", content: gate });
-          await this.log(this.sessionPath, { type: "task_contract_gate", turn, message: gate });
+          await this.log(sessionPath, { type: "task_contract_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
           auditedSteeringCount = this.steeringHistory.length;
           continue;
@@ -319,7 +352,7 @@ export class Agent {
         if (workspaceChanged && !verifiedAfterChange && !completionReminderSent) {
           const gate = `Completion gate: files changed but no verification has passed${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
           this.messages.push({ role: "user", content: gate });
-          await this.log(this.sessionPath, { type: "completion_gate", turn, message: gate });
+          await this.log(sessionPath, { type: "completion_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
           completionReminderSent = true;
           continue;
@@ -349,6 +382,8 @@ export class Agent {
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         let result: string;
         let abortForLoop = false;
+        let taskOperationId: string | undefined;
+        let taskOperationKind: "tool" | "verification" = "tool";
         if (!tool) {
           result = `Unknown tool: ${call.name}`;
         } else {
@@ -374,7 +409,21 @@ export class Agent {
             result = `Tool execution denied: plan mode is read-only. Update the plan or ask the user to turn plan mode off.`;
           } else if ((this.repeatedFailures.get(failureKey) ?? 0) >= 3) {
             result = "Tool error: the same operation already failed three times. Diagnose the cause or choose a different approach.";
+          } else if (this.blockedRecoveryOperations.has(taskOperationSignature(call.name, call.input))) {
+            result = "Tool execution blocked by crash recovery: this exact side-effecting operation was in-flight when Xiu stopped. Verify its effect first; do not replay it automatically.";
           } else {
+            taskOperationKind = this.isVerificationAttempt(call.name, call.input) ? "verification" : "tool";
+            try {
+              taskOperationId = await this.taskRunJournal?.beginOperation({
+                kind: taskOperationKind,
+                name: call.name,
+                signature: taskOperationSignature(call.name, call.input),
+                risk,
+                sideEffect: taskToolSideEffect(risk, Boolean(changesWorkspace)),
+              });
+            } catch (error) {
+              throw new Error(`Task recovery journal unavailable: ${error instanceof Error ? error.message : String(error)}`);
+            }
             result = await executeTool(tool, call.input, {
               cwd: this.config.cwd,
               approve: async (request) => {
@@ -383,9 +432,18 @@ export class Agent {
                 try { approved = await this.approve(request); }
                 finally { this.taskDiagnostics?.finishApproval(approved !== false, request.decisionSource ?? "prompted"); }
                 if (approved && changesWorkspace) {
-                  const checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
+                  const checkpointOperation = await this.taskRunJournal?.beginOperation({ kind: "checkpoint", name: `before ${call.name}`, sideEffect: "none" });
+                  let checkpoint: Awaited<ReturnType<CheckpointManager["capture"]>>;
+                  try {
+                    checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
+                    if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "succeeded", checkpoint ? `checkpoint ${checkpoint.id}` : "checkpoint not required");
+                  } catch (error) {
+                    if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "failed", error instanceof Error ? error.message : String(error));
+                    throw error;
+                  }
                   if (checkpoint) {
                     await this.log(this.sessionPath!, { type: "checkpoint", checkpoint });
+                    await this.taskRunJournal?.recoveryPoint("checkpoint", `checkpoint ${checkpoint.id} captured`, checkpointOperation);
                     this.events.onCheckpoint?.(localize(this.config.language ?? "en-US", `已保存恢复点 ${checkpoint.id}：${checkpoint.files.map((file) => file.path).join(", ")}`, `Checkpoint ${checkpoint.id} saved for ${checkpoint.files.map((file) => file.path).join(", ")}`));
                   }
                 }
@@ -402,7 +460,7 @@ export class Agent {
           } else this.repeatedFailures.delete(failureKey);
           if (call.name === "update_task_plan" && !/^Tool error:/.test(result)) {
             const plan = this.planManager?.snapshot();
-            if (plan) await this.log(this.sessionPath, { type: "plan", plan });
+            if (plan) await this.log(sessionPath, { type: "plan", plan });
             if (plan) this.events.onPlanUpdate?.(plan);
             if (plan) this.taskDiagnostics?.recordProgress();
           }
@@ -425,6 +483,7 @@ export class Agent {
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (message.startsWith("Task recovery journal unavailable:")) throw error;
             result = `Tool error: invalid arguments for ${call.name}: ${message}`;
             this.events.onToolEnd?.(call.name, result);
             this.events.onFailure?.(`${call.name}: ${result}`);
@@ -438,7 +497,7 @@ export class Agent {
         this.recordToolEvidence(call.name, call.input, result);
         const contextResult = this.boundToolContext(result);
         this.messages.push({ role: "tool", content: contextResult, toolCallId: call.id, toolName: call.name });
-        await this.log(this.sessionPath, {
+        await this.log(sessionPath, {
           type: "tool",
           turn,
           id: call.id,
@@ -447,6 +506,10 @@ export class Agent {
           result,
           ...(contextResult === result ? {} : { contextResult }),
         });
+        if (taskOperationId) {
+          await this.taskRunJournal?.finishOperation(taskOperationId, callFailed ? "failed" : "succeeded", result);
+          await this.taskRunJournal?.recoveryPoint(taskOperationKind, `${call.name} ${callFailed ? "failed" : "succeeded"}`, taskOperationId);
+        }
         await this.checkpointDiagnostics();
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
@@ -563,6 +626,14 @@ export class Agent {
     this.checkpointManager?.setSession(restored.id);
   }
 
+  private ensureSession(): void {
+    if (this.sessionPath && this.sessionId) return;
+    this.sessionId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+    const namespace = this.config.sessionNamespace ?? "sessions";
+    if (!/^[a-zA-Z0-9_-]+$/.test(namespace)) throw new Error("Invalid session namespace.");
+    this.sessionPath = path.join(this.config.cwd, ".xiu", namespace, `${this.sessionId}.jsonl`);
+  }
+
   async setPlanMode(enabled: boolean): Promise<void> {
     if (!this.planManager) throw new Error("Plan manager is unavailable.");
     this.planManager.setMode(enabled);
@@ -603,10 +674,15 @@ export class Agent {
   private async applyPendingSteering(turn: number): Promise<boolean> {
     if (!this.pendingSteering.length) return false;
     const items = this.pendingSteering.splice(0);
+    const operation = await this.taskRunJournal?.beginOperation({ kind: "steering", name: `turn ${turn} steering`, sideEffect: "none" });
     const content = `User steering received while the task was running. It adds requirements but NEVER replaces or lowers the priority of the primary goal. Do not stop after answering only the steering. Continue until both sections are complete.\n\nPRIMARY GOAL (still mandatory):\n${this.primaryTask}\n\nADDITIONAL REQUIREMENTS:\n${this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nNEWLY RECEIVED IN THIS TURN:\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
     this.messages.push({ role: "user", content });
     this.taskDiagnostics?.recordProgress();
     if (this.sessionPath) await this.log(this.sessionPath, { type: "steering", turn, items });
+    if (operation) {
+      await this.taskRunJournal?.finishOperation(operation, "succeeded", `${items.length} steering item(s) persisted`);
+      await this.taskRunJournal?.recoveryPoint("steering", `turn ${turn} steering persisted`, operation);
+    }
     return true;
   }
 
@@ -945,7 +1021,7 @@ export class Agent {
   }
 
   private toolResultFailed(result: string): boolean {
-    return /^(?:Tool error:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
+    return /^(?:Tool error:|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
   }
 
   private async checkpointDiagnostics(): Promise<void> {

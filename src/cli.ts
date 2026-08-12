@@ -44,6 +44,7 @@ import type { AgentTool } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-routing.js";
 import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome } from "./security-audit.js";
+import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -51,6 +52,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
   const item = (name: string, zh: string, en: string): SlashCommand => ({ name, description: localize(language, zh, en) });
   return [
     item("/resume", "选择并恢复项目会话", "Choose and restore a project session"),
+    item("/recover", "恢复上次异常中断的任务", "Recover the last interrupted task"),
     item("/history", "查看最近对话", "Show recent conversation"),
     item("/history sessions", "列出本项目会话", "List sessions in this project"),
     item("/compact", "压缩对话上下文", "Compress conversation context"),
@@ -278,6 +280,9 @@ async function main(): Promise<void> {
     startupProfile.model,
   );
   const config = profileConfig(startupProfile, startupModel);
+  const taskRunJournal = new TaskRunJournal(config.cwd);
+  let recoverySource: InterruptedTaskRun | undefined;
+  let confirmedRecoveryTask: string | undefined;
   const securityAudit = new SecurityAuditLog(undefined, config.cwd);
   const auditCredential = async (action: string, subject: string | undefined, outcome: SecurityAuditOutcome): Promise<void> => {
     await securityAudit.record({ category: "credential", action, outcome, ...(subject ? { subject } : {}), source: "command" });
@@ -289,6 +294,7 @@ async function main(): Promise<void> {
   const status = new StatusLine();
   const activities = new ActivityLog();
   const mcpManager = new McpManager(config.cwd, undefined, new McpAuthStore(undefined, mcpSystemCredentialStore));
+  let mcpStartup: Promise<ReturnType<McpManager["status"]>> | undefined;
   const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
     const storage = backend.backend === "environment"
       ? localize(language, "进程环境变量", "process environment")
@@ -371,18 +377,32 @@ async function main(): Promise<void> {
 
     if (!initialTask && !(await confirmWorkspaceTrust(config.cwd, language))) return;
     await skillRegistry.refresh(true);
-    status.start(localize(language, "正在连接 MCP 服务", "Connecting MCP servers"));
     let mcpStatuses = [] as ReturnType<McpManager["status"]>;
     let mcpConfigError: unknown;
     const projectMcpTrusted = await isWorkspaceTrusted(config.cwd);
-    try { mcpStatuses = await mcpManager.start(projectMcpTrusted); }
-    catch (error) { mcpConfigError = error; }
-    finally { status.stop(); }
-    if (mcpConfigError) console.log(chalk.yellow(localize(language, `未加载 MCP 配置：${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`, `MCP configuration was not loaded: ${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`)));
+    const startMcp = async (): Promise<ReturnType<McpManager["status"]>> => {
+      try {
+        mcpStatuses = await mcpManager.start(projectMcpTrusted);
+        return mcpStatuses;
+      } catch (error) {
+        mcpConfigError = error;
+        return [];
+      }
+    };
+    if (initialTask) {
+      status.start(localize(language, "正在连接 MCP 服务", "Connecting MCP servers"));
+      try { await startMcp(); }
+      finally { status.stop(); }
+    } else {
+      // Interactive startup must remain immediately usable. MCP connections are
+      // established in the background and attached to the agent once ready.
+      mcpStartup = startMcp();
+    }
+    if (initialTask && mcpConfigError) console.log(chalk.yellow(localize(language, `未加载 MCP 配置：${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`, `MCP configuration was not loaded: ${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`)));
     if (!projectMcpTrusted && initialTask && await fs.stat(path.join(config.cwd, ".xiu", "mcp.json")).then(() => true).catch(() => false)) {
       console.log(chalk.yellow(localize(language, "工作区尚未信任，因此已跳过项目 MCP 配置。请先以交互方式启动 Xiu 并确认信任。\n", "Project MCP configuration was skipped because this workspace has not been trusted. Start interactive Xiu once to review and trust it.\n")));
     }
-    if (mcpStatuses.length) {
+    if (initialTask && mcpStatuses.length) {
       const connected = mcpStatuses.filter((server) => server.state === "connected");
       const failed = mcpStatuses.filter((server) => server.state === "failed");
       const permissions = mcpStatuses.filter((server) => server.state === "permission-required");
@@ -613,6 +633,53 @@ async function main(): Promise<void> {
       return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
     };
 
+    try {
+      recoverySource = await taskRunJournal.interrupted();
+    } catch (error) {
+      console.log(chalk.red(localize(language,
+        `任务恢复日志无法读取：${error instanceof Error ? error.message : String(error)}。为避免错误重放，Xiu 不会开始新任务。`,
+        `The task recovery journal could not be read: ${error instanceof Error ? error.message : String(error)}. Xiu will not start a new task because replay safety cannot be established.`)));
+      return;
+    }
+    if (recoverySource) {
+      if (initialTask) {
+        console.log(chalk.red(localize(language,
+          `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先不带任务参数启动 xiu，确认恢复或放弃后再运行新任务。`,
+          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task first and explicitly resume or abandon it before running a new task.`)));
+        return;
+      }
+      const point = recoverySource.recoveryPoints.at(-1);
+      console.log(chalk.yellow(localize(language,
+        `检测到异常中断任务：${recoverySource.taskPreview || "（无摘要）"}\n最后恢复点：${point?.evidence ?? "尚无安全恢复点"}\n待核验副作用：${recoverySource.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,
+        `Interrupted task detected: ${recoverySource.taskPreview || "(no summary)"}\nLast recovery point: ${point?.evidence ?? "no safe recovery point"}\nSide effects awaiting verification: ${recoverySource.pendingSideEffects.length}. Xiu will not replay them automatically.`)));
+      const action = await selectTerminalOption(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
+        { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "恢复会话，先核验未知副作用，再继续剩余任务", "Restore the session, verify unknown side effects, then continue"), value: "resume" as const },
+        { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "将旧任务标记为已放弃，不执行任何旧操作", "Mark it abandoned without executing any old operation"), value: "abandon" as const },
+        { label: localize(language, "退出", "Exit"), description: localize(language, "保持恢复记录，暂不继续", "Keep the recovery record and do nothing"), value: "exit" as const },
+      ], language);
+      if (action === "resume") {
+        try {
+          restored = await loadSession(config.cwd, recoverySource.sessionId);
+        } catch (error) {
+          console.log(chalk.red(localize(language,
+            `无法加载关联会话：${error instanceof Error ? error.message : String(error)}。恢复记录已保留。`,
+            `The linked session could not be loaded: ${error instanceof Error ? error.message : String(error)}. The recovery record was preserved.`)));
+          return;
+        }
+        if (restored.providerId) {
+          const profile = providerRegistry.get(restored.providerId);
+          if (profile) Object.assign(config, profileConfig(profile, restored.model));
+        }
+        confirmedRecoveryTask = recoveryContinuation(recoverySource, language);
+      } else if (action === "abandon") {
+        await taskRunJournal.abandon(recoverySource.runId);
+        console.log(chalk.green(localize(language, "旧任务已标记为放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
+        recoverySource = undefined;
+      } else {
+        return;
+      }
+    }
+
     const visibleAgentStates = new Map<string, string>();
     const agentActivities = new Map<string, string>();
     const coordinator = new MultiAgentCoordinator(
@@ -770,7 +837,7 @@ async function main(): Promise<void> {
         },
         onToolEnd: (_name, result) => {
           stopPhase();
-          const failed = /^(?:Tool error:|Tool execution denied|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
+          const failed = /^(?:Tool error:|Tool execution denied|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = result.replace(/\s+/g, " ").trim();
@@ -859,7 +926,19 @@ async function main(): Promise<void> {
       planManager,
       checkpointManager,
       skillRegistry,
+      taskRunJournal,
     );
+    const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+    const ensureMcpReady = async (): Promise<void> => {
+      if (mcpStartup) await mcpStartup;
+      attachMcpTools();
+    };
+    if (mcpStartup) {
+      // Do not print from this continuation: asynchronous output would corrupt
+      // the active line editor. /mcp exposes connection failures on demand.
+      void mcpStartup.then(attachMcpTools);
+    }
+    if (recoverySource) agent.setRecoverySource(recoverySource);
     const featureNames = (profile: ProviderProfile, model = profile.model): string => {
       profile = runtimeProfile(profile, model);
       const names = [localize(language, "文本", "text")];
@@ -1307,6 +1386,17 @@ async function main(): Promise<void> {
       return exitRequested;
     };
 
+    if (confirmedRecoveryTask && recoverySource) {
+      console.log(chalk.cyan(localize(language, "已确认恢复。Xiu 将先核验中断时状态未知的操作，再继续原任务。\n", "Recovery confirmed. Xiu will verify operations left in an unknown state before continuing.\n")));
+      const exitAfterRecovery = await runTaskSequence(confirmedRecoveryTask, {
+        task: localize(language, `恢复中断任务：${recoverySource.taskPreview}`, `Recover interrupted task: ${recoverySource.taskPreview}`),
+        inputKind: "system",
+      });
+      if (exitAfterRecovery) return;
+      confirmedRecoveryTask = undefined;
+      recoverySource = undefined;
+    }
+
     while (true) {
       const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
@@ -1320,7 +1410,56 @@ async function main(): Promise<void> {
       restoredDraft = await draftStore.load();
       if (!task) continue;
       inputHistory.push(task);
+      if (task === "/mcp" || task.startsWith("/mcp ")) {
+        await ensureMcpReady();
+        if (mcpConfigError) {
+          console.log(chalk.yellow(localize(language, `未加载 MCP 配置：${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`, `MCP configuration was not loaded: ${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`)));
+        }
+      }
       if (task === "/exit" || task === "/quit") break;
+      if (task === "/recover") {
+        let interrupted: InterruptedTaskRun | undefined;
+        try { interrupted = await taskRunJournal.interrupted(); }
+        catch (error) {
+          console.error(chalk.red(`${localize(language, "任务恢复日志无法读取", "Could not read the task recovery journal")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          continue;
+        }
+        if (!interrupted) {
+          console.log(chalk.dim(localize(language, "当前工作区没有异常中断任务。\n", "There is no interrupted task in this workspace.\n")));
+          continue;
+        }
+        const action = await selectTerminalOption(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
+          { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "先核验未知副作用，再继续", "Verify unknown side effects before continuing"), value: "resume" as const },
+          { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "不重放任何操作", "Do not replay any operation"), value: "abandon" as const },
+        ], language);
+        if (action === "abandon") {
+          await taskRunJournal.abandon(interrupted.runId);
+          console.log(chalk.green(localize(language, "旧任务已放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
+          continue;
+        }
+        if (action !== "resume") continue;
+        let selected: RestoredSession;
+        try { selected = await loadSession(config.cwd, interrupted.sessionId); }
+        catch (error) {
+          console.error(chalk.red(`${localize(language, "无法加载关联会话", "Could not load the linked session")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          continue;
+        }
+        if (selected.providerId && selected.providerId !== config.providerId) {
+          const selectedProfile = providerRegistry.get(selected.providerId);
+          if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
+            console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，恢复记录保持不变。\n", "Could not restore the session provider; the recovery record was preserved.\n")));
+            continue;
+          }
+        }
+        agent.restoreSession(selected);
+        agent.setRecoverySource(interrupted);
+        renderReplay(selected);
+        await runTaskSequence(recoveryContinuation(interrupted, language), {
+          task: localize(language, `恢复中断任务：${interrupted.taskPreview}`, `Recover interrupted task: ${interrupted.taskPreview}`),
+          inputKind: "system",
+        });
+        continue;
+      }
       if (task === "/resume") {
         const selected = await chooseSession(config.cwd, language);
         if (!selected) console.log(chalk.dim(localize(language, "未选择会话。\n", "No session selected.\n")));
@@ -2486,6 +2625,7 @@ async function main(): Promise<void> {
     process.off("SIGINT", onSigint);
   } finally {
     status.stop();
+    if (typeof mcpStartup !== "undefined") await mcpStartup.catch(() => undefined);
     await mcpManager.close();
     await stopAllBackgroundProcesses();
   }
