@@ -91,6 +91,20 @@ test("continued task runs report the original goal and cumulative file evidence"
   assert.match(formatExecutionReport(report, "zh-CN"), /状态: 已完成/);
 });
 
+test("Chinese report localizes persisted enum values and built-in evidence", () => {
+  const item = run();
+  item.operations.find((operation) => operation.kind === "verification")!.name = "verify_output";
+  item.operations.find((operation) => operation.kind === "verification")!.evidence = "Verification passed: snake.html - size: 18223 bytes - required substrings: 5/5 - forbidden substrings absent: 0/0";
+  item.recoveryPoints[0]!.evidence = "assistant turn 4 completed";
+  const report = buildExecutionReport({ cwd: "D:/workspace", run: item, turn: turn("sk-abcdefghijklmnopqrstuvwxyz012345") });
+  const text = formatExecutionReport(report, "zh-CN");
+  assert.match(text, /服务商\/模型/);
+  assert.match(text, /已修改 `src\/app\.ts`/);
+  assert.match(text, /成功 · 输出验证 · 验证通过：snake\.html - 大小：18223 字节 - 必需内容：5\/5 - 禁止内容未出现：0\/0/);
+  assert.match(text, /最近恢复点: 助手第 4 轮已完成/);
+  assert.doesNotMatch(text, /Provider\/Model|created|modified|Verification passed|required substrings|assistant turn|details 范围/);
+});
+
 test("report export stays inside the workspace and writes atomically", async (t) => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-report-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));

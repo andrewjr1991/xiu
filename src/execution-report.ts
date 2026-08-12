@@ -214,6 +214,53 @@ function nextActionLabel(report: ExecutionReport, language: UiLanguage): string 
   return "沿用已记录证据创建后续任务；不要自动重放副作用未知的操作。";
 }
 
+function fileKindLabel(kind: string, language: UiLanguage): string {
+  if (language !== "zh-CN") return kind;
+  return ({ created: "已创建", modified: "已修改", deleted: "已删除" } as Record<string, string>)[kind] ?? kind;
+}
+
+function operationLabel(name: string, language: UiLanguage): string {
+  if (language !== "zh-CN") return name;
+  return ({
+    verify_output: "输出验证", read_file: "读取文件", write_file: "写入文件", replace_text: "替换文本",
+    apply_patch: "应用补丁", run_command: "运行命令", run_process: "运行程序", git_status: "检查 Git 状态",
+  } as Record<string, string>)[name] ?? name;
+}
+
+function evidenceLabel(value: string, language: UiLanguage): string {
+  if (language !== "zh-CN") return value;
+  return value
+    .replace(/^Verification passed:\s*/i, "验证通过：")
+    .replace(/\bsize:\s*([\d,]+)\s*bytes?\b/gi, "大小：$1 字节")
+    .replace(/\brequired substrings:\s*(\d+\/\d+)/gi, "必需内容：$1")
+    .replace(/\bforbidden substrings absent:\s*(\d+\/\d+)/gi, "禁止内容未出现：$1")
+    .replace(/^assistant turn\s+(\d+)\s+completed$/i, "助手第 $1 轮已完成")
+    .replace(/^assistant turn\s+(\d+)\s+persisted$/i, "助手第 $1 轮已保存")
+    .replace(/^tests? passed$/i, "测试通过");
+}
+
+function failureSourceLabel(source: "operation" | "diagnostic", language: UiLanguage): string {
+  if (language !== "zh-CN") return source;
+  return source === "operation" ? "操作" : "诊断";
+}
+
+function sideEffectLabel(value: string, language: UiLanguage): string {
+  if (language !== "zh-CN") return value;
+  return value
+    .replace(/\(none, safe-after-confirmation\)/g, "（无副作用，确认后可安全重放）")
+    .replace(/\(workspace, verify-first\)/g, "（工作区副作用，需先验证）")
+    .replace(/\(process, forbidden\)/g, "（进程副作用，禁止重放）")
+    .replace(/\(external, forbidden\)/g, "（外部副作用，禁止重放）")
+    .replace(/\(unknown, forbidden\)/g, "（未知副作用，禁止重放）");
+}
+
+function keyActionLabel(value: string, language: UiLanguage): string {
+  if (language !== "zh-CN") return value;
+  const separator = value.indexOf(": ");
+  if (separator < 0) return operationLabel(value, language);
+  return `${operationLabel(value.slice(0, separator), language)}：${evidenceLabel(value.slice(separator + 2), language)}`;
+}
+
 export function formatExecutionReport(report: ExecutionReport, language: UiLanguage = "zh-CN"): string {
   const zh = language === "zh-CN";
   const lines = [
@@ -224,34 +271,34 @@ export function formatExecutionReport(report: ExecutionReport, language: UiLangu
     `- ${zh ? "完整" : "Complete"}: ${yes(report.outcome.complete, language)}`,
     `- ${zh ? "已验证" : "Verified"}: ${yes(report.outcome.verified, language)}`,
     `- ${zh ? "可继续" : "Can continue"}: ${yes(report.outcome.canContinue, language)} · ${nextActionLabel(report, language)}`,
-    `- Provider/Model: ${report.run.provider}/${report.run.model}`,
-    `- ${zh ? "耗时" : "Duration"}: ${(report.run.durationMs / 1000).toFixed(1)}s`,
+    `- ${zh ? "服务商/模型" : "Provider/Model"}: ${report.run.provider}/${report.run.model}`,
+    `- ${zh ? "耗时" : "Duration"}: ${(report.run.durationMs / 1000).toFixed(1)}${zh ? " 秒" : "s"}`,
     "",
     `## ${zh ? "关键操作与依据" : "Key actions and evidence"}`,
-    ...(report.keyActions.length ? report.keyActions.map((item) => `- ${item}`) : [`- ${zh ? "无单独回执；请结合阶段与验证证据复核" : "no separate receipts; review the phases and verification evidence"}`]),
+    ...(report.keyActions.length ? report.keyActions.map((item) => `- ${keyActionLabel(item, language)}`) : [`- ${zh ? "无单独回执；请结合阶段与验证证据复核" : "no separate receipts; review the phases and verification evidence"}`]),
     "",
     `## ${zh ? "阶段" : "Phases"}`,
     ...report.phases.map((item) => `- ${statusLabel(item.kind, language)}: ${item.succeeded}/${item.total} ${zh ? "成功" : "succeeded"} · ${item.failed} ${zh ? "失败" : "failed"} · ${item.pending} ${zh ? "待确认" : "pending"}`),
     "",
     `## ${zh ? "文件变化" : "File changes"}`,
     ...(report.files.length ? report.files.flatMap((file) => [
-      `- ${file.kind} \`${file.path}\`${file.additions === undefined ? "" : ` +${file.additions}`}${file.deletions === undefined ? "" : ` -${file.deletions}`}`,
+      `- ${fileKindLabel(file.kind, language)} \`${file.path}\`${file.additions === undefined ? "" : ` +${file.additions}`}${file.deletions === undefined ? "" : ` -${file.deletions}`}`,
       ...(file.preview ?? []).map((line) => `  - \`${line.replace(/`/g, "'")}\``),
     ]) : [`- ${zh ? "无记录" : "none recorded"}`]),
     "",
     `## ${zh ? "验证证据" : "Verification evidence"}`,
-    ...(report.verification.length ? report.verification.map((item) => `- ${statusLabel(item.status, language)} · ${item.name}${item.evidence ? ` · ${item.evidence}` : ""}`) : [`- ${zh ? "无验证操作记录" : "no verification operation recorded"}`]),
+    ...(report.verification.length ? report.verification.map((item) => `- ${statusLabel(item.status, language)} · ${operationLabel(item.name, language)}${item.evidence ? ` · ${evidenceLabel(item.evidence, language)}` : ""}`) : [`- ${zh ? "无验证操作记录" : "no verification operation recorded"}`]),
     "",
     `## ${zh ? "失败与重试" : "Failures and retries"}`,
-    ...(report.failures.length ? report.failures.map((item) => `- ${item.source} · ${item.operation}: ${item.message}`) : [`- ${zh ? "无" : "none"}`]),
+    ...(report.failures.length ? report.failures.map((item) => `- ${failureSourceLabel(item.source, language)} · ${operationLabel(item.operation, language)}: ${evidenceLabel(item.message, language)}`) : [`- ${zh ? "无" : "none"}`]),
     ...(report.diagnostics ? [`- ${zh ? "模型重试" : "Model retries"}: ${report.diagnostics.retries} · ${zh ? "模型调用" : "model calls"}: ${report.diagnostics.modelCalls} · ${zh ? "工具调用" : "tool calls"}: ${report.diagnostics.toolCalls}`] : []),
     "",
     `## ${zh ? "安全与恢复" : "Security and recovery"}`,
     `- ${zh ? "安全事件" : "Security events"}: ${report.security.events} · ${zh ? "拒绝" : "denied"}: ${report.security.denied} · ${zh ? "失败" : "failed"}: ${report.security.failed}`,
-    `- ${zh ? "未知副作用" : "Unknown side effects"}: ${report.recovery.unknownSideEffects.length ? report.recovery.unknownSideEffects.join(", ") : (zh ? "无" : "none")}`,
-    ...(report.recovery.lastEvidence ? [`- ${zh ? "最近恢复点" : "Latest recovery point"}: ${report.recovery.lastEvidence}`] : []),
+    `- ${zh ? "未知副作用" : "Unknown side effects"}: ${report.recovery.unknownSideEffects.length ? report.recovery.unknownSideEffects.map((item) => sideEffectLabel(item, language)).join("、") : (zh ? "无" : "none")}`,
+    ...(report.recovery.lastEvidence ? [`- ${zh ? "最近恢复点" : "Latest recovery point"}: ${evidenceLabel(report.recovery.lastEvidence, language)}`] : []),
     "",
-    `> ${zh ? "报告默认脱敏且有界；details 范围仅额外包含少量脱敏文件预览。" : "The report is redacted and bounded by default; details only adds small redacted file previews."}`,
+    `> ${zh ? "报告默认脱敏且有界；详细范围仅额外包含少量脱敏文件预览。" : "The report is redacted and bounded by default; details only adds small redacted file previews."}`,
   ];
   return lines.join("\n");
 }
