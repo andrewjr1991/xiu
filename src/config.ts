@@ -49,6 +49,8 @@ export interface AgentConfig {
   language?: UiLanguage;
   taskBudget?: TaskBudgetLimits;
   stallTimeoutMs?: number;
+  /** Internal marker for a detached Xiu process that cannot answer interactive approvals. */
+  backgroundMode?: boolean;
 }
 
 export function resolveConfig(options: {
@@ -187,5 +189,6 @@ export function resolveConfig(options: {
     language,
     taskBudget,
     stallTimeoutMs: stallTimeoutSeconds * 1_000,
+    backgroundMode: process.env.XIU_DETACHED_BACKGROUND === "1",
   };
 }

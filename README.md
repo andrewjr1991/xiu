@@ -76,6 +76,8 @@ Version 0.13.2 unifies retry classification and replay safety across model, tool
 
 Version 0.13.3 adds opt-in task budgets for cumulative Tokens, model calls, tool calls, failures, and elapsed wall time. Warnings appear before a configured limit; exhaustion pauses only between operations, writes a recoverable task-run record, and never reports completion. `/diagnostics` and the live footer share the same budget snapshot. User answers, approval waits, bounded retry backoff, and background waits are explicit states and are not classified as stalls.
 
+Version 0.13.4 replaces process-local background commands with detached, workspace-isolated jobs. `/background start`, `list`, `read`, and `cancel` provide stable job IDs, persisted state, incremental output cursors, exit evidence, and explicit cancellation after the original terminal has closed. Starting a job remains an explicit, risk-aware user action; Xiu shutdown no longer cancels it. A long autonomous task can be launched as a background command such as `xiu -y --budget-seconds 1800 "<task>"`; operations that still require interactive approval are not silently authorized and remain recoverable through the normal task journal.
+
 Phase E closes the automated security gate: active Provider and OAuth credential values are redacted from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features
@@ -114,7 +116,7 @@ Phase E closes the automated security gate: active Provider and OAuth credential
 - Read-only operations run automatically; dangerous commands always require explicit approval
 - Structured `apply_patch` previews before focused file edits
 - Ctrl+C cancellation for active model and command work, plus clear command timeouts
-- Managed background commands for development servers, log inspection, and clean shutdown
+- Detached background commands with persisted state, incremental logs, cross-terminal discovery, and explicit cancellation
 - Completion gate that requests verification after workspace changes
 - Tool loop with a configurable turn limit
 - Resumable, project-isolated JSONL sessions under `.xiu/sessions/`

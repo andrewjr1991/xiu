@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Agent } from "../src/agent.js";
+import { Agent, BackgroundApprovalRequiredError } from "../src/agent.js";
 import { resolveConfig, type AgentConfig } from "../src/config.js";
 import { loadSession } from "../src/session.js";
 import { builtinTools } from "../src/tools.js";
+import { TaskRunJournal } from "../src/task-run.js";
 import type { AgentTool, AssistantTurn, ConversationMessage, ModelProvider, ToolDefinition } from "../src/types.js";
 
 class ScriptedProvider implements ModelProvider {
@@ -110,6 +111,39 @@ test("agent stops at a safe boundary before executing tools after token budget e
   assert.equal(toolRan, false);
   assert.equal(agent.status().outcome, "paused");
   assert.equal(agent.status().diagnostics?.budget?.state, "exhausted");
+});
+
+test("detached agent pauses recoverably when a new approval is required", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-background-approval-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "workspace");
+  await fs.mkdir(cwd);
+  let toolRan = false;
+  const provider: ModelProvider = {
+    async complete() {
+      return { text: "About to write.", toolCalls: [{ id: "call", name: "side_effect", input: {} }], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "side_effect", description: "side effect", risk: "write", changesWorkspace: true,
+    inputSchema: { type: "object", properties: {} }, describe: () => "write the result",
+    execute: async () => { toolRan = true; return "done"; },
+  };
+  const journal = new TaskRunJournal(cwd, path.join(root, "task-runs"));
+  const agent = new Agent(
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, backgroundMode: true },
+    provider,
+    [tool],
+    async (request) => { throw new BackgroundApprovalRequiredError(request.description); },
+    {}, undefined, undefined, undefined, undefined, undefined, journal,
+  );
+
+  await assert.rejects(() => agent.run("write in background"), /background task requires|后台任务需要/i);
+  assert.equal(toolRan, false);
+  assert.equal(agent.status().outcome, "paused");
+  const interrupted = await new TaskRunJournal(cwd, path.join(root, "task-runs")).interrupted();
+  assert.equal(interrupted?.status, "paused");
+  assert.match(interrupted?.recoveryPoints.at(-1)?.evidence ?? "", /background approval required/);
 });
 
 test("agent completes a generated artifact after verify_output passes", async () => {

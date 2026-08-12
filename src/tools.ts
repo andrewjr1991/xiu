@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import fg from "fast-glob";
 import iconv from "iconv-lite";
-import { backgroundProcessOutput, listBackgroundProcesses, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
+import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
 import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
@@ -629,16 +629,19 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "read_background_output",
-    description: "Read recent output from a managed background command.",
+    description: "Read persisted output from a managed background command. Pass the returned nextCursor to fetch only new output later.",
     risk: "read",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string" } },
+      properties: { id: { type: "string" }, cursor: { type: "integer", minimum: 0 } },
       required: ["id"],
       additionalProperties: false,
     },
     describe: (input) => `read background output ${String(input.id)}`,
-    async execute(input) { return truncate(backgroundProcessOutput(stringArg(input, "id"))); },
+    async execute(input) {
+      const page = readBackgroundProcessOutput(stringArg(input, "id"), typeof input.cursor === "number" ? input.cursor : 0);
+      return truncate(JSON.stringify(page, null, 2));
+    },
   },
   {
     name: "stop_background_command",

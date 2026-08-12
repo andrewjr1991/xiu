@@ -6,8 +6,8 @@ import readline from "node:readline/promises";
 import process from "node:process";
 import chalk from "chalk";
 import { Command } from "commander";
-import { Agent } from "./agent.js";
-import { listBackgroundProcesses, stopAllBackgroundProcesses } from "./background.js";
+import { Agent, BackgroundApprovalRequiredError } from "./agent.js";
+import { configureBackgroundWorkspace, listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
@@ -36,7 +36,7 @@ import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress } from "./tool-display.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
-import { builtinTools } from "./tools.js";
+import { builtinTools, classifyCommand } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
@@ -102,6 +102,10 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/agents retry", "重试中断或失败的 Agent", "Retry one interrupted or failed agent"),
     item("/agents integrate", "审查并集成 Worktree Agent", "Review and integrate a Worktree agent"),
     item("/details", "浏览完整工具与 Agent 活动", "Browse complete tool and Agent activity details"),
+    item("/background", "查看可跨终端续跑的后台任务", "Show background jobs that survive terminal exit"),
+    item("/background start", "确认后启动可跨终端续跑的命令", "Start a confirmed command that survives terminal exit"),
+    item("/background read", "从游标读取后台任务输出", "Read background output from a cursor"),
+    item("/background cancel", "显式取消后台任务", "Explicitly cancel a background job"),
     item("/diagnostics", "查看当前或最近任务的诊断报告", "Show diagnostics for the current or most recent task"),
     item("/audit", "查看本机安全审计记录", "Show local security audit records"),
     item("/credentials", "查看凭证后端状态（不显示凭证）", "Show credential backend status without secrets"),
@@ -287,6 +291,7 @@ async function main(): Promise<void> {
     startupProfile.model,
   );
   const config = profileConfig(startupProfile, startupModel);
+  configureBackgroundWorkspace(config.cwd);
   const taskRunJournal = new TaskRunJournal(config.cwd);
   let recoverySource: InterruptedTaskRun | undefined;
   let confirmedRecoveryTask: string | undefined;
@@ -567,6 +572,7 @@ async function main(): Promise<void> {
         runningTaskView?.discard();
         request.decisionSource = "prompted";
         if (!process.stdin.isTTY) {
+          if (config.backgroundMode) throw new BackgroundApprovalRequiredError(request.description);
           approvalDecision = false;
           return approvalDecision;
         }
@@ -1383,7 +1389,7 @@ async function main(): Promise<void> {
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
         if (!failure && agent.status().outcome === "failed") failure = new Error(localize(language, "最后一次工具操作失败或被拒绝，目标尚未完成。", "The last tool operation failed or was denied, so the goal is incomplete."));
-        if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务预算已用尽，已保存安全恢复点。调整预算后使用 /recover 继续。", "Task budget was exhausted and a safe recovery point was saved. Adjust the budget and use /recover to continue."));
+        if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
           const action = await selectTerminalOption(localize(language, "当前任务未完成，下一步怎么做？", "The current task did not complete. What next?"), failureRecoveryOptions(queue.size, language), language);
@@ -2426,6 +2432,48 @@ async function main(): Promise<void> {
         }
         continue;
       }
+      if (task === "/background" || task.startsWith("/background ")) {
+        const parts = task.split(/\s+/);
+        try {
+          if (parts.length === 1 || parts[1] === "list") {
+            const jobs = listBackgroundProcesses();
+            if (!jobs.length) console.log(chalk.dim(localize(language, "当前工作区没有后台任务。\n", "No background jobs exist for this workspace.\n")));
+            else {
+              for (const job of jobs) console.log(`${job.running ? chalk.cyan("●") : chalk.dim("○")} ${job.id} · ${job.state} · PID ${job.pid ?? "-"} · ${job.outputBytes.toLocaleString()} B · ${job.command}`);
+              console.log(chalk.dim(localize(language, "使用 /background read <ID> [游标] 读取增量输出；/background cancel <ID> 显式取消。\n", "Use /background read <id> [cursor] for incremental output; /background cancel <id> to stop it explicitly.\n")));
+            }
+          } else if (parts[1] === "start") {
+            const command = task.slice("/background start".length).trim();
+            if (!command) throw new Error(localize(language, "必须提供命令", "a command is required"));
+            const risk = classifyCommand(command);
+            const prompt = risk === "dangerous"
+              ? localize(language, `这是危险命令，后台启动后不会再有交互审批。输入 BACKGROUND 确认：`, `This is a dangerous command and cannot prompt again after detaching. Type BACKGROUND to confirm: `)
+              : localize(language, `后台启动并允许它在退出 Xiu 后继续？[y/N] `, `Start in background and let it continue after Xiu exits? [y/N] `);
+            const answer = await askQuestion(chalk.yellow(prompt));
+            const confirmed = risk === "dangerous" ? answer.trim() === "BACKGROUND" : /^(y|yes)$/i.test(answer.trim());
+            if (!confirmed) console.log(chalk.dim(localize(language, "已取消后台启动。\n", "Background start cancelled.\n")));
+            else {
+              const started = startBackgroundProcess(command, config.cwd);
+              console.log(chalk.green(localize(language, `后台任务 ${started.id} 已启动（PID ${started.pid ?? "未知"}），退出 Xiu 后仍会继续。\n`, `Background job ${started.id} started (PID ${started.pid ?? "unknown"}) and will survive Xiu exit.\n`)));
+            }
+          } else if (parts[1] === "read" && parts[2]) {
+            const cursor = parts[3] === undefined ? 0 : Number(parts[3]);
+            if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error(localize(language, "游标必须是非负整数", "cursor must be a non-negative integer"));
+            const page = readBackgroundProcessOutput(parts[2], cursor);
+            console.log(`${page.text}\n${chalk.dim(localize(language, `状态 ${page.state} · 下一游标 ${page.nextCursor} · 共 ${page.outputBytes.toLocaleString()} B\n`, `State ${page.state} · next cursor ${page.nextCursor} · ${page.outputBytes.toLocaleString()} B total\n`))}`);
+          } else if (parts[1] === "cancel" && parts[2]) {
+            const selected = listBackgroundProcesses().find((job) => job.id === parts[2]);
+            if (!selected) throw new Error(localize(language, `未知后台任务：${parts[2]}`, `Unknown background job: ${parts[2]}`));
+            if (!selected.running) console.log(chalk.dim(localize(language, `后台任务 ${selected.id} 已是 ${selected.state}。\n`, `Background job ${selected.id} is already ${selected.state}.\n`)));
+            else {
+              const answer = await askQuestion(chalk.yellow(localize(language, `取消后台任务 ${selected.id}（${selected.command}）？[y/N] `, `Cancel background job ${selected.id} (${selected.command})? [y/N] `)));
+              if (/^(y|yes)$/i.test(answer.trim())) { await stopBackgroundProcess(selected.id); console.log(chalk.green(localize(language, `已取消后台任务 ${selected.id}。\n`, `Background job ${selected.id} cancelled.\n`))); }
+              else console.log(chalk.dim(localize(language, "已保留后台任务。\n", "Background job kept running.\n")));
+            }
+          } else console.log(chalk.yellow(localize(language, "用法：/background [list] | start <命令> | read <ID> [游标] | cancel <ID>\n", "Usage: /background [list] | start <command> | read <id> [cursor] | cancel <id>\n")));
+        } catch (error) { console.error(chalk.red(`${localize(language, "后台任务操作失败", "Background job operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
       if (task === "/diagnostics") {
         console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
         continue;
@@ -2641,7 +2689,7 @@ async function main(): Promise<void> {
     status.stop();
     if (typeof mcpStartup !== "undefined") await mcpStartup.catch(() => undefined);
     await mcpManager.close();
-    await stopAllBackgroundProcesses();
+    // Detached background jobs intentionally survive normal Xiu shutdown.
   }
 }
 

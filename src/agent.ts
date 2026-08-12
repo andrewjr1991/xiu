@@ -56,6 +56,13 @@ export interface AgentEvents {
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
 
+export class BackgroundApprovalRequiredError extends Error {
+  override readonly name = "BackgroundApprovalRequiredError";
+  constructor(readonly description: string) {
+    super(`Background task requires approval: ${description}`);
+  }
+}
+
 interface ToolEvidenceEntry {
   signature: string;
   name: string;
@@ -158,6 +165,16 @@ export class Agent {
         const metrics = error.snapshot.exhausted.map((metric) => budgetMetricLabel(metric, this.config.language ?? "en-US")).join(", ");
         if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.pause(`task budget exhausted: ${metrics}`);
         throw new Error(localize(this.config.language ?? "en-US", `任务预算已用尽（${metrics}）。已在安全恢复点暂停；调整预算后可使用 /recover 继续。`, `Task budget exhausted (${metrics}). Paused at a safe recovery point; adjust the budget and use /recover to continue.`));
+      }
+      if (error instanceof BackgroundApprovalRequiredError) {
+        this.lastRunOutcome = "paused";
+        this.taskDiagnostics?.complete("paused");
+        if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.pause(`background approval required: ${error.description}`);
+        throw new Error(localize(
+          this.config.language ?? "en-US",
+          `后台任务需要新的人工审批，已在安全边界暂停：${error.description}。请回到交互终端使用 /recover 继续。`,
+          `The background task requires a new approval and paused at a safe boundary: ${error.description}. Return to an interactive terminal and use /recover to continue.`,
+        ));
       }
       this.lastRunOutcome = "failed";
       this.taskDiagnostics?.complete("failed");
@@ -501,6 +518,7 @@ export class Agent {
           }
           if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
           } catch (error) {
+            if (error instanceof BackgroundApprovalRequiredError) throw error;
             const message = error instanceof Error ? error.message : String(error);
             if (message.startsWith("Task recovery journal unavailable:")) throw error;
             result = `Tool error: invalid arguments for ${call.name}: ${message}`;
