@@ -13,3 +13,15 @@ test("draft survives restart and clears after submission", async () => {
   await first.clear();
   assert.equal(await new DraftStore(cwd).load(), "");
 });
+
+test("draft persistence failures never reject input or poison later saves", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-draft-failure-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const blockedWorkspace = path.join(root, "workspace-file");
+  await fs.writeFile(blockedWorkspace, "not a directory");
+  const store = new DraftStore(blockedWorkspace);
+  await assert.doesNotReject(() => store.save("still typing"));
+  await assert.doesNotReject(() => store.save("still typing more"));
+  await assert.doesNotReject(() => store.flush());
+  assert.equal(await store.load(), "still typing more");
+});

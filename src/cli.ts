@@ -45,6 +45,7 @@ import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./prov
 import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-routing.js";
 import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome } from "./security-audit.js";
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
+import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -107,6 +108,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/background read", "从游标读取后台任务输出", "Read background output from a cursor"),
     item("/background cancel", "显式取消后台任务", "Explicitly cancel a background job"),
     item("/diagnostics", "查看当前或最近任务的诊断报告", "Show diagnostics for the current or most recent task"),
+    item("/report", "预览或导出最近任务的完整执行报告", "Preview or export the latest task execution report"),
     item("/audit", "查看本机安全审计记录", "Show local security audit records"),
     item("/credentials", "查看凭证后端状态（不显示凭证）", "Show credential backend status without secrets"),
     item("/credentials probe", "显式验证 Windows 系统凭证库读写与清理", "Explicitly verify Windows system credential write, read, and cleanup"),
@@ -450,6 +452,7 @@ async function main(): Promise<void> {
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode, language);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
     let runningTaskView: RunningTaskView | undefined;
+    const oneShotChanges: WorkspaceChangeNotice[] = [];
     let activeQueuedInputController: AbortController | undefined;
     const emitLine = (value = ""): void => {
       if (runningTaskView) runningTaskView.line(value);
@@ -919,7 +922,10 @@ async function main(): Promise<void> {
         onWorkspaceChange: (change) => {
           if (runningTaskView) {
             runningTaskView.recordWorkspaceChange(change);
-          } else printWorkspaceChanges([change]);
+          } else {
+            if (initialTask) oneShotChanges.push(change);
+            printWorkspaceChanges([change]);
+          }
         },
         onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
         onTaskComplete: (summary) => {
@@ -1121,7 +1127,23 @@ async function main(): Promise<void> {
     process.on("SIGINT", onSigint);
 
     if (initialTask) {
-      await agent.run(initialTask);
+      try {
+        await agent.run(initialTask);
+      } finally {
+        await agent.recordReplayTurn({
+          task: initialTask,
+          inputKind: "task",
+          supplements: [],
+          changes: oneShotChanges,
+          receipts: [],
+          completion: {
+            message: agent.status().outcome,
+            success: agent.status().outcome === "completed",
+          },
+          diagnostics: agent.status().diagnostics,
+          exact: true,
+        }).catch(() => undefined);
+      }
       if (agent.status().outcome === "unverified") process.exitCode = 2;
       return;
     }
@@ -2476,6 +2498,72 @@ async function main(): Promise<void> {
       }
       if (task === "/diagnostics") {
         console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
+        continue;
+      }
+      if (task === "/report" || task.startsWith("/report ")) {
+        try {
+          const run = await taskRunJournal.latest();
+          if (!run) throw new Error(localize(language, "本工作区还没有可报告的任务运行记录。", "This workspace has no task run to report yet."));
+          const restored = await loadSession(config.cwd, run.sessionId).catch(() => undefined);
+          const replay = restored?.replay.filter((item) => item.inputKind !== "system") ?? [];
+          const sessionUpdatedAt = restored?.updatedAt ?? run.updatedAt;
+          const turn = replay
+            .sort((left, right) => {
+              const leftDistance = Math.abs(Date.parse(left.diagnostics?.startedAt ?? sessionUpdatedAt) - Date.parse(run.startedAt));
+              const rightDistance = Math.abs(Date.parse(right.diagnostics?.startedAt ?? sessionUpdatedAt) - Date.parse(run.startedAt));
+              return leftDistance - rightDistance;
+            })[0];
+          const selectedIndex = turn ? restored?.replay.indexOf(turn) ?? -1 : -1;
+          const rootGoal = originalTaskGoal(turn?.task ?? run.taskPreview);
+          let rootIndex = selectedIndex;
+          if (restored && selectedIndex >= 0) {
+            for (let index = selectedIndex; index >= 0; index--) {
+              const candidate = restored.replay[index];
+              if (candidate?.inputKind !== "system" && originalTaskGoal(candidate?.task ?? "") === rootGoal) rootIndex = index;
+              if (candidate?.task === rootGoal) { rootIndex = index; break; }
+            }
+          }
+          const turns = restored && rootIndex >= 0 && selectedIndex >= rootIndex
+            ? restored.replay.slice(rootIndex, selectedIndex + 1).filter((item) => item.inputKind !== "system")
+            : (turn ? [turn] : []);
+          const chainStartedAt = turns[0]?.diagnostics?.startedAt;
+          const recentRuns = await taskRunJournal.recent(200);
+          const runs = recentRuns
+            .filter((item) => item.sessionId === run.sessionId
+              && (!chainStartedAt || Date.parse(item.startedAt) >= Date.parse(chainStartedAt) - 5_000)
+              && Date.parse(item.startedAt) <= Date.parse(run.finishedAt ?? run.updatedAt))
+            .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+          const audit = await securityAudit.read({ limit: 500, workspaceOnly: true });
+          if (task === "/report") {
+            const report = buildExecutionReport({ cwd: config.cwd, run, runs, turn, turns, auditRecords: audit.records, scope: "summary" });
+            console.log(`${renderTerminalMarkdown(formatExecutionReport(report, language))}\n`);
+            continue;
+          }
+          const match = task.match(/^\/report\s+export\s+(markdown|json)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(summary|details)$/i);
+          if (!match) {
+            console.log(chalk.yellow(localize(language,
+              "用法：/report 或 /report export <markdown|json> <工作区内路径> <summary|details>\n",
+              "Usage: /report or /report export <markdown|json> <workspace path> <summary|details>\n")));
+            continue;
+          }
+          const format = match[1]!.toLowerCase() as ExecutionReportFormat;
+          const requestedPath = match[2] ?? match[3] ?? match[4]!;
+          const scope = match[5]!.toLowerCase() as ExecutionReportScope;
+          const target = path.resolve(config.cwd, requestedPath);
+          const exists = await fs.lstat(target).catch(() => undefined);
+          if (exists) {
+            const answer = await askQuestion(chalk.yellow(localize(language, `报告文件已存在，覆盖 ${requestedPath}？[y/N] `, `Report exists. Overwrite ${requestedPath}? [y/N] `)));
+            if (!/^(y|yes)$/i.test(answer.trim())) {
+              console.log(chalk.dim(localize(language, "已取消报告导出。\n", "Report export cancelled.\n")));
+              continue;
+            }
+          }
+          const report = buildExecutionReport({ cwd: config.cwd, run, runs, turn, turns, auditRecords: audit.records, scope });
+          const written = await writeExecutionReport(config.cwd, requestedPath, serializeExecutionReport(report, format, language));
+          console.log(chalk.green(localize(language, `执行报告已导出：${path.relative(config.cwd, written)}\n`, `Execution report exported: ${path.relative(config.cwd, written)}\n`)));
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "生成执行报告失败", "Could not generate execution report")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        }
         continue;
       }
       if (task === "/audit" || task.startsWith("/audit ")) {

@@ -148,6 +148,8 @@ test("marks terminal operations and no longer reports an interrupted run", async
   await item.journal.finishOperation(operation, "succeeded", "tests passed");
   await item.journal.complete("completed");
   assert.equal(await item.journal.interrupted(), undefined);
+  assert.equal((await item.journal.latest())?.status, "completed");
+  assert.equal((await item.journal.recent(10)).length, 1);
 });
 
 test("side-effect classification preserves the no-replay boundary", () => {

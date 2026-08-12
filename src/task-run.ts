@@ -343,6 +343,26 @@ export class TaskRunJournal {
     return parsed;
   }
 
+  /** Returns the newest run for this workspace, including terminal runs. */
+  async latest(): Promise<TaskRunRecord | undefined> {
+    return (await this.recent(1))[0];
+  }
+
+  /** Returns newest runs for this workspace, including terminal runs. */
+  async recent(limit = 100): Promise<TaskRunRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Task-run history limit must be between 1 and 500.");
+    const names = await fs.readdir(this.directory()).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
+    const records = (await Promise.all(names
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => this.read(path.basename(name, ".json")))))
+      .filter((record): record is TaskRunRecord => Boolean(record))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return records.slice(0, limit).map((record) => structuredClone(record));
+  }
+
   currentRun(): TaskRunRecord | undefined { return this.current ? structuredClone(this.current) : undefined; }
 
   private requireCurrent(): TaskRunRecord {

@@ -54,3 +54,14 @@ test("security audit write failures are reported without throwing", async () => 
   assert.match(result.error ?? "", /regular file/i);
   assert.equal(audit.status().healthy, false);
 });
+
+test("security audit can isolate records to the current workspace", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-audit-workspace-"));
+  const filename = path.join(directory, "audit.jsonl");
+  const first = new SecurityAuditLog(filename, path.join(directory, "first"));
+  const second = new SecurityAuditLog(filename, path.join(directory, "second"));
+  await first.record({ category: "approval", action: "first", outcome: "allowed" });
+  await second.record({ category: "approval", action: "second", outcome: "denied" });
+  const result = await first.read({ limit: 10, workspaceOnly: true });
+  assert.deepEqual(result.records.map((record) => record.action), ["first"]);
+});

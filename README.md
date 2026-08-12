@@ -78,7 +78,9 @@ Version 0.13.3 adds opt-in task budgets for cumulative Tokens, model calls, tool
 
 Version 0.13.4 replaces process-local background commands with detached, workspace-isolated jobs. `/background start`, `list`, `read`, and `cancel` provide stable job IDs, persisted state, incremental output cursors, exit evidence, and explicit cancellation after the original terminal has closed. Starting a job remains an explicit, risk-aware user action; Xiu shutdown no longer cancels it. A long autonomous task can be launched as a background command such as `xiu -y --budget-seconds 1800 "<task>"`; operations that still require interactive approval are not silently authorized and remain recoverable through the normal task journal.
 
-Phase E closes the automated security gate: active Provider and OAuth credential values are redacted from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
+Version 0.13.5 adds bounded execution reports assembled from durable task-run events, exact terminal replay records, diagnostics, validation operations, and workspace-scoped security audit facts. Consecutive retry/continuation runs for the same original goal are folded into one task-chain report, preserving the original user goal and cumulative file evidence. `/report` previews a redacted summary without writing files. `/report export <markdown|json> <workspace-path> <summary|details>` requires the user to choose both the destination and content scope; `details` adds only a small redacted file preview. Reports never include model chain-of-thought, credentials, raw prompts, complete source files, or audit subjects.
+
+The credential-hardening security gate redacts active Provider and OAuth credential values from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features
 
@@ -244,6 +246,9 @@ Interactive session commands:
 /agents integrate ... preview and integrate a completed Worktree task
 /details            browse complete tool and Agent activity output
 /diagnostics        inspect the current or most recent task diagnosis
+/report             preview a bounded, redacted report for the latest task
+/report export markdown reports/latest.md summary
+/report export json reports/latest.json details
 /status             session id, context, tokens, calls, time, and index size
 /queue              show explicitly scheduled next tasks
 /queue <task>       schedule an independent task to run next

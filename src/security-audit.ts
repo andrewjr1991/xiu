@@ -127,7 +127,7 @@ export class SecurityAuditLog {
     }
   }
 
-  async read(options: { category?: SecurityAuditCategory; limit?: number } = {}): Promise<SecurityAuditReadResult> {
+  async read(options: { category?: SecurityAuditCategory; limit?: number; workspaceOnly?: boolean } = {}): Promise<SecurityAuditReadResult> {
     await this.pending;
     const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
     let text: string;
@@ -147,7 +147,8 @@ export class SecurityAuditLog {
       try {
         const parsed: unknown = JSON.parse(line);
         if (!isRecord(parsed)) invalidLines++;
-        else if (!options.category || parsed.category === options.category) records.push(parsed);
+        else if ((!options.category || parsed.category === options.category)
+          && (!options.workspaceOnly || parsed.workspace === this.workspace)) records.push(parsed);
       } catch { invalidLines++; }
     }
     return { records: records.slice(-limit), invalidLines, truncated: records.length > limit || lines.length >= MAX_RECORDS };
