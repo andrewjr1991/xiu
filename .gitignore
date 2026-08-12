@@ -12,5 +12,6 @@ dist/
 *.tgz
 coverage/
 .validation-*/
+.release-smoke-*/
 .DS_Store
 Thumbs.db

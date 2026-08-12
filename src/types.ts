@@ -88,6 +88,10 @@ export interface ToolContext {
 
 export interface AgentTool extends ToolDefinition {
   risk: ToolRisk | ((input: Record<string, unknown>) => ToolRisk);
+  /** Explicit replay contract. Omitted read tools are safe; all other omitted tools are side-effecting. */
+  replaySafety?: "safe" | "idempotent" | "side-effecting" | "unknown" | ((input: Record<string, unknown>) => "safe" | "idempotent" | "side-effecting" | "unknown");
+  /** Bounded attempts for transient failures. Defaults to 3 for safely replayable tools and 1 otherwise. */
+  maxAttempts?: number;
   /** Enables an explicit "always allow for this session" choice for this exact operation family. */
   approvalScope?: string | ((input: Record<string, unknown>) => string | undefined);
   describe(input: Record<string, unknown>): string;

@@ -133,6 +133,22 @@ test("a failed image download resumes from the stored URL without generating aga
   assert.match(second, /Generated image/);
 });
 
+test("an explicitly transient image download retries without resubmitting generation", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-transient-download-"));
+  const backend = new MockMediaBackend();
+  backend.download = async () => {
+    backend.downloadCalls += 1;
+    if (backend.downloadCalls === 1) throw new MediaApiError("temporary download service failure", 503, 0);
+    return Buffer.from("recovered-image");
+  };
+  const tool = createMediaTools(config(cwd), backend).find((item) => item.name === "generate_image")!;
+  const result = await executeTool(tool, { prompt: "recover transient", output_path: "out.png" }, { cwd, approve: async () => true });
+  assert.equal(backend.imageCalls, 1);
+  assert.equal(backend.downloadCalls, 2);
+  assert.equal(await fs.readFile(path.join(cwd, "out.png"), "utf8"), "recovered-image");
+  assert.match(result, /Generated image/);
+});
+
 test("vision analysis converts a local image to a data URI", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-vision-"));
   await fs.writeFile(path.join(cwd, "sample.png"), Buffer.from("png"));

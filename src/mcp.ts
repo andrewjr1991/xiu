@@ -912,6 +912,8 @@ export class McpManager {
       description: `[MCP: ${name}] ${definition.description ?? definition.name}`,
       inputSchema: definition.inputSchema ?? { type: "object", properties: {} },
       risk,
+      replaySafety: risk === "read" ? "safe" : "side-effecting",
+      maxAttempts: risk === "read" ? 3 : 1,
       changesWorkspace,
       describe: (input) => `call MCP tool ${name}/${definition.name} with ${truncate(JSON.stringify(input)).slice(0, 500)}`,
       preview: async (input) => truncate(JSON.stringify(input, null, 2)).slice(0, 4_000),

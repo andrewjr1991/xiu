@@ -23,6 +23,7 @@ import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } 
 import { sanitizeSecrets } from "./secret-redaction.js";
 import { readEnvironmentCredential } from "./credential-store.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
+import { retryDecision, retryDelay } from "./retry-policy.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
 import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
 
@@ -949,17 +950,23 @@ export class Agent {
         this.taskDiagnostics?.finishModel(undefined, false, safeError);
         await this.checkpointDiagnostics();
         const transient = isTransientProviderError(error);
+        const decision = retryDecision({
+          operation: "model",
+          error,
+          attempt,
+          maxAttempts,
+          replaySafety: "safe",
+          commitState: "not-committed",
+          outputEmitted: emitted,
+        });
         if (emitted || !transient) {
           if (reportFailure) this.events.onFailure?.(localize(this.config.language ?? "en-US", `模型请求失败：${safeError}`, `Model request failed: ${safeError}`));
           throw new Error(safeError);
         }
-        if (attempt < maxAttempts) {
-          const delayMs = 500 * 2 ** (attempt - 1);
+        if (decision.retry) {
+          const delayMs = decision.delayMs ?? 0;
           this.events.onRetry?.(localize(this.config.language ?? "en-US", `模型暂时出错；${delayMs}ms 后重试 ${attempt + 1}/${maxAttempts}`, `Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`));
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(resolve, delayMs);
-            signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("Task cancelled.")); }, { once: true });
-          });
+          await retryDelay(delayMs, signal);
           attempt++;
           continue;
         }

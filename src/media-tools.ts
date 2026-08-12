@@ -4,8 +4,9 @@ import type { AgentConfig } from "./config.js";
 import { createMediaBackend, MediaApiError, type MediaBackend, type VideoTask } from "./media.js";
 import { mediaOperationKey, mediaRetryBlocked, MediaOperationStore } from "./media-operations.js";
 import { safeProviderErrorMessage } from "./provider-failover.js";
+import { classifyRetryError, retryDecision, retryDelay } from "./retry-policy.js";
 import { resolveWorkspacePath } from "./tools.js";
-import type { AgentTool } from "./types.js";
+import type { AgentTool, ToolContext } from "./types.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const RATIOS = new Set(["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]);
@@ -80,7 +81,7 @@ function mediaStatus(error: unknown): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
-function retryDelay(error: unknown, polling: boolean): number {
+function mediaCooldownDelay(error: unknown, polling: boolean): number {
   if (error instanceof MediaApiError && error.retryAfterMs !== undefined) return Math.max(1_000, error.retryAfterMs);
   const message = error instanceof Error ? error.message : String(error);
   const quota = message.match(/allows\s+(\d+)\s+requests?\s+per\s+(\d+)\s+minute/i);
@@ -88,13 +89,26 @@ function retryDelay(error: unknown, polling: boolean): number {
   return polling ? 30_000 : 60_000;
 }
 
-function isRetryableMediaStatus(status: number | undefined): boolean {
-  return status === 408 || status === 425 || status === 429 || (status !== undefined && status >= 500 && status <= 599);
+function isRetryableMediaError(error: unknown): boolean {
+  return ["rate-limit", "timeout", "transport", "server"].includes(classifyRetryError(error));
 }
 
 function cooldownMessage(requestId: string, retryAfterAt: string): string {
   const seconds = Math.max(1, Math.ceil((Date.parse(retryAfterAt) - Date.now()) / 1000));
   return `Media provider cooldown is active after request ${requestId}. Wait about ${seconds}s before submitting another paid request. Existing video task polling and asset downloads may still resume safely.`;
+}
+
+async function safeMediaCall<T>(label: string, context: ToolContext, call: () => Promise<T>): Promise<T> {
+  const maxAttempts = 3;
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await call(); }
+    catch (error) {
+      const decision = retryDecision({ operation: "media", error, attempt, maxAttempts, replaySafety: "safe", commitState: "not-committed" });
+      if (!decision.retry) throw error;
+      context.reportProgress?.(`${label}: transient ${decision.category} failure; retrying ${attempt + 1}/${maxAttempts} in ${decision.delayMs}ms`);
+      await retryDelay(decision.delayMs ?? 0, context.signal);
+    }
+  }
 }
 
 export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBackend): AgentTool[] {
@@ -115,6 +129,8 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       name: "analyze_image",
       description: "Analyze a workspace image or public image URL with the configured vision model. Use this when visual inspection is needed.",
       risk: "execute",
+      replaySafety: "safe",
+      maxAttempts: 3,
       inputSchema: {
         type: "object",
         properties: { source: { type: "string", description: "Workspace-relative image path, public URL, or image data URI" }, prompt: { type: "string" } },
@@ -183,7 +199,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         if (!bytes && operation.url) {
           context.reportProgress?.(`Resuming download for image request ${operation.requestId}`);
           try {
-            bytes = await getBackend().download!(operation.url, context.signal);
+            bytes = await safeMediaCall("Image download", context, async () => await getBackend().download!(operation.url!, context.signal));
           } catch (error) {
             throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
@@ -197,7 +213,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
             const reason = safeProviderErrorMessage(error, [config.apiKey ?? ""]);
             const status = mediaStatus(error);
             if (status !== undefined) {
-              const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
+              const retryAfterAt = isRetryableMediaError(error) ? new Date(Date.now() + mediaCooldownDelay(error, false)).toISOString() : undefined;
               await operations.update(key, { status: "failed", error: reason, retryAfterAt });
               throw new Error(`Image request ${operation.requestId} was rejected before an asset was returned${retryAfterAt ? `; new submissions are paused until ${retryAfterAt}` : ""}: ${reason}`);
             }
@@ -211,7 +227,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           } else {
             operation = await operations.update(key, { status: "asset_ready", url: result.url });
             try {
-              bytes = await getBackend().download!(result.url!, context.signal);
+              bytes = await safeMediaCall("Image download", context, async () => await getBackend().download!(result.url!, context.signal));
             } catch (error) {
               throw new Error(`Image request ${operation.requestId} was accepted, but its asset could not be downloaded. Repeat the same request to resume without a new generation charge: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
             }
@@ -302,7 +318,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
             const reason = safeProviderErrorMessage(error, [config.apiKey ?? ""]);
             const status = mediaStatus(error);
             if (status !== undefined) {
-              const retryAfterAt = isRetryableMediaStatus(status) ? new Date(Date.now() + retryDelay(error, false)).toISOString() : undefined;
+              const retryAfterAt = isRetryableMediaError(error) ? new Date(Date.now() + mediaCooldownDelay(error, false)).toISOString() : undefined;
               await operations.update(key, { status: "failed", error: reason, retryAfterAt });
               throw new Error(`Video request ${operation.requestId} was rejected before a task ID was returned${retryAfterAt ? `; new submissions are paused until ${retryAfterAt}` : ""}: ${reason}`);
             }
@@ -316,6 +332,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           });
         }
         const deadline = Date.now() + timeoutMs;
+        let consecutivePollFailures = 0;
         while (!completed(task) && !failed(task) && !task.url) {
           if (Date.now() >= deadline) throw new Error(`Video request ${operation.requestId} timed out after ${timeoutMs / 1000}s. Task ${task.id} was preserved; repeat the same request to resume polling without creating another task.`);
           const progress = task.progress === undefined ? task.status : `${task.status} ${Math.round(task.progress)}%`;
@@ -325,17 +342,19 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           try {
             task = await getBackend().getVideo!(task.id, context.signal);
           } catch (error) {
-            const status = mediaStatus(error);
-            if (isRetryableMediaStatus(status)) {
-              const waitMs = retryDelay(error, true);
+            const decision = retryDecision({ operation: "media", error, attempt: consecutivePollFailures + 1, maxAttempts: 3, replaySafety: "safe", commitState: "not-committed" });
+            if (decision.retry) {
+              consecutivePollFailures += 1;
+              const waitMs = decision.delayMs ?? mediaCooldownDelay(error, true);
               if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${task.id} is still preserved, but polling could not recover before the ${timeoutMs / 1000}s timeout: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
               context.reportProgress?.(`Video ${task.id}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
-              await delay(waitMs, context.signal);
+              await retryDelay(waitMs, context.signal);
               resumePollImmediately = true;
               continue;
             }
             throw new Error(`Could not poll video task ${task.id}. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
+          consecutivePollFailures = 0;
           operation = await operations.update(key, {
             status: task.url ? "asset_ready" : "submitted",
             taskId: task.id,
@@ -352,7 +371,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         context.reportProgress?.(`Downloading completed video ${task.id}`);
         if (!bytes) {
           try {
-            bytes = await getBackend().download!(task.url, context.signal);
+            bytes = await safeMediaCall("Video download", context, async () => await getBackend().download!(task.url!, context.signal));
           } catch (error) {
             throw new Error(`Video task ${task.id} completed, but its asset could not be downloaded. Repeat the same request to resume without creating another task: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
           }
@@ -442,19 +461,22 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         const deadline = Date.now() + timeoutMs;
         let task: VideoTask = { id: taskId, status: "submitted" };
         context.reportProgress?.(`Resuming video request ${operation.requestId} (task ${taskId})`);
+        let consecutivePollFailures = 0;
         while (!completed(task) && !failed(task) && !task.url) {
           if (Date.now() >= deadline) throw new Error(`Video task ${taskId} is still preserved; recovery timed out after ${timeoutMs / 1000}s.`);
           try {
             task = await backend.getVideo(taskId, context.signal);
           } catch (error) {
-            const status = mediaStatus(error);
-            if (!isRetryableMediaStatus(status)) throw new Error(`Could not resume video task ${taskId}: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
-            const waitMs = retryDelay(error, true);
+            const decision = retryDecision({ operation: "media", error, attempt: consecutivePollFailures + 1, maxAttempts: 3, replaySafety: "safe", commitState: "not-committed" });
+            if (!decision.retry) throw new Error(`Could not resume video task ${taskId}: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
+            consecutivePollFailures += 1;
+            const waitMs = decision.delayMs ?? mediaCooldownDelay(error, true);
             if (Date.now() + waitMs >= deadline) throw new Error(`Video task ${taskId} remains preserved, but polling could not recover before timeout: ${safeProviderErrorMessage(error, [config.apiKey ?? ""])}`);
             context.reportProgress?.(`Video ${taskId}: status service busy; retrying poll in ${Math.ceil(waitMs / 1000)}s`);
-            await delay(waitMs, context.signal);
+            await retryDelay(waitMs, context.signal);
             continue;
           }
+          consecutivePollFailures = 0;
           taskId = task.id;
           url = task.url;
           await operations.update(operation.key, { status: url ? "asset_ready" : "submitted", taskId, url });
@@ -469,7 +491,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       if (!url) throw new Error(`Media request ${operation.requestId} has no cached asset or download URL and cannot be resumed safely.`);
       if (!backend.download) throw new Error("The current Provider backend cannot download media assets.");
       context.reportProgress?.(`Resuming download for ${operation.kind} request ${operation.requestId}`);
-      bytes = await backend.download(url, context.signal);
+      bytes = await safeMediaCall("Media recovery download", context, async () => await backend.download!(url!, context.signal));
       const cachedAsset = await operations.cacheAsset(operation.requestId, extension, bytes);
       const saved = await saveAsset(context.cwd, outputPath, bytes);
       await operations.update(operation.key, { status: "completed", taskId, url, cachedAsset, savedPath: saved, error: undefined });

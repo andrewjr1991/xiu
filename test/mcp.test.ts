@@ -31,8 +31,12 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
     const tools = manager.tools();
     assert.deepEqual(tools.map((tool) => tool.name), ["mcp__test__echo", "mcp__test__change"]);
     assert.equal(tools[0]?.risk, "read");
+    assert.equal(tools[0]?.replaySafety, "safe");
+    assert.equal(tools[0]?.maxAttempts, 3);
     assert.equal(tools[0]?.changesWorkspace, false);
     assert.equal(tools[1]?.risk, "write");
+    assert.equal(tools[1]?.replaySafety, "side-effecting");
+    assert.equal(tools[1]?.maxAttempts, 1);
     assert.equal(tools[1]?.changesWorkspace, true);
     assert.equal(await tools[0]?.execute({ message: "hello" }, { cwd: workspace, approve: async () => true }), "echo:hello");
     const controller = new AbortController();

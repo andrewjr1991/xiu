@@ -7,6 +7,7 @@ import iconv from "iconv-lite";
 import { backgroundProcessOutput, listBackgroundProcesses, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
 import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
+import { retryDecision, retryDelay } from "./retry-policy.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 60_000;
@@ -754,6 +755,25 @@ export async function executeTool(tool: AgentTool, input: Record<string, unknown
     const sessionScope = typeof tool.approvalScope === "function" ? tool.approvalScope(input) : tool.approvalScope;
     if (!(await context.approve({ description: tool.describe(input), risk, preview, sessionScope }))) return "Tool execution denied by user.";
   }
-  try { return await tool.execute(input, context); }
-  catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
+  const replaySafety = typeof tool.replaySafety === "function"
+    ? tool.replaySafety(input)
+    : tool.replaySafety ?? (risk === "read" ? "safe" : "side-effecting");
+  const maxAttempts = Math.max(1, Math.min(5, tool.maxAttempts ?? (replaySafety === "safe" || replaySafety === "idempotent" ? 3 : 1)));
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await tool.execute(input, context); }
+    catch (error) {
+      const decision = retryDecision({
+        operation: tool.name.startsWith("mcp__") ? "mcp" : "tool",
+        error,
+        attempt,
+        maxAttempts,
+        replaySafety,
+        commitState: replaySafety === "safe" || replaySafety === "idempotent" ? "not-committed" : "unknown",
+      });
+      if (!decision.retry) return `Tool error: ${error instanceof Error ? error.message : String(error)}`;
+      context.reportProgress?.(`${tool.name}: transient ${decision.category} failure; retrying ${attempt + 1}/${maxAttempts} in ${decision.delayMs}ms`);
+      try { await retryDelay(decision.delayMs ?? 0, context.signal); }
+      catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
+    }
+  }
 }
