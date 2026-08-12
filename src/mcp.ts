@@ -846,8 +846,7 @@ export class McpManager {
       const transport = transportOf(config);
       const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
       const previous = await this.permissionStore.approvedManifest(manifest);
-      if (!previous && !manifest.declared) await this.permissionStore.approve(manifest);
-      else if (!await this.permissionStore.isApproved(manifest)) {
+      if (!await this.permissionStore.isApproved(manifest)) {
         const permissionChanges = addedPermissions(previous, manifest);
         this.serverStatuses.push({ name, transport, state: "permission-required", tools: 0,
           permissionChanges,

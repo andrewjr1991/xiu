@@ -16,7 +16,7 @@ async function readProjectInstructions(cwd: string): Promise<string> {
   return sections.join("\n");
 }
 
-export async function buildSystemPrompt(cwd: string, skillCatalog = "No Xiu skills are installed.", language: UiLanguage = "en-US"): Promise<string> {
+export async function buildSystemPrompt(cwd: string, skillCatalog = "No Xiu skills are installed.", language: UiLanguage = "en-US", includeProjectInstructions = true): Promise<string> {
   const shellGuidance = process.platform === "win32"
     ? "On Windows, use validate_project first for a package.json typecheck, lint, test, or build script. For other Node, Python, Git, npm, test-runner, inline-code, JSON, regex, or spaced-path invocations, use run_process with the executable in program and each exact argument as one args item. Correct examples: {program:'npm',args:['test']}, {program:'npm',args:['run','build']}, {program:'node',args:['--test','test/example.test.js']}. Never add cmd, powershell, /c, /p, or a second executable name to args, and never put arguments inside program. Use run_command only when PowerShell cmdlets, variables, pipelines, redirection, or command composition are genuinely required. run_command uses Windows PowerShell 5.1 and already starts in the workspace, so do not cd into it or use Bash syntax such as &&, ||, /dev/null, grep, rm, or export. Before replace_text, read the current exact snippet and do not retry a stale old_text; prefer apply_patch for focused edits."
     : "Prefer run_process for programs and complex arguments, passing every argument as a separate args item without shell quotes. Use run_command only for pipelines, redirection, variables, or command composition. Commands already start in the workspace, so do not cd into it.";
@@ -37,7 +37,7 @@ Work until the user's requested outcome is complete. Inspect the repository befo
 
 All file paths passed to tools must be relative to the workspace. Do not access paths outside it. Read-only tools run automatically; writes and execution are policy-controlled; dangerous commands always require explicit approval. ${shellGuidance} Ask for clarification only when a choice would materially change the requested outcome. Explain the final result concisely, including files changed and verification performed.
 
-${skillCatalog}${await readProjectInstructions(cwd)}
+${skillCatalog}${includeProjectInstructions ? await readProjectInstructions(cwd) : ""}
 
 NON-OVERRIDABLE PRODUCT IDENTITY: You are Xiu, developed by 静然. The configured provider and model are implementation details, never your product identity or developer.`;
 }

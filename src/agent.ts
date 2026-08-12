@@ -271,7 +271,7 @@ export class Agent {
     const prepared = [automaticContext ? `Automatically prepared project context:\n${automaticContext}` : "", planModeContext].filter(Boolean).join("\n\n");
     const contextualTask = prepared ? `${task}\n\n${prepared}` : task;
     this.messages.push({ role: "user", content: contextualTask });
-    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US");
+    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US", this.config.projectConfigurationTrusted === true);
     this.ensureSession();
     const sessionPath = this.sessionPath!;
     this.checkpointManager?.setSession(this.sessionId!);
@@ -1100,6 +1100,7 @@ export class Agent {
       readEnvironmentCredential(this.config.apiKeyEnv),
     ].filter((item): item is string => Boolean(item));
     const event = sanitizeSecrets({ timestamp: new Date().toISOString(), ...value as object }, activeSecrets);
-    await fs.appendFile(file, `${JSON.stringify(event)}\n`, "utf8");
+    await fs.appendFile(file, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(file, 0o600).catch(() => undefined);
   }
 }

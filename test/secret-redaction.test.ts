@@ -4,14 +4,21 @@ import { redactSecrets, sanitizeSecrets } from "../src/secret-redaction.js";
 
 test("shared secret redaction covers provider, bearer, OAuth JSON, and URL forms", () => {
   const secret = "canary-provider-secret";
+  const githubToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+  const slackToken = ["xoxb", "1234567890", "abcdefghijklmnopqrstuvwxyz"].join("-");
+  const awsKey = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
   const output = redactSecrets([
     `api_key=${secret}`,
     "Authorization: Bearer bearer-token-value",
     '\"refresh_token\":\"refresh-value\"',
     "https://example.test/callback?code=authorization-code&client_secret=client-value",
     "sk-example12345678",
+    githubToken,
+    slackToken,
+    awsKey,
+    "-----BEGIN PRIVATE KEY-----\nprivate-key-canary\n-----END PRIVATE KEY-----",
   ].join("\n"), [secret]);
-  for (const leaked of [secret, "bearer-token-value", "refresh-value", "authorization-code", "client-value", "example12345678"]) {
+  for (const leaked of [secret, "bearer-token-value", "refresh-value", "authorization-code", "client-value", "example12345678", githubToken, slackToken, awsKey, "private-key-canary"]) {
     assert.doesNotMatch(output, new RegExp(leaked));
   }
   assert.match(output, /\[REDACTED\]/);

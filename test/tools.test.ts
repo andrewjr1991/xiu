@@ -4,12 +4,46 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { builtinTools, classifyCommand, classifyProcess, executeTool, formatProcessInvocation, looksLikeVerification, resolveWorkspacePath, verificationCommandPassed } from "../src/tools.js";
+import { validateWorkspaceGlob } from "../src/workspace-path.js";
 
 test("resolveWorkspacePath blocks traversal", () => {
-  const root = path.resolve("workspace");
-  assert.equal(resolveWorkspacePath(root, "src/index.ts"), path.join(root, "src/index.ts"));
+  const root = process.cwd();
+  assert.equal(resolveWorkspacePath(root, "workspace/src/index.ts"), path.join(root, "workspace/src/index.ts"));
   assert.throws(() => resolveWorkspacePath(root, "../secret.txt"), /escapes workspace/);
   assert.throws(() => resolveWorkspacePath(root, path.parse(root).root), /escapes workspace/);
+});
+
+test("workspace paths reject symlink or junction escapes", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-path-root-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-path-outside-"));
+  const link = path.join(root, "external");
+  try {
+    await fs.symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      t.skip("This environment does not permit symlink or Junction creation");
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => resolveWorkspacePath(root, "external/secret.txt"), /resolves outside workspace/);
+  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(outside, { recursive: true, force: true });
+});
+
+test("workspace globs reject absolute and parent traversal patterns", () => {
+  assert.equal(validateWorkspaceGlob("src/**/*.ts"), "src/**/*.ts");
+  assert.throws(() => validateWorkspaceGlob("../**/*"), /inside workspace/);
+  assert.throws(() => validateWorkspaceGlob("C:/Users/**/.ssh/*"), /inside workspace/);
+  assert.throws(() => validateWorkspaceGlob("/etc/**/*"), /inside workspace/);
+});
+
+test("search_text rejects a glob outside the workspace", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-boundary-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "search_text")!;
+  const result = await executeTool(tool, { query: "secret", pattern: "../**/*" }, { cwd, approve: async () => false });
+  assert.match(result, /^Tool error: Glob must stay inside workspace/);
+  await fs.rm(cwd, { recursive: true, force: true });
 });
 
 test("custom verifier scripts count as verification commands", () => {

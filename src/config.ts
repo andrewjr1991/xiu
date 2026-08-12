@@ -51,6 +51,8 @@ export interface AgentConfig {
   stallTimeoutMs?: number;
   /** Internal marker for a detached Xiu process that cannot answer interactive approvals. */
   backgroundMode?: boolean;
+  /** Set only after the CLI has confirmed workspace trust. */
+  projectConfigurationTrusted?: boolean;
 }
 
 export function resolveConfig(options: {

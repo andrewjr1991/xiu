@@ -89,6 +89,7 @@ test("MCP OAuth completes discovery, DCR, PKCE callback, and token persistence",
     await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { secure: { url: `${origin}/mcp`, auth: { type: "oauth", registration: "auto", callbackPort }, risk: "read" } } }));
     const manager = new McpManager(directory, globalConfig, store);
     try {
+      await manager.approvePermissions("secure", false);
       assert.deepEqual(await manager.start(false), [{ name: "secure", transport: "streamable-http", state: "connected", tools: 1 }]);
       assert.equal(await manager.tools()[0]!.execute({ message: "hello" }, { cwd: directory, approve: async () => true }), "oauth:hello");
     } finally { await manager.close(); }
@@ -312,6 +313,7 @@ test("MCP OAuth scope elevation requires approval and retries the rejected call 
     await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { secure: { url: `${origin}/mcp`, auth: authConfig, risk: "execute" } } }));
     const manager = new McpManager(directory, globalConfig, store, interaction);
     try {
+      await manager.approvePermissions("secure", false);
       await manager.start(false);
       let approvals = 0;
       const output = await manager.tools()[0]!.execute({}, { cwd: directory, approve: async () => { approvals += 1; return true; } });

@@ -15,6 +15,10 @@ export function redactSecrets(value: string, sensitiveValues: readonly string[] 
   return result
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "gh_[REDACTED]")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "xox-[REDACTED]")
+    .replace(/\bAKIA[A-Z0-9]{16}\b/g, "AKIA[REDACTED]")
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, "[REDACTED-PRIVATE-KEY]")
     .replace(/([?&](?:code|token|access_token|refresh_token|id_token|client_secret)=)[^&#\s]+/gi, "$1[REDACTED]")
     .replace(/("?(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|password|passwd|client[-_]?secret|secret|authorization|cookie|credential)"?\s*[:=]\s*"?)[^"\s,;}]+/gi, "$1[REDACTED]")
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*)?\b/g, "[REDACTED-JWT]");

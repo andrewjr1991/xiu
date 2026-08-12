@@ -26,6 +26,7 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
   }));
   const manager = new McpManager(workspace, globalConfig);
   try {
+    await manager.approvePermissions("test");
     const statuses = await manager.start();
     assert.deepEqual(statuses, [{ name: "test", transport: "stdio", state: "connected", tools: 2 }]);
     const tools = manager.tools();
@@ -86,6 +87,7 @@ test("project MCP configuration overrides a global server and can disable it", a
   try {
     assert.deepEqual(await manager.start(), []);
     assert.equal(manager.tools().length, 0);
+    await manager.approvePermissions("shared", false);
     assert.deepEqual(await manager.start(false), [{ name: "shared", transport: "stdio", state: "connected", tools: 2 }]);
   } finally {
     await manager.close();
@@ -152,6 +154,7 @@ test("MCP manager connects to Streamable HTTP, preserves its session, and calls 
   } } }));
   const manager = new McpManager(workspace, globalConfig);
   try {
+    await manager.approvePermissions("remote", false);
     assert.deepEqual(await manager.start(false), [{ name: "remote", transport: "streamable-http", state: "connected", tools: 1 }]);
     const tool = manager.tools()[0]!;
     assert.equal(tool.name, "mcp__remote__echo");
@@ -216,6 +219,7 @@ test("MCP manager negotiates modern Streamable HTTP without initialize or sessio
   } } }));
   const manager = new McpManager(workspace, globalConfig);
   try {
+    await manager.approvePermissions("modern", false);
     assert.deepEqual(await manager.start(false), [{ name: "modern", transport: "streamable-http", state: "connected", tools: 1 }]);
     assert.equal(await manager.tools()[0]!.execute({ message: "hello" }, { cwd: workspace, approve: async () => true }), "modern:hello");
   } finally {
@@ -271,6 +275,7 @@ test("OAuth MCP configuration is validated and remains auth-required until expli
   } } }));
   const manager = new McpManager(workspace, globalConfig);
   try {
+    await manager.approvePermissions("secure", false);
     assert.deepEqual(await manager.start(false), [{
       name: "secure",
       transport: "streamable-http",
@@ -353,6 +358,24 @@ test("MCP permission declaration cannot omit inferred capabilities", async () =>
   await fs.rm(workspace, { recursive: true, force: true });
 });
 
+test("undeclared MCP permissions require explicit first-use approval", async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-undeclared-permissions-"));
+  const globalConfig = path.join(workspace, "global-mcp.json");
+  await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { guarded: {
+    command: process.execPath, args: [fixture], risk: "read",
+  } } }));
+  const manager = new McpManager(workspace, globalConfig);
+  try {
+    assert.equal((await manager.start(false))[0]?.state, "permission-required");
+    assert.equal(manager.tools().length, 0);
+    await manager.approvePermissions("guarded", false);
+    assert.equal((await manager.start(false))[0]?.state, "connected");
+  } finally {
+    await manager.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("stdio MCP decodes Windows local-codepage stderr into readable text", async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-local-stderr-"));
   const globalConfig = path.join(workspace, "global-mcp.json");
@@ -361,6 +384,7 @@ test("stdio MCP decodes Windows local-codepage stderr into readable text", async
   } } }));
   const manager = new McpManager(workspace, globalConfig);
   try {
+    await manager.approvePermissions("broken", false);
     const status = (await manager.start(false))[0]!;
     assert.equal(status.state, "failed");
     assert.match(status.error ?? "", /下载失败：网络不可用/);

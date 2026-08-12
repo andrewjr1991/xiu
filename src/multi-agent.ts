@@ -462,7 +462,9 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
     {
       name: "cancel_agent",
       description: "Cancel one pending or running agent without cancelling unrelated agents.",
-      risk: "read",
+      risk: "execute",
+      replaySafety: "side-effecting",
+      maxAttempts: 1,
       inputSchema: { type: "object", properties: { run_id: { type: "string" }, task_id: { type: "string" } }, required: ["run_id", "task_id"], additionalProperties: false },
       describe: (input) => `cancel agent ${String(input.task_id ?? "")}`,
       async execute(input) {
@@ -474,7 +476,9 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
     {
       name: "retry_agent",
       description: "Retry one failed, cancelled, interrupted, or blocked agent task.",
-      risk: "read",
+      risk: "execute",
+      replaySafety: "side-effecting",
+      maxAttempts: 1,
       inputSchema: { type: "object", properties: { run_id: { type: "string" }, task_id: { type: "string" } }, required: ["run_id", "task_id"], additionalProperties: false },
       describe: (input) => `retry agent ${String(input.task_id ?? "")}`,
       async execute(input) {

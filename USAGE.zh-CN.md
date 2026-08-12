@@ -24,6 +24,8 @@ Xiu 是由“静然”开发、运行在终端中的开源 AI 编码 Agent。你
 
 Xiu 不是完全隔离的云端沙箱。它使用当前操作系统账号访问文件和运行命令，因此必须认真阅读权限提示，只在可信项目中使用。
 
+从 `0.13.6` 起，交互启动和一次性命令都会先执行同一套工作区信任确认；`-y` 只影响任务内的普通自动审批，不能代替工作区信任。确认前，Xiu 不读取 `AGENTS.md`、`XIU.md` 等项目指令，不加载项目 Skills 或项目 MCP，也不会修改或执行工作区内容。文件工具按真实文件系统路径校验边界，拒绝通过符号链接、Junction、重解析点、绝对 Glob 或 `..` Glob 访问工作区之外。
+
 ## 二、安装与检查
 
 Xiu 要求 Node.js 20 或更高版本。先检查：
@@ -70,6 +72,8 @@ API Key 有两种配置方式：
 v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider、MCP OAuth 和 Windows 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。
 
 从 v0.13.0 起，Xiu 在用户目录 `~/.xiu/security-audit.jsonl` 追加本机安全审计记录。输入 `/audit` 查看最近 50 条，或使用 `/audit approvals`、`/audit credentials` 按类别筛选。记录只包含时间、事件类型、结果、风险、决策来源和非秘密配置 ID；不会保存命令正文、工具参数、Prompt、模型回复、文件内容、完整工作区路径或任何凭证。日志写入失败不会改变既有审批决定，`/audit` 会显示本进程最近的写入错误。
+
+新添加的 MCP 在第一次连接前必须确认当前权限清单，即使它没有手写 `permissions` 字段也不会自动批准。使用 `/mcp permissions` 查看待确认项，再执行 `/mcp permissions approve <名称>` 并确认；后续权限扩张仍会再次阻断。此确认只批准清单，不会跳过具体工具的风险审批、Plan 只读边界或危险操作确认。
 
 阶段 B 加入了可选的 Windows Credential Manager 后端。普通 `/credentials` 只检查原生模块能否加载，不会写入系统凭证库；`/credentials probe` 会先要求明确确认，再写入一个名称和内容均随机的临时 Canary，完成回读校验后立即删除，用来验证当前 Windows、Node.js、架构和企业策略是否真正允许使用该后端。探测不会迁移、覆盖或删除现有 Provider/MCP 凭证。若可选原生模块没有安装或被企业策略拦截，Xiu 会报告后端不可用，但现有 Legacy File 路径和普通启动不受影响。
 

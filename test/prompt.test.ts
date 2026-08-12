@@ -40,3 +40,11 @@ test("Chinese language mode governs all user-visible model output", async () => 
   assert.match(prompt, /USER_INPUT_REQUIRED/);
   assert.match(prompt, /plan goal, step title, and note.*Simplified Chinese/);
 });
+
+test("system prompt omits project instructions before workspace trust", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-prompt-untrusted-"));
+  await fs.writeFile(path.join(cwd, "AGENTS.md"), "UNTRUSTED-CANARY", "utf8");
+  const prompt = await buildSystemPrompt(cwd, undefined, "en-US", false);
+  assert.doesNotMatch(prompt, /UNTRUSTED-CANARY/);
+  await fs.rm(cwd, { recursive: true, force: true });
+});

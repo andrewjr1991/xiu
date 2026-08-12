@@ -5,7 +5,7 @@ import { createMediaBackend, MediaApiError, type MediaBackend, type VideoTask } 
 import { mediaOperationKey, mediaRetryBlocked, MediaOperationStore } from "./media-operations.js";
 import { safeProviderErrorMessage } from "./provider-failover.js";
 import { classifyRetryError, retryDecision, retryDelay } from "./retry-policy.js";
-import { resolveWorkspacePath } from "./tools.js";
+import { resolveWorkspacePath } from "./workspace-path.js";
 import type { AgentTool, ToolContext } from "./types.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);

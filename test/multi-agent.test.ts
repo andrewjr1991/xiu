@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { MultiAgentCoordinator, selectSubagentTools, validateTaskGraph, type SubagentExecutor } from "../src/multi-agent.js";
+import { createMultiAgentTools, MultiAgentCoordinator, selectSubagentTools, validateTaskGraph, type SubagentExecutor } from "../src/multi-agent.js";
 import type { AgentTool } from "../src/types.js";
 
 const stats = { modelCalls: 1, toolCalls: 0, inputTokens: 10, outputTokens: 5, activeMs: 10 };
@@ -29,6 +29,18 @@ test("shared read-only agents cannot see write, execute, dangerous, or dynamic-r
   const tools = [tool("read", "read"), tool("write", "write"), tool("execute", "execute"), tool("danger", "dangerous"), tool("dynamic", () => "read")];
   assert.deepEqual(selectSubagentTools(tools, "shared_readonly").map((item) => item.name), ["read"]);
   assert.deepEqual(selectSubagentTools(tools, "worktree").map((item) => item.name), tools.map((item) => item.name));
+});
+
+test("agent cancellation and retry require execute approval and are never replayed", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-tool-risk-"));
+  const coordinator = new MultiAgentCoordinator(cwd, async () => ({ result: "done", stats }));
+  const tools = createMultiAgentTools(coordinator);
+  for (const name of ["cancel_agent", "retry_agent"]) {
+    const tool = tools.find((candidate) => candidate.name === name);
+    assert.equal(tool?.risk, "execute");
+    assert.equal(tool?.replaySafety, "side-effecting");
+    assert.equal(tool?.maxAttempts, 1);
+  }
 });
 
 test("three independent read-only agents run concurrently", async () => {

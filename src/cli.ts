@@ -375,8 +375,8 @@ async function main(): Promise<void> {
     }
     const initialTask = (program.args as string[]).join(" ").trim();
     const skillRegistry = new SkillRegistry(config.cwd);
-    const mayReadProjectSkills = Boolean(initialTask) || await isWorkspaceTrusted(config.cwd);
-    await skillRegistry.refresh(mayReadProjectSkills);
+    const trustedBeforePrompt = await isWorkspaceTrusted(config.cwd);
+    await skillRegistry.refresh(trustedBeforePrompt);
     if (initialTask) {
       console.log(chalk.bold(`\nXiu - ${config.providerId}/${config.model}`));
       console.log(chalk.dim(`${localize(language, "工作区", "Workspace")}: ${config.cwd}\n`));
@@ -389,11 +389,12 @@ async function main(): Promise<void> {
       console.log(chalk.yellow(localize(language, "警告：Xiu 正在 Windows System32 中运行。请退出并进入项目目录后重新启动，以免误改系统文件。\n", "Warning: Xiu is running in Windows System32. Exit, enter your project directory, and start Xiu there before making changes.\n")));
     }
 
-    if (!initialTask && !(await confirmWorkspaceTrust(config.cwd, language))) return;
+    if (!(await confirmWorkspaceTrust(config.cwd, language))) return;
+    config.projectConfigurationTrusted = true;
     await skillRegistry.refresh(true);
     let mcpStatuses = [] as ReturnType<McpManager["status"]>;
     let mcpConfigError: unknown;
-    const projectMcpTrusted = await isWorkspaceTrusted(config.cwd);
+    const projectMcpTrusted = true;
     const startMcp = async (): Promise<ReturnType<McpManager["status"]>> => {
       try {
         mcpStatuses = await mcpManager.start(projectMcpTrusted);

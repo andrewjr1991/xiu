@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import iconv from "iconv-lite";
 import type { AgentTool } from "./types.js";
+import { resolveWorkspacePath } from "./workspace-path.js";
 
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 const MAX_OUTPUT_CHARACTERS = 60_000;
@@ -45,14 +46,6 @@ function optionalInteger(input: Record<string, unknown>, name: string, fallback:
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
   }
   return Number(value);
-}
-
-function resolveWorkspacePath(cwd: string, requested: string): string {
-  const root = path.resolve(cwd);
-  const target = path.resolve(root, requested);
-  const relative = path.relative(root, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Path escapes workspace: ${requested}`);
-  return target;
 }
 
 async function readStructuredFile(cwd: string, requested: string, requestedEncoding?: unknown): Promise<DecodedFile> {

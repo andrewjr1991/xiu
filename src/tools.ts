@@ -8,6 +8,9 @@ import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundPr
 import { structuredExtractTools } from "./structured-extract.js";
 import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
+import { resolveWorkspacePath, validateWorkspaceGlob } from "./workspace-path.js";
+
+export { resolveWorkspacePath } from "./workspace-path.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 60_000;
@@ -123,16 +126,6 @@ function shellFailureHint(command: string, output: string): string {
   return inlineInterpreter || parserFailure
     ? "\nHint: avoid PowerShell quoting for this command. Retry with run_process using program and args so every argument is passed directly."
     : "";
-}
-
-export function resolveWorkspacePath(cwd: string, requested: string): string {
-  const root = path.resolve(cwd);
-  const target = path.resolve(root, requested);
-  const relative = path.relative(root, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes workspace: ${requested}`);
-  }
-  return target;
 }
 
 function truncate(value: string): string {
@@ -258,12 +251,13 @@ export const builtinTools: AgentTool[] = [
     describe: (input) => `list files matching ${String(input.pattern)}`,
     async execute(input, context) {
       const pattern = stringArg(input, "pattern");
-      if (path.isAbsolute(pattern) || pattern.includes("..")) throw new Error("Glob must stay inside workspace");
+      validateWorkspaceGlob(pattern);
       const files = await fg(pattern, {
         cwd: context.cwd,
         onlyFiles: true,
         dot: true,
         unique: true,
+        followSymbolicLinks: false,
         ignore: ["**/.git/**", "**/node_modules/**", "**/dist/**", "**/.xiu/**"],
       });
       return files.sort().slice(0, 1000).join("\n") || "No matching files.";
@@ -378,13 +372,14 @@ export const builtinTools: AgentTool[] = [
     async execute(input, context) {
       const query = stringArg(input, "query");
       const pattern = typeof input.pattern === "string" ? input.pattern : "**/*";
+      validateWorkspaceGlob(pattern);
       let regex: RegExp;
       try { regex = new RegExp(query, "i"); } catch { throw new Error("query must be a valid regular expression"); }
-      const files = await fg(pattern, { cwd: context.cwd, onlyFiles: true, dot: true, ignore: ["**/.git/**", "**/node_modules/**", "**/dist/**", "**/.xiu/**"] });
+      const files = await fg(pattern, { cwd: context.cwd, onlyFiles: true, dot: true, followSymbolicLinks: false, ignore: ["**/.git/**", "**/node_modules/**", "**/dist/**", "**/.xiu/**"] });
       const matches: string[] = [];
       for (const file of files.slice(0, 3000)) {
         let content: string;
-        try { content = await fs.readFile(path.join(context.cwd, file), "utf8"); } catch { continue; }
+        try { content = await fs.readFile(resolveWorkspacePath(context.cwd, file), "utf8"); } catch { continue; }
         for (const [index, line] of content.split(/\r?\n/).entries()) {
           if (regex.test(line)) matches.push(`${file}:${index + 1}:${line}`);
           regex.lastIndex = 0;
@@ -601,7 +596,7 @@ export const builtinTools: AgentTool[] = [
   },
   {
     name: "start_background_command",
-    description: "Start a long-running command such as a development server under Xiu session management. It is stopped when Xiu exits.",
+    description: "Start a durable long-running command such as a development server under Xiu management. It can continue after Xiu exits; inspect or stop it explicitly with the background-process tools.",
     risk: (input) => classifyCommand(stringArg(input, "command")) === "dangerous" ? "dangerous" : "execute",
     changesWorkspace: (input) => classifyCommand(stringArg(input, "command")) !== "read",
     inputSchema: {
