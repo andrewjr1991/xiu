@@ -74,6 +74,8 @@ Version 0.13.0 adds a privacy-preserving security audit ledger. `/audit`, `/audi
 
 Version 0.13.2 unifies retry classification and replay safety across model, tool, MCP, and media operations. Authentication, authorization, invalid requests, cancellation, streamed responses, completed effects, and unknown commit outcomes are never silently retried. Rate limits, timeouts, transport failures, and 5xx responses recover only within a bounded attempt budget and only for explicitly safe or idempotent work. MCP calls inherit replay safety from their configured risk; media submissions remain non-replayable while status polling and existing-asset downloads may recover safely.
 
+Version 0.13.3 adds opt-in task budgets for cumulative Tokens, model calls, tool calls, failures, and elapsed wall time. Warnings appear before a configured limit; exhaustion pauses only between operations, writes a recoverable task-run record, and never reports completion. `/diagnostics` and the live footer share the same budget snapshot. User answers, approval waits, bounded retry backoff, and background waits are explicit states and are not classified as stalls.
+
 Phase E closes the automated security gate: active Provider and OAuth credential values are redacted from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features
@@ -408,6 +410,13 @@ Useful options:
 --context-window <tokens>   model window override when metadata is unavailable
 --context-limit <tokens>    automatic compaction override (maximum: 90% of window)
 --max-turns <number>        optional user-selected limit (unlimited by default)
+--budget-tokens <number>    cumulative task Token budget
+--budget-model-calls <n>    model-call budget, including retries
+--budget-tool-calls <n>     completed tool-call budget
+--budget-failures <n>       combined model/tool failure budget
+--budget-seconds <n>        elapsed wall-time budget, enforced at safe boundaries
+--budget-warning-percent <n> warning threshold percentage (default: 80)
+--stall-timeout-seconds <n> no-evidence stall threshold (default: 120)
 --agent-concurrency <n>     concurrent specialist limit, 1-8 (default: 3)
 -y, --yes                   approve writes/execution except dangerous actions
 ```

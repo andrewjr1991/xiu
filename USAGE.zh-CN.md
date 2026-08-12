@@ -1126,6 +1126,13 @@ Xiu 可以启动开发服务器等后台任务、查看输出并停止它们。�
 | `--context-window <Token>` | Provider 元数据不可用时覆盖模型真实窗口 |
 | `--context-limit <Token>` | 覆盖自动压缩阈值，最大为窗口的 90% |
 | `--max-turns <次数>` | 可选的单任务轮数上限；默认不限制 |
+| `--budget-tokens <数量>` | 单任务累计 Token 预算；默认不限制 |
+| `--budget-model-calls <次数>` | 模型请求预算，重试也计入 |
+| `--budget-tool-calls <次数>` | 已完成工具调用预算 |
+| `--budget-failures <次数>` | 模型与工具失败总预算 |
+| `--budget-seconds <秒>` | 墙钟时间预算，在安全操作边界生效 |
+| `--budget-warning-percent <百分比>` | 预算预警阈值，默认 80 |
+| `--stall-timeout-seconds <秒>` | 无新证据停滞阈值，默认 120 |
 | `--agent-concurrency <数量>` | 并发子 Agent 上限，1 到 8，默认 3 |
 | `--language <语言>` | 本次启动使用 `zh-CN` 或 `en-US` |
 | `-y, --yes` | 自动批准非危险写入和执行 |

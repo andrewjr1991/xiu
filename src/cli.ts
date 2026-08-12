@@ -140,6 +140,13 @@ const program = new Command()
   .option("--context-window <tokens>", "override the model context window when provider metadata is unavailable")
   .option("--context-limit <tokens>", "override the automatic compaction threshold (maximum 90% of the window)")
   .option("--max-turns <number>", "optional user-selected agent turn limit (unlimited by default)")
+  .option("--budget-tokens <number>", "stop safely after this many task tokens")
+  .option("--budget-model-calls <number>", "stop safely after this many model calls")
+  .option("--budget-tool-calls <number>", "stop safely after this many tool calls")
+  .option("--budget-failures <number>", "stop safely after this many model or tool failures")
+  .option("--budget-seconds <number>", "stop safely after this many elapsed seconds")
+  .option("--budget-warning-percent <number>", "warn when a task reaches this percentage of a budget", "80")
+  .option("--stall-timeout-seconds <number>", "elapsed time without new evidence before stall diagnosis", "120")
   .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
@@ -708,6 +715,7 @@ async function main(): Promise<void> {
             onToolStart: (name, description) => context.reportProgress(`${name}: ${localizeToolDescription(name, description, language)}`),
             onToolProgress: (name, message) => context.reportProgress(`${name}: ${localizeToolProgress(message, language)}`),
             onRetry: (message) => context.reportProgress(localizeToolProgress(message, language)),
+            onBudgetWarning: (message) => context.reportProgress(message),
             onProviderFailover: (details) => context.reportProgress(localize(language,
               `Provider 故障转移：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`,
               `Provider failover: ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`)),
@@ -856,6 +864,10 @@ async function main(): Promise<void> {
         onCompletionGate: () => emitLine(chalk.yellow(localize(language, "完成前需要验证。\n", "Verification required before completion.\n"))),
         onCompaction: (message) => startPhase(message),
         onRetry: (message) => startPhase(localizeToolProgress(message, language)),
+        onBudgetWarning: (message) => {
+          runningTaskView?.activity(message);
+          emitLine(chalk.yellow(`! ${message}\n`));
+        },
         onFailure: (message) => {
           stopPhase();
           runningTaskView?.activity(`${localize(language, "失败", "Failure")}: ${message}`);
@@ -1346,6 +1358,7 @@ async function main(): Promise<void> {
         if (receipts.length) console.log(`${chalk.cyan(localize(language, "关键操作", "Key actions"))}\n${receipts.map((line) => chalk.green(line)).join("\n")}\n`);
         const interaction = parseAssistantInteraction(finalResponse, language);
         finalResponse = interaction.text;
+        if (interaction.question) await agent.markWaitingForUser(interaction.question);
         if (finalResponse.trim()) console.log(`${chalk.cyan.bold("Xiu")}\n${renderTerminalMarkdown(finalResponse)}\n`);
         awaitingReply = interaction.question ? { question: interaction.question, originalTask: current.text } : undefined;
         if (interaction.question) printUserQuestion(interaction.question);
@@ -1370,6 +1383,7 @@ async function main(): Promise<void> {
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
         if (!failure && agent.status().outcome === "failed") failure = new Error(localize(language, "最后一次工具操作失败或被拒绝，目标尚未完成。", "The last tool operation failed or was denied, so the goal is incomplete."));
+        if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务预算已用尽，已保存安全恢复点。调整预算后使用 /recover 继续。", "Task budget was exhausted and a safe recovery point was saved. Adjust the budget and use /recover to continue."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
           const action = await selectTerminalOption(localize(language, "当前任务未完成，下一步怎么做？", "The current task did not complete. What next?"), failureRecoveryOptions(queue.size, language), language);

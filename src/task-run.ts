@@ -6,7 +6,7 @@ import { redactSecrets } from "./secret-redaction.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
 
-export type TaskRunStatus = "running" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned";
+export type TaskRunStatus = "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned";
 export type TaskOperationKind = "model" | "tool" | "verification" | "checkpoint" | "steering";
 export type TaskOperationStatus = "planned" | "started" | "succeeded" | "failed" | "cancelled" | "unknown";
 export type TaskSideEffect = "none" | "workspace" | "process" | "external" | "unknown";
@@ -37,7 +37,7 @@ export interface TaskRecoveryPoint {
 export interface TaskRunEvent {
   id: string;
   at: string;
-  type: "run-started" | "operation-started" | "operation-finished" | "recovery-point" | "run-finished" | "run-abandoned";
+  type: "run-started" | "operation-started" | "operation-finished" | "recovery-point" | "run-paused" | "run-finished" | "run-abandoned";
   operationId?: string;
   status?: TaskRunStatus | TaskOperationStatus;
   evidence?: string;
@@ -179,7 +179,7 @@ export class TaskRunJournal {
 
   async begin(options: BeginRunOptions): Promise<TaskRunRecord> {
     if (this.current?.status === "running") throw new Error("A task run is already active in this Xiu process.");
-    const existing = (await this.runningRecords())[0];
+    const existing = (await this.recoverableRecords())[0];
     if (existing && existing.runId !== options.resumedFrom) {
       if (existing.ownerPid !== process.pid && this.processAlive(existing.ownerPid)) {
         throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
@@ -264,7 +264,7 @@ export class TaskRunJournal {
     await this.persist();
   }
 
-  async complete(status: Exclude<TaskRunStatus, "running" | "abandoned">): Promise<void> {
+  async complete(status: Exclude<TaskRunStatus, "running" | "paused" | "abandoned">): Promise<void> {
     const run = this.requireCurrent();
     run.status = status;
     run.finishedAt = new Date().toISOString();
@@ -275,6 +275,24 @@ export class TaskRunJournal {
       }
     }
     this.appendEvent(run, { type: "run-finished", status });
+    run.updatedAt = run.finishedAt;
+    await atomicWrite(this.runFile(run.runId), run);
+    this.current = undefined;
+    await this.releaseLock(run.runId);
+  }
+
+  async pause(evidence: string): Promise<void> {
+    const run = this.requireCurrent();
+    await this.recoveryPoint("checkpoint", evidence);
+    run.status = "paused";
+    run.finishedAt = new Date().toISOString();
+    for (const operation of run.operations) {
+      if (operation.status === "started") {
+        operation.status = "unknown";
+        operation.finishedAt = run.finishedAt;
+      }
+    }
+    this.appendEvent(run, { type: "run-paused", status: "paused", evidence });
     run.updatedAt = run.finishedAt;
     await atomicWrite(this.runFile(run.runId), run);
     this.current = undefined;
@@ -299,7 +317,7 @@ export class TaskRunJournal {
   }
 
   async interrupted(): Promise<InterruptedTaskRun | undefined> {
-    const record = (await this.runningRecords())[0];
+    const record = (await this.recoverableRecords())[0];
     if (!record) return undefined;
     if (record.ownerPid !== process.pid && this.processAlive(record.ownerPid)) return undefined;
     const interruptedOperations = record.operations.filter((operation) => operation.status === "started").map((operation) => ({ ...operation, status: "unknown" as const }));
@@ -340,6 +358,17 @@ export class TaskRunJournal {
     return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.read(path.basename(name, ".json")))))
       .filter((record): record is TaskRunRecord => Boolean(record))
       .filter((record) => record.status === "running")
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  private async recoverableRecords(): Promise<TaskRunRecord[]> {
+    const names = await fs.readdir(this.directory()).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
+    return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.read(path.basename(name, ".json")))))
+      .filter((record): record is TaskRunRecord => Boolean(record))
+      .filter((record) => record.status === "running" || record.status === "paused")
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 

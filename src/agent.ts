@@ -26,6 +26,7 @@ import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailov
 import { retryDecision, retryDelay } from "./retry-policy.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
 import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
+import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
@@ -40,6 +41,7 @@ export interface AgentEvents {
   onCompletionGate?: (message: string) => void;
   onCompaction?: (message: string) => void;
   onRetry?: (message: string) => void;
+  onBudgetWarning?: (message: string) => void;
   onFailure?: (message: string) => void;
   onProviderFailover?: (details: { fromProviderId: string; fromModel: string; toProviderId: string; toModel: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
   onProviderFailoverUnavailable?: (details: { providerId: string; model: string; reason: string; skipped: Array<{ providerId: string; reason: string }> }) => void;
@@ -52,7 +54,7 @@ export interface AgentEvents {
   onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified" | "failed"; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
 }
 
-export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled";
+export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
 
 interface ToolEvidenceEntry {
   signature: string;
@@ -86,6 +88,7 @@ export class Agent {
   private taskRouteNotices = new Set<string>();
   private recoverySource?: InterruptedTaskRun;
   private blockedRecoveryOperations = new Set<string>();
+  private budgetWarnings = new Set<TaskBudgetMetric>();
 
   constructor(
     private config: AgentConfig,
@@ -122,7 +125,8 @@ export class Agent {
     this.primaryTask = task.trim();
     this.steeringHistory = [];
     this.toolEvidence = [];
-    this.taskDiagnostics = new TaskDiagnostics(task.trim());
+    this.taskDiagnostics = new TaskDiagnostics(task.trim(), Date.now, undefined, this.config.taskBudget, this.config.stallTimeoutMs);
+    this.budgetWarnings.clear();
     this.taskFailoverOriginProviderId = this.config.providerId;
     this.taskAttemptedProviders = new Set([this.config.providerId]);
     this.taskRoutingOrigin = { config: structuredClone(this.config), provider: this.provider, tools: [...this.tools] };
@@ -147,6 +151,13 @@ export class Agent {
         this.taskDiagnostics?.complete("cancelled");
         if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("cancelled");
         throw new Error("Task cancelled.");
+      }
+      if (error instanceof TaskBudgetExceededError) {
+        this.lastRunOutcome = "paused";
+        this.taskDiagnostics?.complete("paused");
+        const metrics = error.snapshot.exhausted.map((metric) => budgetMetricLabel(metric, this.config.language ?? "en-US")).join(", ");
+        if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.pause(`task budget exhausted: ${metrics}`);
+        throw new Error(localize(this.config.language ?? "en-US", `任务预算已用尽（${metrics}）。已在安全恢复点暂停；调整预算后可使用 /recover 继续。`, `Task budget exhausted (${metrics}). Paused at a safe recovery point; adjust the budget and use /recover to continue.`));
       }
       this.lastRunOutcome = "failed";
       this.taskDiagnostics?.complete("failed");
@@ -276,6 +287,7 @@ export class Agent {
     let lastToolFailed = false;
     const loopGuard = new ToolLoopGuard();
     for (let turn = 1; ; turn++) {
+      this.enforceBudget();
       if (this.config.maxTurns !== undefined && turn > this.config.maxTurns) {
         throw new Error(`Agent reached the user-configured ${this.config.maxTurns}-turn limit before completing the task.`);
       }
@@ -330,6 +342,7 @@ export class Agent {
         await this.taskRunJournal?.finishOperation(modelOperation, "succeeded", `assistant turn ${turn} persisted`);
         await this.taskRunJournal?.recoveryPoint("assistant", `assistant turn ${turn} completed`, modelOperation);
       }
+      this.enforceBudget();
 
       if (response.toolCalls.length === 0) {
         if (await this.applyPendingSteering(turn)) continue;
@@ -377,6 +390,7 @@ export class Agent {
       let toolBatchSucceeded = false;
       let toolBatchFailed = false;
       for (const call of response.toolCalls) {
+        this.enforceBudget();
         toolCallCount++;
         this.stats.toolCalls++;
         this.taskDiagnostics?.beginTool(call.name, call.input);
@@ -452,6 +466,10 @@ export class Agent {
               },
               signal,
               reportProgress: (message) => this.events.onToolProgress?.(call.name, message),
+              setRuntimeState: (state, detail) => {
+                if (state === "working") this.taskDiagnostics?.finishWait();
+                else this.taskDiagnostics?.beginWait(state, detail ?? call.name);
+              },
             });
           }
           this.events.onToolEnd?.(call.name, result);
@@ -512,6 +530,7 @@ export class Agent {
           await this.taskRunJournal?.recoveryPoint(taskOperationKind, `${call.name} ${callFailed ? "failed" : "succeeded"}`, taskOperationId);
         }
         await this.checkpointDiagnostics();
+        this.enforceBudget();
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
       lastToolFailed = toolBatchFailed && !toolBatchSucceeded;
@@ -572,6 +591,24 @@ export class Agent {
       pendingSteering: this.pendingSteering.length,
       diagnostics: this.taskDiagnostics?.snapshot(),
     };
+  }
+
+  async markWaitingForUser(question: string): Promise<void> {
+    this.taskDiagnostics?.waitForUser(question);
+    await this.checkpointDiagnostics();
+  }
+
+  private enforceBudget(): void {
+    const budget = this.taskDiagnostics?.budget();
+    if (!budget || budget.state === "unlimited") return;
+    for (const metric of budget.warning) {
+      if (this.budgetWarnings.has(metric)) continue;
+      this.budgetWarnings.add(metric);
+      this.events.onBudgetWarning?.(localize(this.config.language ?? "en-US",
+        `任务预算接近上限：${budgetMetricLabel(metric, "zh-CN")}。Xiu 将在安全操作边界暂停。`,
+        `Task budget is nearing its limit: ${budgetMetricLabel(metric, "en-US")}. Xiu will pause at a safe operation boundary.`));
+    }
+    if (budget.exhausted.length) throw new TaskBudgetExceededError(budget);
   }
 
   async setModel(model: string): Promise<void> {
@@ -949,6 +986,7 @@ export class Agent {
         }
         this.taskDiagnostics?.finishModel(undefined, false, safeError);
         await this.checkpointDiagnostics();
+        this.enforceBudget();
         const transient = isTransientProviderError(error);
         const decision = retryDecision({
           operation: "model",
@@ -966,7 +1004,10 @@ export class Agent {
         if (decision.retry) {
           const delayMs = decision.delayMs ?? 0;
           this.events.onRetry?.(localize(this.config.language ?? "en-US", `模型暂时出错；${delayMs}ms 后重试 ${attempt + 1}/${maxAttempts}`, `Temporary model error; retrying ${attempt + 1}/${maxAttempts} in ${delayMs}ms`));
-          await retryDelay(delayMs, signal);
+          this.taskDiagnostics?.beginWait("backoff", `model retry ${attempt + 1}/${maxAttempts}`);
+          try { await retryDelay(delayMs, signal); }
+          finally { this.taskDiagnostics?.finishWait(); }
+          this.enforceBudget();
           attempt++;
           continue;
         }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatTaskDiagnostics, restoreTaskDiagnostics, TaskDiagnostics } from "../src/diagnostics.js";
+import { formatTaskDiagnostics, formatTaskDiagnosticSummary, restoreTaskDiagnostics, TaskDiagnostics } from "../src/diagnostics.js";
 
 test("task diagnostics aggregate model tools approval tokens and bounded failures", () => {
   let now = 1_000;
@@ -182,4 +182,34 @@ test("diagnostics report provider prompt cache tokens without treating them as e
   assert.equal(snapshot.model.cacheCreationInputTokens, 300);
   assert.equal(snapshot.model.cacheHits, 1);
   assert.match(formatTaskDiagnostics(snapshot, "zh-CN"), /Prompt Cache：命中请求 1\/2.*读取 1,500 tokens.*写入 300 tokens/);
+});
+
+test("user waits, retry backoff, and background work never count as stalls", () => {
+  let now = 0;
+  const diagnostics = new TaskDiagnostics("wait states", () => now);
+  for (const kind of ["user", "backoff", "background"] as const) {
+    diagnostics.beginWait(kind, kind);
+    now += 600_000;
+    assert.equal(diagnostics.snapshot().health.state, "waiting");
+    assert.equal(diagnostics.snapshot().phase.kind, kind);
+    diagnostics.finishWait();
+  }
+});
+
+test("diagnostics expose the same task budget used by execution", () => {
+  let now = 0;
+  const diagnostics = new TaskDiagnostics("bounded", () => now, undefined, { tokens: 100, modelCalls: 3, warningRatio: 0.8 });
+  diagnostics.beginModel("turn 1", 1);
+  now += 10;
+  diagnostics.finishModel({ inputTokens: 70, outputTokens: 10 }, true);
+  assert.equal(diagnostics.snapshot().budget?.state, "warning");
+  assert.match(formatTaskDiagnostics(diagnostics.snapshot(), "zh-CN"), /任务预算：warning.*Token 80\/100/);
+  assert.match(formatTaskDiagnosticSummary(diagnostics.snapshot(), "zh-CN"), /预算 Token 80\/100 warning/);
+});
+
+test("restored diagnostics reject malformed persisted budget data", () => {
+  const diagnostics = new TaskDiagnostics("bounded", () => 1_000, undefined, { tokens: 100, warningRatio: 0.8 });
+  const snapshot = diagnostics.snapshot();
+  assert.ok(restoreTaskDiagnostics(snapshot));
+  assert.equal(restoreTaskDiagnostics({ ...snapshot, budget: { ...snapshot.budget, usage: { tokens: "invalid" } } }), undefined);
 });

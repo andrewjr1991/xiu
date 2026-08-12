@@ -772,8 +772,10 @@ export async function executeTool(tool: AgentTool, input: Record<string, unknown
       });
       if (!decision.retry) return `Tool error: ${error instanceof Error ? error.message : String(error)}`;
       context.reportProgress?.(`${tool.name}: transient ${decision.category} failure; retrying ${attempt + 1}/${maxAttempts} in ${decision.delayMs}ms`);
+      context.setRuntimeState?.("backoff", `${tool.name} retry ${attempt + 1}/${maxAttempts}`);
       try { await retryDelay(decision.delayMs ?? 0, context.signal); }
       catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
+      finally { context.setRuntimeState?.("working"); }
     }
   }
 }

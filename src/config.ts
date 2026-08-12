@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveContextProfile, type ContextWindowSource } from "./context.js";
 import { defaultLanguage, normalizeLanguage, type UiLanguage } from "./i18n.js";
+import type { TaskBudgetLimits } from "./task-budget.js";
 
 export type ProviderName = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
 
@@ -46,6 +47,8 @@ export interface AgentConfig {
   /** Internal session-log namespace. CLI user sessions use the default `sessions`. */
   sessionNamespace?: string;
   language?: UiLanguage;
+  taskBudget?: TaskBudgetLimits;
+  stallTimeoutMs?: number;
 }
 
 export function resolveConfig(options: {
@@ -71,6 +74,13 @@ export function resolveConfig(options: {
   apiKey?: string;
   credentialRevision?: number;
   providerFeatures?: ProviderFeatureFlags;
+  budgetTokens?: string;
+  budgetModelCalls?: string;
+  budgetToolCalls?: string;
+  budgetFailures?: string;
+  budgetSeconds?: string;
+  budgetWarningPercent?: string;
+  stallTimeoutSeconds?: string;
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
   if (!["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"].includes(provider)) {
@@ -135,6 +145,24 @@ export function resolveConfig(options: {
             : provider === "vllm" ? "http://127.0.0.1:8000/v1"
               : process.env.OPENAI_BASE_URL);
   const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE) ?? defaultLanguage();
+  const optionalPositive = (value: string | undefined, name: string): number | undefined => {
+    if (value === undefined || value === "") return undefined;
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer when provided`);
+    return parsed;
+  };
+  const warningPercent = Number(options.budgetWarningPercent ?? process.env.XIU_BUDGET_WARNING_PERCENT ?? 80);
+  if (!Number.isFinite(warningPercent) || warningPercent < 1 || warningPercent >= 100) throw new Error("budget-warning-percent must be from 1 to 99");
+  const stallTimeoutSeconds = optionalPositive(options.stallTimeoutSeconds ?? process.env.XIU_STALL_TIMEOUT_SECONDS, "stall-timeout-seconds") ?? 120;
+  const budgetSeconds = optionalPositive(options.budgetSeconds ?? process.env.XIU_BUDGET_SECONDS, "budget-seconds");
+  const taskBudget: TaskBudgetLimits = {
+    tokens: optionalPositive(options.budgetTokens ?? process.env.XIU_BUDGET_TOKENS, "budget-tokens"),
+    modelCalls: optionalPositive(options.budgetModelCalls ?? process.env.XIU_BUDGET_MODEL_CALLS, "budget-model-calls"),
+    toolCalls: optionalPositive(options.budgetToolCalls ?? process.env.XIU_BUDGET_TOOL_CALLS, "budget-tool-calls"),
+    failures: optionalPositive(options.budgetFailures ?? process.env.XIU_BUDGET_FAILURES, "budget-failures"),
+    wallTimeMs: budgetSeconds === undefined ? undefined : budgetSeconds * 1_000,
+    warningRatio: warningPercent / 100,
+  };
 
   return {
     provider,
@@ -157,5 +185,7 @@ export function resolveConfig(options: {
     ...context,
     agentConcurrency,
     language,
+    taskBudget,
+    stallTimeoutMs: stallTimeoutSeconds * 1_000,
   };
 }

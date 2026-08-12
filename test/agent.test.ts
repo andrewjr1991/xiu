@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
-import type { AgentConfig } from "../src/config.js";
+import { resolveConfig, type AgentConfig } from "../src/config.js";
 import { loadSession } from "../src/session.js";
 import { builtinTools } from "../src/tools.js";
 import type { AgentTool, AssistantTurn, ConversationMessage, ModelProvider, ToolDefinition } from "../src/types.js";
@@ -89,6 +89,27 @@ test("agent does not report success when the final tool operation failed", async
   assert.equal(await agent.run("Complete an external operation"), "The service is unavailable.");
   assert.equal(agent.status().outcome, "failed");
   assert.equal(agent.status().diagnostics?.outcome, "failed");
+});
+
+test("agent stops at a safe boundary before executing tools after token budget exhaustion", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-budget-"));
+  let toolRan = false;
+  const provider: ModelProvider = {
+    async complete() {
+      return { text: "About to act.", toolCalls: [{ id: "call", name: "side_effect", input: {} }], raw: {}, usage: { inputTokens: 90, outputTokens: 20, totalTokens: 110 } };
+    },
+  };
+  const tool: AgentTool = {
+    name: "side_effect", description: "side effect", risk: "write", inputSchema: { type: "object", properties: {} }, describe: () => "side effect",
+    execute: async () => { toolRan = true; return "done"; },
+  };
+  const warnings: string[] = [];
+  const config = resolveConfig({ provider: "openai", cwd, budgetTokens: "100", budgetWarningPercent: "80", yes: true });
+  const agent = new Agent(config, provider, [tool], async () => true, { onBudgetWarning: (message) => warnings.push(message) });
+  await assert.rejects(() => agent.run("bounded task"), /预算已用尽|budget exhausted/i);
+  assert.equal(toolRan, false);
+  assert.equal(agent.status().outcome, "paused");
+  assert.equal(agent.status().diagnostics?.budget?.state, "exhausted");
 });
 
 test("agent completes a generated artifact after verify_output passes", async () => {

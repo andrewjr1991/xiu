@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { localize, type UiLanguage } from "./i18n.js";
 import { PROVIDER_ROUTING_PHASES, type ProviderRoutingPhase } from "./provider-routing.js";
 import { isSecretField, redactSecrets } from "./secret-redaction.js";
+import { budgetMetricLabel, taskBudgetSnapshot, type TaskBudgetLimits, type TaskBudgetSnapshot } from "./task-budget.js";
 
-export type DiagnosticPhaseKind = "idle" | "model" | "tool" | "approval";
+export type DiagnosticPhaseKind = "idle" | "model" | "tool" | "approval" | "user" | "backoff" | "background";
 export type DiagnosticHealthState = "healthy" | "waiting" | "attention" | "stalled";
-export type DiagnosticOutcome = "running" | "completed" | "unverified" | "failed" | "cancelled" | "interrupted";
+export type DiagnosticOutcome = "running" | "completed" | "unverified" | "failed" | "cancelled" | "interrupted" | "paused" | "waiting";
 export type DiagnosticToolOutcome = "success" | "failure" | "denied" | "cancelled";
 
 export interface DiagnosticFailure {
@@ -72,6 +73,7 @@ export interface TaskDiagnosticSnapshot {
   compactions: number;
   progress: { lastAt: string; operationsSince: number; distinctOperations: number; consecutiveFailures: number };
   failures: DiagnosticFailure[];
+  budget?: TaskBudgetSnapshot;
 }
 
 interface ActiveOperation {
@@ -135,12 +137,30 @@ function validDate(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+function validBudgetSnapshot(value: unknown): value is TaskBudgetSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const budget = value as Record<string, unknown>;
+  const limits = budget.limits as Record<string, unknown> | undefined;
+  const usage = budget.usage as Record<string, unknown> | undefined;
+  if (!limits || !usage || Array.isArray(limits) || Array.isArray(usage)) return false;
+  if (!["unlimited", "ok", "warning", "exhausted"].includes(String(budget.state))) return false;
+  const metrics = ["tokens", "modelCalls", "toolCalls", "failures", "wallTimeMs"] as const;
+  if (typeof limits.warningRatio !== "number" || !Number.isFinite(limits.warningRatio) || limits.warningRatio <= 0 || limits.warningRatio >= 1) return false;
+  for (const metric of metrics) {
+    if (limits[metric] !== undefined && !finiteInteger(limits[metric])) return false;
+    if (!finiteInteger(usage[metric])) return false;
+  }
+  return [budget.warning, budget.exhausted].every((list) => Array.isArray(list)
+    && list.length <= metrics.length
+    && list.every((metric) => metrics.includes(metric as typeof metrics[number])));
+}
+
 function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   if (item.version !== 1 || typeof item.task !== "string" || item.task.length > MAX_TASK_CHARACTERS || !validDate(item.startedAt) || !validDate(item.updatedAt)) return false;
   if (item.completedAt !== undefined && !validDate(item.completedAt)) return false;
-  if (!["running", "completed", "unverified", "failed", "cancelled", "interrupted"].includes(String(item.outcome)) || !finiteInteger(item.durationMs)) return false;
+  if (!["running", "completed", "unverified", "failed", "cancelled", "interrupted", "paused", "waiting"].includes(String(item.outcome)) || !finiteInteger(item.durationMs)) return false;
   const phase = item.phase as Record<string, unknown> | undefined;
   const health = item.health as Record<string, unknown> | undefined;
   const model = item.model as Record<string, unknown> | undefined;
@@ -148,7 +168,7 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
   const approvals = item.approvals as Record<string, unknown> | undefined;
   const progress = item.progress as Record<string, unknown> | undefined;
   if (!phase || !health || !model || !tools || !approvals || !progress) return false;
-  if (!["idle", "model", "tool", "approval"].includes(String(phase.kind)) || !finiteInteger(phase.activeMs) || (phase.operation !== undefined && (typeof phase.operation !== "string" || phase.operation.length > MAX_OPERATION_CHARACTERS))) return false;
+  if (!["idle", "model", "tool", "approval", "user", "backoff", "background"].includes(String(phase.kind)) || !finiteInteger(phase.activeMs) || (phase.operation !== undefined && (typeof phase.operation !== "string" || phase.operation.length > MAX_OPERATION_CHARACTERS))) return false;
   if (!["healthy", "waiting", "attention", "stalled"].includes(String(health.state))) return false;
   if ([health.reason, health.recommendation].some((field) => field !== undefined && (typeof field !== "string" || field.length > MAX_MESSAGE_CHARACTERS))) return false;
   const modelNumbers = [model.attempts, model.completed, model.failures, model.retries, model.inputTokens, model.outputTokens, model.totalMs, model.slowestMs];
@@ -204,6 +224,7 @@ function validSnapshot(value: unknown): value is TaskDiagnosticSnapshot {
         && [entry.providerId, entry.model, entry.reason].every((field) => typeof field === "string" && field.length <= MAX_MESSAGE_CHARACTERS);
     }))) return false;
   }
+  if (item.budget !== undefined && !validBudgetSnapshot(item.budget)) return false;
   return true;
 }
 
@@ -231,8 +252,13 @@ export class TaskDiagnostics {
   private seenOperations = new Set<string>();
   private distinctOperations = 0;
   private failures: DiagnosticFailure[] = [];
+  private readonly budgetLimits?: TaskBudgetLimits;
+  private readonly stallTimeoutMs: number;
+  private activeBeforeWait?: ActiveOperation;
 
-  constructor(private readonly task: string, private readonly now: () => number = Date.now, restored?: TaskDiagnosticSnapshot) {
+  constructor(private readonly task: string, private readonly now: () => number = Date.now, restored?: TaskDiagnosticSnapshot, budgetLimits?: TaskBudgetLimits, stallTimeoutMs = 120_000) {
+    this.budgetLimits = budgetLimits ?? restored?.budget?.limits;
+    this.stallTimeoutMs = stallTimeoutMs;
     if (restored) {
       this.startedAtMs = Date.parse(restored.startedAt);
       this.updatedAtMs = Date.parse(restored.updatedAt);
@@ -363,6 +389,36 @@ export class TaskDiagnostics {
     this.activeBeforeApproval = undefined;
   }
 
+  beginWait(kind: "backoff" | "background" | "user", operation: string): void {
+    const now = this.touch();
+    this.activeBeforeWait = this.active;
+    this.active = { kind, operation: bounded(operation, MAX_OPERATION_CHARACTERS), startedAt: now };
+  }
+
+  finishWait(): void {
+    this.touch();
+    this.active = this.activeBeforeWait;
+    this.activeBeforeWait = undefined;
+  }
+
+  waitForUser(operation: string): void {
+    this.outcome = "waiting";
+    this.completedAtMs = undefined;
+    this.beginWait("user", operation);
+  }
+
+  budget(): TaskBudgetSnapshot | undefined {
+    if (!this.budgetLimits) return undefined;
+    const now = this.now();
+    return taskBudgetSnapshot(this.budgetLimits, {
+      tokens: this.model.inputTokens + this.model.outputTokens,
+      modelCalls: this.model.attempts,
+      toolCalls: this.tools.calls,
+      failures: this.model.failures + this.tools.failures,
+      wallTimeMs: Math.max(0, now - this.startedAtMs),
+    });
+  }
+
   recordCompaction(): void {
     this.compactions++;
     this.touch();
@@ -457,6 +513,7 @@ export class TaskDiagnostics {
       ? { kind: this.active.kind, operation: this.active.operation, activeMs: Math.max(0, now - this.active.startedAt) }
       : { kind: "idle" as const, activeMs: 0 };
     const health = this.health(now, phase.kind, phase.activeMs);
+    const budget = this.budget();
     return {
       version: 1,
       task: bounded(redactSecrets(this.task), MAX_TASK_CHARACTERS),
@@ -481,6 +538,7 @@ export class TaskDiagnostics {
       compactions: this.compactions,
       progress: { lastAt: iso(this.lastProgressAtMs), operationsSince: this.operationsSinceProgress, distinctOperations: this.distinctOperations, consecutiveFailures: this.consecutiveFailures },
       failures: this.failures.map((failure) => ({ ...failure })),
+      ...(budget ? { budget } : {}),
     };
   }
 
@@ -504,9 +562,12 @@ export class TaskDiagnostics {
 
   private health(now: number, phase: DiagnosticPhaseKind, activeMs: number): TaskDiagnosticSnapshot["health"] {
     if (phase === "approval") return { state: "waiting", reason: "waiting_for_approval", recommendation: "Wait for the user decision; this is not a task stall." };
+    if (phase === "user") return { state: "waiting", reason: "waiting_for_user", recommendation: "Wait for the user's answer; this is not a task stall." };
+    if (phase === "backoff") return { state: "waiting", reason: "rate_limit_backoff", recommendation: "A bounded retry delay is active; this is not a task stall." };
+    if (phase === "background") return { state: "waiting", reason: "background_process", recommendation: "A background operation is active; this is not a task stall." };
     if (this.consecutiveFailures >= 3) return { state: "stalled", reason: "repeated_failures", recommendation: "Diagnose the shared cause and switch strategy before retrying." };
     const sinceProgress = Math.max(0, now - this.lastProgressAtMs);
-    if (this.operationsSinceProgress >= 8 && sinceProgress >= 120_000) return { state: "stalled", reason: "no_new_evidence", recommendation: "Summarize existing evidence, stop repeated investigation, and choose the next untried action." };
+    if (this.operationsSinceProgress >= 8 && sinceProgress >= this.stallTimeoutMs) return { state: "stalled", reason: "no_new_evidence", recommendation: "Summarize existing evidence, stop repeated investigation, and choose the next untried action." };
     if (phase === "model" && activeMs >= 60_000) return { state: "attention", reason: "slow_model", recommendation: "The model request is still active; consider cancellation only if it exceeds the user's tolerance." };
     if (phase === "tool" && activeMs >= 60_000) return { state: "attention", reason: "slow_tool", recommendation: "The tool is still active; inspect details or cancel if it is no longer useful." };
     if (this.consecutiveFailures > 0 || (this.operationsSinceProgress >= 4 && sinceProgress >= 60_000)) return { state: "attention", reason: this.consecutiveFailures > 0 ? "recent_failures" : "limited_progress", recommendation: "Review the recent failure or confirm that the current strategy is producing new evidence." };
@@ -529,7 +590,7 @@ function duration(value: number): string {
 function healthLabel(snapshot: TaskDiagnosticSnapshot, language: UiLanguage): string {
   return ({
     healthy: localize(language, "正常", "healthy"),
-    waiting: localize(language, "等待审批", "waiting for approval"),
+    waiting: localize(language, "等待中", "waiting"),
     attention: localize(language, "需要关注", "attention"),
     stalled: localize(language, "可能停滞", "possibly stalled"),
   } as const)[snapshot.health.state];
@@ -543,6 +604,8 @@ function outcomeLabel(outcome: DiagnosticOutcome, language: UiLanguage): string 
     failed: ["失败", "failed"],
     cancelled: ["已取消", "cancelled"],
     interrupted: ["已中断", "interrupted"],
+    paused: ["已安全暂停", "safely paused"],
+    waiting: ["等待用户", "waiting for user"],
   };
   return localize(language, ...labels[outcome]);
 }
@@ -553,6 +616,9 @@ function phaseLabel(phase: DiagnosticPhaseKind, language: UiLanguage): string {
     model: ["模型请求", "model request"],
     tool: ["工具执行", "tool execution"],
     approval: ["等待审批", "approval wait"],
+    user: ["等待用户回答", "waiting for user"],
+    backoff: ["限流退避", "rate-limit backoff"],
+    background: ["后台进程", "background process"],
   };
   return localize(language, ...labels[phase]);
 }
@@ -581,6 +647,9 @@ function routingReasonLabel(reason: string, language: UiLanguage): string {
 function reasonLabel(reason: string, language: UiLanguage): string {
   const labels: Record<string, [string, string]> = {
     waiting_for_approval: ["正在等待用户审批", "waiting for user approval"],
+    waiting_for_user: ["正在等待用户回答", "waiting for user response"],
+    rate_limit_backoff: ["正在进行有界限流退避", "bounded rate-limit backoff"],
+    background_process: ["后台进程仍在运行", "background process is active"],
     repeated_failures: ["连续出现相同类型的失败", "repeated failures"],
     no_new_evidence: ["多次操作没有产生新证据", "no new evidence"],
     slow_model: ["模型请求耗时较长", "slow model request"],
@@ -596,6 +665,9 @@ function recommendationLabel(snapshot: TaskDiagnosticSnapshot, language: UiLangu
   if (!snapshot.health.reason) return undefined;
   const labels: Record<string, [string, string]> = {
     waiting_for_approval: ["请完成当前审批；等待审批不属于任务停滞。", "Complete the current approval; approval wait is not a task stall."],
+    waiting_for_user: ["请等待用户回答；这不属于任务停滞。", "Wait for the user's answer; this is not a task stall."],
+    rate_limit_backoff: ["正在等待下一次安全重试；这不属于任务停滞。", "Wait for the next safe retry; this is not a task stall."],
+    background_process: ["后台操作仍在运行；这不属于任务停滞。", "The background operation is active; this is not a task stall."],
     repeated_failures: ["先分析共同原因并切换策略，再继续重试。", "Diagnose the shared cause and switch strategy before retrying."],
     no_new_evidence: ["汇总已有证据，停止重复调查，并选择尚未尝试的下一步。", "Summarize existing evidence, stop repeated investigation, and choose the next untried action."],
     slow_model: ["模型请求仍在运行；仅在超过可接受等待时间时考虑取消。", "The model request is still active; cancel only if it exceeds the acceptable wait."],
@@ -609,9 +681,16 @@ function recommendationLabel(snapshot: TaskDiagnosticSnapshot, language: UiLangu
 
 export function formatTaskDiagnosticSummary(snapshot: TaskDiagnosticSnapshot, language: UiLanguage): string {
   const tokens = snapshot.model.inputTokens + snapshot.model.outputTokens;
-  return localize(language,
+  const base = localize(language,
     `${tokens.toLocaleString()} tokens · 模型 ${duration(snapshot.model.totalMs)} · 工具 ${duration(snapshot.tools.totalMs)} · 失败 ${snapshot.model.failures + snapshot.tools.failures} · ${healthLabel(snapshot, language)}`,
     `${tokens.toLocaleString()} tokens · model ${duration(snapshot.model.totalMs)} · tools ${duration(snapshot.tools.totalMs)} · ${snapshot.model.failures + snapshot.tools.failures} failure(s) · ${healthLabel(snapshot, language)}`);
+  if (!snapshot.budget || snapshot.budget.state === "unlimited") return base;
+  const metric = snapshot.budget.exhausted[0] ?? snapshot.budget.warning[0];
+  if (!metric) return `${base} · ${localize(language, "预算正常", "budget ok")}`;
+  const used = snapshot.budget.usage[metric];
+  const limit = snapshot.budget.limits[metric];
+  const usage = metric === "wallTimeMs" ? `${duration(used)}/${duration(limit!)}` : `${used.toLocaleString()}/${limit!.toLocaleString()}`;
+  return `${base} · ${localize(language, "预算", "budget")} ${budgetMetricLabel(metric, language)} ${usage} ${snapshot.budget.state}`;
 }
 
 export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefined, language: UiLanguage): string {
@@ -647,6 +726,12 @@ export function formatTaskDiagnostics(snapshot: TaskDiagnosticSnapshot | undefin
     `Approvals: ${snapshot.approvals.requests} prompt(s) / ${snapshot.approvals.automatic ?? 0} automatic / ${snapshot.approvals.remembered ?? 0} remembered / ${snapshot.approvals.checks ?? snapshot.approvals.requests} policy check(s) / denied ${snapshot.approvals.denied} · human wait ${duration(snapshot.approvals.waitMs)}`,
     `Progress: ${snapshot.progress.operationsSince} operation(s) without new evidence · ${snapshot.progress.consecutiveFailures} consecutive failure(s) · ${snapshot.compactions} compaction(s)`,
   ];
+  if (snapshot.budget && snapshot.budget.state !== "unlimited") {
+    const metrics = (["tokens", "modelCalls", "toolCalls", "failures", "wallTimeMs"] as const)
+      .filter((metric) => snapshot.budget!.limits[metric] !== undefined)
+      .map((metric) => `${budgetMetricLabel(metric, language)} ${metric === "wallTimeMs" ? duration(snapshot.budget!.usage[metric]) : snapshot.budget!.usage[metric].toLocaleString()}/${metric === "wallTimeMs" ? duration(snapshot.budget!.limits[metric]!) : snapshot.budget!.limits[metric]!.toLocaleString()}`);
+    lines.push(localize(language, `任务预算：${snapshot.budget.state} · ${metrics.join(" · ")}`, `Task budget: ${snapshot.budget.state} · ${metrics.join(" · ")}`));
+  }
   if (snapshot.health.reason) lines.push(localize(language, `诊断依据：${reasonLabel(snapshot.health.reason, language)}`, `Diagnostic reason: ${reasonLabel(snapshot.health.reason, language)}`));
   const recommendation = recommendationLabel(snapshot, language);
   if (recommendation) lines.push(localize(language, `建议：${recommendation}`, `Recommendation: ${recommendation}`));

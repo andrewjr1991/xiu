@@ -84,6 +84,7 @@ export interface ToolContext {
   approve: (request: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
   reportProgress?: (message: string) => void;
+  setRuntimeState?: (state: "working" | "backoff" | "background", detail?: string) => void;
 }
 
 export interface AgentTool extends ToolDefinition {

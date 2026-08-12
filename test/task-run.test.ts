@@ -115,6 +115,31 @@ test("rejects corrupt and unknown-version journals", async (t) => {
   await assert.rejects(() => item.journal.read("bad"), /Unsupported or corrupt/);
 });
 
+test("a budget pause remains explicitly recoverable", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const record = await item.journal.begin({ sessionId: "budget", task: "bounded task", providerId: "p", model: "m" });
+  await item.journal.pause("task budget exhausted: tokens");
+  assert.equal((await item.journal.read(record.runId))?.status, "paused");
+  const recoverable = await new TaskRunJournal(item.workspace, item.journalRoot).interrupted();
+  assert.equal(recoverable?.runId, record.runId);
+  assert.match(recoverable?.recoveryPoints.at(-1)?.evidence ?? "", /budget exhausted/);
+});
+
+test("a paused run blocks a new task until it is explicitly recovered or abandoned", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const record = await item.journal.begin({ sessionId: "paused", task: "bounded task", providerId: "p", model: "m" });
+  await item.journal.pause("task budget exhausted: tokens");
+  const next = new TaskRunJournal(item.workspace, item.journalRoot);
+  await assert.rejects(
+    () => next.begin({ sessionId: "new", task: "unrelated task", providerId: "p", model: "m" }),
+    /explicit resume or abandon decision/,
+  );
+  const resumed = await next.begin({ sessionId: "paused", task: "continue", providerId: "p", model: "m", resumedFrom: record.runId });
+  assert.equal(resumed.resumedFrom, record.runId);
+});
+
 test("marks terminal operations and no longer reports an interrupted run", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
