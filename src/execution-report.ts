@@ -139,7 +139,7 @@ export function buildExecutionReport(options: {
   const changed = files.length > 0;
   const verificationPassed = verification.some((item) => item.status === "succeeded");
   const complete = run.status === "completed";
-  const verified = complete && (!changed || verificationPassed || turns.at(-1)?.completion?.success === true || turn?.completion?.success === true);
+  const verified = complete && verificationPassed;
   const canContinue = run.status === "running" || run.status === "paused" || run.status === "unverified" || run.status === "failed";
   const unknownSideEffects = operations
     .filter((item) => item.status === "unknown" && item.sideEffect !== "none")

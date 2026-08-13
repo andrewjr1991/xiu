@@ -85,3 +85,39 @@ test("a persisted beta environment reference migrates to managed auth after the 
   assert.deepEqual(await store.load(), { language: "zh-CN", webSearch: managedBetaSearch });
   await fs.rm(directory, { recursive: true, force: true });
 });
+
+test("a persisted custom beta token reference migrates to managed auth when the variable is missing", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-beta-search-custom-migrate-"));
+  const filename = path.join(directory, "settings.json");
+  await fs.writeFile(filename, JSON.stringify({
+    webSearch: {
+      enabled: true,
+      provider: "searxng",
+      baseURL: XIU_BETA_SEARXNG_ENDPOINT,
+      apiKeyEnv: "XIU_SEARXNG_TOKEN",
+    },
+  }));
+  const store = new SettingsStore(filename, {});
+  assert.deepEqual(await store.load(), { webSearch: managedBetaSearch });
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search auth and its independent proxy survive settings reload", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-search-settings-"));
+  const filename = path.join(directory, "settings.json");
+  const store = new SettingsStore(filename, {});
+  const configured = {
+    ...managedBetaSearch,
+    baseURL: "https://search.example.com",
+    authBaseURL: "https://search.example.com/xiu-auth",
+    proxy: "http://127.0.0.1:12334",
+  };
+  await store.save({ webSearch: configured });
+  assert.deepEqual((await store.load()).webSearch, {
+    ...configured,
+    baseURL: "https://search.example.com/",
+    authBaseURL: "https://search.example.com/xiu-auth",
+    proxy: "http://127.0.0.1:12334/",
+  });
+  await fs.rm(directory, { recursive: true, force: true });
+});

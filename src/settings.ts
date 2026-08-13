@@ -15,6 +15,7 @@ export const XIU_BETA_SEARXNG_TOKEN_ENV = "XIU_BETA_SEARXNG_TOKEN";
 
 function betaWebSearchConfig(environment: NodeJS.ProcessEnv): WebSearchConfig | undefined {
   const legacyToken = environment[XIU_BETA_SEARXNG_TOKEN_ENV]?.trim();
+  const proxy = environment.XIU_WEB_PROXY?.trim();
   return {
     enabled: true,
     provider: "searxng",
@@ -23,6 +24,7 @@ function betaWebSearchConfig(environment: NodeJS.ProcessEnv): WebSearchConfig | 
       ? { apiKeyEnv: XIU_BETA_SEARXNG_TOKEN_ENV }
       : { managedAuth: "xiu-device" as const, authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT }),
     timeoutMs: 20_000,
+    ...(proxy ? { proxy } : {}),
   };
 }
 
@@ -41,6 +43,21 @@ function webSearchConfig(value: unknown): WebSearchConfig | undefined {
   if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return undefined;
   const timeoutMs = typeof input.timeoutMs === "number" && Number.isInteger(input.timeoutMs) && input.timeoutMs >= 1_000 && input.timeoutMs <= 60_000
     ? input.timeoutMs : undefined;
+  let proxy: string | undefined;
+  if (typeof input.proxy === "string" && input.proxy.trim()) {
+    try {
+      const parsedProxy = new URL(input.proxy);
+      if (parsedProxy.protocol === "http:" || parsedProxy.protocol === "https:") proxy = parsedProxy.toString();
+    } catch { /* Ignore invalid persisted proxy values. */ }
+  }
+  const managedAuth = input.managedAuth === "xiu-device" ? "xiu-device" as const : undefined;
+  let authBaseURL: string | undefined;
+  if (managedAuth && typeof input.authBaseURL === "string") {
+    try {
+      const parsedAuth = new URL(input.authBaseURL);
+      if (parsedAuth.protocol === "https:" && !parsedAuth.username && !parsedAuth.password) authBaseURL = parsedAuth.toString();
+    } catch { /* Ignore invalid persisted auth endpoints. */ }
+  }
   return {
     enabled: input.enabled === true,
     provider: input.provider as WebSearchProvider,
@@ -49,6 +66,8 @@ function webSearchConfig(value: unknown): WebSearchConfig | undefined {
     ...(stringArray(input.allowedDomains)?.length ? { allowedDomains: stringArray(input.allowedDomains) } : {}),
     ...(stringArray(input.blockedDomains)?.length ? { blockedDomains: stringArray(input.blockedDomains) } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
+    ...(proxy ? { proxy } : {}),
+    ...(managedAuth && authBaseURL ? { managedAuth, authBaseURL } : {}),
   };
 }
 
@@ -62,9 +81,10 @@ export class SettingsStore {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown };
       const webSearch = webSearchConfig(parsed.webSearch);
-      const legacyBetaWithoutToken = webSearch?.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
-        && webSearch.apiKeyEnv === XIU_BETA_SEARXNG_TOKEN_ENV
-        && !this.environment[XIU_BETA_SEARXNG_TOKEN_ENV]?.trim();
+      const legacyBetaWithoutToken = webSearch?.enabled === true
+        && webSearch.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
+        && Boolean(webSearch.apiKeyEnv)
+        && !this.environment[webSearch.apiKeyEnv!]?.trim();
       const effectiveWebSearch = Object.prototype.hasOwnProperty.call(parsed, "webSearch")
         ? legacyBetaWithoutToken ? betaWebSearchConfig(this.environment) : webSearch
         : betaWebSearchConfig(this.environment);

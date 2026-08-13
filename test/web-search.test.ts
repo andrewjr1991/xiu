@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { SettingsStore } from "../src/settings.js";
+import { ManagedWebSearchAuth } from "../src/managed-web-search-auth.js";
+import { SettingsStore, XIU_BETA_SEARXNG_ENDPOINT } from "../src/settings.js";
 import { executeTool } from "../src/tools.js";
 import { createWebSearchTools, isPublicAddress, validatePublicWebUrl, type WebSearchConfig } from "../src/web-search.js";
 
@@ -214,5 +215,83 @@ test("Tavily configuration is accepted by the settings store", async () => {
   const loaded = await store.load();
   assert.equal(loaded.webSearch?.provider, "tavily");
   assert.equal(loaded.webSearch?.baseURL, "https://api.tavily.com/search");
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("a new user with a stale beta key reference automatically enrolls before the first search", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-web-first-search-"));
+  const settingsFilename = path.join(root, "settings.json");
+  await fs.writeFile(settingsFilename, JSON.stringify({
+    webSearch: {
+      enabled: true,
+      provider: "searxng",
+      baseURL: XIU_BETA_SEARXNG_ENDPOINT,
+      apiKeyEnv: "XIU_SEARXNG_TOKEN",
+    },
+  }));
+  const config = (await new SettingsStore(settingsFilename, {}).load()).webSearch!;
+  assert.equal(config.managedAuth, "xiu-device");
+  assert.equal(config.apiKeyEnv, undefined);
+
+  const authCalls: string[] = [];
+  const auth = new ManagedWebSearchAuth(config.authBaseURL!, path.join(root, "search-auth.json"), async (url) => {
+    authCalls.push(url);
+    if (url.endsWith("/v1/devices/register")) {
+      return new Response(JSON.stringify({ deviceId: `device_${"a".repeat(32)}`, deviceSecret: `secret-${"b".repeat(40)}` }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ accessToken: "short-token", expiresAt: 2_000 }), { status: 200 });
+  }, () => 1_000_000, async () => undefined);
+  let authorization = "";
+  const tools = createWebSearchTools(config, undefined, {
+    getBearerToken: (signal) => auth.getBearerToken(signal),
+    resolveHostname: publicDns,
+    fetch: async (_url, init) => {
+      authorization = new Headers(init.headers).get("authorization") ?? "";
+      return new Response(JSON.stringify({ results: [{ title: "Claude", url: "https://example.com/claude", content: "Current news" }] }), { status: 200 });
+    },
+  });
+  const result = await executeTool(tools.find((tool) => tool.name === "web_search")!, { query: "Claude latest" }, { cwd: root, approve: async () => false });
+  assert.match(result, /Results \(1\)/);
+  assert.equal(authorization, "Bearer short-token");
+  assert.equal(authCalls.filter((url) => url.endsWith("/v1/devices/register")).length, 1);
+  assert.equal(authCalls.filter((url) => url.endsWith("/v1/tokens")).length, 1);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("managed search reports the bounded server reason when automatic registration is disabled", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-web-denied-"));
+  const auth = new ManagedWebSearchAuth(
+    "https://search.example.com/xiu-auth",
+    path.join(root, "search-auth.json"),
+    async () => new Response(JSON.stringify({ error: "registration_not_allowed", ignored: "secret" }), { status: 403 }),
+    () => 1_000_000,
+    async () => undefined,
+  );
+  await assert.rejects(
+    () => auth.getBearerToken(),
+    (error: Error & { status?: number; code?: string }) => {
+      assert.equal(error.status, 403);
+      assert.equal(error.code, "registration_not_allowed");
+      assert.match(error.message, /automatic device enrollment/);
+      assert.doesNotMatch(error.message, /secret/);
+      return true;
+    },
+  );
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("managed search preserves a TLS error code and provides safe trust guidance", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-web-tls-"));
+  const auth = new ManagedWebSearchAuth(
+    "https://search.example.com/xiu-auth",
+    path.join(root, "search-auth.json"),
+    async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "SELF_SIGNED_CERT_IN_CHAIN" } }); },
+    () => 1_000_000,
+    async () => undefined,
+  );
+  await assert.rejects(
+    () => auth.getBearerToken(),
+    /SELF_SIGNED_CERT_IN_CHAIN.*NODE_EXTRA_CA_CERTS/,
+  );
   await fs.rm(root, { recursive: true, force: true });
 });

@@ -47,7 +47,7 @@ import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-rout
 import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome } from "./security-audit.js";
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
-import { createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
+import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -267,9 +267,6 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
-  const managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
-    ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL)
-    : undefined;
   let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
   try { systemCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
   catch { /* The CLI remains usable with environment and legacy credentials. */ }
@@ -321,6 +318,9 @@ async function main(): Promise<void> {
     startupProfile.model,
   );
   const config = profileConfig(startupProfile, startupModel);
+  const managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
+    ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL, undefined, createWebFetch(settings.webSearch.proxy))
+    : undefined;
   configureBackgroundWorkspace(config.cwd);
   const taskRunJournal = new TaskRunJournal(config.cwd);
   let recoverySource: InterruptedTaskRun | undefined;
@@ -845,7 +845,7 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, toolConfig.proxy, {
+    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, settings.webSearch?.proxy, {
       ...(managedWebSearchAuth ? { getBearerToken: (signal) => managedWebSearchAuth.getBearerToken(signal) } : {}),
     }), ...coordinatorTools];
     let baseTools = buildBaseTools();
@@ -1363,6 +1363,7 @@ async function main(): Promise<void> {
         localize(language, `原生联网搜索：已启用 · ${web.provider}`, `Native web search: enabled · ${web.provider}`),
         `${localize(language, "端点", "Endpoint")}: ${web.baseURL}`,
         `${localize(language, "认证", "Authentication")}: ${credential}`,
+        `${localize(language, "联网代理", "Web proxy")}: ${web.proxy ? localize(language, "已配置", "configured") : localize(language, "直连", "direct")}`,
         `${localize(language, "超时", "Timeout")}: ${web.timeoutMs ?? 20_000}ms`,
         `${localize(language, "策略", "Policy")}: ${policy}`,
         localize(language, "工具：web_search、web_open（只读；外部内容始终按不可信数据处理）", "Tools: web_search, web_open (read-only; external content is always untrusted)"),
@@ -1424,7 +1425,18 @@ async function main(): Promise<void> {
       const timeoutInput = (await askQuestion(localize(language, "超时毫秒（回车使用 20000）：", "Timeout in milliseconds (Enter for 20000): "))).trim();
       const timeoutMs = timeoutInput ? Number(timeoutInput) : 20_000;
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error(localize(language, "超时必须是 1000 到 60000 之间的整数。", "Timeout must be an integer from 1000 to 60000."));
-      const web: WebSearchConfig = { enabled: true, provider, baseURL: parsed.toString(), ...(apiKeyEnv ? { apiKeyEnv } : {}), ...(allowedDomains ? { allowedDomains } : {}), ...(blockedDomains ? { blockedDomains } : {}), timeoutMs };
+      const proxyInput = (await askQuestion(localize(language,
+        "联网搜索代理（可留空，与模型 Provider 代理独立）：",
+        "Web search proxy (optional and independent from the model provider proxy): "))).trim();
+      let webProxy: string | undefined;
+      if (proxyInput) {
+        try {
+          const parsedProxy = new URL(proxyInput);
+          if (parsedProxy.protocol !== "http:" && parsedProxy.protocol !== "https:") throw new Error();
+          webProxy = parsedProxy.toString();
+        } catch { throw new Error(localize(language, "联网搜索代理必须是有效的 HTTP(S) URL。", "Web search proxy must be a valid HTTP(S) URL.")); }
+      }
+      const web: WebSearchConfig = { enabled: true, provider, baseURL: parsed.toString(), ...(apiKeyEnv ? { apiKeyEnv } : {}), ...(allowedDomains ? { allowedDomains } : {}), ...(blockedDomains ? { blockedDomains } : {}), timeoutMs, ...(webProxy ? { proxy: webProxy } : {}) };
       settings.webSearch = web;
       await settingsStore.save(settings);
       baseTools = buildBaseTools();

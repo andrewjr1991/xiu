@@ -586,3 +586,18 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 8. 短期 Token 服务端必须通过 Python 自检、HTTP 注册/签发/验证/鉴权转发/撤销闭环和真实 VPS 验收；服务只监听本机，管理 API 不得出现在公网 Nginx location 中，且不得要求宝塔 Nginx 编译可选模块。安装器还必须以 root 初始化命名卷所有权，再以非 root UID `10001` 启动服务。
 9. 旧 Token 迁移只保存 SHA-256 摘要；安装器、`auth.env` 模板、日志、文档与 npm 包不得复制实际旧 Token。
 10. 设备数据库目录必须由容器非 root 用户独占写入；容器移除 Linux capabilities 并设置 `no-new-privileges`。旧 CentOS/Docker 环境须使用已验证的 Debian slim Python 镜像和 Docker 命名卷，不得退回会触发 SQLite I/O 错误的 Alpine 组合。
+
+## 二十五、0.15.3 搜索可靠性安全修复发布门禁
+
+发布 `0.15.3` 前除通用流程外，还必须验证：
+
+1. 托管搜索的设备注册、Token 签发、搜索和页面打开使用同一套独立联网代理；默认直连，不得继承当前模型 Provider 代理。显式配置联网代理时，认证和搜索不得出现一方直连、一方走代理的分裂行为。
+2. 所有 `web_search` 调用失败时，模型生成的“最新事实”不得显示或写入最终答复，任务必须以失败结束并提供脱敏错误。
+3. “最新/最近/当前/今日/明确时间范围”任务中，仅有搜索摘要时不得完成；最终答复里的每个 HTTP(S) 引用都必须在本次任务中成功通过 `web_open` 打开，未满足时任务必须失败。
+3. Windows 企业环境必须验证系统信任库与 Node 内置根证书合并生效；不得设置 `NODE_TLS_REJECT_UNAUTHORIZED=0` 或实现忽略证书错误的开关。旧运行时只允许使用 `NODE_EXTRA_CA_CERTS` 显式补充管理员提供的 PEM 根证书。
+4. `registration_not_allowed`、设备凭证拒绝和确定性 TLS 证书错误必须在首次失败后停止模型循环；验收中模型不得继续改搜其他站点来掩盖搜索不可用。
+5. 发布前从公网检查 `/xiu-auth/healthz`，确认 `publicRegistration=true` 且每日 IP 登记配额非零；再以无旧 Key、无旧设备凭证的新用户完成首次自动登记与搜索。
+6. 搜索恢复后获得至少一个可用结果时，证据门禁允许任务继续，且来源 URL 仍按现有安全边界输出。
+7. `/report` 只有在存在成功的显式验证操作时才显示“已验证”；无验证证据的只读检索不得误标。
+8. 定向搜索、认证、Agent 与报告测试，以及完整测试、类型检查、构建、包预览和秘密扫描全部通过后，才允许发布并回读 Registry。
+9. 删除旧 `XIU_SEARXNG_TOKEN` 后，以保留旧设置的新用户场景启动并首次搜索，必须自动迁移到设备注册和短期 Token，不得继续提示缺少旧环境变量。

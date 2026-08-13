@@ -67,6 +67,17 @@ test("details add only a small redacted preview", () => {
   assert.doesNotMatch(JSON.stringify(report.files[0]?.preview), new RegExp(secret));
 });
 
+test("a completed read-only task is not labeled verified without verification evidence", () => {
+  const item = run();
+  item.operations = item.operations.filter((operation) => operation.kind !== "tool" && operation.kind !== "verification");
+  const replay = turn("sk-abcdefghijklmnopqrstuvwxyz012345");
+  replay.changes = [];
+  const report = buildExecutionReport({ cwd: "D:/workspace", run: item, turn: replay });
+  assert.equal(report.outcome.complete, true);
+  assert.equal(report.outcome.verified, false);
+  assert.equal(report.verification.length, 0);
+});
+
 test("continued task runs report the original goal and cumulative file evidence", () => {
   const firstRun = run();
   firstRun.status = "unverified";

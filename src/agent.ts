@@ -71,6 +71,49 @@ interface ToolEvidenceEntry {
   count: number;
 }
 
+function isFatalWebSearchFailure(message: string): boolean {
+  return /(?:Missing web search API key environment variable|managed web search authentication is unavailable|device registration failed with HTTP 4(?:00|01|03)|device credential was rejected|token request failed with HTTP 4(?:00|01|03)|(?:device registration|token issuance|authentication) transport failed \((?:SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+|UNABLE_TO_GET_ISSUER_CERT[^)]*)\))/i.test(message);
+}
+
+function isTimeSensitiveWebTask(task: string): boolean {
+  return /(?:最新|最近|近\s*\d+\s*(?:天|日|周|个月|月|年)|过去\s*\d+\s*(?:天|日|周|个月|月|年)|本周|本月|今日|今天|当前|实时|刚刚|截至|latest|recent|past\s+\d+\s+(?:days?|weeks?|months?|years?)|last\s+\d+\s+(?:days?|weeks?|months?|years?)|this\s+(?:week|month|year)|today|current|breaking|as\s+of)/i.test(task);
+}
+
+function canonicalHttpUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    url.hash = "";
+    return url.toString();
+  } catch { return undefined; }
+}
+
+function extractHttpUrls(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  return [...new Set(matches
+    .map((value) => value.replace(/[),.;!?，。；！？\]}]+$/u, ""))
+    .map(canonicalHttpUrl)
+    .filter((value): value is string => Boolean(value)))];
+}
+
+function openedWebUrls(input: unknown, result: string): string[] {
+  const values: string[] = [];
+  if (input && typeof input === "object" && "url" in input && typeof (input as { url?: unknown }).url === "string") {
+    values.push((input as { url: string }).url);
+  }
+  const reported = result.match(/^URL:\s*(https?:\/\/\S+)/mi)?.[1];
+  if (reported) values.push(reported);
+  return [...new Set(values.map(canonicalHttpUrl).filter((value): value is string => Boolean(value)))];
+}
+
+function currentLocalDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export class Agent {
   private messages: ConversationMessage[] = [];
   private system?: string;
@@ -302,6 +345,15 @@ export class Agent {
     let planReminderSent = false;
     let toolCallCount = 0;
     let lastToolFailed = false;
+    let webSearchAttempts = 0;
+    let webSearchSuccesses = 0;
+    let lastWebSearchFailure = "web_search returned no usable results";
+    let fatalWebSearchFailure: string | undefined;
+    let webSearchIntegrityReminderSent = false;
+    const requiresCurrentWebEvidence = () => isTimeSensitiveWebTask([this.primaryTask, ...this.steeringHistory].filter(Boolean).join("\n"));
+    const verifiedWebUrls = new Set<string>();
+    let webEvidenceAuditSent = false;
+    let webEvidenceFailure: string | undefined;
     const loopGuard = new ToolLoopGuard();
     for (let turn = 1; ; turn++) {
       this.enforceBudget();
@@ -349,6 +401,39 @@ export class Agent {
         const normalized = normalizeAssistantText(response.text, this.config.language ?? "en-US");
         if (normalized !== response.text) response = { ...response, text: normalized, raw: undefined };
       }
+      if (response.toolCalls.length === 0 && webSearchAttempts > 0 && webSearchSuccesses === 0) {
+        response = {
+          ...response,
+          text: webSearchIntegrityReminderSent
+            ? localize(this.config.language ?? "en-US",
+              `联网搜索未成功，因此无法可靠提供最新信息。最后错误：${lastWebSearchFailure}`,
+              `Web search did not succeed, so current information cannot be provided reliably. Last error: ${lastWebSearchFailure}`)
+            : "",
+          raw: undefined,
+        };
+      }
+      if (response.toolCalls.length === 0 && requiresCurrentWebEvidence() && webSearchSuccesses > 0) {
+        const citedUrls = extractHttpUrls(response.text);
+        const unsupportedUrls = citedUrls.filter((url) => !verifiedWebUrls.has(url));
+        if (verifiedWebUrls.size === 0 || citedUrls.length === 0 || unsupportedUrls.length > 0) {
+          if (!webEvidenceAuditSent) {
+            response = { ...response, text: "", raw: undefined };
+          } else {
+            webEvidenceFailure = unsupportedUrls.length
+              ? `final answer cited ${unsupportedUrls.length} URL(s) that were not successfully opened`
+              : verifiedWebUrls.size === 0
+                ? "no search result page was successfully opened"
+                : "final answer did not include an exact opened source URL";
+            response = {
+              ...response,
+              text: localize(this.config.language ?? "en-US",
+                `联网检索返回了候选结果，但未完成来源与时效核验，因此不能可靠回答。证据门禁：${webEvidenceFailure}。`,
+                `Web search returned candidates, but source and recency verification was incomplete, so a reliable answer cannot be provided. Evidence gate: ${webEvidenceFailure}.`),
+              raw: undefined,
+            };
+          }
+        }
+      }
       this.recordUsage(response.usage, response.text);
       if (response.text && !streamed) this.events.onText?.(response.text);
       if (streamed && response.text) this.events.onTextStreamEnd?.();
@@ -363,6 +448,22 @@ export class Agent {
 
       if (response.toolCalls.length === 0) {
         if (await this.applyPendingSteering(turn)) continue;
+        if (webSearchAttempts > 0 && webSearchSuccesses === 0 && !webSearchIntegrityReminderSent) {
+          const gate = "Web research integrity gate: every web_search attempt failed or returned no usable results. Do not claim current or latest facts from memory, an unrelated page, or inferred dates. Retry only with a materially different safe approach. If search still cannot recover, state plainly that search is unavailable and report the exact sanitized error instead of synthesizing results.";
+          this.messages.push({ role: "user", content: gate });
+          await this.log(sessionPath, { type: "web_research_gate", turn, message: gate });
+          this.events.onCompletionGate?.(gate);
+          webSearchIntegrityReminderSent = true;
+          continue;
+        }
+        if (requiresCurrentWebEvidence() && webSearchSuccesses > 0 && !webEvidenceAuditSent && response.text === "") {
+          const gate = `Current-information evidence gate: the current local date is ${currentLocalDate()}. web_search snippets are discovery hints, not verified evidence. Open every exact source URL you plan to cite with web_open. Confirm that each opened page supports the claimed event and publication/event date, and that the date falls inside the user's requested time range relative to this date. Exclude unverifiable or out-of-range items; if fewer than requested survive, report fewer. Every HTTP(S) URL in the final answer must have been successfully opened during this task. Never invent a title, date, URL, or event.`;
+          this.messages.push({ role: "user", content: gate });
+          await this.log(sessionPath, { type: "web_evidence_gate", turn, message: gate });
+          this.events.onCompletionGate?.(gate);
+          webEvidenceAuditSent = true;
+          continue;
+        }
         const unfinishedPlan = this.planManager?.snapshot()?.steps.some((step) => step.status === "pending" || step.status === "in_progress");
         if (unfinishedPlan && !this.planManager?.mode() && !planReminderSent) {
           const reminder = "Plan gate: the visible task plan still has pending or in-progress steps. Complete the work or update blocked steps with an explanation before finishing.";
@@ -388,7 +489,9 @@ export class Agent {
           completionReminderSent = true;
           continue;
         }
-        const outcome = lastToolFailed ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
+        const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
+          ? "failed"
+          : lastToolFailed ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
         this.lastRunOutcome = outcome;
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
@@ -527,6 +630,17 @@ export class Agent {
           }
         }
         const callFailed = this.toolResultFailed(result) || /^Tool execution denied by user\./i.test(result);
+        if (call.name === "web_search") {
+          webSearchAttempts += 1;
+          if (!callFailed && /Results \(([1-9]\d*)\):/i.test(result)) webSearchSuccesses += 1;
+          else lastWebSearchFailure = callFailed
+            ? result.replace(/^Tool error:\s*/i, "").split(/\r?\n/, 1)[0]!.slice(0, 240)
+            : "web_search returned no usable results";
+          if (callFailed && isFatalWebSearchFailure(lastWebSearchFailure)) fatalWebSearchFailure = lastWebSearchFailure;
+        }
+        if (call.name === "web_open" && !callFailed) {
+          for (const url of openedWebUrls(call.input, result)) verifiedWebUrls.add(url);
+        }
         if (callFailed) toolBatchFailed = true;
         else toolBatchSucceeded = true;
         const diagnosticOutcome = /^Tool execution denied by user\./i.test(result) ? "denied" : (this.toolResultFailed(result) ? "failure" : "success");
@@ -552,6 +666,28 @@ export class Agent {
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
       lastToolFailed = toolBatchFailed && !toolBatchSucceeded;
+      if (fatalWebSearchFailure) {
+        const text = localize(this.config.language ?? "en-US",
+          `联网搜索配置或证书验证失败，已停止自动重试，避免继续消耗模型调用。错误：${fatalWebSearchFailure}`,
+          `Web search configuration or certificate verification failed. Automatic retries were stopped to avoid wasting model calls. Error: ${fatalWebSearchFailure}`);
+        this.messages.push({ role: "assistant", content: text });
+        this.events.onText?.(text);
+        this.events.onAssistantTurn?.(text, false);
+        await this.log(sessionPath, { type: "assistant", turn, text, toolCalls: [] });
+        this.lastRunOutcome = "failed";
+        this.taskDiagnostics?.complete("failed");
+        await this.checkpointDiagnostics();
+        this.events.onTaskComplete?.({
+          turns: turn,
+          toolCalls: toolCallCount,
+          changed: workspaceChanged,
+          verified: verifiedAfterChange,
+          outcome: "failed",
+          durationMs: Date.now() - startedAt,
+          diagnostics: this.taskDiagnostics?.snapshot(),
+        });
+        return text;
+      }
     }
   }
 

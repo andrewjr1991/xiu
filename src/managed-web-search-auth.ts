@@ -24,6 +24,19 @@ type SystemStoreFactory = () => Promise<WindowsSystemCredentialStore<SearchDevic
 const CREDENTIAL_ID = "search.jingran.vip:device";
 const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 
+function responseErrorCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const error = (value as { error?: unknown }).error;
+  return typeof error === "string" && /^[a-z0-9_-]{1,80}$/i.test(error) ? error : undefined;
+}
+
+function transportGuidance(code: string): string {
+  if (/SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_(?:HAS_EXPIRED|NOT_YET_VALID)|UNABLE_TO_GET_ISSUER_CERT/i.test(code)) {
+    return " The TLS certificate chain is not trusted. Xiu did not disable certificate verification; configure a dedicated XIU_WEB_PROXY if required, or add the enterprise root CA to the Windows trust store/NODE_EXTRA_CA_CERTS.";
+  }
+  return "";
+}
+
 function validCredential(value: unknown): value is SearchDeviceCredential {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<SearchDeviceCredential>;
@@ -127,13 +140,21 @@ export class ManagedWebSearchAuth {
 
   private async jsonRequest(endpoint: string, body: object, signal?: AbortSignal): Promise<{ status: number; value: unknown }> {
     const timeoutSignal = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
-    const response = await this.fetchImpl(`${this.authBaseURL.replace(/\/$/, "")}${endpoint}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify(body),
-      redirect: "error",
-      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.authBaseURL.replace(/\/$/, "")}${endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body),
+        redirect: "error",
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      });
+    } catch (error) {
+      const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
+      const code = typeof cause?.code === "string" ? ` (${cause.code})` : "";
+      const phase = endpoint.endsWith("/register") ? "device registration" : endpoint.endsWith("/tokens") ? "token issuance" : "authentication";
+      throw new Error(`Xiu Search ${phase} transport failed${code}.${transportGuidance(code)}`);
+    }
     let value: unknown;
     try { value = await response.json(); } catch { value = undefined; }
     return { status: response.status, value };
@@ -142,7 +163,13 @@ export class ManagedWebSearchAuth {
   private async register(signal?: AbortSignal): Promise<SearchDeviceCredential> {
     const state = await this.load();
     const response = await this.jsonRequest("/v1/devices/register", { name: `xiu-${process.platform}-${state.installationId.slice(0, 8)}` }, signal);
-    if (response.status !== 201 || !validCredential(response.value)) throw Object.assign(new Error(`Xiu Search device registration failed with HTTP ${response.status}.`), { status: response.status });
+    if (response.status !== 201 || !validCredential(response.value)) {
+      const code = responseErrorCode(response.value);
+      const guidance = code === "registration_not_allowed"
+        ? " The server is not accepting automatic device enrollment; enable restricted public registration or provide an approved enrollment path on the Xiu Search server."
+        : "";
+      throw Object.assign(new Error(`Xiu Search device registration failed with HTTP ${response.status}${code ? ` (${code})` : ""}.${guidance}`), { status: response.status, code });
+    }
     await this.saveCredential(response.value);
     return response.value;
   }
@@ -152,7 +179,8 @@ export class ManagedWebSearchAuth {
     if (response.status === 401) return undefined;
     const value = response.value as Partial<TokenResponse> | undefined;
     if (response.status !== 200 || typeof value?.accessToken !== "string" || !Number.isSafeInteger(value.expiresAt)) {
-      throw Object.assign(new Error(`Xiu Search token request failed with HTTP ${response.status}.`), { status: response.status });
+      const code = responseErrorCode(response.value);
+      throw Object.assign(new Error(`Xiu Search token request failed with HTTP ${response.status}${code ? ` (${code})` : ""}.`), { status: response.status, code });
     }
     return { accessToken: value.accessToken, expiresAt: value.expiresAt! };
   }

@@ -1,7 +1,8 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import * as tls from "node:tls";
 import * as cheerio from "cheerio";
-import { fetch as undiciFetch, ProxyAgent } from "undici";
+import { Agent, fetch as undiciFetch, ProxyAgent } from "undici";
 import type { AgentTool } from "./types.js";
 
 export type WebSearchProvider = "tavily" | "brave" | "searxng";
@@ -14,6 +15,7 @@ export interface WebSearchConfig {
   allowedDomains?: string[];
   blockedDomains?: string[];
   timeoutMs?: number;
+  proxy?: string;
   managedAuth?: "xiu-device";
   authBaseURL?: string;
 }
@@ -130,8 +132,20 @@ function responseError(response: Response): WebHttpError {
   return new WebHttpError(`Web request failed with HTTP ${response.status}.`, response.status, response.headers);
 }
 
-function createFetch(proxy: string | undefined): FetchLike {
-  const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
+export function createWebFetch(proxy: string | undefined): FetchLike {
+  // Node 22 can read the native Windows trust store. Combining it with the
+  // bundled roots keeps public CAs working while also supporting enterprise
+  // TLS inspection certificates that Windows already trusts. Older supported
+  // Node releases simply retain Undici's default CA set.
+  const certificateApiAvailable = typeof tls.getCACertificates === "function";
+  const defaultRoots = certificateApiAvailable ? tls.getCACertificates("default") : tls.rootCertificates;
+  const systemRoots = process.platform === "win32" && certificateApiAvailable
+    ? tls.getCACertificates("system")
+    : [];
+  const ca = systemRoots.length ? [...new Set([...defaultRoots, ...systemRoots])] : undefined;
+  const dispatcher = proxy
+    ? new ProxyAgent({ uri: proxy, ...(ca ? { requestTls: { ca }, proxyTls: { ca } } : {}) })
+    : ca ? new Agent({ connect: { ca } }) : undefined;
   return async (url, init) => undiciFetch(url, { ...init, ...(dispatcher ? { dispatcher } : {}) } as never) as unknown as Response;
 }
 
@@ -211,7 +225,7 @@ function htmlToReadableText(html: string, url: string, maxCharacters: number): s
 
 export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?: string, dependencies: WebSearchDependencies = {}): AgentTool[] {
   if (!config?.enabled) return [];
-  const fetchImpl = dependencies.fetch ?? createFetch(proxy);
+  const fetchImpl = dependencies.fetch ?? createWebFetch(proxy);
   const resolveHostname = dependencies.resolveHostname ?? (async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address));
   const timeoutMs = boundedInteger(config.timeoutMs, DEFAULT_TIMEOUT_MS, 1_000, 60_000, "timeoutMs");
   const webSearch: AgentTool = {

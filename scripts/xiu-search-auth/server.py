@@ -320,7 +320,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path == "/healthz":
-            self.send_json(200, {"status": "ok"})
+            self.send_json(200, {
+                "status": "ok",
+                "publicRegistration": PUBLIC_REGISTRATION,
+                "registrationLimitPerIpPerDay": REGISTRATIONS_PER_IP_PER_DAY,
+            })
             return
         if path == "/v1/tokens/verify":
             claims = verify_token(self.bearer())

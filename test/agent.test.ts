@@ -92,6 +92,164 @@ test("agent does not report success when the final tool operation failed", async
   assert.equal(agent.status().diagnostics?.outcome, "failed");
 });
 
+test("agent suppresses fabricated current facts when every web search fails", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-integrity-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return {
+        text: "Searching for current sources.",
+        toolCalls: [{ id: "search", name: "web_search", input: { query: "latest Claude news" } }],
+        raw: {},
+      };
+      return { text: "Claude Opus 99 launched tomorrow.", toolCalls: [], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    describe: () => "search the web",
+    execute: async () => "Tool error: Xiu Search device registration transport failed (ECONNRESET).",
+  };
+  const visible: string[] = [];
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" },
+    provider,
+    [tool],
+    async () => true,
+    { onText: (text) => visible.push(text) },
+  );
+
+  const result = await agent.run("Search for the latest Claude news");
+  assert.match(result, /Web search did not succeed/);
+  assert.match(result, /ECONNRESET/);
+  assert.doesNotMatch(result, /Opus 99/);
+  assert.doesNotMatch(visible.join("\n"), /Opus 99/);
+  assert.equal(agent.status().outcome, "failed");
+  assert.equal(calls, 3);
+});
+
+test("agent stops immediately after a deterministic managed search authentication failure", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-auth-fatal-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls > 1) throw new Error("model must not be called again after deterministic search auth failure");
+      return {
+        text: "Searching.",
+        toolCalls: [{ id: "search", name: "web_search", input: { query: "latest Claude news" } }],
+        raw: {},
+      };
+    },
+  };
+  const tool: AgentTool = {
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    describe: () => "search the web",
+    execute: async () => "Tool error: Xiu Search device registration failed with HTTP 403 (registration_not_allowed).",
+  };
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
+    provider,
+    [tool],
+    async () => true,
+  );
+  const result = await agent.run("搜索 Claude 最新信息");
+  assert.match(result, /已停止自动重试/);
+  assert.match(result, /registration_not_allowed/);
+  assert.equal(calls, 1);
+  assert.equal(agent.status().outcome, "failed");
+});
+
+test("agent requires opened source URLs before completing a current-information task", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-source-gate-"));
+  let calls = 0;
+  const source = "https://example.com/news/claude-update";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return {
+        text: "Searching.",
+        toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude latest news" } }],
+        raw: {},
+      };
+      if (calls === 2) return { text: `Latest update: ${source}`, toolCalls: [], raw: {} };
+      if (calls === 3) return {
+        text: "Opening the exact source.",
+        toolCalls: [{ id: "open", name: "web_open", input: { url: source } }],
+        raw: {},
+      };
+      return { text: `Verified update: ${source}`, toolCalls: [], raw: {} };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    describe: () => "search the web",
+    execute: async () => `UNTRUSTED WEB CONTENT\n\nSearch query: Claude latest news\nResults (1):\n1. Claude update\nURL: ${source}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    describe: () => "open source",
+    execute: async () => `UNTRUSTED WEB CONTENT\n\nURL: ${source}\nTitle: Claude update\nContent:\nPublished today.`,
+  }];
+  const visible: string[] = [];
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, maxTurns: 6, autoApprove: true, language: "en-US" },
+    provider,
+    tools,
+    async () => true,
+    { onText: (text) => visible.push(text) },
+  );
+
+  const result = await agent.run("Find the latest Claude news");
+  assert.equal(result, `Verified update: ${source}`);
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(calls, 4);
+  assert.equal(visible.filter((text) => text.includes("Latest update:")).length, 0);
+});
+
+test("agent rejects current-information citations that were not opened after the evidence audit", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-source-reject-"));
+  let calls = 0;
+  const searched = "https://example.com/news/real";
+  const invented = "https://example.com/news/invented";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return {
+        text: "Searching.",
+        toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude this week" } }],
+        raw: {},
+      };
+      return { text: `Claude launched a new model: ${invented}`, toolCalls: [], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    describe: () => "search the web",
+    execute: async () => `UNTRUSTED WEB CONTENT\n\nSearch query: Claude this week\nResults (1):\n1. Real result\nURL: ${searched}`,
+  };
+  const visible: string[] = [];
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
+    provider,
+    [tool],
+    async () => true,
+    { onText: (text) => visible.push(text) },
+  );
+
+  const result = await agent.run("搜索 Claude 最近一周的消息");
+  assert.match(result, /未完成来源与时效核验/);
+  assert.match(result, /not successfully opened/);
+  assert.doesNotMatch(visible.join("\n"), /launched a new model/);
+  assert.equal(agent.status().outcome, "failed");
+  assert.equal(calls, 3);
+});
+
 test("agent stops at a safe boundary before executing tools after token budget exhaustion", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-budget-"));
   let toolRan = false;
