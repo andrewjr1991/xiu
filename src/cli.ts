@@ -47,6 +47,7 @@ import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "./provider-rout
 import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome } from "./security-audit.js";
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
+import { createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -83,6 +84,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
     item("/provider remove", "删除自定义 Provider", "Remove a custom provider"),
     item("/language", "设置界面与会话语言", "Set interface and conversation language"),
+    item("/web", "查看原生只读联网搜索状态", "Show native read-only web search status"),
+    item("/web configure", "配置 Tavily、Brave Search 或 SearXNG", "Configure Tavily, Brave Search, or SearXNG"),
+    item("/web disable", "停用原生联网工具", "Disable native web tools"),
     item("/plugins", "列出已发现的 Xiu 插件声明", "List discovered Xiu plugin manifests"),
     item("/plugins reload", "重新扫描插件声明", "Rescan plugin manifests"),
     item("/plugin inspect", "检查插件兼容性、权限与贡献项", "Inspect plugin compatibility, permissions, and contributions"),
@@ -837,7 +841,7 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...coordinatorTools];
+    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, toolConfig.proxy), ...coordinatorTools];
     let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
     let startupProviderError: Error | undefined;
@@ -1331,6 +1335,96 @@ async function main(): Promise<void> {
       console.log(chalk.green(localize(language, `语言已立即切换为${languageName(selected, language)}。当前界面、进度、命令和下一次模型调用均已更新。\n`, `Language switched immediately to ${languageName(selected, language)}. The current UI, progress, commands, and next model call are updated.\n`)));
     };
 
+    const webSearchSummary = (): string => {
+      const web = settings.webSearch;
+      if (!web?.enabled) return localize(language,
+        "原生联网搜索：未启用。使用 /web configure 配置 Tavily、Brave Search 或 SearXNG。",
+        "Native web search: disabled. Use /web configure to set up Tavily, Brave Search, or SearXNG.");
+      const defaultKeyEnv = web.provider === "tavily" ? "TAVILY_API_KEY" : web.provider === "brave" ? "BRAVE_SEARCH_API_KEY" : undefined;
+      const credentialEnv = web.apiKeyEnv ?? defaultKeyEnv;
+      const credential = credentialEnv
+        ? process.env[credentialEnv]
+          ? localize(language, "API Key 环境变量可用", "API key environment variable is available")
+          : localize(language, `缺少环境变量 ${credentialEnv}`, `missing environment variable ${credentialEnv}`)
+        : localize(language, "无需 API Key", "no API key required");
+      const policy = [
+        web.allowedDomains?.length ? `${localize(language, "允许域名", "allowlisted domains")}: ${web.allowedDomains.join(", ")}` : localize(language, "允许所有公网域名", "all public domains allowed"),
+        web.blockedDomains?.length ? `${localize(language, "阻止域名", "blocked domains")}: ${web.blockedDomains.join(", ")}` : undefined,
+      ].filter(Boolean).join(" · ");
+      return [
+        localize(language, `原生联网搜索：已启用 · ${web.provider}`, `Native web search: enabled · ${web.provider}`),
+        `${localize(language, "端点", "Endpoint")}: ${web.baseURL}`,
+        `${localize(language, "认证", "Authentication")}: ${credential}`,
+        `${localize(language, "超时", "Timeout")}: ${web.timeoutMs ?? 20_000}ms`,
+        `${localize(language, "策略", "Policy")}: ${policy}`,
+        localize(language, "工具：web_search、web_open（只读；外部内容始终按不可信数据处理）", "Tools: web_search, web_open (read-only; external content is always untrusted)"),
+      ].join("\n");
+    };
+
+    const parseDomainSetting = (value: string): string[] | undefined => {
+      const domains = [...new Set(value.split(/[\s,]+/).map((item) => item.trim().toLowerCase().replace(/^\.+|\.+$/g, "")).filter(Boolean))];
+      if (domains.some((domain) => domain.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(domain))) {
+        throw new Error(localize(language, "域名策略中包含无效域名。", "The domain policy contains an invalid domain."));
+      }
+      return domains.length ? domains : undefined;
+    };
+
+    const configureWebSearch = async (command: string): Promise<void> => {
+      const requested = command.slice("/web configure".length).trim().toLowerCase();
+      let provider: WebSearchProvider | undefined;
+      if (requested) {
+        if (requested !== "tavily" && requested !== "brave" && requested !== "searxng") throw new Error(localize(language, "Web Search 后端仅支持 tavily、brave 或 searxng。", "Web Search provider must be tavily, brave, or searxng."));
+        provider = requested;
+      } else {
+        provider = await selectTerminalOption(localize(language, "选择只读搜索后端", "Choose a read-only search provider"), [
+          { label: "Tavily", description: localize(language, "面向 AI 的 HTTPS API，免费额度无需信用卡", "AI-oriented HTTPS API; free allowance without a credit card"), value: "tavily" as const },
+          { label: "Brave Search", description: localize(language, "官方 HTTPS API，需要 API Key 环境变量", "Official HTTPS API; requires an API key environment variable"), value: "brave" as const },
+          { label: "SearXNG", description: localize(language, "使用你自建或信任的 HTTPS 实例，可选 Bearer Token", "Use a self-hosted or trusted HTTPS instance; optional Bearer token"), value: "searxng" as const },
+        ], language);
+      }
+      if (!provider) { console.log(chalk.dim(localize(language, "已取消联网搜索配置。\n", "Web search configuration cancelled.\n"))); return; }
+      const previous = settings.webSearch?.provider === provider ? settings.webSearch : undefined;
+      const defaultEndpoint = provider === "tavily" ? "https://api.tavily.com/search"
+        : provider === "brave" ? "https://api.search.brave.com/res/v1/web/search"
+          : previous?.baseURL ?? "";
+      const endpointInput = (await askQuestion(localize(language,
+        `HTTPS 端点${defaultEndpoint ? `（回车使用 ${defaultEndpoint}）` : "（例如 https://search.example.com）"}：`,
+        `HTTPS endpoint${defaultEndpoint ? ` (Enter for ${defaultEndpoint})` : " (for example https://search.example.com)"}: `))).trim();
+      const baseURL = endpointInput || defaultEndpoint;
+      let parsed: URL;
+      try { parsed = new URL(baseURL); } catch { throw new Error(localize(language, "端点必须是有效的绝对 HTTPS URL。", "Endpoint must be a valid absolute HTTPS URL.")); }
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error(localize(language, "端点必须使用 HTTPS 且不能包含凭证。", "Endpoint must use HTTPS and must not contain credentials."));
+      let apiKeyEnv: string | undefined;
+      if (provider === "tavily" || provider === "brave") {
+        const fallbackKeyEnv = provider === "tavily" ? "TAVILY_API_KEY" : "BRAVE_SEARCH_API_KEY";
+        apiKeyEnv = (await askQuestion(localize(language,
+          `API Key 环境变量名（回车使用 ${previous?.apiKeyEnv ?? fallbackKeyEnv}）：`,
+          `API key environment variable (Enter for ${previous?.apiKeyEnv ?? fallbackKeyEnv}): `))).trim() || previous?.apiKeyEnv || fallbackKeyEnv;
+        if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(apiKeyEnv)) throw new Error(localize(language, "API Key 环境变量名无效。", "Invalid API key environment variable name."));
+      } else {
+        apiKeyEnv = (await askQuestion(localize(language,
+          "可选 Bearer Token 环境变量名（公开或 IP 白名单实例请留空）：",
+          "Optional Bearer token environment variable (blank for public or IP-allowlisted instances): "))).trim() || undefined;
+        if (apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(apiKeyEnv)) throw new Error(localize(language, "Token 环境变量名无效。", "Invalid token environment variable name."));
+      }
+      const allowedDomains = parseDomainSetting((await askQuestion(localize(language,
+        "允许域名（空格或逗号分隔；留空允许所有公网域名）：",
+        "Allowed domains (space/comma separated; blank allows all public domains): "))).trim());
+      const blockedDomains = parseDomainSetting((await askQuestion(localize(language,
+        "阻止域名（空格或逗号分隔；可留空）：",
+        "Blocked domains (space/comma separated; optional): "))).trim());
+      const timeoutInput = (await askQuestion(localize(language, "超时毫秒（回车使用 20000）：", "Timeout in milliseconds (Enter for 20000): "))).trim();
+      const timeoutMs = timeoutInput ? Number(timeoutInput) : 20_000;
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error(localize(language, "超时必须是 1000 到 60000 之间的整数。", "Timeout must be an integer from 1000 to 60000."));
+      const web: WebSearchConfig = { enabled: true, provider, baseURL: parsed.toString(), ...(apiKeyEnv ? { apiKeyEnv } : {}), ...(allowedDomains ? { allowedDomains } : {}), ...(blockedDomains ? { blockedDomains } : {}), timeoutMs };
+      settings.webSearch = web;
+      await settingsStore.save(settings);
+      baseTools = buildBaseTools();
+      attachMcpTools();
+      agent.reloadInstructions();
+      console.log(`${chalk.green(localize(language, "原生只读联网搜索已启用。", "Native read-only web search enabled."))}\n${webSearchSummary()}\n`);
+    };
+
     const runTaskSequence = async (firstTask: string, firstDisplay?: Pick<SessionReplayTurn, "task" | "inputKind">): Promise<boolean> => {
       const queue = new TaskInputQueue();
       queue.enqueue(firstTask);
@@ -1439,6 +1533,14 @@ async function main(): Promise<void> {
             const selected = await chooseRuntimeLanguage(followUp);
             if (!selected) console.log(chalk.dim(localize(language, "已取消语言选择。\n", "Language selection cancelled.\n")));
             else await applyRuntimeLanguage(selected, false);
+            continue;
+          }
+          if (followUp === "/web") {
+            console.log(`${webSearchSummary()}\n`);
+            continue;
+          }
+          if (followUp.startsWith("/web ")) {
+            console.log(chalk.dim(localize(language, "联网搜索配置请在当前任务结束后修改。\n", "Change web search configuration after the current task finishes.\n")));
             continue;
           }
           if (followUp === "/status") {
@@ -2038,6 +2140,24 @@ async function main(): Promise<void> {
           continue;
         }
         await applyRuntimeLanguage(selected, true);
+        continue;
+      }
+      if (task === "/web") {
+        console.log(`${webSearchSummary()}\n`);
+        continue;
+      }
+      if (task === "/web disable") {
+        if (settings.webSearch) settings.webSearch.enabled = false;
+        await settingsStore.save(settings);
+        baseTools = buildBaseTools();
+        attachMcpTools();
+        agent.reloadInstructions();
+        console.log(chalk.green(localize(language, "原生联网工具已停用。\n", "Native web tools disabled.\n")));
+        continue;
+      }
+      if (task === "/web configure" || task.startsWith("/web configure ")) {
+        try { await configureWebSearch(task); }
+        catch (error) { console.error(chalk.red(`${localize(language, "联网搜索配置失败", "Web search configuration failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/plugins" || task === "/plugins reload") {

@@ -23,6 +23,8 @@ export function localizeToolDescription(name: string, description: string, langu
     case "find_callers": return `查找调用方 ${rest(/^find callers of\s*/i)}`;
     case "verify_output": return `验证生成结果 ${rest(/^verify generated output\s*/i)}`;
     case "search_text": return `搜索 ${rest(/^search for\s*/i)}`;
+    case "web_search": return `联网搜索 ${rest(/^search the web for\s*/i)}`;
+    case "web_open": return `打开网页 ${rest(/^open web page\s*/i)}`;
     case "write_file": return `写入 ${rest(/^write\s*/i)}`;
     case "replace_text": return `修改 ${rest(/^edit\s*/i)}`;
     case "apply_patch": return `应用补丁 ${rest(/^patch\s*/i)}`;

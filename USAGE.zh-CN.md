@@ -1340,9 +1340,113 @@ Xiu 会发现以下位置的插件清单：
 }
 ```
 
-### 联网搜索现状
+## 二十四、原生只读联网搜索（v0.15.0）
 
-Xiu 当前没有统一的内置 Web Search 工具。可以通过提供搜索工具的 MCP、模型供应商原生能力，或经审批的外部命令间接联网，但这些方式的引用、代理和隐私体验尚未统一。路线图安排在 v0.14 扩展安全闭环之后的 v0.15 增加原生只读联网搜索，并统一来源引用、域名策略、代理、超时和不可信内容隔离。
+v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默认不启用；完成配置后，Xiu 才能在需要时搜索公开网页、打开结果并在回答中保留精确来源 URL。
+
+常用命令：
+
+```text
+/web
+/web configure tavily
+/web configure brave
+/web configure searxng
+/web disable
+```
+
+### Tavily（推荐先试）
+
+Tavily 面向 AI 检索，免费计划目前每月提供 1,000 credits，注册无需信用卡。到 Tavily 控制台创建 Key 后，先在当前 PowerShell 会话设置：
+
+```powershell
+$env:TAVILY_API_KEY = '你的实际 Tavily API Key'
+```
+
+然后执行 `/web configure tavily`，端点直接回车使用 `https://api.tavily.com/search`。Xiu 使用节省额度的 basic search，不请求答案、原始正文或图片；一次基础搜索通常消耗 1 credit。
+
+### Brave Search
+
+Brave Search 需要 API Key。Xiu 只保存环境变量名，不保存 Key 正文；例如先在当前 PowerShell 会话设置：
+
+```powershell
+$env:BRAVE_SEARCH_API_KEY = '你的实际 API Key'
+```
+
+然后执行 `/web configure brave`。也可以在向导中填写其他环境变量名。
+
+### 自建 SearXNG
+
+SearXNG 必须填写你自建或信任的 HTTPS 实例地址；既可填写实例根地址，也可填写以 `/search` 结尾的地址。`settings.yml` 必须显式允许 JSON 输出，否则搜索会返回 HTTP 403：
+
+如果使用带 Docker 的宝塔 VPS，推荐直接运行仓库中的交互式安装脚本：
+
+```bash
+sudo bash scripts/install-searxng-vps.sh --domain search.example.com
+```
+
+脚本会自动生成随机密钥、创建 SearXNG 与 Valkey 容器、仅监听本机端口、通过 `/healthz` 检查服务状态，并生成宝塔 Nginx 配置和 Xiu 客户端 Token 说明。它不会修改宝塔或抢占 80/443；运行结束后只需按提示在宝塔添加域名、SSL，并粘贴生成的反向代理配置。已有安装会先备份，使用 `--help` 可查看端口和目录选项。
+
+以下是需要手工部署或排障时使用的配置原理：
+
+```yaml
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Xiu Search"
+
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "请替换为足够长的随机值"
+  # 私有 Xiu API 由前置 Nginx Bearer Token 保护。
+  # limiter 会把 Xiu/curl 等 API 客户端识别为机器人，因此关闭。
+  limiter: false
+  image_proxy: false
+
+valkey:
+  url: valkey://valkey:6379/0
+```
+
+公网部署必须放在 HTTPS 反向代理后面，不要直接暴露容器端口。安装脚本生成的私有 API 使用 64 位随机 Bearer Token 保护全部路径，并关闭面向公共浏览器实例的 SearXNG limiter，避免误拦截 Xiu、curl 等自动客户端。不要在没有 Token 认证或其他等效访问控制时关闭 limiter；如需向公众开放网页搜索，应重新启用 limiter 并按官方文档配置可信代理和限流策略。在 Xiu 配置向导中填写保存该 Token 的环境变量名即可；Xiu 只保存变量名，发送搜索请求时才读取 Token。
+
+最小验收：
+
+```powershell
+Invoke-RestMethod 'https://search.example.com/search?q=xiu&format=json'
+```
+
+安装脚本会用 `/healthz` 判断服务是否启动，仅额外执行一次真实 JSON 搜索。若健康检查返回 `OK`，但搜索检查提示 `429 Too Many Requests`，通常是上游搜索引擎临时限流，并不代表容器安装失败。不要反复执行真实搜索作为健康检查；先完成 HTTPS 反向代理，再通过公网端点做一次验收即可。
+
+若启用了 Bearer Token：
+
+```powershell
+$env:XIU_SEARXNG_TOKEN = '你的长随机 Token'
+Invoke-RestMethod 'https://search.example.com/search?q=xiu&format=json' -Headers @{ Authorization = "Bearer $env:XIU_SEARXNG_TOKEN" }
+```
+
+再运行 `/web configure searxng`，填写 HTTPS 域名和可选的 `XIU_SEARXNG_TOKEN`。不要使用 HTTP、localhost、内网 IP 或在 URL 中嵌入用户名密码；这些目标会被 Xiu 拒绝。
+
+配置向导还支持：
+
+- 允许域名和阻止域名清单；子域名会按所属域匹配。
+- 1000 至 60000 毫秒的请求超时。
+- 复用当前 Xiu `--proxy` 配置。
+- 对限流、超时和服务端瞬时错误进行最多三次安全重试；认证、权限和参数错误不会误重试。
+
+安全边界：
+
+- 只允许公开 HTTPS 地址；拒绝 URL 内嵌凭证、localhost、本机和私网地址。
+- 每次跳转都重新检查协议、域名策略和目标地址。
+- 页面响应有大小与文本长度上限，只接受可阅读文本、HTML 或 JSON；脚本、样式、表单和其他主动内容会被剥离。
+- 搜索结果和页面正文始终标记为“不可信外部内容”，不能覆盖系统、项目或用户指令。
+- 工具不会提交表单、保存 Cookie、登录账号或执行网页写入。需要账号、OAuth 或外部修改时，继续使用经过独立权限确认的 MCP。
+
+`/web disable` 会立即移除本次会话中的联网工具并持久停用配置，但不会删除你自行设置的环境变量。
 
 ### 23.1 包完整性与来源锁定
 
