@@ -84,6 +84,8 @@ Version 0.13.6 is a security hardening release. One-shot commands can no longer 
 
 Version 0.13.7 fixes first-run Provider setup. Fresh installs with no API key remain in interactive setup mode instead of exiting: users can enter the current Provider key, choose another Provider, or configure later with `/provider key` and `/providers`. One-shot tasks without credentials fail with a concise setup instruction instead of a stack trace.
 
+Version 0.13.8 adds gated multi-agent integration. Reviewer and Tester tasks inspect the implementation Worktree read-only and must finish with `VERDICT: PASS`; Xiu then checks overlapping files, symbols, dependency manifests, the Git patch, and dirty main-workspace files before asking for explicit integration confirmation. Conflicts preserve the main workspace, patch, run record, and Worktree. The running-task editor now absorbs blank Enter/key-repeat events instead of recreating empty steering prompts, and read-only Git commands against Agent Worktrees no longer invalidate already-passed verification.
+
 The credential-hardening security gate redacts active Provider and OAuth credential values from model, media, MCP startup/tool/resource/prompt, refresh, logout, diagnostics, failover, and session error paths before truncation or persistence. Regression tests cover opaque canaries, interrupted migration recovery, corrupted system credentials, retained recovery copies, concurrent writes, package contents, and isolated installation. Windows Credential Manager remains opt-in until the external enterprise-policy, Windows ARM64, and real OAuth migration matrix is completed.
 
 ## Features
@@ -274,7 +276,7 @@ While an Agent is running, a transient `补充> ` / `steer> ` prompt accepts add
 
 For goals with genuinely independent investigation, implementation, review, or test work, Xiu can create a dependency graph of specialist agents. Each agent receives a bounded task, its own conversation context, an optional explicit turn budget, elapsed-time counter, and Token statistics. Independent tasks run concurrently; dependent tasks start only after their prerequisites complete.
 
-Explorer and Reviewer tasks use `shared_readonly` mode by default. Their tool registry contains only tools declared statically read-only, and Plan mode adds a second enforcement boundary. Implementer tasks use `worktree` mode by default. Xiu creates them under `.xiu/worktrees/` on a dedicated `xiu/agent-*` Git branch, so their edits cannot overwrite the main workspace or another agent.
+Explorer, Reviewer, and Tester tasks use `shared_readonly` mode by default. Their tool registry contains only tools declared statically read-only, and Plan mode adds a second enforcement boundary. When Reviewer or Tester depends on one implementation, it reads that implementation's Worktree instead of the main workspace. Implementer tasks use `worktree` mode by default. Xiu creates them under `.xiu/worktrees/` on a dedicated `xiu/agent-*` Git branch, so their edits cannot overwrite the main workspace or another agent.
 
 Use `/agents` after or between tasks to inspect persisted runs. A completed implementation is not merged automatically. Xiu or the user must review its Diff and explicitly integrate it:
 
@@ -284,7 +286,7 @@ Use `/agents` after or between tasks to inspect persisted runs. A completed impl
 /agents integrate <run-id> <task-id>
 ```
 
-Integration first runs `git apply --check`; conflicts leave the main workspace untouched and preserve the Worktree. Xiu never automatically deletes Agent Worktrees in v0.6. After integration, the parent Agent still reviews the result and runs normal project verification. If Xiu exits while agents are running, their persisted state becomes `interrupted`; use `/agents retry <run-id> <task-id>` to continue that task.
+Integration requires completed Reviewer and Tester descendants whose final line is `VERDICT: PASS`. Xiu reports dirty main-workspace files, checks overlapping files, symbols and dependency manifests, saves a bounded patch preview, and runs `git apply --check` again immediately before applying. Conflicts leave the main workspace untouched and preserve the patch, run record, and Worktree. Xiu never automatically deletes Agent Worktrees. After integration, the parent Agent still reviews the merged result and runs normal project verification. If Xiu exits while agents are running, their persisted state becomes `interrupted`; use `/agents retry <run-id> <task-id>` to continue that task.
 
 `/models` asks the active provider for its available model catalog, filters out obvious embedding, speech, image, video, and moderation-only endpoints, and opens a keyboard-driven picker. This works with OpenAI-compatible local gateways as well as cloud providers. If the provider does not implement model listing, Xiu falls back to its built-in default plus the model already active in the session. Model changes are persisted with the resumable session.
 

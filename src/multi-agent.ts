@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentTool, ApprovalRequest } from "./types.js";
-import { WorktreeManager, type WorktreeInfo } from "./worktree.js";
+import { WorktreeManager, type WorktreeInfo, type WorktreeMergeAnalysis } from "./worktree.js";
 import { localize, type UiLanguage } from "./i18n.js";
 
 export type SubagentRole = "explorer" | "implementer" | "reviewer" | "tester";
@@ -39,6 +39,33 @@ export interface SubagentTask extends SubagentTaskInput {
   progress?: string;
   stats?: SubagentStats;
   worktree?: WorktreeInfo;
+  integration?: SubagentIntegrationRecord;
+}
+
+export interface IntegrationEvidence {
+  reviewers: string[];
+  testers: string[];
+  blockers: string[];
+}
+
+export interface AgentIntegrationPlan {
+  runId: string;
+  taskId: string;
+  analysis: WorktreeMergeAnalysis;
+  evidence: IntegrationEvidence;
+  blockers: string[];
+  canIntegrate: boolean;
+}
+
+export interface SubagentIntegrationRecord {
+  status: "ready" | "blocked" | "applied";
+  updatedAt: string;
+  changedFiles: string[];
+  blockers: string[];
+  reviewerEvidence: string[];
+  testerEvidence: string[];
+  patchFile?: string;
+  error?: string;
 }
 
 export interface SubagentRun {
@@ -124,6 +151,50 @@ function defaultMode(role: SubagentRole): SubagentMode {
 }
 
 function cloneRun(run: SubagentRun): SubagentRun { return structuredClone(run); }
+
+function dependsOn(run: SubagentRun, task: SubagentTask, targetId: string, visited = new Set<string>()): boolean {
+  if (visited.has(task.id)) return false;
+  visited.add(task.id);
+  for (const dependencyId of task.dependencies) {
+    if (dependencyId === targetId) return true;
+    const dependency = run.tasks.find((candidate) => candidate.id === dependencyId);
+    if (dependency && dependsOn(run, dependency, targetId, visited)) return true;
+  }
+  return false;
+}
+
+function evidencePassed(result: string | undefined): boolean {
+  if (!result) return false;
+  const finalLine = result.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? "";
+  return /^VERDICT\s*:\s*PASS\.?$/i.test(finalLine) || /^(?:结论|审查|测试|验证)\s*[:：]\s*(?:通过|合格)[。.]?$/u.test(finalLine);
+}
+
+export function collectIntegrationEvidence(run: SubagentRun, targetId: string): IntegrationEvidence {
+  const related = run.tasks.filter((task) => dependsOn(run, task, targetId));
+  const reviewers = related.filter((task) => task.role === "reviewer" && task.mode === "shared_readonly" && task.status === "completed" && evidencePassed(task.result)).map((task) => task.id);
+  const testers = related.filter((task) => task.role === "tester" && task.mode === "shared_readonly" && task.status === "completed" && evidencePassed(task.result)).map((task) => task.id);
+  const blockers: string[] = [];
+  if (!reviewers.length) blockers.push("A completed reviewer dependency with VERDICT: PASS is required.");
+  if (!testers.length) blockers.push("A completed tester dependency with VERDICT: PASS is required.");
+  return { reviewers, testers, blockers };
+}
+
+function inheritedWorktree(run: SubagentRun, task: SubagentTask): WorktreeInfo | undefined {
+  const worktrees = new Map<string, WorktreeInfo>();
+  const visit = (candidate: SubagentTask): void => {
+    if (candidate.worktree) worktrees.set(path.resolve(candidate.worktree.path).toLowerCase(), candidate.worktree);
+    for (const dependencyId of candidate.dependencies) {
+      const dependency = run.tasks.find((item) => item.id === dependencyId);
+      if (dependency) visit(dependency);
+    }
+  };
+  for (const dependencyId of task.dependencies) {
+    const dependency = run.tasks.find((item) => item.id === dependencyId);
+    if (dependency) visit(dependency);
+  }
+  if (worktrees.size > 1) throw new Error(`Agent task ${task.id} depends on multiple Worktrees; split the review or test into one target per task.`);
+  return [...worktrees.values()][0];
+}
 
 export class MultiAgentCoordinator {
   private runs = new Map<string, SubagentRun>();
@@ -254,11 +325,49 @@ export class MultiAgentCoordinator {
     return await this.worktrees.diff(task.worktree);
   }
 
-  async integrate(runId: string, taskId: string): Promise<string> {
-    const task = this.resolveTask(this.resolveRun(runId), taskId);
+  async analyzeIntegration(runId: string, taskId: string): Promise<AgentIntegrationPlan> {
+    const run = this.resolveRun(runId);
+    const task = this.resolveTask(run, taskId);
     if (task.status !== "completed") throw new Error(`Only completed agent tasks can be integrated; ${task.id} is ${task.status}.`);
     if (!task.worktree) throw new Error(`Agent task ${task.id} has no Worktree.`);
-    return await this.worktrees.integrate(task.worktree);
+    const analysis = await this.worktrees.analyze(task.worktree);
+    const evidence = collectIntegrationEvidence(run, task.id);
+    const blockers = [
+      ...analysis.conflicts.map((conflict) => `${conflict.kind}: ${conflict.detail}`),
+      ...evidence.blockers,
+    ];
+    const plan: AgentIntegrationPlan = { runId: run.id, taskId: task.id, analysis, evidence, blockers, canIntegrate: analysis.canIntegrate && blockers.length === 0 };
+    task.integration = {
+      status: plan.canIntegrate ? "ready" : "blocked",
+      updatedAt: now(),
+      changedFiles: analysis.changedFiles,
+      blockers,
+      reviewerEvidence: evidence.reviewers,
+      testerEvidence: evidence.testers,
+      patchFile: analysis.patchFile,
+    };
+    run.updatedAt = now();
+    await this.persist(run);
+    return structuredClone(plan);
+  }
+
+  async integrate(runId: string, taskId: string): Promise<string> {
+    const run = this.resolveRun(runId);
+    const task = this.resolveTask(run, taskId);
+    const plan = await this.analyzeIntegration(run.id, task.id);
+    if (!plan.canIntegrate) throw new Error(`Agent patch was not applied: ${plan.blockers.join(" ")}`);
+    try {
+      const result = await this.worktrees.integrate(task.worktree!);
+      task.integration = { ...task.integration!, status: "applied", updatedAt: now() };
+      run.updatedAt = now();
+      await this.persist(run);
+      return result;
+    } catch (error) {
+      task.integration = { ...task.integration!, status: "blocked", updatedAt: now(), error: error instanceof Error ? error.message : String(error) };
+      run.updatedAt = now();
+      await this.persist(run);
+      throw error;
+    }
   }
 
   private resolveRun(id: string): SubagentRun {
@@ -330,6 +439,9 @@ export class MultiAgentCoordinator {
         await this.changed(run, task);
         task.worktree ??= await this.worktrees.create(run.id, task.id);
         taskCwd = task.worktree.path;
+      } else if (task.role === "reviewer" || task.role === "tester") {
+        const inherited = inheritedWorktree(run, task);
+        if (inherited) taskCwd = inherited.path;
       }
       await this.changed(run, task);
       const dependencies = task.dependencies.map((id) => this.resolveTask(run, id));
@@ -405,10 +517,44 @@ export function formatAgentRun(run: SubagentRun, language: UiLanguage = "en-US")
     ...run.tasks.map((task) => {
       const elapsed = task.startedAt ? ((new Date(task.completedAt ?? now()).getTime() - new Date(task.startedAt).getTime()) / 1000).toFixed(1) : "0.0";
       const tokens = (task.stats?.inputTokens ?? 0) + (task.stats?.outputTokens ?? 0);
-      return `[${task.status}] ${task.id} (${task.role}, ${task.mode}) ${task.title} - ${elapsed}s, ${tokens} tokens${task.progress ? ` - ${task.progress}` : ""}${task.error ? ` - ${task.error}` : ""}`;
+      const integration = task.integration ? ` - integration:${task.integration.status}` : "";
+      return `[${task.status}] ${task.id} (${task.role}, ${task.mode}) ${task.title} - ${elapsed}s, ${tokens} tokens${task.progress ? ` - ${task.progress}` : ""}${task.error ? ` - ${task.error}` : ""}${integration}`;
     }),
     localize(language, `总计：${totals.tokens} tokens，${(totals.activeMs / 1000).toFixed(1)} 秒 Agent 时间`, `Total: ${totals.tokens} tokens, ${(totals.activeMs / 1000).toFixed(1)}s agent time`),
   ].join("\n");
+}
+
+export function formatIntegrationPlan(plan: AgentIntegrationPlan, language: UiLanguage = "en-US"): string {
+  const previewLines = plan.analysis.patch.split(/\r?\n/);
+  const preview = previewLines.slice(0, 80).join("\n");
+  const omitted = Math.max(0, previewLines.length - 80);
+  const fileList = plan.analysis.changedFiles.length ? plan.analysis.changedFiles.join(", ") : localize(language, "无", "none");
+  const dirtyList = plan.analysis.dirtyMainFiles.length ? plan.analysis.dirtyMainFiles.join(", ") : localize(language, "无", "none");
+  const displayedBlockers = [
+    ...plan.analysis.conflicts.map((conflict) => {
+      if (conflict.kind === "file") return localize(language, `主工作区和 Agent 同时修改了文件：${conflict.files.join(", ")}`, conflict.detail);
+      if (conflict.kind === "dependency") return localize(language, `双方同时修改了依赖清单：${conflict.files.join(", ")}`, conflict.detail);
+      if (conflict.kind === "symbol") return localize(language, `双方同时修改了符号：${conflict.symbols?.join(", ") ?? ""}`, conflict.detail);
+      return localize(language, `Git 补丁预检失败：${conflict.detail}`, `Git patch preflight failed: ${conflict.detail}`);
+    }),
+    ...plan.evidence.blockers.map((blocker) => blocker.startsWith("A completed reviewer")
+      ? localize(language, "缺少以 VERDICT: PASS 结束的 Reviewer 审查证据。", blocker)
+      : localize(language, "缺少以 VERDICT: PASS 结束的 Tester 测试证据。", blocker)),
+  ];
+  const blockerList = displayedBlockers.length ? displayedBlockers.map((item) => `  - ${item}`).join("\n") : localize(language, "  无", "  none");
+  return [
+    localize(language, "Agent 合并分析", "Agent integration analysis"),
+    `${localize(language, "变更文件", "Changed files")}: ${fileList}`,
+    `${localize(language, "主工作区未提交文件", "Dirty main-workspace files")}: ${dirtyList}`,
+    `${localize(language, "审查证据", "Reviewer evidence")}: ${plan.evidence.reviewers.join(", ") || localize(language, "缺失", "missing")}`,
+    `${localize(language, "测试证据", "Tester evidence")}: ${plan.evidence.testers.join(", ") || localize(language, "缺失", "missing")}`,
+    `${localize(language, "阻断项", "Blockers")}:\n${blockerList}`,
+    `${localize(language, "结论", "Decision")}: ${plan.canIntegrate ? localize(language, "可以合并（仍需明确确认）", "ready for explicit confirmation") : localize(language, "禁止合并", "blocked")}`,
+    "",
+    localize(language, "有界补丁预览：", "Bounded patch preview:"),
+    preview,
+    omitted ? localize(language, `... 另有 ${omitted} 行已省略，可在保存的补丁文件中查看。`, `... ${omitted} more lines omitted; inspect the preserved patch file for the complete diff.`) : "",
+  ].filter(Boolean).join("\n");
 }
 
 export function createMultiAgentTools(coordinator: MultiAgentCoordinator): AgentTool[] {
@@ -495,7 +641,7 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
       describe: (input) => `integrate agent ${String(input.task_id ?? "")} changes`,
       async preview(input) {
         if (typeof input.run_id !== "string" || typeof input.task_id !== "string") throw new Error("run_id and task_id are required");
-        return await coordinator.diff(input.run_id, input.task_id);
+        return formatIntegrationPlan(await coordinator.analyzeIntegration(input.run_id, input.task_id));
       },
       async execute(input) {
         if (typeof input.run_id !== "string" || typeof input.task_id !== "string") throw new Error("run_id and task_id are required");

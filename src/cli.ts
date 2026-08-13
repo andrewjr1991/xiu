@@ -24,7 +24,7 @@ import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
 import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
-import { createMultiAgentTools, formatAgentRun, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
+import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
@@ -759,9 +759,9 @@ async function main(): Promise<void> {
           const roleGuidance = task.role === "explorer"
             ? "Investigate only. Return concrete file paths, evidence, risks, and a recommended approach. Do not modify files."
             : task.role === "reviewer"
-              ? "Review critically. Find correctness, safety, regression, and test gaps. Do not modify files."
+              ? "Review the inherited implementation Worktree critically. Find correctness, safety, regression, and test gaps. Do not modify files. End with exactly VERDICT: PASS only when no blocking issue remains; otherwise end with VERDICT: FAIL."
               : task.role === "tester"
-                ? "Analyze verification needs and use only the tools available under your safety mode. Report exact evidence and limitations."
+                ? "Test the inherited implementation Worktree using only the tools available under your safety mode. Report exact commands, results, and limitations. End with exactly VERDICT: PASS only when required verification passed; otherwise end with VERDICT: FAIL."
                 : "Implement the scoped change only inside your isolated Worktree. Run relevant verification and summarize every changed file.";
           const result = await childAgent.run(`You are the ${task.role} specialist for a parent Xiu agent.\nGoal: ${task.title}\n\n${task.instructions}\n\nRole requirements: ${roleGuidance}${dependencyContext}`);
           const childStatus = childAgent.status();
@@ -1340,6 +1340,7 @@ async function main(): Promise<void> {
             refreshMs: 250,
             language,
             persistPrompt: false,
+            ignoreEmptySubmit: true,
           })).trim();
           if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
           const liveChanges = view.drainWorkspaceChanges();
@@ -2493,9 +2494,13 @@ async function main(): Promise<void> {
           } else if (parts[1] === "retry" && parts[2] && parts[3]) {
             console.log(`${formatAgentRun(await coordinator.retry(parts[2], parts[3]), language)}\n`);
           } else if (parts[1] === "integrate" && parts[2] && parts[3]) {
-            const preview = await coordinator.diff(parts[2], parts[3]);
-            console.log(`${chalk.dim(localize(language, "拟议的 Agent 补丁：", "Proposed Agent patch:"))}\n${preview}\n`);
-            const answer = await askQuestion(chalk.yellow("[write]") + ` Integrate this Agent patch into ${config.cwd}? [y/N] `);
+            const plan = await coordinator.analyzeIntegration(parts[2], parts[3]);
+            console.log(`${formatIntegrationPlan(plan, language)}\n`);
+            if (!plan.canIntegrate) {
+              console.log(chalk.red(localize(language, "合并已被冲突或证据门禁阻止；主工作区和 Agent Worktree 均未修改。\n", "Integration is blocked by conflicts or evidence gates; the main workspace and Agent Worktree were not modified.\n")));
+              continue;
+            }
+            const answer = await askQuestion(chalk.yellow("[write]") + localize(language, ` 将此 Agent 补丁合并到 ${config.cwd}？[y/N] `, ` Integrate this Agent patch into ${config.cwd}? [y/N] `));
             if (!/^(y|yes)$/i.test(answer.trim())) console.log(chalk.dim(localize(language, "已取消 Agent 集成。\n", "Agent integration cancelled.\n")));
             else {
               console.log(chalk.green(`${await coordinator.integrate(parts[2], parts[3])}\n`));

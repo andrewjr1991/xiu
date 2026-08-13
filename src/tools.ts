@@ -173,8 +173,34 @@ function unquotedText(value: string): string {
   return result;
 }
 
+function commandTokens(command: string): string[] {
+  return command.match(/"(?:`.|[^"])*"|'(?:''|[^'])*'|[^\s]+/g)?.map((token) => {
+    if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) return token.slice(1, -1);
+    return token;
+  }) ?? [];
+}
+
+function readOnlyPowerShellScript(command: string): boolean {
+  const tokens = commandTokens(command);
+  const executable = path.basename(tokens[0] ?? "").toLowerCase().replace(/\.exe$/i, "");
+  let script = command;
+  if (executable === "powershell" || executable === "pwsh") {
+    const commandIndex = tokens.findIndex((token) => ["-command", "-c"].includes(token.toLowerCase()));
+    if (commandIndex < 0 || !tokens[commandIndex + 1]) return false;
+    script = tokens.slice(commandIndex + 1).join(" ");
+  }
+  const structure = unquotedText(script);
+  if (/[;&><=]/.test(structure) || /\b(?:set|add|remove|new|clear|copy|move|rename|start|stop|invoke|out|export|import)-[a-z]+\b/i.test(structure)) return false;
+  const cmdlets = structure.match(/\b[A-Za-z]+-[A-Za-z]+\b/g) ?? [];
+  if (!cmdlets.length) return false;
+  const allowed = new Set(["get-content", "get-childitem", "test-path", "select-string", "get-filehash", "measure-object", "select-object", "where-object", "compare-object"]);
+  return cmdlets.every((cmdlet) => allowed.has(cmdlet.toLowerCase()));
+}
+
 export function classifyCommand(command: string): ToolRisk {
   const shell = unquotedText(command).trim();
+  const gitInvocation = classifyGitInvocation(command, shell);
+  if (gitInvocation) return gitInvocation;
   const dangerous = /(^|[;|]\s*)(remove-item\b|del\s+|erase\s+|rd\s+|rmdir\s+|rm\s+)|git\s+(reset\s+--hard|clean\s+-[^\r\n]*f)|\b(format|shutdown|restart-computer|stop-computer)\b/i;
   if (dangerous.test(shell)) return "dangerous";
   const readOnly = [
@@ -182,7 +208,32 @@ export function classifyCommand(command: string): ToolRisk {
     /^(node|npm|python|py|git)\s+--version\b/i,
     /^(get-content|get-childitem|test-path|select-string|get-filehash|measure-object)\b/i,
   ];
+  if (readOnlyPowerShellScript(command)) return "read";
+  if (/[|;]/.test(shell)) return "execute";
   return readOnly.some((pattern) => pattern.test(shell)) ? "read" : "execute";
+}
+
+function classifyGitInvocation(command: string, shell: string): ToolRisk | undefined {
+  // Only classify a single Git invocation here. Composed shell commands stay
+  // conservative because a later segment may mutate the workspace.
+  if (!/^git\b/i.test(shell) || /[;|&<>]/.test(shell)) return undefined;
+  const tokens = commandTokens(command);
+  if (tokens[0]?.toLowerCase() !== "git") return undefined;
+  let index = 1;
+  while (index < tokens.length) {
+    const option = tokens[index]?.toLowerCase() ?? "";
+    if (option === "-c") { index += 2; continue; }
+    if (option === "--no-pager" || option === "--paginate" || option.startsWith("--git-dir=") || option.startsWith("--work-tree=")) { index++; continue; }
+    break;
+  }
+  const subcommand = tokens[index]?.toLowerCase();
+  const rest = tokens.slice(index + 1).map((token) => token.toLowerCase());
+  if (subcommand === "reset" && rest.includes("--hard")) return "dangerous";
+  if (subcommand === "clean" && rest.some((item) => /^-[a-z]*f/i.test(item))) return "dangerous";
+  if (["status", "log", "diff", "show", "rev-parse"].includes(subcommand ?? "")) return "read";
+  if (subcommand === "branch" && rest.includes("--list")) return "read";
+  if (subcommand === "worktree" && rest[0] === "list") return "read";
+  return "execute";
 }
 
 export function looksLikeVerification(command: string): boolean {

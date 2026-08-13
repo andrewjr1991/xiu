@@ -1,12 +1,27 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
-import { createMultiAgentTools, MultiAgentCoordinator, selectSubagentTools, validateTaskGraph, type SubagentExecutor } from "../src/multi-agent.js";
+import { collectIntegrationEvidence, createMultiAgentTools, MultiAgentCoordinator, selectSubagentTools, validateTaskGraph, type SubagentExecutor, type SubagentRun } from "../src/multi-agent.js";
 import type { AgentTool } from "../src/types.js";
 
 const stats = { modelCalls: 1, toolCalls: 0, inputTokens: 10, outputTokens: 5, activeMs: 10 };
+const execFileAsync = promisify(execFile);
+
+async function gitRepository(): Promise<string> {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-integration-"));
+  await execFileAsync("git", ["init", "-b", "main"], { cwd, windowsHide: true });
+  await execFileAsync("git", ["config", "user.name", "Xiu Test"], { cwd, windowsHide: true });
+  await execFileAsync("git", ["config", "user.email", "xiu@example.invalid"], { cwd, windowsHide: true });
+  await fs.writeFile(path.join(cwd, ".gitignore"), ".xiu/\n", "utf8");
+  await fs.writeFile(path.join(cwd, "base.txt"), "base\n", "utf8");
+  await execFileAsync("git", ["add", "."], { cwd, windowsHide: true });
+  await execFileAsync("git", ["commit", "-m", "base"], { cwd, windowsHide: true });
+  return cwd;
+}
 
 test("task graph rejects duplicates, missing dependencies, and cycles", () => {
   assert.throws(() => validateTaskGraph([
@@ -82,6 +97,59 @@ test("dependencies start only after their prerequisites complete", async () => {
   ]);
   assert.equal((await coordinator.wait(run.id, 2_000)).status, "completed");
   assert.ok(events.indexOf("end:first") < events.indexOf("start:second"));
+});
+
+test("integration evidence requires passing reviewer and tester descendants", () => {
+  const createdAt = new Date().toISOString();
+  const run = {
+    id: "evidence", goal: "evidence", status: "completed", createdAt, updatedAt: createdAt, concurrency: 3,
+    tasks: [
+      { id: "impl", title: "impl", instructions: "impl", role: "implementer", mode: "worktree", dependencies: [], status: "completed", createdAt },
+      { id: "review", title: "review", instructions: "review", role: "reviewer", mode: "shared_readonly", dependencies: ["impl"], status: "completed", createdAt, result: "No blockers.\nVERDICT: PASS" },
+      { id: "test", title: "test", instructions: "test", role: "tester", mode: "shared_readonly", dependencies: ["review"], status: "completed", createdAt, result: "Tests failed.\nVERDICT: FAIL" },
+    ],
+  } as SubagentRun;
+  const blocked = collectIntegrationEvidence(run, "impl");
+  assert.deepEqual(blocked.reviewers, ["review"]);
+  assert.deepEqual(blocked.testers, []);
+  assert.match(blocked.blockers.join(" "), /tester/);
+  run.tasks[1]!.mode = "worktree";
+  assert.deepEqual(collectIntegrationEvidence(run, "impl").reviewers, []);
+  run.tasks[1]!.mode = "shared_readonly";
+  run.tasks[2]!.result = "VERDICT: PASS\nVERDICT: FAIL";
+  assert.deepEqual(collectIntegrationEvidence(run, "impl").testers, []);
+  run.tasks[2]!.result = "All required tests passed.\nVERDICT: PASS";
+  const ready = collectIntegrationEvidence(run, "impl");
+  assert.deepEqual(ready.testers, ["test"]);
+  assert.deepEqual(ready.blockers, []);
+});
+
+test("reviewer and tester inspect the implementation Worktree before gated integration", async () => {
+  const cwd = await gitRepository();
+  let implementationCwd = "";
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") {
+      implementationCwd = context.cwd;
+      await fs.writeFile(path.join(context.cwd, "feature.txt"), "implemented\n", "utf8");
+      return { result: "Implemented and locally verified.", stats };
+    }
+    assert.equal(context.cwd, implementationCwd);
+    assert.equal(await fs.readFile(path.join(context.cwd, "feature.txt"), "utf8"), "implemented\n");
+    return { result: `${task.role} evidence\nVERDICT: PASS`, stats };
+  });
+  const run = await coordinator.start("safe merge", [
+    { id: "impl", title: "implement", instructions: "implement", role: "implementer" },
+    { id: "review", title: "review", instructions: "review", role: "reviewer", dependencies: ["impl"] },
+    { id: "test", title: "test", instructions: "test", role: "tester", dependencies: ["impl"] },
+  ]);
+  assert.equal((await coordinator.wait(run.id, 10_000)).status, "completed");
+  const plan = await coordinator.analyzeIntegration(run.id, "impl");
+  assert.equal(plan.canIntegrate, true);
+  assert.deepEqual(plan.evidence.reviewers, ["review"]);
+  assert.deepEqual(plan.evidence.testers, ["test"]);
+  await coordinator.integrate(run.id, "impl");
+  assert.equal((await fs.readFile(path.join(cwd, "feature.txt"), "utf8")).replace(/\r\n/g, "\n"), "implemented\n");
+  assert.equal(coordinator.get(run.id).tasks.find((task) => task.id === "impl")?.integration?.status, "applied");
 });
 
 test("one agent can be cancelled without stopping another", async () => {

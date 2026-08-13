@@ -166,6 +166,11 @@ test("read tools are auto-approved while dangerous commands carry their risk", a
   await executeTool(listTool, { pattern: "**/*" }, { cwd, approve: async () => { approvals++; return false; } });
   assert.equal(approvals, 0);
   assert.equal(classifyCommand("git status"), "read");
+  assert.equal(classifyCommand('git -C ".xiu/worktrees/run/impl" diff --name-only HEAD'), "read");
+  assert.equal(classifyCommand('git -C ".xiu/worktrees/run/impl" worktree list'), "read");
+  assert.equal(classifyCommand('git -C ".xiu/worktrees/run/impl" reset --hard'), "dangerous");
+  assert.equal(classifyCommand(`powershell -Command "(Get-Content '.xiu/worktrees/run/result.txt' | Measure-Object -Character).Characters"`), "read");
+  assert.equal(classifyCommand("Get-Content input.txt | Set-Content output.txt"), "execute");
   assert.equal(classifyCommand("npm test"), "execute");
   assert.equal(classifyCommand("Remove-Item -Recurse important"), "dangerous");
 

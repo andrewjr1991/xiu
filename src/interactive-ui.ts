@@ -25,6 +25,8 @@ export interface InteractiveInputOptions {
   refreshMs?: number;
   language?: UiLanguage;
   persistPrompt?: boolean;
+  /** Keep an empty Enter inside the live editor instead of completing it. */
+  ignoreEmptySubmit?: boolean;
 }
 
 export interface EditorState {
@@ -61,6 +63,10 @@ export interface TerminalMouseInputResult {
   state: TerminalMouseInputState;
   consumed: boolean;
   event?: TerminalMouseEvent;
+}
+
+export function shouldIgnoreEmptyInteractiveSubmit(value: string, enabled = false): boolean {
+  return enabled && !value.trim();
 }
 
 const ENABLE_TERMINAL_MOUSE = "\x1b[?1000h\x1b[?1006h";
@@ -639,6 +645,13 @@ export async function readInteractiveInput(
           searchQuery = undefined;
           dismissed = true;
           changed();
+          render();
+          return;
+        }
+        // The running-task editor is recreated after every submitted value.
+        // Completing it for an empty Enter lets Windows key-repeat or a stale
+        // CR byte create an unbounded stream of blank `steer>` prompts.
+        if (shouldIgnoreEmptyInteractiveSubmit(state.value, options.ignoreEmptySubmit)) {
           render();
           return;
         }
