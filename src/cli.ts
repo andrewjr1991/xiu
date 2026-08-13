@@ -48,6 +48,7 @@ import { SecurityAuditLog, type SecurityAuditCategory, type SecurityAuditOutcome
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
+import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -266,6 +267,9 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
+  const managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
+    ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL)
+    : undefined;
   let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
   try { systemCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
   catch { /* The CLI remains usable with environment and legacy credentials. */ }
@@ -841,7 +845,9 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, toolConfig.proxy), ...coordinatorTools];
+    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, toolConfig.proxy, {
+      ...(managedWebSearchAuth ? { getBearerToken: (signal) => managedWebSearchAuth.getBearerToken(signal) } : {}),
+    }), ...coordinatorTools];
     let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
     let startupProviderError: Error | undefined;
@@ -1342,7 +1348,9 @@ async function main(): Promise<void> {
         "Native web search: disabled. Use /web configure to set up Tavily, Brave Search, or SearXNG.");
       const defaultKeyEnv = web.provider === "tavily" ? "TAVILY_API_KEY" : web.provider === "brave" ? "BRAVE_SEARCH_API_KEY" : undefined;
       const credentialEnv = web.apiKeyEnv ?? defaultKeyEnv;
-      const credential = credentialEnv
+      const credential = web.managedAuth === "xiu-device"
+        ? localize(language, "自动设备注册与短期 Token", "automatic device enrollment and short-lived tokens")
+        : credentialEnv
         ? process.env[credentialEnv]
           ? localize(language, "API Key 环境变量可用", "API key environment variable is available")
           : localize(language, `缺少环境变量 ${credentialEnv}`, `missing environment variable ${credentialEnv}`)

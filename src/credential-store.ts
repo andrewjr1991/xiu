@@ -1,5 +1,5 @@
 export type CredentialBackend = "environment" | "legacy-file" | "system";
-export type CredentialKind = "provider-api-key" | "mcp-oauth-record";
+export type CredentialKind = "provider-api-key" | "mcp-oauth-record" | "web-search-device";
 
 export interface CredentialRef<K extends CredentialKind = CredentialKind> {
   backend: CredentialBackend;

@@ -149,6 +149,28 @@ test("SearXNG optionally sends a Bearer token from an environment variable", asy
   delete process.env.XIU_TEST_SEARXNG_TOKEN;
 });
 
+test("managed SearXNG obtains a short-lived Bearer token at execution time", async () => {
+  let requestedHeaders: HeadersInit | undefined;
+  let tokenRequests = 0;
+  const tools = createWebSearchTools({
+    enabled: true,
+    provider: "searxng",
+    baseURL: "https://search.example.com",
+    managedAuth: "xiu-device",
+    authBaseURL: "https://search.example.com/xiu-auth",
+  }, undefined, {
+    resolveHostname: publicDns,
+    getBearerToken: async () => { tokenRequests += 1; return "managed-short-token"; },
+    fetch: async (_url, init) => {
+      requestedHeaders = init.headers;
+      return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  await executeTool(tools[0]!, { query: "managed search" }, { cwd: process.cwd(), approve: async () => false });
+  assert.equal(tokenRequests, 1);
+  assert.equal(new Headers(requestedHeaders).get("authorization"), "Bearer managed-short-token");
+});
+
 test("web_open strips active content and revalidates redirects", async () => {
   const htmlTools = createWebSearchTools(base, undefined, {
     resolveHostname: publicDns,

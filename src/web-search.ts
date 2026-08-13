@@ -14,6 +14,8 @@ export interface WebSearchConfig {
   allowedDomains?: string[];
   blockedDomains?: string[];
   timeoutMs?: number;
+  managedAuth?: "xiu-device";
+  authBaseURL?: string;
 }
 
 type FetchLike = (url: string, init: RequestInit & { dispatcher?: unknown }) => Promise<Response>;
@@ -21,6 +23,7 @@ type FetchLike = (url: string, init: RequestInit & { dispatcher?: unknown }) => 
 export interface WebSearchDependencies {
   fetch?: FetchLike;
   resolveHostname?: (hostname: string) => Promise<string[]>;
+  getBearerToken?: (signal?: AbortSignal) => Promise<string | undefined>;
 }
 
 const MAX_RESPONSE_BYTES = 1_000_000;
@@ -264,7 +267,10 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
           endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/search`;
         }
         endpoint.search = new URLSearchParams({ q: requested, format: "json", language: "all", safesearch: "1" }).toString();
-        const key = config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
+        const key = config.managedAuth === "xiu-device"
+          ? await dependencies.getBearerToken?.(context.signal)
+          : config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
+        if (config.managedAuth === "xiu-device" && !key) throw Object.assign(new Error("Managed Xiu Search authentication is unavailable."), { status: 401 });
         if (config.apiKeyEnv && !key) throw Object.assign(new Error(`Missing web search API key environment variable: ${config.apiKeyEnv}`), { status: 401 });
         if (key) headers.authorization = `Bearer ${key}`;
       }

@@ -1431,6 +1431,59 @@ Invoke-RestMethod 'https://search.example.com/search?q=xiu&format=json' -Headers
 
 再运行 `/web configure searxng`，填写 HTTPS 域名和可选的 `XIU_SEARXNG_TOKEN`。不要使用 HTTP、localhost、内网 IP 或在 URL 中嵌入用户名密码；这些目标会被 Xiu 拒绝。
 
+### Xiu 内测搜索预置（v0.15.1）
+
+内测包预置了 `https://search.jingran.vip` 及其设备认证端点，但不包含共享 Token、邀请码、管理 Token 或其他可直接使用的秘密。新安装和从旧版本升级的用户无需设置环境变量：Xiu 启动时只注册 `web_search` 与 `web_open` 工具，第一次真正搜索时才自动登记本机并申请 15 分钟短期 Token，因此不会拖慢普通启动。
+
+设备凭证优先保存到当前 Windows 账号的凭证管理器；企业策略或可选原生模块不可用时，降级保存到当前用户目录 `~/.xiu/search-auth.json`，文件权限收紧为仅当前用户可读写。该凭证仅属于这一台安装，可由服务器单独撤销；15 分钟访问 Token 只存在于当前进程内存，不写入设置、会话、报告或日志，并会在到期前自动续签。
+
+优先级规则：
+
+1. 用户通过 `/web configure` 保存的配置优先于内测预置。
+2. `/web disable` 会保存明确的停用状态，后续启动不会被环境变量重新启用。
+3. 删除用户配置后，下一次加载会恢复内测托管搜索；旧版保存的 `XIU_BETA_SEARXNG_TOKEN` 引用会自动迁移。
+4. 为兼容已设置旧环境变量的内测设备，变量存在时仍可继续使用；删除后会自动切换到设备认证。
+5. Xiu 不把设备秘密或短期 Token 写入 `~/.xiu/settings.json`、会话、诊断或日志。
+
+服务器管理员可以按设备撤销访问。设备被撤销后，旧设备凭证和已经签发的 Token 会立即失效；Xiu 下次搜索会尝试重新登记，并继续受服务器注册配额约束。
+
+### 设备凭证与短期 Token 服务
+
+仓库提供 `scripts/install-xiu-search-auth-vps.sh`，用于在现有 SearXNG 前增加独立设备注册、15 分钟短期 Token、设备撤销和每设备限流。该服务使用基于 glibc 的 Debian Python 容器运行，并把 SQLite 数据保存在 Docker 管理的 `xiu-search-auth-data` 命名卷中，避免旧版 CentOS/Docker 与 Alpine musl SQLite 的 I/O 兼容问题，以及 SELinux 标签和特殊宿主机挂载造成的写入问题。授权端口默认只监听 `127.0.0.1:8787`，管理接口不会由生成的 Nginx 配置暴露到公网。搜索请求由授权服务验证后转发到本机 SearXNG，因此兼容未编译 `http_auth_request_module` 的宝塔 Nginx。
+
+先把整个 `scripts` 目录上传到 VPS，然后运行：
+
+```bash
+sudo bash scripts/install-xiu-search-auth-vps.sh \
+  --domain search.jingran.vip \
+  --searxng-port 8080
+```
+
+安装器默认开启受限的公开设备登记，每个公网 IP 每 24 小时最多登记 5 台设备，并同时启用每设备和每 IP 的搜索限流。若希望关闭公开登记，可在 `auth.env` 中设置 `XIU_AUTH_PUBLIC_REGISTRATION=false`，再使用邀请码或固定公司出口 IP：
+
+```bash
+sudo bash scripts/install-xiu-search-auth-vps.sh \
+  --domain search.jingran.vip \
+  --trusted-cidrs '203.0.113.10/32,198.51.100.0/24'
+```
+
+安装完成后：
+
+1. 在宝塔站点配置中删除原来的 `location /` 区块。
+2. 粘贴 `/opt/xiu-search-auth/bt-nginx-xiu-search.conf` 中的全部 `location` 配置。
+3. 保存后访问 `https://search.jingran.vip/xiu-auth/healthz`，应返回 `{"status":"ok"}`。
+4. 邀请码、管理 Token 和仅限 VPS 本机执行的设备管理命令保存在 `/opt/xiu-search-auth/admin.txt`。
+
+安装器会读取现有 `/opt/xiu-searxng/searxng.env`，只把旧 Token 的 SHA-256 摘要交给网关。因此已配置旧 Token 的 Xiu 仍能使用，网关本身不复制旧 Token 正文。所有设备迁移后，可以从 `auth.env` 删除 `XIU_AUTH_LEGACY_TOKEN_SHA256` 的值并重启网关，正式关闭旧共享 Token。
+
+安全注意事项：
+
+- `auth.env` 与 `admin.txt` 权限为 `600`，不得上传、截图或提交 Git。
+- 公开登记必须保留每日 IP 配额；关闭公开登记后，邀请码只用于设备首次登记并应定期轮换。
+- 公司 IP 免邀请码注册只应填写可确认的公网出口地址，不要使用 `0.0.0.0/0`。
+- 每台设备的长期凭证优先保存在 Windows 凭证管理器；兼容文件仅限当前用户访问。访问 Token 只保存在内存并在到期前续签。
+- 真实宝塔 VPS 已完成无 Token 拒绝、设备登记、短期 Token、认证搜索、设备撤销及撤销后拒绝的闭环验收。
+
 配置向导还支持：
 
 - 允许域名和阻止域名清单；子域名会按所属域匹配。

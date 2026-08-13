@@ -1,0 +1,6 @@
+**/__pycache__/
+**/*.py[cod]
+scripts/xiu-search-auth/__pycache__/
+scripts/xiu-search-auth/__pycache__/**
+.xiu/
+test/

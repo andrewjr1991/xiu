@@ -571,3 +571,18 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 7. 限流、超时与服务端瞬时错误仅按安全读取语义有界重试；认证、权限、参数错误和用户取消不误重试。
 8. 当前代理、超时和取消信号对搜索与页面打开均生效；工具不保存 Cookie、不登录、不提交表单、不执行外部写入。
 9. 专项测试、完整测试、类型检查、构建、包预览和干净目录安装全部通过后，才允许发布并回读 Registry。
+
+## 二十四、0.15.1 内测搜索预置发布门禁
+
+发布 `0.15.1` 前除通用流程外，还必须验证：
+
+1. npm 包只包含 `https://search.jingran.vip` 及其认证端点，不得包含共享 Bearer Token、邀请码、管理 Token、设备秘密、认证响应样本或其他可用秘密。
+2. 新安装和升级用户在没有显式 `webSearch` 配置时自动注册联网工具，但设备登记和 Token 请求必须延迟到第一次搜索，不得拖慢启动。
+3. 第一次搜索自动登记设备并申请短期 Token；设备凭证优先存入 Windows 凭证管理器，兼容文件只允许当前用户访问，短期 Token 只保存在内存并在到期前续签。
+4. 已保存的 `/web configure` 和 `/web disable` 状态必须优先，预置不得覆盖用户选择。
+5. `~/.xiu/settings.json`、会话、诊断、报告和错误输出中不得出现 Token 正文。
+6. 自动登记、缓存续签、并发合并、撤销后重新登记和旧环境变量迁移均须通过确定性测试，再执行完整测试、类型检查、构建、`npm pack --dry-run` 和压缩包秘密扫描。
+7. 服务端必须限制每 IP 每日登记数，并同时实施每设备与每 IP 搜索限流；管理接口只允许 VPS 本机访问。
+8. 短期 Token 服务端必须通过 Python 自检、HTTP 注册/签发/验证/鉴权转发/撤销闭环和真实 VPS 验收；服务只监听本机，管理 API 不得出现在公网 Nginx location 中，且不得要求宝塔 Nginx 编译可选模块。安装器还必须以 root 初始化命名卷所有权，再以非 root UID `10001` 启动服务。
+9. 旧 Token 迁移只保存 SHA-256 摘要；安装器、`auth.env` 模板、日志、文档与 npm 包不得复制实际旧 Token。
+10. 设备数据库目录必须由容器非 root 用户独占写入；容器移除 Linux capabilities 并设置 `no-new-privileges`。旧 CentOS/Docker 环境须使用已验证的 Debian slim Python 镜像和 Docker 命名卷，不得退回会触发 SQLite I/O 错误的 Alpine 组合。
