@@ -19,7 +19,7 @@ export type ExtensionPermission = typeof EXTENSION_PERMISSIONS[number];
 const KNOWN = new Set<string>(EXTENSION_PERMISSIONS);
 
 export interface ExtensionPermissionManifest {
-  kind: "mcp" | "skill";
+  kind: "mcp" | "skill" | "plugin";
   name: string;
   origin: string;
   permissions: ExtensionPermission[];

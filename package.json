@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/cli",
-  "version": "0.13.8",
+  "version": "0.14.3",
   "description": "A safe terminal coding agent with risk-aware tools and multi-provider support.",
   "type": "module",
   "bin": {

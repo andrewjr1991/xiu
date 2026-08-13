@@ -178,7 +178,7 @@ function validateRemoteUrl(value: string, name: string): string {
   return url.toString();
 }
 
-function validateServer(name: string, value: unknown): McpServerConfig {
+export function validateMcpServerConfig(name: string, value: unknown): McpServerConfig {
   if (!value || typeof value !== "object") throw new Error(`MCP server ${name} must be an object`);
   const config = value as Record<string, unknown>;
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error(`MCP server name ${name} must contain only letters, numbers, _ or -`);
@@ -254,6 +254,8 @@ function validateServer(name: string, value: unknown): McpServerConfig {
   }
   return config as unknown as McpServerConfig;
 }
+
+const validateServer = validateMcpServerConfig;
 
 function inferredMcpPermissions(config: McpServerConfig): ExtensionPermission[] {
   const permissions = new Set<ExtensionPermission>();
@@ -817,6 +819,7 @@ export class McpManager {
   private serverStatuses: McpServerStatus[] = [];
   private serverOrigins = new Map<string, "user" | "project">();
   private activeConfigs = new Map<string, McpServerConfig>();
+  private pluginServers = new Map<string, McpServerConfig>();
 
   constructor(
     private workspace: string,
@@ -832,8 +835,15 @@ export class McpManager {
     this.serverOrigins = new Map([
       ...Object.keys(globalServers).map((name) => [name, "user"] as const),
       ...Object.keys(projectServers).map((name) => [name, "project"] as const),
+      ...[...this.pluginServers.keys()].map((name) => [name, "user"] as const),
     ]);
-    return { ...globalServers, ...projectServers };
+    return { ...globalServers, ...projectServers, ...Object.fromEntries(this.pluginServers) };
+  }
+
+  /** Replace ephemeral MCP servers contributed by approved plugins. */
+  setPluginServers(servers: Record<string, McpServerConfig>): void {
+    this.pluginServers = new Map(Object.entries(servers).map(([name, config]) => [name, validateMcpServerConfig(name, config)]));
+    for (const name of this.pluginServers.keys()) this.serverOrigins.set(name, "user");
   }
 
   async start(includeProject = true): Promise<McpServerStatus[]> {

@@ -1287,7 +1287,116 @@ v0.10.1 修复了输入框、任务补充框和选择菜单交接时的 Raw 模�
 
 如果窗口标题同时出现“选择”或 `Select`，则是经典 Windows PowerShell 控制台进入了 QuickEdit/标记模式，宿主会暂停 Xiu 整个进程，因此程序无法在暂停期间自行恢复。按 Esc 或 Enter 可立即退出。若经常误触，可在 PowerShell 窗口标题栏右键进入“属性 → 选项”，取消“快速编辑模式”，或者改用 Windows Terminal。Xiu 不会擅自修改系统控制台设置，也不会接管鼠标右键，以免破坏原生文字和文件路径粘贴。
 
-## 二十三、安全建议
+## 二十三、插件（v0.14.3 阶段 D）
+
+Xiu 会发现以下位置的插件清单：
+
+```text
+项目/.xiu/plugins/<插件>/xiu.plugin.json   仅在工作区信任后扫描
+用户目录/.xiu/plugins/<插件>/xiu.plugin.json
+```
+
+查看和重新扫描：
+
+```text
+/plugins
+/plugins reload
+/plugin inspect acme.example
+/plugin policy
+/plugin approve acme.example
+/plugin install D:\trusted\xiu-plugin
+/plugin install https://github.com/example/xiu-plugin.git
+/plugin update acme.example
+/plugin disable acme.example
+/plugin enable acme.example
+/plugin uninstall acme.example
+/plugin recover acme.example global
+/plugin publisher list
+/plugin publisher trust acme.example
+/plugin publisher revoke <完整 SHA-256 发布者指纹>
+```
+
+`ready` 表示清单有效，`active` 才表示当前清单指纹已被用户授权。授权指纹包含插件版本、权限、全部贡献路径和内容摘要；任意一项变化都会自动回到 `inactive`，必须重新确认。
+
+阶段 B 只加载声明式数据：Provider 和 MCP Tool 使用有界 JSON，Skill 和工作流使用有界 Markdown。Xiu 不会执行插件 JavaScript、安装脚本或任意二进制入口。Provider JSON 不能包含明文 `apiKey`，只能用 `apiKeyEnv` 引用环境变量；MCP Tool 导入后仍受 MCP 权限清单和风险审批约束。`/plugins reload` 会重新扫描并刷新已授权贡献。
+
+阶段 C 支持可信本地路径和无内嵌凭证的 HTTPS Git 来源。安装包会先复制到插件目录内的暂存位置，拒绝符号链接、Junction、非普通文件和超限内容，校验通过后才原子就位。Git 仅用于读取仓库，不执行 Hook、安装脚本或插件代码。
+
+更新只使用安装时记录的来源，确认界面会显示版本变化和新增/移除权限。旧插件先移动到可恢复备份，新版本替换失败时恢复旧目录；即使权限没有变化，新内容摘要也会让旧授权失效。禁用只写本地标记，启用不会扩大权限。卸载只把插件包移入 `plugin-backups`，不会删除插件生成的项目文件、会话或其他用户数据；`/plugin recover` 可在卸载后恢复，也可在插件仍安装时回退到最近备份，回退前的当前版本同样会被保留。
+
+清单示例：
+
+```json
+{
+  "apiVersion": 1,
+  "id": "acme.example",
+  "name": "Example",
+  "version": "1.0.0",
+  "engines": { "xiu": { "min": "0.14.0", "maxExclusive": "0.15.0" } },
+  "permissions": ["instructions:load"],
+  "contributes": {
+    "skills": [{ "id": "review", "path": "skills/review" }]
+  }
+}
+```
+
+### 联网搜索现状
+
+Xiu 当前没有统一的内置 Web Search 工具。可以通过提供搜索工具的 MCP、模型供应商原生能力，或经审批的外部命令间接联网，但这些方式的引用、代理和隐私体验尚未统一。路线图安排在 v0.14 扩展安全闭环之后的 v0.15 增加原生只读联网搜索，并统一来源引用、域名策略、代理、超时和不可信内容隔离。
+
+### 23.1 包完整性与来源锁定
+
+从 v0.14.3 开始，Xiu 在安装时为整个插件包计算确定性的 SHA-256 摘要，并将摘要、原始安装来源和安装时间写入 `.xiu-install.json`。HTTPS Git 来源还会记录浅克隆实际解析到的完整提交 ID；安装仍然由用户显式触发，不会自动跟随远端分支更新。
+
+执行 `/plugin inspect <id>` 可查看完整性状态、安装来源和源修订：
+
+- `verified`：当前包与安装时锁定摘要一致。
+- `legacy`：由旧版本安装，尚未建立完整包锁；下一次显式更新会迁移。
+- `unmanaged`：手工放入插件目录，没有安装元数据。
+- `mismatch`：安装后内容发生变化，插件会失败关闭并撤销激活。
+
+`.xiu-disabled` 是 Xiu 的本地状态标记，不属于包摘要，因此正常禁用和启用不会被误判为篡改。修改插件内容、替换清单、增加未声明文件或删除包内文件都会改变摘要；应通过 `/plugin update` 安装新版本，而不是直接编辑已安装目录。
+
+### 23.2 Ed25519 签名与发布者信任
+
+插件可以在包根目录提供 `xiu.plugin.sig.json` 分离签名。Xiu 使用 Ed25519 验证签名是否覆盖当前插件 ID、版本和阶段 D1 计算出的完整包 SHA-256；签名文件本身不进入摘要，避免循环依赖。`/plugin inspect <id>` 和安装、更新确认页会显示以下状态：
+
+- `unsigned`：没有签名，仍可在本机按当前精确清单审批。
+- `valid-untrusted`：签名有效，但该公钥尚未被本机显式信任。
+- `trusted`：签名有效，且完整 SHA-256 发布者指纹已记录在本机信任库。
+- `invalid`：签名格式、元数据、算法、公钥或签名字节无效；插件失败关闭，不能安装或激活。
+
+`/plugin publisher trust <插件 ID>` 只接受当前已通过签名验证的插件，显示发布者名称、完整公钥指纹并要求确认。`/plugin publisher revoke <完整指纹>` 删除本机信任记录。信任发布者只确认“是谁签的”，绝不等于允许插件权限：首次安装、内容变化、版本变化、权限变化或发布者换钥后，仍必须对当前精确内容执行 `/plugin approve <id>`。旧发布者私钥被替换时，发布者指纹也会进入授权指纹并使原授权失效。
+
+信任库保存在用户目录 `.xiu/trusted-plugin-publishers.json`，仅包含公开密钥、指纹、可选名称和信任时间，不包含私钥。文件损坏、记录与指纹不匹配或签名被替换时均安全失败。阶段 D2 保持无签名插件兼容；阶段 D3 的团队策略可以选择禁止无签名来源，但不能替用户扩大信任或审批。
+
+### 23.3 团队插件策略
+
+受信任项目可在仓库根目录提交 `xiu.plugin-policy.json`。Xiu 只在工作区已信任后读取它；文件必须是非符号链接的有界普通 JSON 文件。策略无效时插件失败关闭，但不会影响 Xiu 的普通编码功能。使用 `/plugin policy` 查看当前策略、文件位置和确定性策略指纹。
+
+```json
+{
+  "version": 1,
+  "requireSignature": true,
+  "allowedSources": [
+    "project",
+    "https://github.com/acme/xiu-review-plugin.git"
+  ],
+  "allowedPublishers": [
+    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  ],
+  "deniedPermissions": ["process:execute", "credentials:access"]
+}
+```
+
+- `requireSignature`：拒绝 `unsigned` 插件；签名存在但无效时无论策略如何都会失败关闭。
+- `allowedSources`：精确允许来源。`project` 只匹配直接放入当前项目插件目录且没有安装来源元数据的项目插件；远程来源必须是无内嵌凭证的完整 HTTPS URL，按规范化后的 URL 精确匹配。本地路径安装不会匹配远程来源白名单。
+- `allowedPublishers`：只接受完整 SHA-256 发布者公钥指纹，可带或不带 `sha256:` 前缀。
+- `deniedPermissions`：阻止声明任一所列权限的插件。
+
+团队策略只有限制能力：它不会写入本机发布者信任库，不会执行 `/plugin approve`，也不会放宽工作区信任、Plan 只读、MCP 权限或危险操作确认。即使来源和发布者均在白名单中，用户仍需在本机显式信任发布者（如需要显示 `trusted`）并对当前精确插件内容执行 `/plugin approve <id>`。安装预览到原子提交之间若策略变化，安装会取消；恢复备份前也会按最新策略、完整性和签名重新验证。
+
+## 二十四、安全建议
 
 - 只在可信工作区运行 Xiu。
 - 不理解的审批请求先拒绝。
@@ -1300,7 +1409,7 @@ v0.10.1 修复了输入框、任务补充框和选择菜单交接时的 Raw 模�
 - 用 `/diff` 检查修改，用测试和构建验证结果。
 - Xiu 报告“完成”后仍应进行人工代码审查。
 
-## 二十四、推荐的新手工作流
+## 二十五、推荐的新手工作流
 
 第一次处理项目时，可以按以下顺序：
 
@@ -1321,7 +1430,7 @@ v0.10.1 修复了输入框、任务补充框和选择菜单交接时的 Raw 模�
 
 把目标说清楚、控制修改范围、保留 Git 恢复手段并认真查看验证结果，是安全高效使用 Xiu 的关键。
 
-## 二十五、完整执行报告
+## 二十六、完整执行报告
 
 任务结束后输入 `/report`，可以预览最近一次任务的有界、脱敏摘要。报告组合任务运行日志、终端会话回放、文件变化、验证操作、诊断和当前工作区的安全审计事实，回答任务做了什么、是否完成、如何验证、哪里失败以及能否继续。同一原始目标因未验证而产生的“继续未完成任务”运行会自动聚合为一条任务链：报告保留原始用户目标，并累计此前运行的文件变化和最终验证证据。
 

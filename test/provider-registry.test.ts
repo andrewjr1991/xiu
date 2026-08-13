@@ -81,6 +81,31 @@ test("saved interactive provider and model override legacy environment defaults"
   assert.equal(resolveStartupModel("coder-v3", "coder-v2", "agnes-2.5-flash", "coder"), "coder-v3");
 });
 
+test("approved plugin provider model selection survives loading before plugin discovery", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-plugin-active-"));
+  const filename = path.join(directory, "providers.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 3,
+    active: "plugin-gateway",
+    activeModels: { "plugin-gateway": "coder-large", "__proto__": "unsafe" },
+    profiles: [],
+  }), "utf8");
+
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  assert.equal(registry.activeId(), "plugin-gateway");
+  assert.equal(registry.activeModel("plugin-gateway"), "coder-large");
+  assert.equal(registry.activeModel("__proto__"), undefined);
+
+  registry.setPluginProfiles([{
+    id: "plugin-gateway", name: "Plugin Gateway", kind: "openai-compatible", model: "coder-default",
+    baseURL: "https://plugin.example.test/v1", apiKeyEnv: "PLUGIN_GATEWAY_KEY", contextWindow: 1_000_000,
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  }]);
+  assert.equal(registry.get("plugin-gateway")?.model, "coder-default");
+  assert.equal(registry.activeModel("plugin-gateway"), "coder-large");
+});
+
 test("saved credentials also work for built-in providers", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-key-"));
   const filename = path.join(directory, "providers.json");

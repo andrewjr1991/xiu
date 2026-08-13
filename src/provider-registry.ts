@@ -119,6 +119,10 @@ const ALLOWED_KINDS = new Set<ProviderName>(["openai", "anthropic", "agnes", "op
 const RESERVED_IDS = new Set(["__proto__", "prototype", "constructor"]);
 const PROBE_STATES = new Set<CapabilityProbeState>(["supported", "unsupported", "unknown", "not-tested"]);
 
+function isValidProviderId(id: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]{0,62}$/i.test(id) && !RESERVED_IDS.has(id.toLowerCase());
+}
+
 export function resolveStartupProviderId(cliProvider?: string, savedProvider?: string, environmentProvider?: string): string {
   return cliProvider ?? savedProvider ?? environmentProvider ?? "openai";
 }
@@ -147,7 +151,7 @@ function validateURL(value: string | undefined, label: string): void {
 }
 
 export function validateProviderProfile(profile: ProviderProfile): ProviderProfile {
-  if (!/^[a-z0-9][a-z0-9._-]{0,62}$/i.test(profile.id) || RESERVED_IDS.has(profile.id.toLowerCase())) {
+  if (!isValidProviderId(profile.id)) {
     throw new Error("Provider id must be 1-63 letters, numbers, dots, underscores, or hyphens");
   }
   if (!profile.name.trim() || profile.name.length > 80) throw new Error("Provider name must be 1-80 characters");
@@ -182,6 +186,7 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
 
 export class ProviderRegistry {
   private file: ProviderFile = { version: 3, profiles: [] };
+  private pluginProfiles: ProviderProfile[] = [];
   private credentials: LegacyCredentialStore<string, "provider-api-key">;
   private saveOperation: Promise<void> = Promise.resolve();
   private saveSequence = 0;
@@ -257,7 +262,10 @@ export class ProviderRegistry {
       const rawActiveModels = parsed.activeModels && typeof parsed.activeModels === "object" ? parsed.activeModels : {};
       const activeModels: Record<string, string> = {};
       for (const [id, model] of Object.entries(rawActiveModels)) {
-        if (!knownIds.has(id) || typeof model !== "string" || !model.trim() || model.length > 200) continue;
+        // An approved plugin provider is installed only after workspace trust is
+        // established. Preserve its bounded model choice until that profile is
+        // contributed later in startup, while still rejecting unsafe keys.
+        if (!isValidProviderId(id) || typeof model !== "string" || !model.trim() || model.length > 200) continue;
         activeModels[id] = model.trim();
       }
       const failoverChains: Record<string, string[]> = {};
@@ -282,7 +290,8 @@ export class ProviderRegistry {
         revisions: parsed.credentialRevisions && typeof parsed.credentialRevisions === "object" ? parsed.credentialRevisions : undefined,
       });
       this.file = { version: 3, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
-      if (this.file.active && !this.get(this.file.active)) this.file.active = undefined;
+      // Keep an unresolved active id in memory: an approved plugin may contribute
+      // that provider after workspace trust is established later in startup.
       if (sourceVersion < 3) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -295,11 +304,23 @@ export class ProviderRegistry {
   }
 
   list(): ProviderProfile[] {
-    return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles].map((profile) => ({
+    return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles, ...this.pluginProfiles].map((profile) => ({
       ...profile,
       apiKey: this.resolveStoredCredential(profile.id),
       features: { ...profile.features },
     }));
+  }
+
+  /** Install validated, in-memory profiles contributed by approved plugins. */
+  setPluginProfiles(profiles: ProviderProfile[]): void {
+    const reserved = new Set([...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles].map((profile) => profile.id));
+    const seen = new Set<string>();
+    this.pluginProfiles = profiles.map((profile) => {
+      const normalized = validateProviderProfile({ ...profile, apiKey: undefined, builtin: false });
+      if (reserved.has(normalized.id) || seen.has(normalized.id)) throw new Error(`Plugin provider id conflicts with an existing provider: ${normalized.id}`);
+      seen.add(normalized.id);
+      return normalized;
+    });
   }
 
   get(id: string): ProviderProfile | undefined {
@@ -308,7 +329,10 @@ export class ProviderRegistry {
 
   activeId(): string | undefined { return this.file.active; }
 
-  activeModel(id: string): string | undefined { return this.file.activeModels?.[id]; }
+  activeModel(id: string): string | undefined {
+    const models = this.file.activeModels;
+    return models && Object.hasOwn(models, id) ? models[id] : undefined;
+  }
 
   credentialRevision(id: string): number { return this.file.credentialRefs?.[id]?.revision ?? this.credentials.ref(id).revision; }
 

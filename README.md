@@ -4,6 +4,10 @@
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
+Version 0.14.3 is closing the plugin supply-chain boundary. Stage D1 records a deterministic SHA-256 digest for every installed package, pins HTTPS Git installs to the exact resolved commit, and rechecks installed content during discovery. Stage D2 verifies optional detached Ed25519 signatures over that package digest and manages trusted publisher fingerprints with explicit `/plugin publisher` commands. Invalid signatures fail closed; unsigned and merely trusted-signer packages still require an exact local `/plugin approve`, so publisher identity never bypasses permissions, workspace trust, Plan mode, or tool approval.
+
+Version 0.14.2 completes the recoverable plugin lifecycle. Xiu can install declarative plugins from a trusted local path or credential-free HTTPS Git URL, preview version and permission changes before an update, disable without deleting data, recoverably uninstall, and roll back to the latest retained package. Remote repositories are shallow-cloned without a worktree and only regular Git blobs are materialized; links, submodules, oversized packages, plugin JavaScript, hooks, installers, and binary entrypoints are never run. Every changed package still requires exact `/plugin approve` authorization before its Provider, MCP, Skill, or workflow contributions activate.
+
 Version 0.8 starts Xiu's large-project intelligence work with a reliability-first context engine. Compaction now creates a structured checkpoint while deterministically preserving the authoritative primary goal, additive steering, and current plan. The next model resumes from recorded evidence and the next action instead of restarting discovery. Large text files are read in bounded line pages, while minified or giant single-line HTML/JSON can be paged by character offset with explicit continuation hints. It retains the professional terminal UI, multi-agent, MCP, planning, checkpoint, resumable-session, multimodal, and Skill systems from earlier releases.
 
 Version 0.8.1 recognizes successful project-specific verifier scripts such as `verify_output.py`, `check-result.js`, and `output_validate.py` as completion evidence. Failed checks still cannot pass the completion gate. While a task runs, the input area now keeps a visible progress summary with completed/current/pending steps, the current and next action, and the latest changed file. `Ctrl+O` switches that summary to detailed tool activity.
@@ -144,6 +148,7 @@ The credential-hardening security gate redacts active Provider and OAuth credent
 - Persistent `/language` selection for localized UI, progress, plans, and model responses
 - Per-project draft recovery under `.xiu/draft.json` and responsive terminal Resize reflow
 - Direction-key approval menus that default to deny
+- Versioned `xiu.plugin-policy.json` team policy that can require signatures, allowlist exact sources/publishers, and deny permissions without granting local trust or approval
 - Bounded tool/Agent summaries with full output available through `/details`
 - Responsive status footer with current plan phase, agents, MCP tools, background tasks, and context
 - Editable transient `补充> ` / `steer> ` prompt that steers the active goal without polluting terminal history
@@ -193,7 +198,7 @@ Start a persistent interactive session (conversation context is retained between
 xiu
 ```
 
-Interactive commands include `/history`, `/compact`, `/models`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/diagnostics`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+Interactive commands include `/history`, `/compact`, `/models`, `/plugins`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/diagnostics`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
 
 Open an interactive picker for saved sessions in the current project after closing the terminal:
 
@@ -228,6 +233,16 @@ Interactive session commands:
 /models             discover and choose a model with Up/Down and Enter
 /language           persist Simplified Chinese or English UI and model output
 /paste              import clipboard text, image, or copied files
+/plugins            inventory plugin manifests and activation state
+/plugins reload     rescan and reload approved declarative contributions
+/plugin inspect ID  inspect compatibility, permissions, contributions, and problems
+/plugin approve ID  approve the exact current manifest and load JSON/Markdown contributions
+/plugin install SRC install from a trusted local path or credential-free HTTPS Git URL
+/plugin update ID   preview permissions and atomically update with a recoverable backup
+/plugin enable ID   enable an installed plugin without expanding its permissions
+/plugin disable ID  disable a plugin without deleting its package or user data
+/plugin uninstall ID recoverably uninstall a plugin package
+/plugin recover ID [global|project] restore the latest retained plugin backup
 /skills             browse installed skills
 /skills install ... install from a local path or HTTPS Git repository
 /mcp                show MCP server connections and tool counts

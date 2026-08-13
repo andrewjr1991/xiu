@@ -15,7 +15,7 @@ export interface XiuSkill {
   name: string;
   description: string;
   file: string;
-  scope: "project" | "global" | "compatible";
+  scope: "project" | "global" | "compatible" | "plugin";
   permissions: ExtensionPermission[];
   permissionWarnings: string[];
   permissionsDeclared: boolean;
@@ -100,6 +100,7 @@ async function copyTree(source: string, destination: string): Promise<void> {
 
 export class SkillRegistry {
   private skills: XiuSkill[] = [];
+  private pluginFiles: Array<{ file: string; name: string }> = [];
 
   constructor(
     private readonly cwd: string,
@@ -110,6 +111,10 @@ export class SkillRegistry {
   ) {}
 
   globalDirectory(): string { return this.globalRoot ?? path.join(os.homedir(), ".xiu", "skills"); }
+
+  setPluginFiles(files: Array<{ file: string; name: string }>): void {
+    this.pluginFiles = files.map((entry) => ({ ...entry }));
+  }
 
   async refresh(includeProject = true): Promise<XiuSkill[]> {
     const roots: Array<{ directory: string; scope: XiuSkill["scope"] }> = [
@@ -141,6 +146,23 @@ export class SkillRegistry {
           });
         } catch { /* ignore unreadable skills */ }
       }
+    }
+    for (const entry of this.pluginFiles.slice(0, MAX_SKILL_FILES)) {
+      try {
+        const content = await fs.readFile(entry.file, "utf8");
+        if (content.length > 120_000) continue;
+        const meta = frontmatter(content);
+        const permissionInfo = skillPermissions(meta);
+        discovered.push({
+          name: entry.name,
+          description: meta.description || content.replace(/^---[\s\S]*?---\s*/, "").split(/\r?\n/).find((line) => line.trim())?.replace(/^#+\s*/, "") || "No description",
+          file: entry.file,
+          scope: "plugin",
+          permissions: permissionInfo.permissions,
+          permissionWarnings: permissionInfo.unknown,
+          permissionsDeclared: permissionInfo.declared,
+        });
+      } catch { /* invalid plugin contributions are reported by PluginRegistry */ }
     }
     const unique = new Map<string, XiuSkill>();
     for (const skill of discovered) if (!unique.has(skill.name.toLowerCase())) unique.set(skill.name.toLowerCase(), skill);

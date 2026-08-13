@@ -1,0 +1,25 @@
+{
+  "apiVersion": 1,
+  "id": "xiu.hello-review",
+  "name": "Xiu Hello Review",
+  "version": "1.0.1",
+  "description": "A minimal read-only plugin for validating the Xiu plugin lifecycle.",
+  "engines": {
+    "xiu": {
+      "min": "0.14.0",
+      "maxExclusive": "0.15.0"
+    }
+  },
+  "permissions": [
+    "workspace:read",
+    "instructions:load"
+  ],
+  "contributes": {
+    "skills": [
+      {
+        "id": "hello-review",
+        "path": "skills/hello-review"
+      }
+    ]
+  }
+}
