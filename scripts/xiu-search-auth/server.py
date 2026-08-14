@@ -349,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "publicRegistration": PUBLIC_REGISTRATION,
                 "registrationLimitPerIpPerDay": REGISTRATIONS_PER_IP_PER_DAY,
-            }, request_id=request_id)
+            })
             return
         if path == "/v1/tokens/verify":
             claims = verify_token(self.bearer())
@@ -521,6 +521,8 @@ def integration_self_test() -> None:
             return response.status, json.loads(content) if content else None
 
     try:
+        status, health = request("GET", "/healthz")
+        assert status == 200 and health["status"] == "ok"
         status, registered = request("POST", "/v1/devices/register", {"name": "integration test"}, {"X-Xiu-Enrollment": ENROLLMENT_CODE})
         assert status == 201 and registered
         status, issued = request("POST", "/v1/tokens", {
