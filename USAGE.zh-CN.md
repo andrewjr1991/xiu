@@ -1482,6 +1482,21 @@ sudo bash scripts/install-xiu-search-auth-vps.sh \
 
 安装器会读取现有 `/opt/xiu-searxng/searxng.env`，只把旧 Token 的 SHA-256 摘要交给网关。因此已配置旧 Token 的 Xiu 仍能使用，网关本身不复制旧 Token 正文。所有设备迁移后，可以从 `auth.env` 删除 `XIU_AUTH_LEGACY_TOKEN_SHA256` 的值并重启网关，正式关闭旧共享 Token。
 
+从 v0.15.7 起，升级会保留现有 `auth.env` 中合法的 `XIU_AUTH_DATABASE`，不会自动切换数据库文件。启动前还会只读检查命名卷：如果目标数据库为空，但其他 `*.sqlite3` 文件包含设备记录，安装器会停止，不会启动一个看似健康但设备列表为空的服务。先根据输出核对候选文件，再显式迁移，例如：
+
+```bash
+sudo bash scripts/install-xiu-search-auth-vps.sh \
+  --domain search.jingran.vip \
+  --source-dir /root/xiu-search-auth-deploy/xiu-search-auth \
+  --database /data/xiu-search-auth.sqlite3 \
+  --migrate-database-from /data/xiu-search-auth-v3.sqlite3 \
+  --yes
+```
+
+迁移会先执行只读预览；目标数据库已经存在时，再用 SQLite backup API 在同一命名卷创建权限为 `600` 的时间戳备份，然后通过单个事务导入缺失设备并追加 `restored` 审计事件。相同设备重复执行会跳过；同一设备 ID 对应不同凭证数据、schema 不兼容、路径不在 `/data`、符号链接或备份失败时均在服务启动前终止。安装器不会删除源数据库或迁移备份。
+
+数据卷权限现在由一次性 helper 容器初始化。该容器禁用网络、使用只读根文件系统，并只临时获得 `CHOWN`、`DAC_OVERRIDE` 和 `FOWNER`；数据库迁移 helper 还限制为 128 MiB 内存和 64 个进程。长期授权服务仍以 UID/GID `10001`、无 Linux capabilities 和 `no-new-privileges` 运行。数据库参数只接受 `/data` 下的普通 `.sqlite3` 文件；检测到损坏或 schema 不兼容的历史凭证库时会停止升级，不会把异常库当成空库忽略。
+
 安全注意事项：
 
 - `auth.env` 与 `admin.txt` 权限为 `600`，不得上传、截图或提交 Git。

@@ -10,7 +10,26 @@ DOMAIN="search.jingran.vip"
 SEARXNG_PORT="8080"
 AUTH_PORT="8787"
 TRUSTED_CIDRS=""
+DATABASE_PATH_OVERRIDE=""
+MIGRATE_DATABASE_FROM=""
 ASSUME_YES="false"
+AUTH_ENV_ROLLBACK_SOURCE=""
+
+restore_auth_env() {
+  if [[ -n "$AUTH_ENV_ROLLBACK_SOURCE" && -f "$AUTH_ENV_ROLLBACK_SOURCE" ]]; then
+    cp -a "$AUTH_ENV_ROLLBACK_SOURCE" "$INSTALL_DIR/auth.env" || true
+    printf '\n已恢复升级前的 auth.env；如果旧服务已停止，请核对后手动重新启动。\n' >&2
+    AUTH_ENV_ROLLBACK_SOURCE=""
+  fi
+}
+
+restore_auth_env_on_error() {
+  local status="$?"
+  trap - ERR
+  restore_auth_env
+  exit "$status"
+}
+trap restore_auth_env_on_error ERR
 
 usage() {
   cat <<'EOF'
@@ -27,6 +46,9 @@ usage() {
   --install-dir PATH       授权服务目录，默认 /opt/xiu-search-auth
   --searxng-dir PATH       现有 SearXNG 目录，默认 /opt/xiu-searxng
   --source-dir PATH        server.py 与 Dockerfile 所在目录
+  --database PATH          数据卷内数据库路径；默认保留既有配置或使用 /data/xiu-search-auth.sqlite3
+  --migrate-database-from PATH
+                           从数据卷内旧数据库显式迁移设备；执行前先备份目标数据库
   --yes                    跳过覆盖确认；仍会先备份
   --help                   显示帮助
 
@@ -35,7 +57,7 @@ usage() {
 EOF
 }
 
-die() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
+die() { printf '\n错误：%s\n' "$*" >&2; restore_auth_env; exit 1; }
 info() { printf '\n==> %s\n' "$*"; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
@@ -48,6 +70,8 @@ while [[ $# -gt 0 ]]; do
     --install-dir) INSTALL_DIR="${2:?--install-dir 缺少参数}"; shift 2 ;;
     --searxng-dir) SEARXNG_DIR="${2:?--searxng-dir 缺少参数}"; shift 2 ;;
     --source-dir) SOURCE_DIR="${2:?--source-dir 缺少参数}"; shift 2 ;;
+    --database) DATABASE_PATH_OVERRIDE="${2:?--database 缺少参数}"; shift 2 ;;
+    --migrate-database-from) MIGRATE_DATABASE_FROM="${2:?--migrate-database-from 缺少参数}"; shift 2 ;;
     --yes) ASSUME_YES="true"; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "未知参数：$1（使用 --help 查看帮助）" ;;
@@ -64,7 +88,13 @@ done
 for directory in "$INSTALL_DIR" "$SEARXNG_DIR" "$SOURCE_DIR"; do
   [[ "$directory" = /* ]] || die "目录必须是绝对路径：$directory"
 done
-[[ -f "$SOURCE_DIR/server.py" && -f "$SOURCE_DIR/Dockerfile" ]] || die "缺少服务端文件：$SOURCE_DIR/server.py 或 Dockerfile"
+[[ -f "$SOURCE_DIR/server.py" && -f "$SOURCE_DIR/Dockerfile" && -f "$SOURCE_DIR/migrate_database.py" ]] || die "缺少服务端文件：server.py、migrate_database.py 或 Dockerfile"
+
+validate_database_path() {
+  [[ "$1" =~ ^/data/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.sqlite3$ ]] || die "数据库路径必须是 /data 下的普通 .sqlite3 文件：$1"
+}
+[[ -z "$DATABASE_PATH_OVERRIDE" ]] || validate_database_path "$DATABASE_PATH_OVERRIDE"
+[[ -z "$MIGRATE_DATABASE_FROM" ]] || validate_database_path "$MIGRATE_DATABASE_FROM"
 
 command_exists docker || die "未检测到 Docker，请先在宝塔安装并启动 Docker"
 docker info >/dev/null 2>&1 || die "Docker 服务未运行"
@@ -89,12 +119,13 @@ if [[ -e "$INSTALL_DIR/docker-compose.yml" ]]; then
   for item in docker-compose.yml auth.env bt-nginx-xiu-search.conf admin.txt app; do
     [[ -e "$INSTALL_DIR/$item" ]] && cp -a "$INSTALL_DIR/$item" "$BACKUP_DIR/"
   done
+  [[ -f "$BACKUP_DIR/auth.env" ]] && AUTH_ENV_ROLLBACK_SOURCE="$BACKUP_DIR/auth.env"
 fi
 
 mkdir -p "$INSTALL_DIR/app" "$INSTALL_DIR/data"
 chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/data"
 chown 10001:10001 "$INSTALL_DIR/data"
-cp "$SOURCE_DIR/server.py" "$SOURCE_DIR/Dockerfile" "$SOURCE_DIR/.dockerignore" "$INSTALL_DIR/app/"
+cp "$SOURCE_DIR/server.py" "$SOURCE_DIR/migrate_database.py" "$SOURCE_DIR/Dockerfile" "$SOURCE_DIR/.dockerignore" "$INSTALL_DIR/app/"
 
 existing_value() {
   local key="$1"
@@ -105,9 +136,15 @@ existing_value() {
 JWT_SECRET="$(existing_value XIU_AUTH_JWT_SECRET)"
 ADMIN_TOKEN="$(existing_value XIU_AUTH_ADMIN_TOKEN)"
 ENROLLMENT_CODE="$(existing_value XIU_AUTH_ENROLLMENT_CODE)"
+EXISTING_DATABASE_PATH="$(existing_value XIU_AUTH_DATABASE)"
 [[ -n "$JWT_SECRET" ]] || JWT_SECRET="$(openssl rand -hex 48)"
 [[ -n "$ADMIN_TOKEN" ]] || ADMIN_TOKEN="$(openssl rand -hex 32)"
 [[ -n "$ENROLLMENT_CODE" ]] || ENROLLMENT_CODE="$(openssl rand -hex 16)"
+DATABASE_PATH="${DATABASE_PATH_OVERRIDE:-${EXISTING_DATABASE_PATH:-/data/xiu-search-auth.sqlite3}}"
+validate_database_path "$DATABASE_PATH"
+if [[ -n "$MIGRATE_DATABASE_FROM" && "$MIGRATE_DATABASE_FROM" == "$DATABASE_PATH" ]]; then
+  die "迁移源数据库不能与目标数据库相同"
+fi
 
 LEGACY_TOKEN_HASH=""
 if [[ -r "$SEARXNG_DIR/searxng.env" ]]; then
@@ -129,7 +166,7 @@ XIU_AUTH_REQUESTS_PER_MINUTE=20
 XIU_AUTH_REQUESTS_PER_IP_PER_MINUTE=60
 XIU_AUTH_PUBLIC_REGISTRATION=true
 XIU_AUTH_REGISTRATIONS_PER_IP_PER_DAY=5
-XIU_AUTH_DATABASE=/data/xiu-search-auth.sqlite3
+XIU_AUTH_DATABASE=${DATABASE_PATH}
 XIU_AUTH_HOST=127.0.0.1
 XIU_AUTH_PORT=8787
 XIU_AUTH_UPSTREAM_URL=http://127.0.0.1:${SEARXNG_PORT}
@@ -234,8 +271,35 @@ info "构建并启动授权服务"
 cd "$INSTALL_DIR"
 "${COMPOSE[@]}" build auth
 info "初始化 Docker 数据卷权限"
-"${COMPOSE[@]}" run --rm --no-deps --user 0 --entrypoint sh auth -c \
-  'chown -R 10001:10001 /data && chmod 700 /data'
+AUTH_IMAGE_ID="$("${COMPOSE[@]}" images -q auth | head -n 1)"
+[[ -n "$AUTH_IMAGE_ID" ]] || die "无法确定授权服务镜像"
+docker run --rm --network none --read-only --user 0 \
+  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --security-opt no-new-privileges=true \
+  --mount type=volume,src=xiu-search-auth-data,dst=/data \
+  --entrypoint sh "$AUTH_IMAGE_ID" -c 'chown -R 10001:10001 /data && chmod 700 /data'
+
+run_database_tool() {
+  docker run --rm --network none --read-only --user 10001:10001 \
+    --memory 128m --memory-swap 128m --pids-limit 64 \
+    --cap-drop ALL --security-opt no-new-privileges=true \
+    --mount type=volume,src=xiu-search-auth-data,dst=/data \
+    --entrypoint python "$AUTH_IMAGE_ID" /app/migrate_database.py "$@"
+}
+
+if [[ -n "$MIGRATE_DATABASE_FROM" ]]; then
+  info "预览数据库迁移"
+  run_database_tool migrate --source "$MIGRATE_DATABASE_FROM" --target "$DATABASE_PATH"
+  info "停止旧授权服务以锁定迁移边界"
+  "${COMPOSE[@]}" stop auth
+  info "备份目标数据库并执行显式迁移"
+  run_database_tool migrate --source "$MIGRATE_DATABASE_FROM" --target "$DATABASE_PATH" --apply
+fi
+
+info "检查数据库路径与历史数据分叉"
+if ! run_database_tool inspect --target "$DATABASE_PATH"; then
+  die "检测到目标数据库为空但数据卷中存在有设备记录的旧数据库。服务未启动；请核对上方候选文件后，使用 --migrate-database-from /data/候选.sqlite3 重新运行。"
+fi
 "${COMPOSE[@]}" up -d
 
 info "等待健康检查"
@@ -252,6 +316,7 @@ if [[ "$READY" != "true" ]]; then
   "${COMPOSE[@]}" logs --tail=100 auth || true
   die "授权服务未能在 60 秒内启动"
 fi
+AUTH_ENV_ROLLBACK_SOURCE=""
 
 cat <<EOF
 

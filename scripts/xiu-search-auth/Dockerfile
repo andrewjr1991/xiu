@@ -4,6 +4,7 @@ RUN groupadd --gid 10001 xiu \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin xiu
 WORKDIR /app
 COPY server.py /app/server.py
+COPY migrate_database.py /app/migrate_database.py
 RUN mkdir /data && chown xiu:xiu /data
 
 USER xiu

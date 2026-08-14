@@ -1,8 +1,8 @@
 # Xiu
 
-Version 0.15.6 adds explicit read-only managed-search device observability. `/web devices` queries the authenticated server-side device list and revocation audit only when explicitly invoked; it never auto-registers, revokes, clears, or restores credentials. Device identifiers are shown only in redacted form, response fields are bounded and schema-validated, and authentication, transport, malformed-response, or server failures fail closed without changing local credentials.
+Version 0.15.7 hardens managed-search VPS upgrades. The installer preserves an existing database path, stops before startup when an empty target conflicts with a populated historical database, and supports an explicit dry-run-first migration that backs up the target and rejects credential conflicts. Docker volume ownership is initialized by a short-lived, network-isolated helper with only the required capabilities; the long-running service remains non-root with all capabilities dropped.
 
-中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.15.6 设计](./V0.15.6_DESIGN.zh-CN.md)。
+中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.15.7 设计](./V0.15.7_DESIGN.zh-CN.md)。
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
