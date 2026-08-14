@@ -508,6 +508,59 @@ test("agent prunes unsupported result blocks from the final web answer and keeps
   assert.equal(agent.status().outcome, "completed");
 });
 
+test("agent prunes unsupported result blocks before the web page failure budget is exhausted", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-partial-prune-"));
+  let calls = 0;
+  const verified = "https://example.com/verified";
+  const unsupported = "https://unavailable.example/invented";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "搜索", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude 最新消息" } }], raw: {} };
+      if (calls === 2) return {
+        text: "打开候选来源",
+        toolCalls: [
+          { id: "open-ok", name: "web_open", input: { url: verified } },
+          { id: "open-fail-1", name: "web_open", input: { url: unsupported } },
+          { id: "open-fail-2", name: "web_open", input: { url: "https://unavailable.example/second" } },
+        ],
+        raw: {},
+      };
+      return {
+        text: [
+          "以下是核验后的结果：",
+          "",
+          `1. 已核验消息\n日期：2026-08-14\n摘要：来自已打开页面。\n原始链接：${verified}`,
+          "",
+          `2. 未核验消息\n日期：未知\n摘要：页面没有成功打开。\n原始链接：${unsupported}`,
+        ].join("\n"),
+        toolCalls: [],
+        raw: {},
+      };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (2):\nURL: ${verified}\nURL: ${unsupported}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async (input) => input.url === verified
+      ? `UNTRUSTED WEB CONTENT\nURL: ${verified}\nPublished: 2026-08-14`
+      : "Tool error: fetch failed",
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+
+  const result = await agent.run("搜索 Claude 最新消息");
+  assert.match(result, /已核验消息/);
+  assert.match(result, new RegExp(verified.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(result, /已移除未完成来源核验的候选条目/);
+  assert.doesNotMatch(result, /未核验消息|页面没有成功打开|unavailable\.example/);
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "completed");
+});
+
 test("agent localizes a source evidence failure after web finalization", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-localized-"));
   let calls = 0;

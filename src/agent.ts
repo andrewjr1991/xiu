@@ -535,7 +535,7 @@ export class Agent {
       if (response.toolCalls.length === 0 && requiresCurrentWebEvidence() && webSearchSuccesses > 0 && !webEvidenceFailure) {
         let citedUrls = extractHttpUrls(response.text);
         let unsupportedUrls = citedUrls.filter((url) => !verifiedWebUrls.has(url));
-        if (webOpenBudgetFinalizationRequested && verifiedWebUrls.size > 0 && unsupportedUrls.length > 0) {
+        if (verifiedWebUrls.size > 0 && unsupportedUrls.length > 0) {
           const pruned = pruneUnsupportedWebCitationBlocks(response.text, verifiedWebUrls);
           const prunedUrls = extractHttpUrls(pruned.text);
           const prunedUnsupportedUrls = prunedUrls.filter((url) => !verifiedWebUrls.has(url));

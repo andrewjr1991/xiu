@@ -1,6 +1,6 @@
 # Xiu
 
-Version 0.15.7 hardens managed-search VPS upgrades. The installer preserves an existing database path, stops before startup when an empty target conflicts with a populated historical database, and supports an explicit dry-run-first migration that backs up the target and rejects credential conflicts. Docker volume ownership is initialized by a short-lived, network-isolated helper with only the required capabilities; the long-running service remains non-root with all capabilities dropped.
+Version 0.15.7 hardens managed-search VPS upgrades. The installer preserves an existing database path, stops before startup when an empty target conflicts with a populated historical database, and supports an explicit dry-run-first migration that backs up the target and rejects credential conflicts. Docker volume ownership is initialized by a short-lived, network-isolated helper with only the required capabilities; the long-running service remains non-root with all capabilities dropped. It also keeps successfully opened web sources when only some candidate pages fail: complete unsupported result blocks are removed before the evidence gate, so a current-information task can finish with fewer verified results instead of failing as a whole.
 
 中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.15.7 设计](./V0.15.7_DESIGN.zh-CN.md)。
 
