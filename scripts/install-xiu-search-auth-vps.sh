@@ -192,6 +192,14 @@ location = /xiu-auth/v1/tokens {
     proxy_set_header X-Forwarded-For \$remote_addr;
 }
 
+location = /xiu-auth/v1/devices {
+    proxy_pass http://127.0.0.1:${AUTH_PORT}/v1/devices;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$remote_addr;
+    proxy_set_header Authorization \$http_authorization;
+}
+
 location / {
     proxy_pass http://127.0.0.1:${AUTH_PORT};
     proxy_http_version 1.1;
