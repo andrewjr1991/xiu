@@ -1348,6 +1348,9 @@ v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默�
 
 ```text
 /web
+/web status
+/web doctor
+/web reset
 /web configure tavily
 /web configure brave
 /web configure searxng
@@ -1519,6 +1522,14 @@ Windows 上使用支持系统证书读取的 Node.js 时，Xiu 会合并 Node �
 - 工具不会提交表单、保存 Cookie、登录账号或执行网页写入。需要账号、OAuth 或外部修改时，继续使用经过独立权限确认的 MCP。
 
 `/web disable` 会立即移除本次会话中的联网工具并持久停用配置，但不会删除你自行设置的环境变量。
+
+### 托管搜索状态、诊断与恢复（v0.15.4）
+
+- `/web` 与 `/web status`：显示当前搜索后端、端点、独立代理以及托管设备凭证存储位置。该命令只检查本机状态，不联网，也不会自动登记设备。
+- `/web doctor`：主动检查托管网关健康状态和认证链路。若本机还没有设备凭证，该命令会提示可能自动登记，然后执行一次登记与短期 Token 签发；结果只显示成功状态和耗时，不显示 Token 或设备秘密。
+- `/web reset`：在明确确认后删除当前电脑的托管搜索设备凭证和内存 Token。下一次搜索或 `/web doctor` 会把这台电脑作为新设备重新登记。
+
+`/web reset` 不会删除 Tavily、Brave 或自建 SearXNG 的 API Key 环境变量，也不会修改联网代理。若系统凭证引用仍存在但 Windows 凭证管理器不可用，Xiu 会拒绝重置并保留原状态，避免出现“界面说已删除、实际仍可使用”的不一致。普通启动不会自动执行 `/web doctor`，因此诊断功能不会重新引入启动等待。
 
 ### 23.1 包完整性与来源锁定
 

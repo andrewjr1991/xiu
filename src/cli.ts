@@ -86,6 +86,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/provider remove", "删除自定义 Provider", "Remove a custom provider"),
     item("/language", "设置界面与会话语言", "Set interface and conversation language"),
     item("/web", "查看原生只读联网搜索状态", "Show native read-only web search status"),
+    item("/web status", "查看联网搜索本地配置与凭证状态", "Show local web search configuration and credential status"),
+    item("/web doctor", "诊断联网搜索健康状态与认证", "Diagnose web search health and authentication"),
+    item("/web reset", "确认后重置托管搜索设备凭证", "Reset the managed search device credential after confirmation"),
     item("/web configure", "配置 Tavily、Brave Search 或 SearXNG", "Configure Tavily, Brave Search, or SearXNG"),
     item("/web disable", "停用原生联网工具", "Disable native web tools"),
     item("/plugins", "列出已发现的 Xiu 插件声明", "List discovered Xiu plugin manifests"),
@@ -1370,6 +1373,55 @@ async function main(): Promise<void> {
       ].join("\n");
     };
 
+    const managedSearchCredentialSummary = async (): Promise<string> => {
+      if (!settings.webSearch?.enabled || settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) {
+        return localize(language, "托管搜索凭证：不适用。", "Managed search credential: not applicable.");
+      }
+      const state = await managedWebSearchAuth.credentialStatus();
+      const storage = state.storage === "system" ? localize(language, "Windows 凭证管理器", "Windows Credential Manager")
+        : state.storage === "compatibility-file" ? localize(language, "本机兼容文件", "local compatibility file")
+          : state.storage === "system-unavailable" ? localize(language, "系统凭证后端不可用", "system credential backend unavailable")
+            : localize(language, "尚未注册（首次搜索时自动注册）", "not registered yet (automatic on first search)");
+      return [
+        `${localize(language, "托管搜索凭证", "Managed search credential")}: ${state.present ? localize(language, "可用", "available") : localize(language, "未就绪", "not ready")}`,
+        `${localize(language, "存储", "Storage")}: ${storage}`,
+        `${localize(language, "内存短期 Token", "In-memory short-lived token")}: ${state.tokenCached ? localize(language, "可用", "available") : localize(language, "无（按需签发）", "none (issued on demand)")}`,
+      ].join("\n");
+    };
+
+    const printWebSearchStatus = async (): Promise<void> => {
+      console.log(`${webSearchSummary()}\n${await managedSearchCredentialSummary()}\n`);
+    };
+
+    const diagnoseWebSearch = async (): Promise<void> => {
+      if (!settings.webSearch?.enabled) throw new Error(localize(language, "联网搜索未启用。", "Web search is disabled."));
+      if (settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) {
+        const keyEnv = settings.webSearch.apiKeyEnv ?? (settings.webSearch.provider === "tavily" ? "TAVILY_API_KEY" : settings.webSearch.provider === "brave" ? "BRAVE_SEARCH_API_KEY" : undefined);
+        if (keyEnv && !process.env[keyEnv]?.trim()) throw new Error(localize(language, `缺少环境变量 ${keyEnv}。`, `Missing environment variable ${keyEnv}.`));
+        console.log(chalk.green(localize(language, "✓ 本地配置检查通过。当前后端不使用 Xiu 托管设备认证；实际搜索连接将在调用 web_search 时验证。\n", "✓ Local configuration check passed. This backend does not use Xiu managed device authentication; the search connection is verified when web_search runs.\n")));
+        return;
+      }
+      console.log(chalk.cyan(localize(language, "正在检查 Xiu Search 健康状态并验证设备认证；没有凭证时会自动注册本设备……", "Checking Xiu Search health and device authentication; this device will be enrolled automatically if no credential exists...")));
+      const result = await managedWebSearchAuth.diagnose();
+      console.log(chalk.green(localize(language,
+        `✓ 服务健康 · 设备认证通过 · ${result.elapsedMs}ms\n${await managedSearchCredentialSummary()}\n`,
+        `✓ Service healthy · device authentication passed · ${result.elapsedMs}ms\n${await managedSearchCredentialSummary()}\n`)));
+    };
+
+    const resetManagedWebSearch = async (): Promise<void> => {
+      if (settings.webSearch?.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error(localize(language, "当前配置未使用 Xiu 托管搜索设备凭证。", "The current configuration does not use a Xiu managed search device credential."));
+      const confirmed = await selectTerminalOption(localize(language, "重置本机托管搜索凭证？", "Reset this installation's managed search credential?"), [
+        { label: localize(language, "取消", "Cancel"), description: localize(language, "保留现有设备凭证", "Keep the existing device credential"), value: false },
+        { label: localize(language, "确认重置", "Confirm reset"), description: localize(language, "删除本机凭证；下一次搜索将注册新设备", "Delete the local credential; the next search will enroll a new device"), value: true },
+      ], language);
+      if (!confirmed) { console.log(chalk.dim(localize(language, "已取消托管搜索凭证重置。\n", "Managed search credential reset cancelled.\n"))); return; }
+      const before = await managedWebSearchAuth.resetCredential();
+      await auditCredential("web-search-reset", "managed-search-device", "allowed");
+      console.log(chalk.green(localize(language,
+        `已清除本机托管搜索凭证${before.present ? "" : "（此前没有可用凭证）"}。下一次搜索或 /web doctor 将自动注册新设备。\n`,
+        `The local managed search credential was cleared${before.present ? "" : " (no usable credential was present)"}. The next search or /web doctor will enroll a new device.\n`)));
+    };
+
     const parseDomainSetting = (value: string): string[] | undefined => {
       const domains = [...new Set(value.split(/[\s,]+/).map((item) => item.trim().toLowerCase().replace(/^\.+|\.+$/g, "")).filter(Boolean))];
       if (domains.some((domain) => domain.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(domain))) {
@@ -1555,8 +1607,8 @@ async function main(): Promise<void> {
             else await applyRuntimeLanguage(selected, false);
             continue;
           }
-          if (followUp === "/web") {
-            console.log(`${webSearchSummary()}\n`);
+          if (followUp === "/web" || followUp === "/web status") {
+            await printWebSearchStatus();
             continue;
           }
           if (followUp.startsWith("/web ")) {
@@ -2162,8 +2214,19 @@ async function main(): Promise<void> {
         await applyRuntimeLanguage(selected, true);
         continue;
       }
-      if (task === "/web") {
-        console.log(`${webSearchSummary()}\n`);
+      if (task === "/web" || task === "/web status") {
+        try { await printWebSearchStatus(); }
+        catch (error) { console.error(chalk.red(`${localize(language, "读取联网搜索状态失败", "Could not read web search status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/web doctor") {
+        try { await diagnoseWebSearch(); }
+        catch (error) { console.error(chalk.red(`${localize(language, "联网搜索诊断失败", "Web search diagnostics failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/web reset") {
+        try { await resetManagedWebSearch(); }
+        catch (error) { console.error(chalk.red(`${localize(language, "托管搜索凭证重置失败", "Managed search credential reset failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/web disable") {

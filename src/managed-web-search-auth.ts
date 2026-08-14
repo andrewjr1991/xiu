@@ -21,6 +21,19 @@ interface TokenResponse { accessToken: string; expiresAt: number }
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 type SystemStoreFactory = () => Promise<WindowsSystemCredentialStore<SearchDeviceCredential, "web-search-device"> | undefined>;
 
+export interface ManagedWebSearchCredentialStatus {
+  present: boolean;
+  storage: "system" | "compatibility-file" | "none" | "system-unavailable";
+  tokenCached: boolean;
+}
+
+export interface ManagedWebSearchDiagnostic {
+  health: "ok";
+  authentication: "ok";
+  elapsedMs: number;
+  credential: ManagedWebSearchCredentialStatus;
+}
+
 const CREDENTIAL_ID = "search.jingran.vip:device";
 const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -136,6 +149,64 @@ export class ManagedWebSearchAuth {
     }
     this.state = { version: 1, installationId: state.installationId };
     await atomicSave(this.filename, this.state);
+  }
+
+  async credentialStatus(): Promise<ManagedWebSearchCredentialStatus> {
+    const state = await this.load();
+    const tokenCached = Boolean(this.token && this.token.expiresAt * 1000 - this.now() > 60_000);
+    if (state.credentialRef) {
+      const store = await this.store();
+      if (!store) return { present: false, storage: "system-unavailable", tokenCached };
+      try {
+        return { present: validCredential(store.get(state.credentialRef)), storage: "system", tokenCached };
+      } catch {
+        return { present: false, storage: "system-unavailable", tokenCached };
+      }
+    }
+    if (validCredential(state.legacyCredential)) return { present: true, storage: "compatibility-file", tokenCached };
+    return { present: false, storage: "none", tokenCached };
+  }
+
+  async resetCredential(): Promise<ManagedWebSearchCredentialStatus> {
+    const before = await this.credentialStatus();
+    const state = await this.load();
+    if (state.credentialRef) {
+      const store = await this.store();
+      if (!store) throw new Error("The managed web search credential is stored in the system credential manager, but that backend is unavailable. Nothing was removed.");
+      try { store.delete(state.credentialRef); }
+      catch { throw new Error("Could not remove the managed web search credential from the system credential manager. Nothing was removed."); }
+    }
+    this.token = undefined;
+    this.inflight = undefined;
+    this.state = { version: 1, installationId: state.installationId };
+    await atomicSave(this.filename, this.state);
+    return before;
+  }
+
+  async diagnose(signal?: AbortSignal): Promise<ManagedWebSearchDiagnostic> {
+    const startedAt = this.now();
+    const timeoutSignal = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.authBaseURL.replace(/\/$/, "")}/healthz`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        redirect: "error",
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      });
+    } catch (error) {
+      const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
+      const code = typeof cause?.code === "string" ? ` (${cause.code})` : "";
+      throw new Error(`Xiu Search health check transport failed${code}.${transportGuidance(code)}`);
+    }
+    if (response.status !== 200) throw Object.assign(new Error(`Xiu Search health check failed with HTTP ${response.status}.`), { status: response.status });
+    await this.getBearerToken(signal);
+    return {
+      health: "ok",
+      authentication: "ok",
+      elapsedMs: Math.max(0, this.now() - startedAt),
+      credential: await this.credentialStatus(),
+    };
   }
 
   private async jsonRequest(endpoint: string, body: object, signal?: AbortSignal): Promise<{ status: number; value: unknown }> {

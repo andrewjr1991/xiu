@@ -76,3 +76,100 @@ test("managed search coalesces concurrent token refreshes", async () => {
   assert.equal(registrations, 1);
   await fs.rm(directory, { recursive: true, force: true });
 });
+
+test("managed search credential status is local-only and reports compatibility storage", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-status-"));
+  const filename = path.join(directory, "search-auth.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    legacyCredential: device("e"),
+  }));
+  let networkCalls = 0;
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async () => {
+    networkCalls += 1;
+    return json({}, 500);
+  }, () => 1_000_000, async () => undefined);
+
+  assert.deepEqual(await auth.credentialStatus(), {
+    present: true,
+    storage: "compatibility-file",
+    tokenCached: false,
+  });
+  assert.equal(networkCalls, 0);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search doctor checks health and authentication without exposing the token", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-doctor-"));
+  const filename = path.join(directory, "search-auth.json");
+  const calls: string[] = [];
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url) => {
+    calls.push(url);
+    if (url.endsWith("/healthz")) return json({ status: "ok" });
+    if (url.endsWith("/v1/devices/register")) return json(device("f"), 201);
+    if (url.endsWith("/v1/tokens")) return json({ accessToken: "doctor-secret-token", expiresAt: 2_000 });
+    return json({}, 404);
+  }, () => 1_000_000, async () => undefined);
+
+  const result = await auth.diagnose();
+  assert.equal(result.health, "ok");
+  assert.equal(result.authentication, "ok");
+  assert.equal(result.credential.present, true);
+  assert.equal(result.credential.tokenCached, true);
+  assert.deepEqual(calls.map((url) => new URL(url).pathname), ["/xiu-auth/healthz", "/xiu-auth/v1/devices/register", "/xiu-auth/v1/tokens"]);
+  assert.doesNotMatch(JSON.stringify(result), /doctor-secret-token/);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search reset clears only the local device credential and re-enrolls on demand", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-reset-"));
+  const filename = path.join(directory, "search-auth.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    legacyCredential: device("1"),
+  }));
+  let registrations = 0;
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url) => {
+    if (url.endsWith("/v1/devices/register")) { registrations += 1; return json(device("2"), 201); }
+    return json({ accessToken: `token-${registrations}`, expiresAt: 2_000 });
+  }, () => 1_000_000, async () => undefined);
+
+  await auth.getBearerToken();
+  const before = await auth.resetCredential();
+  assert.equal(before.present, true);
+  assert.deepEqual(await auth.credentialStatus(), { present: false, storage: "none", tokenCached: false });
+  assert.doesNotMatch(await fs.readFile(filename, "utf8"), /device_|deviceSecret/);
+  await auth.getBearerToken();
+  assert.equal(registrations, 1);
+  assert.match(await fs.readFile(filename, "utf8"), /device_22222222/);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search reset fails closed when a referenced system credential backend is unavailable", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-reset-system-"));
+  const filename = path.join(directory, "search-auth.json");
+  const state = {
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    credentialRef: {
+      backend: "system",
+      kind: "web-search-device",
+      id: "search.jingran.vip:device",
+      revision: 1,
+    },
+  };
+  await fs.writeFile(filename, JSON.stringify(state));
+  const auth = new ManagedWebSearchAuth(
+    "https://search.example/xiu-auth",
+    filename,
+    async () => json({}, 500),
+    () => 1_000_000,
+    async () => undefined,
+  );
+
+  await assert.rejects(() => auth.resetCredential(), /backend is unavailable/i);
+  assert.deepEqual(JSON.parse(await fs.readFile(filename, "utf8")), state);
+  await fs.rm(directory, { recursive: true, force: true });
+});
