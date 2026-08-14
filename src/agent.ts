@@ -96,6 +96,47 @@ function extractHttpUrls(text: string): string[] {
     .filter((value): value is string => Boolean(value)))];
 }
 
+interface PrunedWebAnswer {
+  text: string;
+  removedBlocks: number;
+}
+
+function pruneUnsupportedWebCitationBlocks(text: string, allowedUrls: ReadonlySet<string>): PrunedWebAnswer {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return { text: "", removedBlocks: 0 };
+
+  const paragraphs = normalized.split(/\n[ \t]*\n+/u);
+  const blocks: string[] = [];
+  for (const paragraph of paragraphs) {
+    const lines = paragraph.split("\n");
+    const numberedStarts = lines
+      .map((line, index) => (/^\s*\d+[.)、]\s+/u.test(line) ? index : -1))
+      .filter((index) => index >= 0);
+    const paragraphUrls = extractHttpUrls(paragraph);
+    const mixesAllowedAndUnsupported = paragraphUrls.some((url) => allowedUrls.has(url))
+      && paragraphUrls.some((url) => !allowedUrls.has(url));
+    if (!mixesAllowedAndUnsupported || numberedStarts.length < 2) {
+      blocks.push(paragraph);
+      continue;
+    }
+
+    if (numberedStarts[0]! > 0) blocks.push(lines.slice(0, numberedStarts[0]).join("\n"));
+    for (let index = 0; index < numberedStarts.length; index += 1) {
+      const start = numberedStarts[index]!;
+      const end = numberedStarts[index + 1] ?? lines.length;
+      blocks.push(lines.slice(start, end).join("\n"));
+    }
+  }
+
+  let removedBlocks = 0;
+  const retained = blocks.filter((block) => {
+    const unsupported = extractHttpUrls(block).some((url) => !allowedUrls.has(url));
+    if (unsupported) removedBlocks += 1;
+    return !unsupported;
+  });
+  return { text: retained.join("\n\n").trim(), removedBlocks };
+}
+
 function openedWebUrls(input: unknown, result: string): string[] {
   const values: string[] = [];
   if (input && typeof input === "object" && "url" in input && typeof (input as { url?: unknown }).url === "string") {
@@ -112,6 +153,68 @@ function currentLocalDate(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+const MAX_WEB_SEARCH_ATTEMPTS = 3;
+const MAX_WEB_OPEN_FAILURES = 6;
+const MAX_WEB_OPEN_FAILURES_WITH_EVIDENCE = 4;
+
+function webOpenFailureLimit(verifiedSourceCount: number): number {
+  return verifiedSourceCount > 0 ? MAX_WEB_OPEN_FAILURES_WITH_EVIDENCE : MAX_WEB_OPEN_FAILURES;
+}
+
+function isoDate(year: number, month: number, day: number): string | undefined {
+  const value = new Date(Date.UTC(year, month - 1, day));
+  if (value.getUTCFullYear() !== year || value.getUTCMonth() !== month - 1 || value.getUTCDate() !== day) return undefined;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function extractExplicitWebDates(text: string): string[] {
+  const dates = new Set<string>();
+  const withoutUrls = text.replace(/https?:\/\/[^\s<>()\[\]{}"']+/giu, " ");
+  const patterns = [
+    /(?:日期|发布时间|发布日期|date|published|publication\s+date)[*_`\s]*[：:]\s*[*_`\s]*(\d{4})\s*(?:年|[-/.])\s*(\d{1,2})\s*(?:月|[-/.])\s*(\d{1,2})\s*日?/giu,
+    /(?:^|[^\d])(\d{4})\s*(?:年|[-/.])\s*(\d{1,2})\s*(?:月|[-/.])\s*(\d{1,2})\s*日?(?=$|[^\d])/gmu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of withoutUrls.matchAll(pattern)) {
+      const value = isoDate(Number(match[1]), Number(match[2]), Number(match[3]));
+      if (value) dates.add(value);
+    }
+  }
+  return [...dates];
+}
+
+function webAnswerBlocks(answer: string): string[] {
+  const normalized = answer.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return [];
+  const blocks: string[] = [];
+  for (const paragraph of normalized.split(/\n[ \t]*\n+/u)) {
+    const lines = paragraph.split("\n");
+    const starts = lines
+      .map((line, index) => (/^\s*\d+[.)、]\s+/u.test(line) ? index : -1))
+      .filter((index) => index >= 0);
+    if (starts.length < 2) {
+      blocks.push(paragraph);
+      continue;
+    }
+    if (starts[0]! > 0) blocks.push(lines.slice(0, starts[0]).join("\n"));
+    for (let index = 0; index < starts.length; index += 1) {
+      blocks.push(lines.slice(starts[index]!, starts[index + 1] ?? lines.length).join("\n"));
+    }
+  }
+  return blocks;
+}
+
+function annotateUnknownWebDates(task: string, answer: string, language: UiLanguage = "en-US"): string {
+  const requiresDates = /(?:包含|给出|提供).{0,12}日期|\b(?:include|give|provide).{0,20}\bdate\b/iu.test(task);
+  if (!requiresDates) return answer;
+  const unknownPattern = /(?:日期|发布时间|发布日期)[*_`\s]*[：:]\s*[*_`\s]*(?:未知|不详)|\b(?:date|published|publication\s+date)[*_`\s]*:\s*[*_`\s]*(?:unknown|not\s+available|n\/a)\b/iu;
+  const label = localize(language, "日期：未知（来源未提供可核验日期）", "Date: Unknown (the source did not provide a verifiable date)");
+  return webAnswerBlocks(answer).map((block) => {
+    if (extractHttpUrls(block).length === 0 || extractExplicitWebDates(block).length > 0 || unknownPattern.test(block)) return block;
+    return `${block}\n${label}`;
+  }).join("\n\n").trim();
 }
 
 export class Agent {
@@ -354,6 +457,10 @@ export class Agent {
     const verifiedWebUrls = new Set<string>();
     let webEvidenceAuditSent = false;
     let webEvidenceFailure: string | undefined;
+    let pendingWebSourceAuditFailure = false;
+    let webOpenFailures = 0;
+    let webOpenBudgetFinalizationRequested = false;
+    let webAnswerVerified = false;
     const loopGuard = new ToolLoopGuard();
     for (let turn = 1; ; turn++) {
       this.enforceBudget();
@@ -401,6 +508,19 @@ export class Agent {
         const normalized = normalizeAssistantText(response.text, this.config.language ?? "en-US");
         if (normalized !== response.text) response = { ...response, text: normalized, raw: undefined };
       }
+      if (webOpenBudgetFinalizationRequested && response.toolCalls.length > 0) {
+        webEvidenceFailure = localize(this.config.language ?? "en-US",
+          "网页打开失败预算耗尽后，模型仍请求继续调用工具",
+          "the model requested more tools after the web page failure budget was exhausted");
+        response = {
+          ...response,
+          text: localize(this.config.language ?? "en-US",
+            `网页来源多次打开失败，Xiu 已停止继续请求，避免长时间空转。证据门禁：${webEvidenceFailure}。`,
+            `Repeated page-open failures caused Xiu to stop further requests instead of looping. Evidence gate: ${webEvidenceFailure}.`),
+          toolCalls: [],
+          raw: undefined,
+        };
+      }
       if (response.toolCalls.length === 0 && webSearchAttempts > 0 && webSearchSuccesses === 0) {
         response = {
           ...response,
@@ -412,18 +532,34 @@ export class Agent {
           raw: undefined,
         };
       }
-      if (response.toolCalls.length === 0 && requiresCurrentWebEvidence() && webSearchSuccesses > 0) {
-        const citedUrls = extractHttpUrls(response.text);
-        const unsupportedUrls = citedUrls.filter((url) => !verifiedWebUrls.has(url));
-        if (verifiedWebUrls.size === 0 || citedUrls.length === 0 || unsupportedUrls.length > 0) {
-          if (!webEvidenceAuditSent) {
+      if (response.toolCalls.length === 0 && requiresCurrentWebEvidence() && webSearchSuccesses > 0 && !webEvidenceFailure) {
+        let citedUrls = extractHttpUrls(response.text);
+        let unsupportedUrls = citedUrls.filter((url) => !verifiedWebUrls.has(url));
+        if (webOpenBudgetFinalizationRequested && verifiedWebUrls.size > 0 && unsupportedUrls.length > 0) {
+          const pruned = pruneUnsupportedWebCitationBlocks(response.text, verifiedWebUrls);
+          const prunedUrls = extractHttpUrls(pruned.text);
+          const prunedUnsupportedUrls = prunedUrls.filter((url) => !verifiedWebUrls.has(url));
+          if (pruned.removedBlocks > 0 && prunedUrls.length > 0 && prunedUnsupportedUrls.length === 0) {
+            const notice = localize(this.config.language ?? "en-US",
+              "已移除未完成来源核验的候选条目，仅保留本次成功打开并核验的来源。",
+              "Unverified candidate entries were removed; only sources successfully opened in this task were retained.");
+            response = { ...response, text: `${pruned.text}\n\n${notice}`, raw: undefined };
+            citedUrls = prunedUrls;
+            unsupportedUrls = [];
+          }
+        }
+        pendingWebSourceAuditFailure = verifiedWebUrls.size === 0 || citedUrls.length === 0 || unsupportedUrls.length > 0;
+        if (pendingWebSourceAuditFailure) {
+          if (!webEvidenceAuditSent && !webOpenBudgetFinalizationRequested) {
             response = { ...response, text: "", raw: undefined };
           } else {
             webEvidenceFailure = unsupportedUrls.length
-              ? `final answer cited ${unsupportedUrls.length} URL(s) that were not successfully opened`
+              ? localize(this.config.language ?? "en-US",
+                `最终回答引用了 ${unsupportedUrls.length} 个本次未成功打开的网址`,
+                `final answer cited ${unsupportedUrls.length} URL(s) that were not successfully opened`)
               : verifiedWebUrls.size === 0
-                ? "no search result page was successfully opened"
-                : "final answer did not include an exact opened source URL";
+                ? localize(this.config.language ?? "en-US", "没有任何搜索结果页面成功打开", "no search result page was successfully opened")
+                : localize(this.config.language ?? "en-US", "最终回答没有包含已成功打开的精确来源网址", "final answer did not include an exact opened source URL");
             response = {
               ...response,
               text: localize(this.config.language ?? "en-US",
@@ -432,6 +568,14 @@ export class Agent {
               raw: undefined,
             };
           }
+        } else {
+          const annotated = annotateUnknownWebDates(
+            [this.primaryTask, ...this.steeringHistory].filter(Boolean).join("\n"),
+            response.text,
+            this.config.language ?? "en-US",
+          );
+          if (annotated !== response.text) response = { ...response, text: annotated, raw: undefined };
+          webAnswerVerified = true;
         }
       }
       this.recordUsage(response.usage, response.text);
@@ -448,7 +592,7 @@ export class Agent {
 
       if (response.toolCalls.length === 0) {
         if (await this.applyPendingSteering(turn)) continue;
-        if (webSearchAttempts > 0 && webSearchSuccesses === 0 && !webSearchIntegrityReminderSent) {
+        if (webSearchAttempts > 0 && webSearchSuccesses === 0 && !webSearchIntegrityReminderSent && !webOpenBudgetFinalizationRequested) {
           const gate = "Web research integrity gate: every web_search attempt failed or returned no usable results. Do not claim current or latest facts from memory, an unrelated page, or inferred dates. Retry only with a materially different safe approach. If search still cannot recover, state plainly that search is unavailable and report the exact sanitized error instead of synthesizing results.";
           this.messages.push({ role: "user", content: gate });
           await this.log(sessionPath, { type: "web_research_gate", turn, message: gate });
@@ -456,8 +600,8 @@ export class Agent {
           webSearchIntegrityReminderSent = true;
           continue;
         }
-        if (requiresCurrentWebEvidence() && webSearchSuccesses > 0 && !webEvidenceAuditSent && response.text === "") {
-          const gate = `Current-information evidence gate: the current local date is ${currentLocalDate()}. web_search snippets are discovery hints, not verified evidence. Open every exact source URL you plan to cite with web_open. Confirm that each opened page supports the claimed event and publication/event date, and that the date falls inside the user's requested time range relative to this date. Exclude unverifiable or out-of-range items; if fewer than requested survive, report fewer. Every HTTP(S) URL in the final answer must have been successfully opened during this task. Never invent a title, date, URL, or event.`;
+        if (requiresCurrentWebEvidence() && webSearchSuccesses > 0 && pendingWebSourceAuditFailure && !webEvidenceAuditSent && !webOpenBudgetFinalizationRequested && response.text === "") {
+          const gate = `Current-information evidence gate: the current local date is ${currentLocalDate()}. web_search snippets are discovery hints, not verified evidence. Open every exact source URL you plan to cite with web_open. Confirm that each opened page supports the claimed event and use its real publication/event date when the page exposes one. If the opened source has no verifiable date, mark that result as Date: Unknown; never infer or fill a date. Prioritize the user's requested time range, but if too few verified items exist, older verified items may be included with their real dates and a clear note that they fall outside the preferred range. Every HTTP(S) URL in the final answer must have been successfully opened during this task. Never invent a title, date, URL, or event.`;
           this.messages.push({ role: "user", content: gate });
           await this.log(sessionPath, { type: "web_evidence_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
@@ -491,7 +635,7 @@ export class Agent {
         }
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
-          : lastToolFailed ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
+          : lastToolFailed && !webAnswerVerified ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
         this.lastRunOutcome = outcome;
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
@@ -542,6 +686,10 @@ export class Agent {
             result = `Tool error: ${loop.reason}`;
           } else if (this.planManager?.mode() && risk !== "read") {
             result = `Tool execution denied: plan mode is read-only. Update the plan or ask the user to turn plan mode off.`;
+          } else if (call.name === "web_search" && webSearchAttempts >= MAX_WEB_SEARCH_ATTEMPTS) {
+            result = `Web search discovery budget reached after ${MAX_WEB_SEARCH_ATTEMPTS} searches. Do not search again. Open the best already discovered candidates, then answer with fewer verified sources if necessary.`;
+          } else if (call.name === "web_open" && webOpenFailures >= webOpenFailureLimit(verifiedWebUrls.size)) {
+            result = `Tool error: web_open failure budget exhausted after ${webOpenFailureLimit(verifiedWebUrls.size)} failed page opens. Stop retrying blocked or unavailable hosts and answer with fewer successfully opened sources.`;
           } else if ((this.repeatedFailures.get(failureKey) ?? 0) >= 3) {
             result = "Tool error: the same operation already failed three times. Diagnose the cause or choose a different approach.";
           } else if (this.blockedRecoveryOperations.has(taskOperationSignature(call.name, call.input))) {
@@ -631,16 +779,20 @@ export class Agent {
         }
         const callFailed = this.toolResultFailed(result) || /^Tool execution denied by user\./i.test(result);
         if (call.name === "web_search") {
-          webSearchAttempts += 1;
-          if (!callFailed && /Results \(([1-9]\d*)\):/i.test(result)) webSearchSuccesses += 1;
-          else lastWebSearchFailure = callFailed
-            ? result.replace(/^Tool error:\s*/i, "").split(/\r?\n/, 1)[0]!.slice(0, 240)
-            : "web_search returned no usable results";
-          if (callFailed && isFatalWebSearchFailure(lastWebSearchFailure)) fatalWebSearchFailure = lastWebSearchFailure;
+          const budgetReached = /Web search discovery budget reached/i.test(result);
+          if (!budgetReached) {
+            webSearchAttempts += 1;
+            if (!callFailed && /Results \(([1-9]\d*)\):/i.test(result)) webSearchSuccesses += 1;
+            else lastWebSearchFailure = callFailed
+              ? result.replace(/^Tool error:\s*/i, "").split(/\r?\n/, 1)[0]!.slice(0, 240)
+              : "web_search returned no usable results";
+            if (callFailed && isFatalWebSearchFailure(lastWebSearchFailure)) fatalWebSearchFailure = lastWebSearchFailure;
+          }
         }
         if (call.name === "web_open" && !callFailed) {
           for (const url of openedWebUrls(call.input, result)) verifiedWebUrls.add(url);
         }
+        if (call.name === "web_open" && callFailed && !/failure budget exhausted/i.test(result)) webOpenFailures += 1;
         if (callFailed) toolBatchFailed = true;
         else toolBatchSucceeded = true;
         const diagnosticOutcome = /^Tool execution denied by user\./i.test(result) ? "denied" : (this.toolResultFailed(result) ? "failure" : "success");
@@ -687,6 +839,20 @@ export class Agent {
           diagnostics: this.taskDiagnostics?.snapshot(),
         });
         return text;
+      }
+      const openFailureLimit = webOpenFailureLimit(verifiedWebUrls.size);
+      if (webOpenFailures >= openFailureLimit && !webOpenBudgetFinalizationRequested) {
+        const allowedSources = [...verifiedWebUrls].sort();
+        const sourceAllowlist = allowedSources.length
+          ? allowedSources.map((url) => `- ${url}`).join("\n")
+          : "- (none)";
+        const gate = `Web page failure budget exhausted after ${openFailureLimit} real failed opens. This is the final response turn: do not call any more tools. The only URLs permitted in the answer are the successfully opened URLs listed below. Cite them exactly; do not cite search-result URLs, redirects, related pages, or any URL not in this list. Use real dates supported by the opened sources. Prioritize the user's requested time range, but if too few verified sources survive, you may include older verified sources with their real dates and a clear note that they fall outside the preferred range. Returning fewer items than requested is required when the surviving evidence is still insufficient. If the list is empty or the evidence is insufficient, say so plainly without inventing facts or links.\n\nALLOWED SUCCESSFULLY OPENED URLS:\n${sourceAllowlist}`;
+        this.messages.push({ role: "user", content: gate });
+        await this.log(sessionPath, { type: "web_evidence_budget_gate", turn, message: gate });
+        this.events.onCompletionGate?.(localize(this.config.language ?? "en-US",
+          "网页打开已达到失败上限；仅允许基于已成功打开来源进行一次最终收尾。",
+          "The page-open failure limit was reached; one final answer may use only successfully opened sources."));
+        webOpenBudgetFinalizationRequested = true;
       }
     }
   }

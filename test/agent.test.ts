@@ -244,10 +244,297 @@ test("agent rejects current-information citations that were not opened after the
 
   const result = await agent.run("搜索 Claude 最近一周的消息");
   assert.match(result, /未完成来源与时效核验/);
-  assert.match(result, /not successfully opened/);
+  assert.match(result, /本次未成功打开的网址/);
+  assert.doesNotMatch(result, /not successfully opened/);
   assert.doesNotMatch(visible.join("\n"), /launched a new model/);
   assert.equal(agent.status().outcome, "failed");
   assert.equal(calls, 3);
+});
+
+test("agent accepts an older explicitly dated opened source when the preferred recent range has too few results", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-date-range-"));
+  let calls = 0;
+  const source = "https://example.com/news/old-update";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "Searching.", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude past 1 day" } }], raw: {} };
+      if (calls === 2) return { text: "Opening.", toolCalls: [{ id: "open", name: "web_open", input: { url: source } }], raw: {} };
+      return { text: `1. Old update\nDate: 2000-01-01\nSource: ${source}`, toolCalls: [], raw: {} };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (1):\n1. Old update\nURL: ${source}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async () => `UNTRUSTED WEB CONTENT\nURL: ${source}\nTitle: Old update\nPublished: 2000-01-01`,
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+
+  const result = await agent.run("Find Claude news from the past 1 day and provide the date");
+  assert.match(result, /Old update/);
+  assert.match(result, /2000-01-01/);
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(calls, 3);
+});
+
+test("agent deterministically marks a cited result date unknown instead of asking the model to fill it", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-date-correct-"));
+  let calls = 0;
+  const source = "https://example.com/news/current-update";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "Searching.", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude past 1 day" } }], raw: {} };
+      if (calls === 2) return { text: "Opening.", toolCalls: [{ id: "open", name: "web_open", input: { url: source } }], raw: {} };
+      return { text: `Current update\nSource: ${source}`, toolCalls: [], raw: {} };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (1):\n1. Current update\nURL: ${source}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async () => `UNTRUSTED WEB CONTENT\nURL: ${source}\nCurrent update without publication metadata`,
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+
+  assert.equal(await agent.run("Find Claude news from the past 1 day and provide the date"), `Current update\nSource: ${source}\nDate: Unknown (the source did not provide a verifiable date)`);
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(calls, 3);
+});
+
+test("agent accepts markdown-formatted Chinese dates for every cited result", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-date-markdown-"));
+  let calls = 0;
+  const first = "https://example.com/news/one";
+  const second = "https://example.org/news/two";
+  const today = new Date();
+  const currentDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const chineseDate = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "搜索", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude 最近一周" } }], raw: {} };
+      if (calls === 2) return {
+        text: "打开来源",
+        toolCalls: [
+          { id: "open-one", name: "web_open", input: { url: first } },
+          { id: "open-two", name: "web_open", input: { url: second } },
+        ],
+        raw: {},
+      };
+      return {
+        text: [
+          `1. 第一条\n**日期**：${chineseDate}\n原始链接：${first}`,
+          `2. 第二条（${currentDate}）\n原始链接：${second}`,
+        ].join("\n\n"),
+        toolCalls: [],
+        raw: {},
+      };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (2):\nURL: ${first}\nURL: ${second}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async (input) => `UNTRUSTED WEB CONTENT\nURL: ${String(input.url)}\nPublished: ${currentDate}`,
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+
+  const result = await agent.run("搜索 Claude 最近一周的消息，给出标题、日期和原始链接");
+  assert.match(result, /\*\*日期\*\*/);
+  assert.match(result, new RegExp(chineseDate));
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "completed");
+});
+
+test("agent bounds repeated failed web page opens", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-budget-"));
+  let executions = 0;
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return {
+        text: "Opening candidates.",
+        toolCalls: Array.from({ length: 9 }, (_, index) => ({ id: `open-${index}`, name: "web_open", input: { url: `https://example.com/${index}` } })),
+        raw: {},
+      };
+      return { text: "No accessible sources survived.", toolCalls: [], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async () => { executions += 1; return "Tool error: Web request failed with HTTP 403."; },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
+
+  await agent.run("Open these pages");
+  assert.equal(executions, 6);
+  assert.equal(calls, 2);
+  assert.equal(agent.status().outcome, "failed");
+});
+
+test("agent bounds repeated web discovery searches", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-search-budget-"));
+  let executions = 0;
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return {
+        text: "Searching several variants.",
+        toolCalls: Array.from({ length: 6 }, (_, index) => ({ id: `search-${index}`, name: "web_search", input: { query: `Claude query ${index}` } })),
+        raw: {},
+      };
+      return { text: "Discovery finished.", toolCalls: [], raw: {} };
+    },
+  };
+  const tool: AgentTool = {
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => { executions += 1; return "UNTRUSTED WEB CONTENT\nResults (1):\nURL: https://example.com/result"; },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
+
+  assert.equal(await agent.run("Research several Claude topics"), "Discovery finished.");
+  assert.equal(executions, 3);
+  assert.equal(calls, 2);
+});
+
+test("agent permits one evidence-only final answer after the web page failure budget is exhausted", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-finalize-"));
+  let calls = 0;
+  let executions = 0;
+  const source = "https://example.com/verified";
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls += 1;
+      if (calls === 1) return { text: "Searching.", toolCalls: [{ id: "search", name: "web_search", input: { query: "latest Claude news" } }], raw: {} };
+      if (calls === 2) return {
+        text: "Opening candidates.",
+        toolCalls: [
+          { id: "open-ok", name: "web_open", input: { url: source } },
+          ...Array.from({ length: 6 }, (_, index) => ({ id: `open-fail-${index}`, name: "web_open", input: { url: `https://unavailable.example/${index}` } })),
+        ],
+        raw: {},
+      };
+      const finalization = messages.at(-1)?.content ?? "";
+      assert.match(finalization, /ALLOWED SUCCESSFULLY OPENED URLS/);
+      assert.match(finalization, new RegExp(source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.doesNotMatch(finalization, /https:\/\/unavailable\.example\/0/);
+      return { text: `One verified result. Source: ${source}`, toolCalls: [], raw: {} };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (1):\nURL: ${source}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async (input) => {
+      executions += 1;
+      return input.url === source ? `UNTRUSTED WEB CONTENT\nCitation URL: ${source}\nCurrent news` : "Tool error: fetch failed";
+    },
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+
+  assert.equal(await agent.run("Find the latest Claude news"), `One verified result. Source: ${source}`);
+  assert.equal(executions, 5);
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "completed");
+});
+
+test("agent prunes unsupported result blocks from the final web answer and keeps verified results", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-prune-"));
+  let calls = 0;
+  const verified = "https://example.com/verified";
+  const unsupported = "https://unavailable.example/invented";
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "搜索", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude 最新消息" } }], raw: {} };
+      if (calls === 2) return {
+        text: "打开候选来源",
+        toolCalls: [
+          { id: "open-ok", name: "web_open", input: { url: verified } },
+          ...Array.from({ length: 4 }, (_, index) => ({ id: `open-fail-${index}`, name: "web_open", input: { url: `https://unavailable.example/${index}` } })),
+        ],
+        raw: {},
+      };
+      return {
+        text: [
+          "以下是核验后的结果：",
+          "",
+          `1. 已核验消息\n日期：2026-08-14\n摘要：来自已打开页面。\n原始链接：${verified}`,
+          "",
+          `2. 未核验消息\n日期：2026-08-14\n摘要：不应显示。\n原始链接：${unsupported}`,
+        ].join("\n"),
+        toolCalls: [],
+        raw: {},
+      };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => `UNTRUSTED WEB CONTENT\nResults (2):\nURL: ${verified}\nURL: ${unsupported}`,
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async (input) => input.url === verified
+      ? `UNTRUSTED WEB CONTENT\nURL: ${verified}\nPublished: 2026-08-14`
+      : "Tool error: fetch failed",
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+
+  const result = await agent.run("搜索 Claude 最新消息");
+  assert.match(result, /已核验消息/);
+  assert.match(result, new RegExp(verified.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(result, /已移除未完成来源核验的候选条目/);
+  assert.doesNotMatch(result, /未核验消息|不应显示|unavailable\.example/);
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "completed");
+});
+
+test("agent localizes a source evidence failure after web finalization", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-web-open-localized-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "搜索", toolCalls: [{ id: "search", name: "web_search", input: { query: "Claude 最新消息" } }], raw: {} };
+      if (calls === 2) return { text: "打开", toolCalls: Array.from({ length: 6 }, (_, index) => ({ id: `open-${index}`, name: "web_open", input: { url: `https://example.com/${index}` } })), raw: {} };
+      return { text: "继续搜索", toolCalls: [{ id: "again", name: "web_search", input: { query: "再试一次" } }], raw: {} };
+    },
+  };
+  const tools: AgentTool[] = [{
+    name: "web_search", description: "search", risk: "read",
+    inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
+    execute: async () => "UNTRUSTED WEB CONTENT\nResults (1):\nURL: https://example.com/0",
+  }, {
+    name: "web_open", description: "open", risk: "read",
+    inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
+    execute: async () => "Tool error: fetch failed",
+  }];
+  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+
+  const result = await agent.run("搜索 Claude 最新消息");
+  assert.match(result, /网页来源多次打开失败|网页打开失败预算耗尽/);
+  assert.doesNotMatch(result, /final answer cited|not successfully opened|requested more tools/);
+  assert.equal(calls, 3);
+  assert.equal(agent.status().outcome, "failed");
 });
 
 test("agent stops at a safe boundary before executing tools after token budget exhaustion", async () => {

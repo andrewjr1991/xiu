@@ -105,7 +105,8 @@ export class SettingsStore {
     await fs.mkdir(path.dirname(this.filename), { recursive: true });
     const temporary = `${this.filename}.${process.pid}.tmp`;
     const implicitBetaSearch = settings.webSearch?.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
-      && (settings.webSearch.managedAuth === "xiu-device" || settings.webSearch.apiKeyEnv === XIU_BETA_SEARXNG_TOKEN_ENV);
+      && (settings.webSearch.managedAuth === "xiu-device" || settings.webSearch.apiKeyEnv === XIU_BETA_SEARXNG_TOKEN_ENV)
+      && !settings.webSearch.proxy;
     const persisted = {
       ...(settings.language ? { language: settings.language } : {}),
       ...(!implicitBetaSearch && settings.webSearch ? { webSearch: settings.webSearch } : {}),

@@ -89,6 +89,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/web status", "查看联网搜索本地配置与凭证状态", "Show local web search configuration and credential status"),
     item("/web doctor", "诊断联网搜索健康状态与认证", "Diagnose web search health and authentication"),
     item("/web reset", "确认后重置托管搜索设备凭证", "Reset the managed search device credential after confirmation"),
+    item("/web proxy", "查看联网工具的独立代理", "Show the independent proxy used by web tools"),
+    item("/web proxy set", "设置并保存联网工具的独立代理", "Set and save the independent proxy used by web tools"),
+    item("/web proxy clear", "清除联网工具已保存的独立代理", "Clear the saved independent proxy used by web tools"),
     item("/web configure", "配置 Tavily、Brave Search 或 SearXNG", "Configure Tavily, Brave Search, or SearXNG"),
     item("/web disable", "停用原生联网工具", "Disable native web tools"),
     item("/plugins", "列出已发现的 Xiu 插件声明", "List discovered Xiu plugin manifests"),
@@ -321,7 +324,7 @@ async function main(): Promise<void> {
     startupProfile.model,
   );
   const config = profileConfig(startupProfile, startupModel);
-  const managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
+  let managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
     ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL, undefined, createWebFetch(settings.webSearch.proxy))
     : undefined;
   configureBackgroundWorkspace(config.cwd);
@@ -848,9 +851,12 @@ async function main(): Promise<void> {
     );
     await coordinator.initialize();
     const coordinatorTools = createMultiAgentTools(coordinator);
-    const buildBaseTools = (toolConfig = config) => [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, settings.webSearch?.proxy, {
-      ...(managedWebSearchAuth ? { getBearerToken: (signal) => managedWebSearchAuth.getBearerToken(signal) } : {}),
-    }), ...coordinatorTools];
+    const buildBaseTools = (toolConfig = config) => {
+      const webAuth = managedWebSearchAuth;
+      return [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, settings.webSearch?.proxy, {
+        ...(webAuth ? { getBearerToken: (signal) => webAuth.getBearerToken(signal) } : {}),
+      }), ...coordinatorTools];
+    };
     let baseTools = buildBaseTools();
     const tools = [...baseTools, ...mcpManager.tools()];
     let startupProviderError: Error | undefined;
@@ -1010,6 +1016,14 @@ async function main(): Promise<void> {
       taskRunJournal,
     );
     const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+    const refreshWebSearchRuntime = (): void => {
+      managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
+        ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL, undefined, createWebFetch(settings.webSearch.proxy))
+        : undefined;
+      baseTools = buildBaseTools();
+      attachMcpTools();
+      agent.reloadInstructions();
+    };
     const applyApprovedPlugins = async (restartMcp: boolean): Promise<string[]> => {
       const loaded = await pluginRegistry.loadApprovedContributions();
       try { providerRegistry.setPluginProfiles(loaded.providers); }
@@ -1393,6 +1407,54 @@ async function main(): Promise<void> {
       console.log(`${webSearchSummary()}\n${await managedSearchCredentialSummary()}\n`);
     };
 
+    const normalizedWebProxy = (raw: string): string => {
+      let parsed: URL;
+      try { parsed = new URL(raw.trim()); }
+      catch { throw new Error(localize(language, "联网代理必须是有效的 HTTP(S) URL，例如 http://127.0.0.1:12334。", "Web proxy must be a valid HTTP(S) URL, for example http://127.0.0.1:12334.")); }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error(localize(language, "联网代理仅支持 http:// 或 https://。", "Web proxy must use http:// or https://."));
+      }
+      return parsed.toString();
+    };
+
+    const printWebProxyStatus = (): void => {
+      const proxy = settings.webSearch?.proxy;
+      const environmentProxy = process.env.XIU_WEB_PROXY?.trim();
+      console.log(proxy
+        ? `${localize(language, "联网工具独立代理", "Independent web tools proxy")}: ${proxy}\n${localize(language, "仅用于 web_search、web_open 和托管搜索认证；不会修改模型 Provider 代理。", "Used only by web_search, web_open, and managed search authentication; the model provider proxy is unchanged.")}\n`
+        : `${localize(language, "联网工具独立代理：直连。", "Independent web tools proxy: direct.")}\n`);
+      if (environmentProxy) console.log(chalk.dim(`${localize(language, "当前进程还检测到 XIU_WEB_PROXY；清除已保存配置后，下次启动仍可能从该环境变量恢复代理。", "XIU_WEB_PROXY is also present in this process; after clearing the saved setting, the proxy may return from that environment variable on the next launch.")}\n`));
+    };
+
+    const setWebProxy = async (command: string): Promise<void> => {
+      if (!settings.webSearch) throw new Error(localize(language, "联网工具尚未配置。请先使用 /web configure。", "Web tools are not configured. Use /web configure first."));
+      const argument = command.slice("/web proxy set".length).trim();
+      const input = argument || (await askQuestion(localize(language,
+        "联网工具代理地址（例如 http://127.0.0.1:12334）：",
+        "Web tools proxy URL (for example http://127.0.0.1:12334): "))).trim();
+      if (!input) { console.log(chalk.dim(localize(language, "已取消联网代理设置。\n", "Web proxy setup cancelled.\n"))); return; }
+      settings.webSearch.proxy = normalizedWebProxy(input);
+      await settingsStore.save(settings);
+      refreshWebSearchRuntime();
+      console.log(chalk.green(localize(language,
+        `联网工具独立代理已保存并立即生效：${settings.webSearch.proxy}\n模型 Provider 代理未改变。\n`,
+        `The independent web tools proxy was saved and applied immediately: ${settings.webSearch.proxy}\nThe model provider proxy was not changed.\n`)));
+    };
+
+    const clearWebProxy = async (): Promise<void> => {
+      if (!settings.webSearch) throw new Error(localize(language, "联网工具尚未配置。", "Web tools are not configured."));
+      const hadProxy = Boolean(settings.webSearch.proxy);
+      delete settings.webSearch.proxy;
+      await settingsStore.save(settings);
+      refreshWebSearchRuntime();
+      console.log(chalk.green(localize(language,
+        hadProxy ? "已清除联网工具保存的代理；当前会话改为直连。\n" : "联网工具没有已保存的代理，当前保持直连。\n",
+        hadProxy ? "The saved web tools proxy was cleared; this session now connects directly.\n" : "No saved web tools proxy was present; this session remains direct.\n")));
+      if (process.env.XIU_WEB_PROXY?.trim()) console.log(chalk.yellow(localize(language,
+        "注意：父终端仍设置了 XIU_WEB_PROXY，下次启动会再次读取它；如需永久直连，还要从终端或系统环境变量中删除该变量。\n",
+        "Note: the parent terminal still defines XIU_WEB_PROXY, so it will be loaded again on the next launch. Remove that environment variable from the terminal or system settings for permanent direct access.\n")));
+    };
+
     const diagnoseWebSearch = async (): Promise<void> => {
       if (!settings.webSearch?.enabled) throw new Error(localize(language, "联网搜索未启用。", "Web search is disabled."));
       if (settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) {
@@ -1491,9 +1553,7 @@ async function main(): Promise<void> {
       const web: WebSearchConfig = { enabled: true, provider, baseURL: parsed.toString(), ...(apiKeyEnv ? { apiKeyEnv } : {}), ...(allowedDomains ? { allowedDomains } : {}), ...(blockedDomains ? { blockedDomains } : {}), timeoutMs, ...(webProxy ? { proxy: webProxy } : {}) };
       settings.webSearch = web;
       await settingsStore.save(settings);
-      baseTools = buildBaseTools();
-      attachMcpTools();
-      agent.reloadInstructions();
+      refreshWebSearchRuntime();
       console.log(`${chalk.green(localize(language, "原生只读联网搜索已启用。", "Native read-only web search enabled."))}\n${webSearchSummary()}\n`);
     };
 
@@ -2229,12 +2289,24 @@ async function main(): Promise<void> {
         catch (error) { console.error(chalk.red(`${localize(language, "托管搜索凭证重置失败", "Managed search credential reset failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
+      if (task === "/web proxy") {
+        printWebProxyStatus();
+        continue;
+      }
+      if (task === "/web proxy set" || task.startsWith("/web proxy set ")) {
+        try { await setWebProxy(task); }
+        catch (error) { console.error(chalk.red(`${localize(language, "联网代理设置失败", "Web proxy setup failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/web proxy clear") {
+        try { await clearWebProxy(); }
+        catch (error) { console.error(chalk.red(`${localize(language, "联网代理清除失败", "Could not clear the web proxy")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
       if (task === "/web disable") {
         if (settings.webSearch) settings.webSearch.enabled = false;
         await settingsStore.save(settings);
-        baseTools = buildBaseTools();
-        attachMcpTools();
-        agent.reloadInstructions();
+        refreshWebSearchRuntime();
         console.log(chalk.green(localize(language, "原生联网工具已停用。\n", "Native web tools disabled.\n")));
         continue;
       }

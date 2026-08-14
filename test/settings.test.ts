@@ -121,3 +121,22 @@ test("managed search auth and its independent proxy survive settings reload", as
   });
   await fs.rm(directory, { recursive: true, force: true });
 });
+
+test("the managed beta proxy is persisted even when it originated from XIU_WEB_PROXY", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-search-env-proxy-"));
+  const filename = path.join(directory, "settings.json");
+  const proxy = "http://127.0.0.1:12334";
+  const environmentStore = new SettingsStore(filename, { XIU_WEB_PROXY: proxy });
+  const loaded = await environmentStore.load();
+
+  assert.equal(loaded.webSearch?.proxy, proxy);
+  await environmentStore.save(loaded);
+
+  const cleanEnvironmentStore = new SettingsStore(filename, {});
+  assert.deepEqual((await cleanEnvironmentStore.load()).webSearch, {
+    ...managedBetaSearch,
+    baseURL: `${XIU_BETA_SEARXNG_ENDPOINT}/`,
+    proxy: `${proxy}/`,
+  });
+  await fs.rm(directory, { recursive: true, force: true });
+});

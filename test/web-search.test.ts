@@ -6,7 +6,7 @@ import test from "node:test";
 import { ManagedWebSearchAuth } from "../src/managed-web-search-auth.js";
 import { SettingsStore, XIU_BETA_SEARXNG_ENDPOINT } from "../src/settings.js";
 import { executeTool } from "../src/tools.js";
-import { createWebSearchTools, isPublicAddress, validatePublicWebUrl, type WebSearchConfig } from "../src/web-search.js";
+import { canonicalWebSourceUrl, createWebSearchTools, evaluateSearchQuality, isPublicAddress, validatePublicWebUrl, webSourceId, type WebSearchConfig } from "../src/web-search.js";
 
 const publicDns = async (): Promise<string[]> => ["93.184.216.34"];
 const base: WebSearchConfig = {
@@ -15,6 +15,12 @@ const base: WebSearchConfig = {
   baseURL: "https://api.search.brave.com/res/v1/web/search",
   apiKeyEnv: "XIU_TEST_BRAVE_KEY",
 };
+
+test("web search may retry transient provider failures but page opens are single-attempt", () => {
+  const tools = createWebSearchTools(base, undefined, { resolveHostname: publicDns, fetch: async () => new Response() });
+  assert.equal(tools.find((tool) => tool.name === "web_search")?.maxAttempts, 3);
+  assert.equal(tools.find((tool) => tool.name === "web_open")?.maxAttempts, 1);
+});
 
 test("web URL policy blocks credentials, non-HTTPS, private addresses, and disallowed domains", async () => {
   assert.equal(isPublicAddress("127.0.0.1"), false);
@@ -51,8 +57,50 @@ test("Brave search sends the configured key, filters domains, and marks results 
   assert.equal(new Headers(requestedHeaders).get("x-subscription-token"), "test-secret");
   assert.match(result, /UNTRUSTED WEB CONTENT/);
   assert.match(result, /https:\/\/docs\.example\.com\/a/);
+  assert.match(result, /Source ID: WEB-[0-9a-f]{8}/);
+  assert.match(result, /Citation URL: https:\/\/docs\.example\.com\/a/);
+  assert.match(result, /Evidence coverage: 1 unique source\(s\) across 1 domain\(s\)/);
+  assert.match(result, /discovery-only/);
   assert.doesNotMatch(result, /blocked\.example\.com|outside\.test/);
   delete process.env.XIU_TEST_BRAVE_KEY;
+});
+
+test("search results canonicalize tracking URLs, remove duplicates, and bound provider text", async () => {
+  process.env.XIU_TEST_BRAVE_KEY = "test-secret";
+  const veryLongSnippet = `evidence ${"x".repeat(2_000)}`;
+  const tools = createWebSearchTools(base, undefined, {
+    resolveHostname: publicDns,
+    fetch: async () => new Response(JSON.stringify({ web: { results: [
+      { title: " First result ", url: "https://example.com/news?utm_source=test&id=7#section", description: veryLongSnippet, age: "2 hours ago" },
+      { title: "Duplicate", url: "https://example.com/news?id=7&utm_medium=email", description: "duplicate" },
+      { title: "Second host", url: "https://docs.example.org/item?b=2&a=1", description: "another source" },
+    ] } }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const result = await executeTool(tools[0]!, { query: "quality", count: 5 }, { cwd: process.cwd(), approve: async () => false });
+  assert.match(result, /Results \(2\)/);
+  assert.match(result, /Citation URL: https:\/\/example\.com\/news\?id=7/);
+  assert.doesNotMatch(result, /utm_source|utm_medium|#section|Duplicate/);
+  assert.match(result, /2 unique source\(s\) across 2 domain\(s\); 1\/2 include a provider-supplied date; 1 duplicate\(s\) removed/);
+  assert.ok(result.length < veryLongSnippet.length + 1_500);
+  delete process.env.XIU_TEST_BRAVE_KEY;
+});
+
+test("source identifiers and quality diagnostics are deterministic without claiming verification", () => {
+  const tracked = "https://example.com/page?utm_campaign=x&id=1#top";
+  const canonical = "https://example.com/page?id=1";
+  assert.equal(canonicalWebSourceUrl(tracked), canonical);
+  assert.equal(webSourceId(tracked), webSourceId(canonical));
+  const quality = evaluateSearchQuality([
+    { title: "One", url: canonical, snippet: "a" },
+    { title: "Two", url: "https://example.com/two", snippet: "b" },
+  ], 2);
+  assert.deepEqual(quality, {
+    uniqueSources: 2,
+    uniqueDomains: 1,
+    datedSources: 0,
+    duplicatesRemoved: 2,
+    warnings: ["low domain diversity", "no provider-supplied dates"],
+  });
 });
 
 test("Tavily search uses a bounded POST request and does not expose the API key", async () => {
@@ -179,6 +227,9 @@ test("web_open strips active content and revalidates redirects", async () => {
   });
   const opened = await executeTool(htmlTools.find((tool) => tool.name === "web_open")!, { url: "https://example.com/page", max_characters: 1_000 }, { cwd: process.cwd(), approve: async () => false });
   assert.match(opened, /Title: Example/);
+  assert.match(opened, /Source ID: WEB-[0-9a-f]{8}/);
+  assert.match(opened, /Citation URL: https:\/\/example\.com\/page/);
+  assert.match(opened, /Source host: example\.com/);
   assert.match(opened, /Hello\s+world/);
   assert.doesNotMatch(opened, /steal|Ignore me/);
 

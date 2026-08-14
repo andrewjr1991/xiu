@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import * as tls from "node:tls";
+import { createHash } from "node:crypto";
 import * as cheerio from "cheerio";
 import { Agent, fetch as undiciFetch, ProxyAgent } from "undici";
 import type { AgentTool } from "./types.js";
@@ -187,30 +188,92 @@ async function safeFetch(
   throw new Error(`Web request exceeded ${MAX_REDIRECTS} redirects.`);
 }
 
-interface SearchResult { title: string; url: string; snippet: string; published?: string }
+export interface SearchResult { title: string; url: string; snippet: string; published?: string }
 
-function filterResults(results: SearchResult[], config: WebSearchConfig, requestedDomains: string[], count: number): SearchResult[] {
-  const allowed = normalizedDomains(config.allowedDomains);
-  const blocked = normalizedDomains(config.blockedDomains);
-  return results.filter((result) => {
-    try {
-      const url = new URL(result.url);
-      if (url.protocol !== "https:" || url.username || url.password) return false;
-      const host = url.hostname.toLowerCase();
-      if (blocked.some((rule) => domainMatches(host, rule))) return false;
-      if (allowed.length && !allowed.some((rule) => domainMatches(host, rule))) return false;
-      return !requestedDomains.length || requestedDomains.some((rule) => domainMatches(host, rule));
-    } catch { return false; }
-  }).slice(0, count);
+export interface SearchQualitySummary {
+  uniqueSources: number;
+  uniqueDomains: number;
+  datedSources: number;
+  duplicatesRemoved: number;
+  warnings: string[];
 }
 
-function formatResults(query: string, results: SearchResult[]): string {
+const TRACKING_QUERY_PARAMETERS = new Set([
+  "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "ref_src", "ref_url",
+]);
+
+function boundedText(value: string, maximum: number): string {
+  const normalized = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.length > maximum ? `${normalized.slice(0, maximum - 1)}…` : normalized;
+}
+
+export function canonicalWebSourceUrl(raw: string): string | undefined {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password) return undefined;
+    url.hash = "";
+    for (const name of [...url.searchParams.keys()]) {
+      if (name.toLowerCase().startsWith("utm_") || TRACKING_QUERY_PARAMETERS.has(name.toLowerCase())) url.searchParams.delete(name);
+    }
+    url.searchParams.sort();
+    return url.toString();
+  } catch { return undefined; }
+}
+
+export function webSourceId(raw: string): string {
+  const canonical = canonicalWebSourceUrl(raw) ?? raw;
+  return `WEB-${createHash("sha256").update(canonical).digest("hex").slice(0, 8)}`;
+}
+
+function filterResults(results: SearchResult[], config: WebSearchConfig, requestedDomains: string[], count: number): { results: SearchResult[]; duplicatesRemoved: number } {
+  const allowed = normalizedDomains(config.allowedDomains);
+  const blocked = normalizedDomains(config.blockedDomains);
+  const seenUrls = new Set<string>();
+  const filtered: SearchResult[] = [];
+  let duplicatesRemoved = 0;
+  for (const result of results) {
+    try {
+      const canonical = canonicalWebSourceUrl(result.url);
+      if (!canonical) continue;
+      const url = new URL(canonical);
+      const host = url.hostname.toLowerCase();
+      if (blocked.some((rule) => domainMatches(host, rule))) continue;
+      if (allowed.length && !allowed.some((rule) => domainMatches(host, rule))) continue;
+      if (requestedDomains.length && !requestedDomains.some((rule) => domainMatches(host, rule))) continue;
+      if (seenUrls.has(canonical)) { duplicatesRemoved++; continue; }
+      seenUrls.add(canonical);
+      filtered.push({
+        title: boundedText(result.title, 300),
+        url: canonical,
+        snippet: boundedText(result.snippet, 1_000),
+        ...(result.published ? { published: boundedText(result.published, 100) } : {}),
+      });
+      if (filtered.length >= count) break;
+    } catch { continue; }
+  }
+  return { results: filtered, duplicatesRemoved };
+}
+
+export function evaluateSearchQuality(results: SearchResult[], duplicatesRemoved = 0): SearchQualitySummary {
+  const domains = new Set(results.map((result) => new URL(result.url).hostname.toLowerCase()));
+  const datedSources = results.filter((result) => Boolean(result.published?.trim())).length;
+  const warnings: string[] = [];
+  if (results.length === 0) warnings.push("no usable sources");
+  if (results.length >= 2 && domains.size === 1) warnings.push("low domain diversity");
+  if (results.length > 0 && datedSources === 0) warnings.push("no provider-supplied dates");
+  return { uniqueSources: results.length, uniqueDomains: domains.size, datedSources, duplicatesRemoved, warnings };
+}
+
+function formatResults(query: string, results: SearchResult[], duplicatesRemoved: number): string {
+  const quality = evaluateSearchQuality(results, duplicatesRemoved);
   return `${UNTRUSTED_NOTICE}\n\nSearch query: ${query}\nResults (${results.length}):\n${results.map((result, index) => [
     `[${index + 1}] ${result.title || "Untitled"}`,
-    `URL: ${result.url}`,
+    `Source ID: ${webSourceId(result.url)}`,
+    `Citation URL: ${result.url}`,
+    `Source host: ${new URL(result.url).hostname}`,
     result.published ? `Published: ${result.published}` : undefined,
     `Snippet: ${result.snippet || "(no snippet)"}`,
-  ].filter(Boolean).join("\n")).join("\n\n")}`;
+  ].filter(Boolean).join("\n")).join("\n\n")}\n\nEvidence coverage: ${quality.uniqueSources} unique source(s) across ${quality.uniqueDomains} domain(s); ${quality.datedSources}/${quality.uniqueSources} include a provider-supplied date; ${quality.duplicatesRemoved} duplicate(s) removed.${quality.warnings.length ? `\nWarnings: ${quality.warnings.join("; ")}.` : ""}\nCitation guidance: Search snippets are discovery-only. Open each Citation URL with web_open before citing time-sensitive claims.`;
 }
 
 function htmlToReadableText(html: string, url: string, maxCharacters: number): string {
@@ -220,7 +283,7 @@ function htmlToReadableText(html: string, url: string, maxCharacters: number): s
   const root = $("main,article").first().length ? $("main,article").first() : $("body");
   const text = root.text().replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
   const bounded = text.length > maxCharacters ? `${text.slice(0, maxCharacters)}\n\n[content truncated at ${maxCharacters} characters]` : text;
-  return `${UNTRUSTED_NOTICE}\n\nURL: ${url}\n${title ? `Title: ${title}\n` : ""}Content:\n${bounded || "(page contained no readable text)"}`;
+  return `${UNTRUSTED_NOTICE}\n\nSource ID: ${webSourceId(url)}\nCitation URL: ${url}\nSource host: ${new URL(url).hostname}\nURL: ${url}\n${title ? `Title: ${title}\n` : ""}Content:\n${bounded || "(page contained no readable text)"}`;
 }
 
 export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?: string, dependencies: WebSearchDependencies = {}): AgentTool[] {
@@ -305,7 +368,8 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
             ...(value.age || value.publishedDate ? { published: String(value.age ?? value.publishedDate) } : {}),
           };
         });
-        return formatResults(query, filterResults(results, config, domains, count));
+        const filtered = filterResults(results, config, domains, count);
+        return formatResults(query, filtered.results, filtered.duplicatesRemoved);
       } finally { lifecycle.dispose(); }
     },
   };
@@ -314,7 +378,10 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
     description: "Open one public HTTPS page as bounded readable text. Redirects and DNS are revalidated; local/private hosts, credentials, downloads, and active page content are blocked.",
     risk: "read",
     replaySafety: "safe",
-    maxAttempts: 3,
+    // A page that times out or rejects Xiu is better replaced with another
+    // search result than retried in place. The agent owns the cross-source
+    // failure budget and can still finish from pages that did open.
+    maxAttempts: 1,
     inputSchema: {
       type: "object",
       properties: { url: { type: "string", minLength: 1, maxLength: 2_000 }, max_characters: { type: "integer", minimum: 1_000, maximum: 40_000 } },
@@ -335,7 +402,7 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
         const body = await responseText(response);
         if (contentType.startsWith("text/html")) return htmlToReadableText(body, url.toString(), maxCharacters);
         const bounded = body.length > maxCharacters ? `${body.slice(0, maxCharacters)}\n\n[content truncated at ${maxCharacters} characters]` : body;
-        return `${UNTRUSTED_NOTICE}\n\nURL: ${url}\nContent:\n${bounded}`;
+        return `${UNTRUSTED_NOTICE}\n\nSource ID: ${webSourceId(url.toString())}\nCitation URL: ${url}\nSource host: ${url.hostname}\nURL: ${url}\nContent:\n${bounded}`;
       } finally { lifecycle.dispose(); }
     },
   };
