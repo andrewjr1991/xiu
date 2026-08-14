@@ -1486,15 +1486,25 @@ async function main(): Promise<void> {
     };
 
     const printManagedWebSearchDevices = async (): Promise<void> => {
-      if (settings.webSearch?.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error("The current configuration does not use Xiu managed search device authentication.");
+      if (settings.webSearch?.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error(localize(language, "当前配置未使用 Xiu 托管搜索设备凭证。", "The current configuration does not use a Xiu managed search device credential."));
       const result = await managedWebSearchAuth.listDevices();
       await auditCredential("web-search-devices", result.currentDeviceId ?? "managed-search-device", "allowed");
+      const deviceStatus = (status: string): string => ({
+        active: localize(language, "有效", "active"),
+        revoked: localize(language, "已撤销", "revoked"),
+      })[status] ?? status;
+      const auditAction = (action: string): string => ({
+        registered: localize(language, "已登记", "registered"),
+        revoked: localize(language, "已撤销", "revoked"),
+        restored: localize(language, "已恢复", "restored"),
+      })[action] ?? action;
       const deviceLines = result.devices.map((device) => {
         const id = device.id.length > 12 ? `…${device.id.slice(-8)}` : device.id;
-        return `- ${id} · ${device.status}${device.createdAt ? ` · created ${device.createdAt}` : ""}${device.lastSeenAt ? ` · last seen ${device.lastSeenAt}` : ""}${device.revokedAt ? ` · revoked ${device.revokedAt}` : ""}`;
+        return `- ${id} · ${deviceStatus(device.status)}${device.createdAt ? ` · ${localize(language, "创建", "created")} ${device.createdAt}` : ""}${device.lastSeenAt ? ` · ${localize(language, "最近使用", "last seen")} ${device.lastSeenAt}` : ""}${device.revokedAt ? ` · ${localize(language, "撤销", "revoked")} ${device.revokedAt}` : ""}`;
       });
-      const auditLines = result.audit.map((event) => `- ${event.action} · ${event.deviceId.length > 12 ? `…${event.deviceId.slice(-8)}` : event.deviceId}${event.occurredAt ? ` · ${event.occurredAt}` : ""}${event.requestId ? ` · request ${event.requestId}` : ""}`);
-      console.log(`Server devices (read-only)${result.requestId ? ` · request ${result.requestId}` : ""}\n${deviceLines.length ? deviceLines.join("\n") : "- No device records"}\nRevocation audit\n${auditLines.length ? auditLines.join("\n") : "- No audit records"}\n`);
+      const requestLabel = localize(language, "请求", "request");
+      const auditLines = result.audit.map((event) => `- ${auditAction(event.action)} · ${event.deviceId.length > 12 ? `…${event.deviceId.slice(-8)}` : event.deviceId}${event.occurredAt ? ` · ${event.occurredAt}` : ""}${event.requestId ? ` · ${requestLabel} ${event.requestId}` : ""}`);
+      console.log(`${localize(language, "服务端设备（只读）", "Server devices (read-only)")}${result.requestId ? ` · ${requestLabel} ${result.requestId}` : ""}\n${deviceLines.length ? deviceLines.join("\n") : localize(language, "- 无设备记录", "- No device records")}\n${localize(language, "撤销审计", "Revocation audit")}\n${auditLines.length ? auditLines.join("\n") : localize(language, "- 无审计记录", "- No audit records")}\n`);
     };
 
     const parseDomainSetting = (value: string): string[] | undefined => {
