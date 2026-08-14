@@ -34,6 +34,28 @@ export interface ManagedWebSearchDiagnostic {
   credential: ManagedWebSearchCredentialStatus;
 }
 
+export interface ManagedWebSearchDevice {
+  id: string;
+  status: "active" | "revoked" | "unknown";
+  createdAt?: string;
+  lastSeenAt?: string;
+  revokedAt?: string;
+}
+
+export interface ManagedWebSearchDeviceAuditEvent {
+  action: "registered" | "revoked" | "restored" | "unknown";
+  occurredAt?: string;
+  deviceId: string;
+  requestId?: string;
+}
+
+export interface ManagedWebSearchDevices {
+  currentDeviceId?: string;
+  devices: ManagedWebSearchDevice[];
+  audit: ManagedWebSearchDeviceAuditEvent[];
+  requestId?: string;
+}
+
 const CREDENTIAL_ID = "search.jingran.vip:device";
 const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -71,6 +93,42 @@ function validState(value: unknown): SearchAuthState | undefined {
     ...(ref ? { credentialRef: ref } : {}),
     ...(validCredential(item.legacyCredential) ? { legacyCredential: item.legacyCredential } : {}),
   };
+}
+
+function boundedString(value: unknown, max = 200): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : undefined;
+}
+
+function isoDate(value: unknown): string | undefined {
+  if (!boundedString(value, 64)) return undefined;
+  const parsed = new Date(value as string);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+function parseDevices(value: unknown): ManagedWebSearchDevices | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as { currentDeviceId?: unknown; devices?: unknown; audit?: unknown; requestId?: unknown };
+  if (!Array.isArray(item.devices) || item.devices.length > 100 || !Array.isArray(item.audit) || item.audit.length > 200) return undefined;
+  const devices: ManagedWebSearchDevice[] = [];
+  for (const entry of item.devices) {
+    if (!entry || typeof entry !== "object") return undefined;
+    const device = entry as { id?: unknown; status?: unknown; createdAt?: unknown; lastSeenAt?: unknown; revokedAt?: unknown };
+    const id = boundedString(device.id, 128);
+    if (!id || !/^[a-z0-9_-]+$/i.test(id)) return undefined;
+    const status = device.status === "active" || device.status === "revoked" || device.status === "unknown" ? device.status : undefined;
+    if (!status) return undefined;
+    devices.push({ id, status, ...(isoDate(device.createdAt) ? { createdAt: isoDate(device.createdAt) } : {}), ...(isoDate(device.lastSeenAt) ? { lastSeenAt: isoDate(device.lastSeenAt) } : {}), ...(isoDate(device.revokedAt) ? { revokedAt: isoDate(device.revokedAt) } : {}) });
+  }
+  const audit: ManagedWebSearchDeviceAuditEvent[] = [];
+  for (const entry of item.audit) {
+    if (!entry || typeof entry !== "object") return undefined;
+    const event = entry as { action?: unknown; occurredAt?: unknown; deviceId?: unknown; requestId?: unknown };
+    const deviceId = boundedString(event.deviceId, 128);
+    const action = event.action === "registered" || event.action === "revoked" || event.action === "restored" || event.action === "unknown" ? event.action : undefined;
+    if (!deviceId || !action) return undefined;
+    audit.push({ action, deviceId, ...(isoDate(event.occurredAt) ? { occurredAt: isoDate(event.occurredAt) } : {}), ...(boundedString(event.requestId, 128) ? { requestId: boundedString(event.requestId, 128) } : {}) });
+  }
+  return { devices, audit, ...(boundedString(item.currentDeviceId, 128) ? { currentDeviceId: boundedString(item.currentDeviceId, 128) } : {}), ...(boundedString(item.requestId, 128) ? { requestId: boundedString(item.requestId, 128) } : {}) };
 }
 
 async function atomicSave(filename: string, state: SearchAuthState): Promise<void> {
@@ -254,6 +312,37 @@ export class ManagedWebSearchAuth {
       throw Object.assign(new Error(`Xiu Search token request failed with HTTP ${response.status}${code ? ` (${code})` : ""}.`), { status: response.status, code });
     }
     return { accessToken: value.accessToken, expiresAt: value.expiresAt! };
+  }
+
+  async listDevices(signal?: AbortSignal): Promise<ManagedWebSearchDevices> {
+    const credential = await this.readCredential();
+    if (!credential) throw new Error("Xiu Search device credential is not available; no device query was sent.");
+    const token = await this.issue(credential, signal);
+    if (!token) throw new Error("Xiu Search device credential was rejected; no device query was sent.");
+    const timeoutSignal = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.authBaseURL.replace(/\/$/, "")}/v1/devices`, {
+        method: "GET",
+        headers: { accept: "application/json", authorization: `Bearer ${token.accessToken}` },
+        redirect: "error",
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      });
+    } catch (error) {
+      const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
+      const code = typeof cause?.code === "string" ? ` (${cause.code})` : "";
+      throw new Error(`Xiu Search device query transport failed${code}.${transportGuidance(code)}`);
+    }
+    let value: unknown;
+    try { value = await response.json(); } catch { value = undefined; }
+    if (response.status !== 200) {
+      const code = responseErrorCode(value);
+      throw Object.assign(new Error(`Xiu Search device query failed with HTTP ${response.status}${code ? ` (${code})` : ""}.`), { status: response.status, code });
+    }
+    const parsed = parseDevices(value);
+    if (!parsed) throw new Error("Xiu Search device query returned an invalid response.");
+    this.token = token;
+    return parsed;
   }
 
   private async refresh(signal?: AbortSignal): Promise<string> {

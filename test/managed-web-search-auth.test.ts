@@ -122,6 +122,74 @@ test("managed search doctor checks health and authentication without exposing th
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+test("managed search device listing is read-only, bounded, and redacts identifiers", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-devices-"));
+  const filename = path.join(directory, "search-auth.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    legacyCredential: device("a"),
+  }));
+  const calls: Array<{ url: string; method: string; authorization?: string }> = [];
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url, init) => {
+    calls.push({ url, method: init?.method ?? "GET", authorization: new Headers(init?.headers).get("authorization") ?? undefined });
+    if (url.endsWith("/v1/tokens")) return json({ accessToken: "device-query-token", expiresAt: 2_000 });
+    if (url.endsWith("/v1/devices")) return json({
+      currentDeviceId: "device_gggggggggggggggggggggggggggggggg",
+      requestId: "request-123",
+      devices: [{ id: "device_gggggggggggggggggggggggggggggggg", status: "active", createdAt: "2026-08-01T00:00:00Z" }],
+      audit: [{ action: "registered", deviceId: "device_gggggggggggggggggggggggggggggggg", occurredAt: "2026-08-01T00:00:00Z", requestId: "request-123" }],
+    });
+    return json({}, 404);
+  }, () => 1_000_000, async () => undefined);
+
+  const result = await auth.listDevices();
+  assert.equal(result.devices[0]?.status, "active");
+  assert.equal(result.audit[0]?.action, "registered");
+  assert.deepEqual(calls.map((call) => [new URL(call.url).pathname, call.method]), [["/xiu-auth/v1/tokens", "POST"], ["/xiu-auth/v1/devices", "GET"]]);
+  assert.equal(calls[1]?.authorization, "Bearer device-query-token");
+  assert.doesNotMatch(JSON.stringify(result), /device-query-token|secret-/);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search device listing never auto-registers or clears a rejected credential", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-devices-rejected-"));
+  const filename = path.join(directory, "search-auth.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    legacyCredential: device("b"),
+  }));
+  const calls: string[] = [];
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url) => {
+    calls.push(new URL(url).pathname);
+    if (url.endsWith("/v1/tokens")) return json({ error: "invalid_device_credential" }, 401);
+    return json({}, 500);
+  }, () => 1_000_000, async () => undefined);
+
+  await assert.rejects(() => auth.listDevices(), /credential was rejected/i);
+  assert.deepEqual(calls, ["/xiu-auth/v1/tokens"]);
+  assert.match(await fs.readFile(filename, "utf8"), /device_bbbbbbbb/);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("managed search device listing fails closed on malformed server data", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-devices-malformed-"));
+  const filename = path.join(directory, "search-auth.json");
+  await fs.writeFile(filename, JSON.stringify({
+    version: 1,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    legacyCredential: device("c"),
+  }));
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url) => {
+    if (url.endsWith("/v1/tokens")) return json({ accessToken: "device-query-token", expiresAt: 2_000 });
+    return json({ devices: [{ id: "device_cccccccccccccccccccccccccccccccc", status: "active" }], audit: [{ action: "unexpected", deviceId: "device_cccccccccccccccccccccccccccccccc" }] });
+  }, () => 1_000_000, async () => undefined);
+
+  await assert.rejects(() => auth.listDevices(), /invalid response/i);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
 test("managed search reset clears only the local device credential and re-enrolls on demand", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-reset-"));
   const filename = path.join(directory, "search-auth.json");

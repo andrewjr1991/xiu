@@ -88,6 +88,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/web", "查看原生只读联网搜索状态", "Show native read-only web search status"),
     item("/web status", "查看联网搜索本地配置与凭证状态", "Show local web search configuration and credential status"),
     item("/web doctor", "诊断联网搜索健康状态与认证", "Diagnose web search health and authentication"),
+    item("/web devices", "查看托管搜索服务端设备与撤销审计（只读）", "Show managed search server devices and revocation audit (read-only)"),
     item("/web reset", "确认后重置托管搜索设备凭证", "Reset the managed search device credential after confirmation"),
     item("/web proxy", "查看联网工具的独立代理", "Show the independent proxy used by web tools"),
     item("/web proxy set", "设置并保存联网工具的独立代理", "Set and save the independent proxy used by web tools"),
@@ -1484,6 +1485,18 @@ async function main(): Promise<void> {
         `The local managed search credential was cleared${before.present ? "" : " (no usable credential was present)"}. The next search or /web doctor will enroll a new device.\n`)));
     };
 
+    const printManagedWebSearchDevices = async (): Promise<void> => {
+      if (settings.webSearch?.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error("The current configuration does not use Xiu managed search device authentication.");
+      const result = await managedWebSearchAuth.listDevices();
+      await auditCredential("web-search-devices", result.currentDeviceId ?? "managed-search-device", "allowed");
+      const deviceLines = result.devices.map((device) => {
+        const id = device.id.length > 12 ? `…${device.id.slice(-8)}` : device.id;
+        return `- ${id} · ${device.status}${device.createdAt ? ` · created ${device.createdAt}` : ""}${device.lastSeenAt ? ` · last seen ${device.lastSeenAt}` : ""}${device.revokedAt ? ` · revoked ${device.revokedAt}` : ""}`;
+      });
+      const auditLines = result.audit.map((event) => `- ${event.action} · ${event.deviceId.length > 12 ? `…${event.deviceId.slice(-8)}` : event.deviceId}${event.occurredAt ? ` · ${event.occurredAt}` : ""}${event.requestId ? ` · request ${event.requestId}` : ""}`);
+      console.log(`Server devices (read-only)${result.requestId ? ` · request ${result.requestId}` : ""}\n${deviceLines.length ? deviceLines.join("\n") : "- No device records"}\nRevocation audit\n${auditLines.length ? auditLines.join("\n") : "- No audit records"}\n`);
+    };
+
     const parseDomainSetting = (value: string): string[] | undefined => {
       const domains = [...new Set(value.split(/[\s,]+/).map((item) => item.trim().toLowerCase().replace(/^\.+|\.+$/g, "")).filter(Boolean))];
       if (domains.some((domain) => domain.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(domain))) {
@@ -2282,6 +2295,11 @@ async function main(): Promise<void> {
       if (task === "/web doctor") {
         try { await diagnoseWebSearch(); }
         catch (error) { console.error(chalk.red(`${localize(language, "联网搜索诊断失败", "Web search diagnostics failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+        continue;
+      }
+      if (task === "/web devices") {
+        try { await printManagedWebSearchDevices(); }
+        catch (error) { await auditCredential("web-search-devices", "managed-search-device", "failed"); console.error(chalk.red(`${localize(language, "读取服务端设备状态失败", "Could not read server-side device status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
         continue;
       }
       if (task === "/web reset") {

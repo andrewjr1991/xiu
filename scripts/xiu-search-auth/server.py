@@ -139,6 +139,15 @@ def initialize_database() -> None:
                 revoked_at INTEGER
             )
         """)
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS device_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                occurred_at INTEGER NOT NULL,
+                request_id TEXT NOT NULL
+            )
+        """)
 
 
 def register_device(name: str, client_ip: str) -> tuple[str, str]:
@@ -151,6 +160,18 @@ def register_device(name: str, client_ip: str) -> tuple[str, str]:
             (device_id, name[:100], digest(device_secret), now, now, client_ip),
         )
     return device_id, device_secret
+
+
+def record_device_audit(device_id: str, action: str, request_id: str) -> None:
+    with DB_LOCK, database() as db:
+        db.execute(
+            "INSERT INTO device_audit (device_id, action, occurred_at, request_id) VALUES (?, ?, ?, ?)",
+            (device_id, action, int(time.time()), request_id),
+        )
+
+
+def iso_time(value: int | None) -> str | None:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value)) if value is not None else None
 
 
 def authenticate_device(device_id: str, device_secret: str, client_ip: str) -> bool:
@@ -220,15 +241,19 @@ class Handler(BaseHTTPRequestHandler):
         forwarded = self.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
         return forwarded or self.client_address[0]
 
-    def send_json(self, status: int, payload: dict[str, object]) -> None:
+    def send_json(self, status: int, payload: dict[str, object], request_id: str | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
+        self.send_header("X-Request-Id", request_id or self.request_id())
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+
+    def request_id(self) -> str:
+        return uuid.uuid4().hex
 
     def read_json(self) -> dict[str, object] | None:
         try:
@@ -324,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "publicRegistration": PUBLIC_REGISTRATION,
                 "registrationLimitPerIpPerDay": REGISTRATIONS_PER_IP_PER_DAY,
-            })
+            }, request_id=request_id)
             return
         if path == "/v1/tokens/verify":
             claims = verify_token(self.bearer())
@@ -340,6 +365,43 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Xiu-Device", device_id)
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
+            return
+        if path == "/v1/devices":
+            claims, device_id = self.search_claims()
+            if not claims:
+                self.send_json(401, {"error": "invalid_token"})
+                return
+            if not rate_allowed(f"devices:{device_id}") or not rate_allowed(f"devices-ip:{self.client_ip()}", REQUESTS_PER_IP_PER_MINUTE):
+                self.send_json(429, {"error": "rate_limited"})
+                return
+            request_id = self.request_id()
+            with DB_LOCK, database() as db:
+                row = db.execute(
+                    "SELECT id, created_at, last_seen_at, revoked_at FROM devices WHERE id = ?",
+                    (device_id,),
+                ).fetchone()
+                events = db.execute(
+                    "SELECT action, occurred_at, device_id, request_id FROM device_audit WHERE device_id = ? ORDER BY occurred_at DESC, id DESC LIMIT 100",
+                    (device_id,),
+                ).fetchall()
+            if not row:
+                self.send_json(401, {"error": "invalid_token"})
+                return
+            self.send_json(200, {
+                "currentDeviceId": row["id"],
+                "requestId": request_id,
+                "devices": [{
+                    "id": row["id"],
+                    "status": "revoked" if row["revoked_at"] is not None else "active",
+                    "createdAt": iso_time(row["created_at"]),
+                    "lastSeenAt": iso_time(row["last_seen_at"]),
+                    **({"revokedAt": iso_time(row["revoked_at"])} if row["revoked_at"] is not None else {}),
+                }],
+                "audit": [
+                    {"action": event["action"], "deviceId": event["device_id"], "occurredAt": iso_time(event["occurred_at"]), "requestId": event["request_id"]}
+                    for event in events
+                ],
+            })
             return
         if path == "/v1/admin/devices":
             if not self.admin_allowed():
@@ -378,7 +440,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "device_name_required"})
                 return
             device_id, device_secret = register_device(name, self.client_ip())
-            self.send_json(201, {"deviceId": device_id, "deviceSecret": device_secret})
+            request_id = self.request_id()
+            record_device_audit(device_id, "registered", request_id)
+            self.send_json(201, {"deviceId": device_id, "deviceSecret": device_secret}, request_id=request_id)
             return
         if path == "/v1/tokens":
             payload = self.read_json()
@@ -406,7 +470,9 @@ class Handler(BaseHTTPRequestHandler):
             if result.rowcount != 1:
                 self.send_json(404, {"error": "active_device_not_found"})
                 return
-            self.send_json(200, {"revoked": True, "deviceId": device_id})
+            request_id = self.request_id()
+            record_device_audit(device_id, "revoked", request_id)
+            self.send_json(200, {"revoked": True, "deviceId": device_id}, request_id=request_id)
             return
         self.proxy_search()
 
@@ -472,6 +538,10 @@ def integration_self_test() -> None:
             assert error.code == 401
         status, search_result = request("GET", "/search?q=xiu", headers=access_header)
         assert status == 200 and search_result == {"query": "q=xiu", "ok": True}
+        status, observed = request("GET", "/v1/devices", headers=access_header)
+        assert status == 200 and observed["currentDeviceId"] == registered["deviceId"]
+        assert observed["devices"][0]["status"] == "active"
+        assert observed["audit"][0]["action"] == "registered"
         admin_header = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
         status, devices = request("GET", "/v1/admin/devices", headers=admin_header)
         assert status == 200 and len(devices["devices"]) == 1
