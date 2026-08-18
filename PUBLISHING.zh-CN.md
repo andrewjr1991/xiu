@@ -126,6 +126,8 @@ xiu --check-update
 
 从 `0.16.1` 起，用户可以执行 `/update notifications on` 显式开启非阻塞提醒，使用 `/update status` 查看缓存与状态，或用 `/update notifications off` 关闭。提醒默认关闭，启用后复用 24 小时缓存；过期刷新只在交互界面可用后于后台进行，结果只在安全输入边界显示。该功能仍不会自动安装或修改全局 npm。
 
+从 `0.16.2` 起，`xiu --update-doctor` 与 `/update doctor` 提供只读分发诊断，检查 Node.js、必需包文件、更新代理、缓存与 npm 官方 Registry。诊断明确区分本地硬错误和外部网络警告，不运行 npm、不读取 npm Token、不修复安装，也不修改全局配置。
+
 升级到最新版：
 
 ```powershell
@@ -679,3 +681,16 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 7. 缓存中的 latest 必须按当前正在运行的版本重新计算比较结果；损坏、未来时间、非官方 Registry 和无效版本必须忽略。
 8. 提醒只显示固定官方更新命令，不执行 npm、不读取 npm Token、不安装、不降级、不修改 npm 配置或全局安装。
 9. 定向缓存/设置/格式测试、完整测试、类型检查、构建与 `npm pack --dry-run --json` 全部通过；包内只保留 `V0.16.1_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。
+
+## 三十一、0.16.2 分发可靠性与更新诊断发布门禁
+
+发布 `0.16.2` 前除通用流程外，还必须验证：
+
+1. `xiu --update-doctor` 与 `/update doctor` 只执行运行时、包文件、更新代理、缓存和官方 Registry 的只读检查，不运行 npm、不读取 npm Token、不安装、不修复、不修改全局配置。
+2. Node.js 低于 20、必需包文件缺失或更新代理无效属于本地硬错误；一次性命令必须返回非零退出码。
+3. 离线、DNS、代理出口或 Registry 暂不可用属于外部警告；诊断必须说明 Xiu 仍可使用，且一次性命令不得因此返回失败。
+4. 更新代理只按 `XIU_UPDATE_PROXY`、`npm_config_https_proxy`、`HTTPS_PROXY`、`https_proxy` 的顺序选择，输出来源和脱敏地址；带凭证的 URL 必须拒绝且不得泄露凭证。
+5. 包完整性至少检查 `package.json`、`dist/cli.js`、`README.md` 与 `USAGE.zh-CN.md`；诊断不得扫描项目文件或用户会话。
+6. 普通 `xiu` 启动继续保持零版本检查联网；诊断只能由用户显式触发。
+7. 中英文输出、硬错误退出码、外部警告降级、代理隔离与不执行 npm 均有确定性测试。
+8. 完整测试、类型检查、构建与 `npm pack --dry-run --json` 全部通过；包内只保留 `V0.16.2_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { checkForUpdates, compareVersions, formatUpdateCheck, formatUpdateCheckError, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateProxyFromEnvironment, upgradeCommand } from "../src/update-check.js";
+import { checkForUpdates, compareVersions, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, updateProxySourceFromEnvironment, upgradeCommand } from "../src/update-check.js";
 
 function response(body: string, status = 200, contentLength?: number) {
   return {
@@ -125,4 +125,90 @@ test("update reminder and status explicitly state that no installation occurs", 
   assert.match(formatUpdateReminder(result, "en-US"), /displayed only; not executed/);
   assert.match(formatUpdateNotificationStatus(false, undefined, "en-US"), /disabled \(default\)/);
   assert.match(formatUpdateNotificationStatus(true, { result, fresh: true }, "en-US"), /24-hour cache/);
+});
+
+async function createCompletePackageRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-update-doctor-"));
+  for (const filename of ["package.json", "dist/cli.js", "README.md", "USAGE.zh-CN.md"]) {
+    const target = path.join(root, filename);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "test\n", "utf8");
+  }
+  return root;
+}
+
+test("update doctor reports a healthy local installation without mutating npm", async () => {
+  const root = await createCompletePackageRoot();
+  const cache = new UpdateCheckCache(path.join(root, "update-cache.json"));
+  await cache.save({
+    currentVersion: "0.16.2",
+    latestVersion: "0.16.2",
+    status: "up-to-date",
+    registry: "https://registry.npmjs.org",
+    checkedAt: "2026-08-18T00:00:00.000Z",
+  });
+  const result = await diagnoseUpdateInstallation("0.16.2", {
+    packageRoot: root,
+    runtimeVersion: "20.19.0",
+    environment: { XIU_UPDATE_PROXY: "http://127.0.0.1:12334" },
+    now: new Date("2026-08-18T01:00:00.000Z"),
+    cache,
+    checker: async (proxy) => {
+      assert.equal(proxy, "http://127.0.0.1:12334/");
+      return {
+        currentVersion: "0.16.2",
+        latestVersion: "0.16.2",
+        status: "up-to-date",
+        registry: "https://registry.npmjs.org",
+        checkedAt: "2026-08-18T01:00:00.000Z",
+      };
+    },
+  });
+  assert.equal(result.status, "pass");
+  assert.equal(updateDoctorHasHardFailure(result), false);
+  assert.match(formatUpdateDoctor(result, "zh-CN"), /只执行只读检查/);
+  assert.match(formatUpdateDoctor(result, "zh-CN"), /已是最新版本/);
+  assert.doesNotMatch(formatUpdateDoctor(result, "zh-CN"), /up-to-date/);
+  assert.doesNotMatch(formatUpdateDoctor(result, "en-US"), /npm install/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("update doctor distinguishes local hard failures from external warnings", async () => {
+  const root = await createCompletePackageRoot();
+  await fs.rm(path.join(root, "dist/cli.js"));
+  const failed = await diagnoseUpdateInstallation("0.16.2", {
+    packageRoot: root,
+    runtimeVersion: "18.20.0",
+    environment: { XIU_UPDATE_PROXY: "http://user:secret@proxy.example:8080" },
+    cache: new UpdateCheckCache(path.join(root, "missing-cache.json")),
+    checker: async () => { throw new Error("must not be called with an invalid proxy"); },
+  });
+  assert.equal(failed.status, "failure");
+  assert.equal(updateDoctorHasHardFailure(failed), true);
+  assert.match(formatUpdateDoctor(failed, "en-US"), /Node\.js 18\.20\.0/);
+  assert.match(formatUpdateDoctor(failed, "en-US"), /dist\/cli\.js/);
+  assert.doesNotMatch(formatUpdateDoctor(failed, "en-US"), /secret/);
+
+  const warningRoot = await createCompletePackageRoot();
+  const warning = await diagnoseUpdateInstallation("0.16.2", {
+    packageRoot: warningRoot,
+    runtimeVersion: "22.0.0",
+    environment: {},
+    cache: new UpdateCheckCache(path.join(warningRoot, "missing-cache.json")),
+    checker: async () => { throw new Error("DNS unavailable"); },
+  });
+  assert.equal(warning.status, "warning");
+  assert.equal(updateDoctorHasHardFailure(warning), false);
+  assert.match(formatUpdateDoctor(warning, "en-US"), /usable with external warnings/);
+  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(warningRoot, { recursive: true, force: true });
+});
+
+test("update proxy source reports precedence without exposing credentials", () => {
+  assert.deepEqual(updateProxySourceFromEnvironment({
+    XIU_UPDATE_PROXY: "http://127.0.0.1:12334",
+    HTTPS_PROXY: "http://proxy.example:8080",
+  }), { source: "XIU_UPDATE_PROXY", proxy: "http://127.0.0.1:12334/" });
+  assert.deepEqual(updateProxySourceFromEnvironment({}), {});
+  assert.throws(() => updateProxySourceFromEnvironment({ HTTPS_PROXY: "http://user:secret@proxy.example" }), /must not contain credentials/);
 });

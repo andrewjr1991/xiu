@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { localize, type UiLanguage } from "./i18n.js";
 
@@ -47,6 +48,36 @@ export interface UpdateCheckOptions {
   now?: () => Date;
   fetcher?: (url: string, init: Record<string, unknown>) => Promise<RegistryResponse>;
 }
+
+export type UpdateDoctorLevel = "pass" | "warning" | "failure";
+
+export type UpdateDoctorItemId = "runtime" | "package" | "proxy" | "cache" | "registry";
+
+export interface UpdateDoctorItem {
+  id: UpdateDoctorItemId;
+  level: UpdateDoctorLevel;
+  summary: string;
+  summaryZh?: string;
+  detail?: string;
+  detailZh?: string;
+}
+
+export interface UpdateDoctorResult {
+  status: UpdateDoctorLevel;
+  items: UpdateDoctorItem[];
+  update?: UpdateCheckResult;
+}
+
+export interface UpdateDoctorOptions {
+  packageRoot?: string;
+  runtimeVersion?: string;
+  environment?: NodeJS.ProcessEnv;
+  now?: Date;
+  cache?: UpdateCheckCache;
+  checker?: (proxy?: string) => Promise<UpdateCheckResult>;
+}
+
+const REQUIRED_PACKAGE_FILES = ["package.json", "dist/cli.js", "README.md", "USAGE.zh-CN.md"] as const;
 
 interface ParsedVersion {
   core: [string, string, string];
@@ -113,6 +144,121 @@ function validatedProxy(value?: string): string | undefined {
 
 export function updateProxyFromEnvironment(environment: NodeJS.ProcessEnv = process.env): string | undefined {
   return validatedProxy(environment.XIU_UPDATE_PROXY ?? environment.npm_config_https_proxy ?? environment.HTTPS_PROXY ?? environment.https_proxy);
+}
+
+export function updateProxySourceFromEnvironment(environment: NodeJS.ProcessEnv = process.env): { source?: string; proxy?: string } {
+  const candidates: Array<[string, string | undefined]> = [
+    ["XIU_UPDATE_PROXY", environment.XIU_UPDATE_PROXY],
+    ["npm_config_https_proxy", environment.npm_config_https_proxy],
+    ["HTTPS_PROXY", environment.HTTPS_PROXY],
+    ["https_proxy", environment.https_proxy],
+  ];
+  const selected = candidates.find(([, value]) => Boolean(value?.trim()));
+  if (!selected) return {};
+  return { source: selected[0], proxy: validatedProxy(selected[1]) };
+}
+
+function doctorStatus(items: UpdateDoctorItem[]): UpdateDoctorLevel {
+  if (items.some((item) => item.level === "failure")) return "failure";
+  if (items.some((item) => item.level === "warning")) return "warning";
+  return "pass";
+}
+
+export async function diagnoseUpdateInstallation(currentVersion: string, options: UpdateDoctorOptions = {}): Promise<UpdateDoctorResult> {
+  const items: UpdateDoctorItem[] = [];
+  const runtimeVersion = options.runtimeVersion ?? process.versions.node;
+  const runtimeMajor = Number.parseInt(runtimeVersion.split(".")[0] ?? "", 10);
+  items.push(Number.isInteger(runtimeMajor) && runtimeMajor >= 20
+    ? { id: "runtime", level: "pass", summary: `Node.js ${runtimeVersion}` }
+    : { id: "runtime", level: "failure", summary: `Node.js ${runtimeVersion}`, detail: "Xiu requires Node.js 20 or newer", detailZh: "Xiu 需要 Node.js 20 或更高版本" });
+
+  const packageRoot = options.packageRoot ?? path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+  const missing: string[] = [];
+  for (const filename of REQUIRED_PACKAGE_FILES) {
+    try {
+      const stat = await fs.stat(path.join(packageRoot, filename));
+      if (!stat.isFile()) missing.push(filename);
+    } catch {
+      missing.push(filename);
+    }
+  }
+  items.push(missing.length === 0
+    ? { id: "package", level: "pass", summary: `${REQUIRED_PACKAGE_FILES.length} required package files present`, summaryZh: `${REQUIRED_PACKAGE_FILES.length} 个必需包文件均存在` }
+    : { id: "package", level: "failure", summary: `${missing.length} required package file(s) missing`, summaryZh: `缺少 ${missing.length} 个必需包文件`, detail: missing.join(", ") });
+
+  let proxy: string | undefined;
+  try {
+    const selected = updateProxySourceFromEnvironment(options.environment ?? process.env);
+    proxy = selected.proxy;
+    items.push(selected.source
+      ? { id: "proxy", level: "pass", summary: `${selected.source}: ${selected.proxy}` }
+      : { id: "proxy", level: "pass", summary: "direct connection", summaryZh: "直连" });
+  } catch (error) {
+    items.push({ id: "proxy", level: "failure", summary: "invalid update proxy", summaryZh: "更新代理无效", detail: error instanceof Error ? error.message : String(error), detailZh: "代理地址无效或包含凭证；请检查更新代理配置" });
+  }
+
+  const now = options.now ?? new Date();
+  const cache = options.cache ?? new UpdateCheckCache();
+  const cached = await cache.load(currentVersion, now);
+  items.push(!cached
+    ? { id: "cache", level: "warning", summary: "no valid update cache", summaryZh: "没有有效的更新缓存" }
+    : cached.fresh
+      ? { id: "cache", level: "pass", summary: `fresh cache: ${cached.result.latestVersion}`, summaryZh: `缓存新鲜：${cached.result.latestVersion}`, detail: cached.result.checkedAt }
+      : { id: "cache", level: "warning", summary: `stale cache: ${cached.result.latestVersion}`, summaryZh: `缓存已过期：${cached.result.latestVersion}`, detail: cached.result.checkedAt });
+
+  let update: UpdateCheckResult | undefined;
+  if (items.some((item) => item.id === "proxy" && item.level === "failure")) {
+    items.push({ id: "registry", level: "warning", summary: "registry check skipped", summaryZh: "已跳过 Registry 检查", detail: "Fix the update proxy configuration first", detailZh: "请先修复更新代理配置" });
+  } else {
+    try {
+      update = await (options.checker?.(proxy) ?? checkForUpdates(currentVersion, { proxy, now: () => now }));
+      const statusZh: Record<UpdateStatus, string> = {
+        "update-available": "有可用更新",
+        "up-to-date": "已是最新版本",
+        "newer-than-registry": "本地版本高于 Registry",
+      };
+      items.push({
+        id: "registry",
+        level: "pass",
+        summary: `${XIU_NPM_REGISTRY}: ${update.latestVersion}`,
+        detail: update.status,
+        detailZh: statusZh[update.status],
+      });
+    } catch (error) {
+      items.push({ id: "registry", level: "warning", summary: "official npm registry unavailable", summaryZh: "官方 npm Registry 暂不可用", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { status: doctorStatus(items), items, ...(update ? { update } : {}) };
+}
+
+export function updateDoctorHasHardFailure(result: UpdateDoctorResult): boolean {
+  return result.status === "failure";
+}
+
+export function formatUpdateDoctor(result: UpdateDoctorResult, language: UiLanguage): string {
+  const labels: Record<UpdateDoctorItemId, [string, string]> = {
+    runtime: ["运行环境", "Runtime"],
+    package: ["包完整性", "Package integrity"],
+    proxy: ["更新代理", "Update proxy"],
+    cache: ["更新缓存", "Update cache"],
+    registry: ["官方 Registry", "Official registry"],
+  };
+  const marks: Record<UpdateDoctorLevel, string> = { pass: "✓", warning: "!", failure: "✗" };
+  const status = result.status === "pass"
+    ? localize(language, "通过", "passed")
+    : result.status === "warning"
+      ? localize(language, "可用，但有外部警告", "usable with external warnings")
+      : localize(language, "本地安装存在硬错误", "local installation has hard failures");
+  const lines = [localize(language, "Xiu 更新诊断", "Xiu update diagnostics"), `${localize(language, "结论", "Result")}: ${status}`];
+  for (const item of result.items) {
+    const summary = language === "zh-CN" ? item.summaryZh ?? item.summary : item.summary;
+    const detail = language === "zh-CN" ? item.detailZh ?? item.detail : item.detail;
+    lines.push(`${marks[item.level]} ${localize(language, labels[item.id][0], labels[item.id][1])}: ${summary}`);
+    if (detail) lines.push(`  ${detail}`);
+  }
+  lines.push("", localize(language, "只执行只读检查；未运行 npm，未安装、修复或修改全局配置。", "Read-only checks only; npm was not run and no installation, repair, or global configuration change was performed."));
+  return lines.join("\n");
 }
 
 async function readBoundedBody(response: RegistryResponse, controller: AbortController): Promise<string> {

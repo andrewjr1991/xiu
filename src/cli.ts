@@ -49,7 +49,7 @@ import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from ".
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
-import { checkForUpdates, formatUpdateCheck, formatUpdateCheckError, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
+import { checkForUpdates, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -146,6 +146,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/credentials forget", "删除一个 Provider 的所有本地 Key 副本", "Delete every local key copy for one Provider"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/update", "显式检查 npm 最新版本并显示升级命令", "Explicitly check npm latest and show the upgrade command"),
+    item("/update doctor", "诊断运行环境、包完整性、代理、缓存和官方 Registry", "Diagnose runtime, package integrity, proxy, cache, and the official registry"),
     item("/update status", "查看更新提醒、缓存与自动行为边界", "Show update reminder, cache, and automatic behavior status"),
     item("/update notifications on", "启用非阻塞更新提醒（24 小时缓存）", "Enable non-blocking update reminders (24-hour cache)"),
     item("/update notifications off", "关闭更新提醒（默认）", "Disable update reminders (default)"),
@@ -188,6 +189,7 @@ const program = new Command()
   .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
+  .option("--update-doctor", "run read-only update and installation diagnostics, then exit", false)
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
   .parse();
@@ -281,6 +283,13 @@ async function main(): Promise<void> {
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
   const updateCache = new UpdateCheckCache();
+  if (options.updateDoctor) {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
+    console.log(`${formatUpdateDoctor(result, language)}\n`);
+    if (updateDoctorHasHardFailure(result)) process.exitCode = 1;
+    return;
+  }
   if (options.checkUpdate) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     try {
@@ -3540,6 +3549,11 @@ async function main(): Promise<void> {
         console.log(`${formatUpdateNotificationStatus(Boolean(settings.update?.notifications), cached, language)}\n`);
         continue;
       }
+      if (task === "/update doctor") {
+        const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
+        console.log(`${formatUpdateDoctor(result, language)}\n`);
+        continue;
+      }
       if (task === "/update notifications on") {
         settings.update = { notifications: true };
         await settingsStore.save(settings);
@@ -3558,7 +3572,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (task.startsWith("/update ")) {
-        console.log(`${localize(language, "用法：/update、/update status、/update notifications on、/update notifications off", "Usage: /update, /update status, /update notifications on, /update notifications off")}\n`);
+        console.log(`${localize(language, "用法：/update、/update doctor、/update status、/update notifications on、/update notifications off", "Usage: /update, /update doctor, /update status, /update notifications on, /update notifications off")}\n`);
         continue;
       }
       if (task === "/update") {
