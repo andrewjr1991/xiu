@@ -49,6 +49,7 @@ import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from ".
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
+import { checkForUpdates, formatUpdateCheck, formatUpdateCheckError, updateProxyFromEnvironment } from "./update-check.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -144,6 +145,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/credentials rollback", "切回一个 Provider 保留的旧明文 Key", "Switch one Provider back to its retained legacy key"),
     item("/credentials forget", "删除一个 Provider 的所有本地 Key 副本", "Delete every local key copy for one Provider"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
+    item("/update", "显式检查 npm 最新版本并显示升级命令", "Explicitly check npm latest and show the upgrade command"),
     item("/queue", "查看或安排下一项任务", "Show or schedule the next task"),
     item("/clear-queue", "清空运行期排队任务", "Clear queued follow-ups while a task is running"),
     item("/cancel", "取消当前任务", "Cancel the task that is currently running"),
@@ -182,6 +184,7 @@ const program = new Command()
   .option("--stall-timeout-seconds <number>", "elapsed time without new evidence before stall diagnosis", "120")
   .option("--agent-concurrency <number>", "maximum concurrent specialist agents", "3")
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
+  .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
   .parse();
@@ -274,6 +277,17 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
+  if (options.checkUpdate) {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    try {
+      const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
+      console.log(`${formatUpdateCheck(result, language)}\n`);
+    } catch (error) {
+      console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}`));
+      process.exitCode = 1;
+    }
+    return;
+  }
   let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
   try { systemCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
   catch { /* The CLI remains usable with environment and legacy credentials. */ }
@@ -3485,6 +3499,15 @@ async function main(): Promise<void> {
           `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`, `Background: ${listBackgroundProcesses().filter((item) => item.running).length} running`,
           `Activities: ${activities.list().length} recorded (/details)`,
         ].join("\n") + "\n");
+        continue;
+      }
+      if (task === "/update") {
+        try {
+          const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
+          console.log(`${formatUpdateCheck(result, language)}\n`);
+        } catch (error) {
+          console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}\n`));
+        }
         continue;
       }
       if (task === "/help") {

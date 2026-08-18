@@ -1,8 +1,8 @@
 # Xiu
 
-Version 0.15.7 hardens managed-search VPS upgrades. The installer preserves an existing database path, stops before startup when an empty target conflicts with a populated historical database, and supports an explicit dry-run-first migration that backs up the target and rejects credential conflicts. Docker volume ownership is initialized by a short-lived, network-isolated helper with only the required capabilities; the long-running service remains non-root with all capabilities dropped. It also keeps successfully opened web sources when only some candidate pages fail: complete unsupported result blocks are removed before the evidence gate, so a current-information task can finish with fewer verified results instead of failing as a whole.
+Version 0.16.0 adds explicit, read-only update diagnostics. Run `xiu --check-update` or `/update` to compare the local version with `@xiu-ai/cli@latest` on the official npm Registry and receive the exact upgrade command when needed. Xiu never performs the upgrade itself, never reads npm credentials, and ordinary startup performs no version-check network request. Update checks use a dedicated proxy path that is isolated from model providers and web search.
 
-中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.15.7 设计](./V0.15.7_DESIGN.zh-CN.md)。
+中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.16.0 设计](./V0.16.0_DESIGN.zh-CN.md)。
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
@@ -210,7 +210,7 @@ Start a persistent interactive session (conversation context is retained between
 xiu
 ```
 
-Interactive commands include `/history`, `/compact`, `/models`, `/plugins`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/diagnostics`, `/status`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
+Interactive commands include `/history`, `/compact`, `/models`, `/plugins`, `/skills`, `/mcp`, `/plan`, `/agents`, `/tasks`, `/diff`, `/diagnostics`, `/status`, `/update`, `/queue`, `/cancel`, `/clear`, `/help`, and `/exit`. Supplying a task on the command line keeps the one-shot behavior for scripts and automation.
 
 Open an interactive picker for saved sessions in the current project after closing the terminal:
 

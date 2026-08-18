@@ -116,6 +116,14 @@ xiu
 npm.cmd view '@xiu-ai/cli' version --registry='https://registry.npmjs.org/'
 ```
 
+从 `0.16.0` 起，也可以让 Xiu 执行只读版本检查：
+
+```powershell
+xiu --check-update
+```
+
+交互模式中可输入 `/update`。它们只比较本地版本和官方 `latest`，不会自动运行 npm、读取 npm Token 或修改全局安装。
+
 升级到最新版：
 
 ```powershell
@@ -642,3 +650,16 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 6. 命名卷初始化 helper 必须禁用网络、使用只读根文件系统并只临时恢复 `CHOWN`、`DAC_OVERRIDE`、`FOWNER`；迁移 helper 必须设置内存和进程上限；长期服务继续使用 UID/GID `10001`、`cap_drop: ALL` 与 `no-new-privileges`。
 7. Python 迁移专项测试、Shell 语法检查、完整 TypeScript 测试、类型检查、构建、包预览和秘密/数据库文件清单检查全部通过。
 8. 在真实目标 VPS 分别完成原路径升级、空目标分叉拦截、显式迁移、容器健康检查和 `/web devices` 数据连续性验收后，才允许发布并回读 Registry。
+
+## 二十九、0.16.0 稳定分发与升级诊断发布门禁
+
+发布 `0.16.0` 前除通用流程外，还必须验证：
+
+1. `xiu --check-update` 与 `/update` 只访问 npm 官方 `@xiu-ai/cli/latest` 端点，拒绝重定向，且输出本地版本、官方版本和确定性的语义版本比较结果。
+2. Registry 版本较新时只显示固定官方更新命令，不执行 npm，不读取 npm Token，不修改 npm 配置或全局安装。
+3. 本地候选版本高于 Registry 时明确显示“本地版本高于 npm latest（可能是开发版）”，不得建议自动降级。
+4. 普通 `xiu` 启动不得触发版本检查网络请求，也不得因 Registry、代理或 DNS 故障增加启动等待。
+5. 更新检查代理仅使用 `XIU_UPDATE_PROXY`、npm HTTPS 代理或标准 HTTPS 代理变量，不继承模型 Provider 与 `XIU_WEB_PROXY`。
+6. 超时、超大响应、非 2xx、无效 JSON、缺失版本和无效语义版本均失败关闭并输出脱敏错误。
+7. 中英文输出、代理隔离、无自动执行、固定端点和普通启动无联网均有确定性测试。
+8. 完整测试、类型检查、构建、`npm pack --dry-run` 和包内容检查全部通过；包内不得包含 `.xiu/`、凭证、本机配置或旧版设计稿。

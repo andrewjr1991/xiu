@@ -48,6 +48,14 @@ xiu --version
 Get-Command xiu
 ```
 
+显式检查是否存在官方新版本：
+
+```powershell
+xiu --check-update
+```
+
+也可以进入 Xiu 后输入 `/update`。这两个命令只读取 npm 官方 Registry 并显示版本与更新命令，不会替你安装、降级或修改 npm 配置。普通 `xiu` 启动不会联网检查版本，因此不会因版本检查变慢。需要单独代理时可设置 `XIU_UPDATE_PROXY`；它不会继承模型 Provider 或联网搜索代理。
+
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
 ## 三、配置 Provider 与模型
@@ -1136,6 +1144,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `/details` | 浏览工具和 Agent 的完整活动输出 |
 | `/diagnostics` | 查看当前或最近任务诊断 |
 | `/status` | 查看模型、Token、调用和耗时 |
+| `/update` | 显式检查 npm 官方最新版并显示更新指导，不自动安装 |
 | `/queue` | 查看明确安排的后续任务 |
 | `/queue <任务>` | 安排一项独立任务在当前任务之后运行 |
 | `/clear-queue` | 清空尚未执行的独立任务 |
@@ -1174,6 +1183,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `--language <语言>` | 本次启动使用 `zh-CN` 或 `en-US` |
 | `-y, --yes` | 自动批准非危险写入和执行 |
 | `--version` | 显示版本 |
+| `--check-update` | 显式检查 npm 官方最新版并安全退出 |
 | `--help` | 显示命令行帮助 |
 
 查看当前版本实际支持的参数：
