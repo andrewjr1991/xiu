@@ -74,6 +74,8 @@ xiu --update-doctor
 
 交互模式中也可以输入 `/update doctor`。诊断会检查 Node.js 版本、包内必需文件、独立更新代理、24 小时更新缓存以及 npm 官方 Registry 连通性。Node.js 版本过低、包文件缺失或代理地址不安全属于本地硬错误；离线、DNS、代理出口或 Registry 暂时不可用只显示外部警告，不影响 Xiu 的普通离线功能。该命令不会运行 npm、读取 npm Token、安装或修复文件，也不会修改全局配置；只有一次性命令发现本地硬错误时才返回非零退出码。
 
+从 `0.16.3` 起，同一诊断还会检查当前运行包与 PATH 命令解析链：显示最先命中的 `xiu` 启动器及其包版本，将同一 npm 安装生成的 `.ps1` 和 `.cmd` shim 归为一组，并提示真正的重复安装、旧或损坏 shim，以及显式 npm prefix 的命令目录未进入 PATH。此类问题只显示警告和排查建议；Xiu 不会自动修改 PATH、npm prefix、shim 或全局安装。普通启动不会扫描 PATH。
+
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
 ## 三、配置 Provider 与模型
@@ -1163,7 +1165,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `/diagnostics` | 查看当前或最近任务诊断 |
 | `/status` | 查看模型、Token、调用和耗时 |
 | `/update` | 显式检查 npm 官方最新版并显示更新指导，不自动安装 |
-| `/update doctor` | 只读诊断运行时、包完整性、更新代理、缓存和官方 Registry |
+| `/update doctor` | 只读诊断运行时、命令来源、npm prefix、包完整性、更新代理、缓存和官方 Registry |
 | `/update status` | 查看更新提醒开关、24 小时缓存和行为边界 |
 | `/update notifications on` | 显式开启非阻塞更新提醒 |
 | `/update notifications off` | 关闭更新提醒（默认状态） |
@@ -1206,7 +1208,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `-y, --yes` | 自动批准非危险写入和执行 |
 | `--version` | 显示版本 |
 | `--check-update` | 显式检查 npm 官方最新版并安全退出 |
-| `--update-doctor` | 执行只读分发与更新诊断并安全退出；本地硬错误返回非零退出码 |
+| `--update-doctor` | 执行只读分发、命令解析与更新诊断并安全退出；本地硬错误返回非零退出码 |
 | `--help` | 显示命令行帮助 |
 
 查看当前版本实际支持的参数：

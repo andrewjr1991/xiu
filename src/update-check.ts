@@ -51,7 +51,7 @@ export interface UpdateCheckOptions {
 
 export type UpdateDoctorLevel = "pass" | "warning" | "failure";
 
-export type UpdateDoctorItemId = "runtime" | "package" | "proxy" | "cache" | "registry";
+export type UpdateDoctorItemId = "runtime" | "package" | "command" | "prefix" | "proxy" | "cache" | "registry";
 
 export interface UpdateDoctorItem {
   id: UpdateDoctorItemId;
@@ -72,12 +72,34 @@ export interface UpdateDoctorOptions {
   packageRoot?: string;
   runtimeVersion?: string;
   environment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  pathEntries?: string[];
   now?: Date;
   cache?: UpdateCheckCache;
   checker?: (proxy?: string) => Promise<UpdateCheckResult>;
 }
 
+export interface XiuCommandCandidate {
+  launcher: string;
+  packageRoot?: string;
+  version?: string;
+  issue?: string;
+}
+
+export interface XiuCommandResolution {
+  candidates: XiuCommandCandidate[];
+  installations: Array<{ packageRoot: string; version?: string }>;
+  first?: XiuCommandCandidate;
+  activePackageRoot: string;
+  configuredPrefix?: string;
+  expectedPrefixBin?: string;
+  prefixBinOnPath?: boolean;
+}
+
 const REQUIRED_PACKAGE_FILES = ["package.json", "dist/cli.js", "README.md", "USAGE.zh-CN.md"] as const;
+const MAX_PATH_DIRECTORIES = 128;
+const MAX_LAUNCHER_BYTES = 64 * 1024;
+const MAX_PACKAGE_JSON_BYTES = 64 * 1024;
 
 interface ParsedVersion {
   core: [string, string, string];
@@ -158,6 +180,215 @@ export function updateProxySourceFromEnvironment(environment: NodeJS.ProcessEnv 
   return { source: selected[0], proxy: validatedProxy(selected[1]) };
 }
 
+function normalizedPath(value: string, platform: NodeJS.Platform): string {
+  const resolved = path.resolve(value);
+  return platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+async function realpathOrResolved(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+async function readPackageIdentity(packageRoot: string): Promise<{ packageRoot: string; version?: string } | undefined> {
+  const filename = path.join(packageRoot, "package.json");
+  try {
+    const stat = await fs.stat(filename);
+    if (!stat.isFile() || stat.size > MAX_PACKAGE_JSON_BYTES) return undefined;
+    const document = JSON.parse(await fs.readFile(filename, "utf8")) as { name?: unknown; version?: unknown };
+    if (document.name !== XIU_NPM_PACKAGE) return undefined;
+    return {
+      packageRoot: await realpathOrResolved(packageRoot),
+      ...(typeof document.version === "string" ? { version: document.version } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function packageRootFromTarget(target: string): Promise<{ packageRoot: string; version?: string } | undefined> {
+  let current = path.dirname(target);
+  for (let depth = 0; depth < 12; depth += 1) {
+    const identity = await readPackageIdentity(current);
+    if (identity) return identity;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return undefined;
+}
+
+async function inspectCommandCandidate(launcher: string, platform: NodeJS.Platform): Promise<XiuCommandCandidate> {
+  try {
+    const stat = await fs.lstat(launcher);
+    if (!stat.isFile() && !stat.isSymbolicLink()) return { launcher, issue: "launcher is not a file" };
+    const resolvedLauncher = await fs.realpath(launcher).catch(() => undefined);
+    if (!resolvedLauncher) return { launcher, issue: "launcher target is missing or inaccessible" };
+
+    let identity = resolvedLauncher !== path.resolve(launcher)
+      ? await packageRootFromTarget(resolvedLauncher)
+      : undefined;
+    if (!identity && platform === "win32") {
+      identity = await readPackageIdentity(path.join(path.dirname(launcher), "node_modules", "@xiu-ai", "cli"));
+    }
+    if (!identity && stat.isFile() && stat.size <= MAX_LAUNCHER_BYTES) {
+      identity = await packageRootFromTarget(launcher);
+    }
+    return identity
+      ? { launcher, packageRoot: identity.packageRoot, ...(identity.version ? { version: identity.version } : {}) }
+      : { launcher, issue: `launcher does not resolve to ${XIU_NPM_PACKAGE}` };
+  } catch (error) {
+    return { launcher, issue: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function pathEntriesFromEnvironment(environment: NodeJS.ProcessEnv): string[] {
+  const value = environment.Path ?? environment.PATH ?? "";
+  return value.split(path.delimiter).map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean);
+}
+
+export async function inspectXiuCommandResolution(options: {
+  packageRoot: string;
+  environment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  pathEntries?: string[];
+}): Promise<XiuCommandResolution> {
+  const environment = options.environment ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const rawEntries = options.pathEntries ?? pathEntriesFromEnvironment(environment);
+  const entries: string[] = [];
+  const seenEntries = new Set<string>();
+  for (const entry of rawEntries.slice(0, MAX_PATH_DIRECTORIES)) {
+    const normalized = normalizedPath(entry, platform);
+    if (seenEntries.has(normalized)) continue;
+    seenEntries.add(normalized);
+    entries.push(path.resolve(entry));
+  }
+
+  const names = platform === "win32"
+    ? ["xiu.ps1", "xiu.cmd", "xiu.exe", "xiu.bat", "xiu"]
+    : ["xiu"];
+  const candidates: XiuCommandCandidate[] = [];
+  for (const directory of entries) {
+    for (const name of names) {
+      const launcher = path.join(directory, name);
+      try {
+        await fs.lstat(launcher);
+      } catch {
+        continue;
+      }
+      candidates.push(await inspectCommandCandidate(launcher, platform));
+    }
+  }
+
+  const installations: Array<{ packageRoot: string; version?: string }> = [];
+  const seenInstallations = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate.packageRoot) continue;
+    const key = normalizedPath(candidate.packageRoot, platform);
+    if (seenInstallations.has(key)) continue;
+    seenInstallations.add(key);
+    installations.push({ packageRoot: candidate.packageRoot, ...(candidate.version ? { version: candidate.version } : {}) });
+  }
+
+  const configuredPrefix = environment.npm_config_prefix?.trim() || environment.NPM_CONFIG_PREFIX?.trim() || undefined;
+  const expectedPrefixBin = configuredPrefix
+    ? path.resolve(platform === "win32" ? configuredPrefix : path.join(configuredPrefix, "bin"))
+    : undefined;
+  return {
+    candidates,
+    installations,
+    first: candidates[0],
+    activePackageRoot: await realpathOrResolved(options.packageRoot),
+    ...(configuredPrefix ? { configuredPrefix } : {}),
+    ...(expectedPrefixBin ? {
+      expectedPrefixBin,
+      prefixBinOnPath: entries.some((entry) => normalizedPath(entry, platform) === normalizedPath(expectedPrefixBin, platform)),
+    } : {}),
+  };
+}
+
+function commandResolutionDoctorItems(resolution: XiuCommandResolution, currentVersion: string, platform: NodeJS.Platform): UpdateDoctorItem[] {
+  const first = resolution.first;
+  const activeKey = normalizedPath(resolution.activePackageRoot, platform);
+  const distinctVersions = resolution.installations.map((item) => item.version ?? "unknown").join(", ");
+  let command: UpdateDoctorItem;
+  if (!first) {
+    command = {
+      id: "command",
+      level: "warning",
+      summary: "xiu launcher was not found on PATH",
+      summaryZh: "PATH 中未找到 xiu 启动器",
+      detail: "The current process is usable, but a new terminal may not resolve the xiu command. Add the npm global bin directory to PATH.",
+      detailZh: "当前进程仍可用，但新终端可能无法解析 xiu 命令；请将 npm 全局 bin 目录加入 PATH。",
+    };
+  } else if (first.issue || !first.packageRoot) {
+    command = {
+      id: "command",
+      level: "warning",
+      summary: `first PATH launcher is stale or unrecognized: ${first.launcher}`,
+      summaryZh: `PATH 首个启动器已损坏或无法识别：${first.launcher}`,
+      detail: first.issue,
+      detailZh: `${first.issue ?? "无法解析安装目录"}；请移除旧 shim，或重新安装 ${XIU_NPM_PACKAGE}。`,
+    };
+  } else if (normalizedPath(first.packageRoot, platform) !== activeKey || (first.version && first.version !== currentVersion)) {
+    command = {
+      id: "command",
+      level: "warning",
+      summary: `PATH resolves ${first.version ?? "unknown"} from ${first.launcher}`,
+      summaryZh: `PATH 当前解析到 ${first.version ?? "未知版本"}：${first.launcher}`,
+      detail: `Running package: ${resolution.activePackageRoot} (${currentVersion})`,
+      detailZh: `当前运行包：${resolution.activePackageRoot}（${currentVersion}）；请调整 PATH 顺序或清理旧的全局安装。`,
+    };
+  } else if (resolution.installations.length > 1) {
+    command = {
+      id: "command",
+      level: "warning",
+      summary: `${resolution.installations.length} distinct Xiu installations on PATH (${distinctVersions})`,
+      summaryZh: `PATH 中存在 ${resolution.installations.length} 个不同的 Xiu 安装（${distinctVersions}）`,
+      detail: resolution.installations.map((item) => `${item.version ?? "unknown"}: ${item.packageRoot}`).join("\n  "),
+      detailZh: `${resolution.installations.map((item) => `${item.version ?? "未知版本"}：${item.packageRoot}`).join("\n  ")}\n  建议保留当前安装并清理旧安装；本诊断不会自动修改。`,
+    };
+  } else {
+    command = {
+      id: "command",
+      level: "pass",
+      summary: `${first.launcher} -> ${first.packageRoot} (${first.version ?? currentVersion})`,
+      summaryZh: `${first.launcher} → ${first.packageRoot}（${first.version ?? currentVersion}）`,
+    };
+  }
+
+  let prefix: UpdateDoctorItem;
+  if (!resolution.configuredPrefix || !resolution.expectedPrefixBin) {
+    prefix = {
+      id: "prefix",
+      level: "pass",
+      summary: "npm prefix is not explicitly configured; PATH result used",
+      summaryZh: "未显式配置 npm prefix；已以 PATH 解析结果为准",
+    };
+  } else if (!resolution.prefixBinOnPath) {
+    prefix = {
+      id: "prefix",
+      level: "warning",
+      summary: `npm prefix bin is not on PATH: ${resolution.expectedPrefixBin}`,
+      summaryZh: `npm prefix 对应目录不在 PATH：${resolution.expectedPrefixBin}`,
+      detail: `Configured prefix: ${resolution.configuredPrefix}`,
+      detailZh: `已配置 prefix：${resolution.configuredPrefix}；请将对应目录加入 PATH，或修正 npm prefix。`,
+    };
+  } else {
+    prefix = {
+      id: "prefix",
+      level: "pass",
+      summary: `${resolution.configuredPrefix} (${resolution.expectedPrefixBin} is on PATH)`,
+      summaryZh: `${resolution.configuredPrefix}（${resolution.expectedPrefixBin} 已在 PATH）`,
+    };
+  }
+  return [command, prefix];
+}
+
 function doctorStatus(items: UpdateDoctorItem[]): UpdateDoctorLevel {
   if (items.some((item) => item.level === "failure")) return "failure";
   if (items.some((item) => item.level === "warning")) return "warning";
@@ -185,6 +416,15 @@ export async function diagnoseUpdateInstallation(currentVersion: string, options
   items.push(missing.length === 0
     ? { id: "package", level: "pass", summary: `${REQUIRED_PACKAGE_FILES.length} required package files present`, summaryZh: `${REQUIRED_PACKAGE_FILES.length} 个必需包文件均存在` }
     : { id: "package", level: "failure", summary: `${missing.length} required package file(s) missing`, summaryZh: `缺少 ${missing.length} 个必需包文件`, detail: missing.join(", ") });
+
+  const platform = options.platform ?? process.platform;
+  const commandResolution = await inspectXiuCommandResolution({
+    packageRoot,
+    environment: options.environment,
+    platform,
+    pathEntries: options.pathEntries,
+  });
+  items.push(...commandResolutionDoctorItems(commandResolution, currentVersion, platform));
 
   let proxy: string | undefined;
   try {
@@ -240,6 +480,8 @@ export function formatUpdateDoctor(result: UpdateDoctorResult, language: UiLangu
   const labels: Record<UpdateDoctorItemId, [string, string]> = {
     runtime: ["运行环境", "Runtime"],
     package: ["包完整性", "Package integrity"],
+    command: ["命令来源", "Command resolution"],
+    prefix: ["npm prefix", "npm prefix"],
     proxy: ["更新代理", "Update proxy"],
     cache: ["更新缓存", "Update cache"],
     registry: ["官方 Registry", "Official registry"],

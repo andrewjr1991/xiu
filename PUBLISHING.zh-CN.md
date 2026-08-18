@@ -128,6 +128,8 @@ xiu --check-update
 
 从 `0.16.2` 起，`xiu --update-doctor` 与 `/update doctor` 提供只读分发诊断，检查 Node.js、必需包文件、更新代理、缓存与 npm 官方 Registry。诊断明确区分本地硬错误和外部网络警告，不运行 npm、不读取 npm Token、不修复安装，也不修改全局配置。
 
+从 `0.16.3` 起，同一诊断还检查 PATH 首命中的 `xiu`、当前运行包、重复安装、旧或损坏 shim，以及显式 npm prefix 与 PATH 的一致性。同一 npm 安装生成的多个 shim 按真实包根目录归组；诊断只给出可复制建议，不自动修改 PATH、prefix、shim 或全局安装。
+
 升级到最新版：
 
 ```powershell
@@ -694,3 +696,17 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 6. 普通 `xiu` 启动继续保持零版本检查联网；诊断只能由用户显式触发。
 7. 中英文输出、硬错误退出码、外部警告降级、代理隔离与不执行 npm 均有确定性测试。
 8. 完整测试、类型检查、构建与 `npm pack --dry-run --json` 全部通过；包内只保留 `V0.16.2_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。
+
+## 三十二、0.16.3 安装路径与版本冲突诊断发布门禁
+
+发布 `0.16.3` 前除通用流程外，还必须验证：
+
+1. `xiu --update-doctor` 与 `/update doctor` 显示当前运行包、PATH 首命中启动器、可识别版本和真实包根目录，不运行 npm 或修改系统状态。
+2. 同一 npm 安装生成的 `xiu.ps1`、`xiu.cmd` 等 shim 必须按真实包根目录归为一个安装，不得误报重复安装。
+3. PATH 首命中旧版本、真正的多安装、无法解析的旧或损坏 shim，以及显式 npm prefix 的命令目录未进入 PATH 均有确定性测试。
+4. 命令未进入 PATH 或存在版本冲突时只显示警告；Node.js 过低、当前包缺少必需文件或更新代理不安全仍保持硬失败和非零退出码。
+5. PATH 检查最多读取 128 个直接目录，不递归扫描磁盘；单个启动器和 `package.json` 最多读取 64 KiB。
+6. 诊断不得读取 npm Token、Provider Key、项目文件或会话，不得自动修改 PATH、npm prefix、shim 或全局安装。
+7. 普通 `xiu` 启动不得执行 PATH 诊断或新增版本检查联网；所有检查仍由用户显式触发。
+8. 中英文输出、PATH 顺序、shim 归组、重复安装、损坏启动器、prefix 不一致和警告退出码均有确定性测试。
+9. 完整测试、类型检查、构建、`npm pack --dry-run --json` 与干净安装验收全部通过；包内只保留 `V0.16.3_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。

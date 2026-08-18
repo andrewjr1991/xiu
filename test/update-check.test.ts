@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { checkForUpdates, compareVersions, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, updateProxySourceFromEnvironment, upgradeCommand } from "../src/update-check.js";
+import { checkForUpdates, compareVersions, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, inspectXiuCommandResolution, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, updateProxySourceFromEnvironment, upgradeCommand } from "../src/update-check.js";
 
 function response(body: string, status = 200, contentLength?: number) {
   return {
@@ -129,16 +129,19 @@ test("update reminder and status explicitly state that no installation occurs", 
 
 async function createCompletePackageRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-update-doctor-"));
-  for (const filename of ["package.json", "dist/cli.js", "README.md", "USAGE.zh-CN.md"]) {
+  for (const filename of ["dist/cli.js", "README.md", "USAGE.zh-CN.md"]) {
     const target = path.join(root, filename);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, "test\n", "utf8");
   }
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version: "0.16.2" }), "utf8");
   return root;
 }
 
 test("update doctor reports a healthy local installation without mutating npm", async () => {
   const root = await createCompletePackageRoot();
+  await fs.mkdir(path.join(root, "bin"), { recursive: true });
+  await fs.writeFile(path.join(root, "bin", "xiu"), "#!/usr/bin/env node\n", "utf8");
   const cache = new UpdateCheckCache(path.join(root, "update-cache.json"));
   await cache.save({
     currentVersion: "0.16.2",
@@ -151,6 +154,8 @@ test("update doctor reports a healthy local installation without mutating npm", 
     packageRoot: root,
     runtimeVersion: "20.19.0",
     environment: { XIU_UPDATE_PROXY: "http://127.0.0.1:12334" },
+    platform: "linux",
+    pathEntries: [path.join(root, "bin")],
     now: new Date("2026-08-18T01:00:00.000Z"),
     cache,
     checker: async (proxy) => {
@@ -171,6 +176,86 @@ test("update doctor reports a healthy local installation without mutating npm", 
   assert.doesNotMatch(formatUpdateDoctor(result, "zh-CN"), /up-to-date/);
   assert.doesNotMatch(formatUpdateDoctor(result, "en-US"), /npm install/);
   await fs.rm(root, { recursive: true, force: true });
+});
+
+async function createWindowsGlobalInstall(directory: string, version: string): Promise<string> {
+  const packageRoot = path.join(directory, "node_modules", "@xiu-ai", "cli");
+  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version }), "utf8");
+  await fs.writeFile(path.join(packageRoot, "dist", "cli.js"), "export {};\n", "utf8");
+  await fs.writeFile(path.join(packageRoot, "README.md"), "test\n", "utf8");
+  await fs.writeFile(path.join(packageRoot, "USAGE.zh-CN.md"), "test\n", "utf8");
+  await fs.writeFile(path.join(directory, "xiu.cmd"), "@node node_modules/@xiu-ai/cli/dist/cli.js %*\n", "utf8");
+  await fs.writeFile(path.join(directory, "xiu.ps1"), "& node $PSScriptRoot/node_modules/@xiu-ai/cli/dist/cli.js $args\n", "utf8");
+  return packageRoot;
+}
+
+test("command resolution groups npm shims and reports duplicate installations in PATH order", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-command-resolution-"));
+  const oldBin = path.join(root, "old-bin");
+  const currentBin = path.join(root, "current-bin");
+  const oldPackage = await createWindowsGlobalInstall(oldBin, "0.15.9");
+  const currentPackage = await createWindowsGlobalInstall(currentBin, "0.16.2");
+  const resolution = await inspectXiuCommandResolution({
+    packageRoot: currentPackage,
+    platform: "win32",
+    environment: { npm_config_prefix: currentBin },
+    pathEntries: [oldBin, currentBin],
+  });
+  assert.equal(resolution.first?.version, "0.15.9");
+  assert.equal(resolution.installations.length, 2);
+  assert.equal(resolution.prefixBinOnPath, true);
+  assert.equal(resolution.installations[0]?.packageRoot.toLowerCase(), path.resolve(oldPackage).toLowerCase());
+
+  const doctor = await diagnoseUpdateInstallation("0.16.2", {
+    packageRoot: currentPackage,
+    runtimeVersion: "22.0.0",
+    platform: "win32",
+    environment: { npm_config_prefix: currentBin },
+    pathEntries: [oldBin, currentBin],
+    cache: new UpdateCheckCache(path.join(root, "missing-cache.json")),
+    checker: async () => ({
+      currentVersion: "0.16.2",
+      latestVersion: "0.16.2",
+      status: "up-to-date",
+      registry: "https://registry.npmjs.org",
+      checkedAt: "2026-08-18T00:00:00.000Z",
+    }),
+  });
+  assert.equal(doctor.status, "warning");
+  const output = formatUpdateDoctor(doctor, "zh-CN");
+  assert.match(output, /PATH 当前解析到 0\.15\.9/);
+  assert.match(output, /请调整 PATH 顺序或清理旧的全局安装/);
+  assert.match(output, /npm prefix/);
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("command resolution reports stale launchers and a prefix bin missing from PATH without failing the install", async () => {
+  const root = await createCompletePackageRoot();
+  const staleRoot = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-stale-launcher-"));
+  const staleBin = path.join(staleRoot, "bin");
+  await fs.mkdir(staleBin, { recursive: true });
+  await fs.writeFile(path.join(staleBin, "xiu.cmd"), "@node missing/xiu.js %*\n", "utf8");
+  const result = await diagnoseUpdateInstallation("0.16.2", {
+    packageRoot: root,
+    runtimeVersion: "22.0.0",
+    platform: "win32",
+    environment: { npm_config_prefix: path.join(root, "expected-bin") },
+    pathEntries: [staleBin],
+    cache: new UpdateCheckCache(path.join(root, "missing-cache.json")),
+    checker: async () => ({
+      currentVersion: "0.16.2",
+      latestVersion: "0.16.2",
+      status: "up-to-date",
+      registry: "https://registry.npmjs.org",
+      checkedAt: "2026-08-18T00:00:00.000Z",
+    }),
+  });
+  assert.equal(updateDoctorHasHardFailure(result), false);
+  assert.match(formatUpdateDoctor(result, "en-US"), /stale or unrecognized/);
+  assert.match(formatUpdateDoctor(result, "en-US"), /npm prefix bin is not on PATH/);
+  await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(staleRoot, { recursive: true, force: true });
 });
 
 test("update doctor distinguishes local hard failures from external warnings", async () => {
