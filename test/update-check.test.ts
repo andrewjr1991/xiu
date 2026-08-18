@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { checkForUpdates, compareVersions, formatUpdateCheck, formatUpdateCheckError, updateProxyFromEnvironment, upgradeCommand } from "../src/update-check.js";
+import { checkForUpdates, compareVersions, formatUpdateCheck, formatUpdateCheckError, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateProxyFromEnvironment, upgradeCommand } from "../src/update-check.js";
 
 function response(body: string, status = 200, contentLength?: number) {
   return {
@@ -80,4 +83,46 @@ test("update checks use only the dedicated or standard HTTPS proxy variables", (
   assert.equal(updateProxyFromEnvironment({ HTTPS_PROXY: "http://proxy.example:8080" }), "http://proxy.example:8080/");
   assert.equal(updateProxyFromEnvironment({ XIU_WEB_PROXY: "http://wrong:1", AGNES_PROXY: "http://wrong:2" }), undefined);
   assert.throws(() => updateProxyFromEnvironment({ XIU_UPDATE_PROXY: "http://user:secret@proxy.example:8080" }), /must not contain credentials/);
+});
+
+test("update cache is bounded to official public metadata and expires after 24 hours", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-update-cache-"));
+  const filename = path.join(directory, "update-cache.json");
+  const cache = new UpdateCheckCache(filename);
+  await cache.save({
+    currentVersion: "0.16.0",
+    latestVersion: "0.16.1",
+    status: "update-available",
+    registry: "https://registry.npmjs.org",
+    checkedAt: "2026-08-18T00:00:00.000Z",
+  });
+  assert.deepEqual(await cache.load("0.16.0", new Date("2026-08-18T23:59:59.000Z")), {
+    fresh: true,
+    result: {
+      currentVersion: "0.16.0",
+      latestVersion: "0.16.1",
+      status: "update-available",
+      registry: "https://registry.npmjs.org",
+      checkedAt: "2026-08-18T00:00:00.000Z",
+    },
+  });
+  assert.equal((await cache.load("0.16.1", new Date("2026-08-19T00:00:01.000Z")))?.fresh, false);
+  const persisted = await fs.readFile(filename, "utf8");
+  assert.doesNotMatch(persisted, /proxy|credential|currentVersion|status/);
+  await fs.writeFile(filename, "not json", "utf8");
+  assert.equal(await cache.load("0.16.0"), undefined);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("update reminder and status explicitly state that no installation occurs", () => {
+  const result = {
+    currentVersion: "0.16.0",
+    latestVersion: "0.16.1",
+    status: "update-available" as const,
+    registry: "https://registry.npmjs.org",
+    checkedAt: "2026-08-18T00:00:00.000Z",
+  };
+  assert.match(formatUpdateReminder(result, "en-US"), /displayed only; not executed/);
+  assert.match(formatUpdateNotificationStatus(false, undefined, "en-US"), /disabled \(default\)/);
+  assert.match(formatUpdateNotificationStatus(true, { result, fresh: true }, "en-US"), /24-hour cache/);
 });

@@ -140,3 +140,17 @@ test("the managed beta proxy is persisted even when it originated from XIU_WEB_P
   });
   await fs.rm(directory, { recursive: true, force: true });
 });
+
+test("update notifications are opt-in and persist only when enabled", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-update-settings-"));
+  const filename = path.join(directory, "settings.json");
+  const store = new SettingsStore(filename, {});
+  assert.equal((await store.load()).update, undefined);
+  await store.save({ update: { notifications: true } });
+  assert.deepEqual((await store.load()).update, { notifications: true });
+  assert.match(await fs.readFile(filename, "utf8"), /"notifications": true/);
+  await store.save({ update: { notifications: false } });
+  assert.equal((await store.load()).update, undefined);
+  assert.doesNotMatch(await fs.readFile(filename, "utf8"), /notifications/);
+  await fs.rm(directory, { recursive: true, force: true });
+});

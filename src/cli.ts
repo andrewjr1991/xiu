@@ -49,7 +49,7 @@ import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from ".
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
-import { checkForUpdates, formatUpdateCheck, formatUpdateCheckError, updateProxyFromEnvironment } from "./update-check.js";
+import { checkForUpdates, formatUpdateCheck, formatUpdateCheckError, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -146,6 +146,9 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/credentials forget", "删除一个 Provider 的所有本地 Key 副本", "Delete every local key copy for one Provider"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/update", "显式检查 npm 最新版本并显示升级命令", "Explicitly check npm latest and show the upgrade command"),
+    item("/update status", "查看更新提醒、缓存与自动行为边界", "Show update reminder, cache, and automatic behavior status"),
+    item("/update notifications on", "启用非阻塞更新提醒（24 小时缓存）", "Enable non-blocking update reminders (24-hour cache)"),
+    item("/update notifications off", "关闭更新提醒（默认）", "Disable update reminders (default)"),
     item("/queue", "查看或安排下一项任务", "Show or schedule the next task"),
     item("/clear-queue", "清空运行期排队任务", "Clear queued follow-ups while a task is running"),
     item("/cancel", "取消当前任务", "Cancel the task that is currently running"),
@@ -277,10 +280,12 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
+  const updateCache = new UpdateCheckCache();
   if (options.checkUpdate) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     try {
       const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
+      await updateCache.save(result).catch(() => undefined);
       console.log(`${formatUpdateCheck(result, language)}\n`);
     } catch (error) {
       console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}`));
@@ -1319,6 +1324,30 @@ async function main(): Promise<void> {
     console.log(chalk.dim(localize(language, "交互模式 · 输入 / 查看命令 · Ctrl+C 或 /exit 退出\n", "Interactive mode · type / for commands · Ctrl+C or /exit to quit\n")));
     const inputHistory: string[] = [];
     let awaitingReply: { question: string; originalTask: string } | undefined;
+    let pendingUpdateReminder: UpdateCheckResult | undefined;
+    let updateReminderGeneration = 0;
+    let remindedUpdateVersion: string | undefined;
+    const showUpdateReminder = (result: UpdateCheckResult): void => {
+      if (result.status !== "update-available" || remindedUpdateVersion === result.latestVersion) return;
+      remindedUpdateVersion = result.latestVersion;
+      console.log(`${chalk.yellow(formatUpdateReminder(result, language))}\n`);
+    };
+    const scheduleUpdateReminderRefresh = (): void => {
+      const generation = ++updateReminderGeneration;
+      void checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment(), timeoutMs: 3_000 })
+        .then(async (result) => {
+          await updateCache.save(result).catch(() => undefined);
+          if (generation === updateReminderGeneration && settings.update?.notifications) pendingUpdateReminder = result;
+        })
+        .catch(() => undefined);
+    };
+    const initializeUpdateReminders = async (): Promise<void> => {
+      if (!settings.update?.notifications) return;
+      const cached = await updateCache.load(packageJson.version);
+      if (cached?.fresh) showUpdateReminder(cached.result);
+      else scheduleUpdateReminderRefresh();
+    };
+    await initializeUpdateReminders();
     const promptFooter = (): string => {
       const dashboard = agent.status();
       const agentRuns = coordinator.list();
@@ -1838,6 +1867,11 @@ async function main(): Promise<void> {
     }
 
     while (true) {
+      if (pendingUpdateReminder) {
+        const reminder = pendingUpdateReminder;
+        pendingUpdateReminder = undefined;
+        showUpdateReminder(reminder);
+      }
       const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
@@ -3501,9 +3535,37 @@ async function main(): Promise<void> {
         ].join("\n") + "\n");
         continue;
       }
+      if (task === "/update status") {
+        const cached = await updateCache.load(packageJson.version);
+        console.log(`${formatUpdateNotificationStatus(Boolean(settings.update?.notifications), cached, language)}\n`);
+        continue;
+      }
+      if (task === "/update notifications on") {
+        settings.update = { notifications: true };
+        await settingsStore.save(settings);
+        const cached = await updateCache.load(packageJson.version);
+        console.log(chalk.green(`${localize(language, "更新提醒已启用；检查使用 24 小时缓存，并只在安全输入边界显示。", "Update reminders enabled with a 24-hour cache and safe-boundary display only.")}\n`));
+        if (cached?.fresh) showUpdateReminder(cached.result);
+        else scheduleUpdateReminderRefresh();
+        continue;
+      }
+      if (task === "/update notifications off") {
+        settings.update = { notifications: false };
+        updateReminderGeneration += 1;
+        pendingUpdateReminder = undefined;
+        await settingsStore.save(settings);
+        console.log(chalk.green(`${localize(language, "更新提醒已关闭。显式 /update 和 xiu --check-update 仍可使用。", "Update reminders disabled. Explicit /update and xiu --check-update remain available.")}\n`));
+        continue;
+      }
+      if (task.startsWith("/update ")) {
+        console.log(`${localize(language, "用法：/update、/update status、/update notifications on、/update notifications off", "Usage: /update, /update status, /update notifications on, /update notifications off")}\n`);
+        continue;
+      }
       if (task === "/update") {
         try {
           const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
+          await updateCache.save(result).catch(() => undefined);
+          if (result.status === "update-available") remindedUpdateVersion = result.latestVersion;
           console.log(`${formatUpdateCheck(result, language)}\n`);
         } catch (error) {
           console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}\n`));

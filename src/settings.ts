@@ -7,6 +7,9 @@ import type { WebSearchConfig, WebSearchProvider } from "./web-search.js";
 export interface XiuSettings {
   language?: UiLanguage;
   webSearch?: WebSearchConfig;
+  update?: {
+    notifications: boolean;
+  };
 }
 
 export const XIU_BETA_SEARXNG_ENDPOINT = "https://search.jingran.vip";
@@ -79,7 +82,7 @@ export class SettingsStore {
 
   async load(): Promise<XiuSettings> {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown };
+      const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown; update?: unknown };
       const webSearch = webSearchConfig(parsed.webSearch);
       const legacyBetaWithoutToken = webSearch?.enabled === true
         && webSearch.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
@@ -91,6 +94,9 @@ export class SettingsStore {
       return {
         ...(typeof parsed.language === "string" ? { language: normalizeLanguage(parsed.language) } : {}),
         ...(effectiveWebSearch ? { webSearch: effectiveWebSearch } : {}),
+        ...(parsed.update && typeof parsed.update === "object" && (parsed.update as { notifications?: unknown }).notifications === true
+          ? { update: { notifications: true } }
+          : {}),
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -110,6 +116,7 @@ export class SettingsStore {
     const persisted = {
       ...(settings.language ? { language: settings.language } : {}),
       ...(!implicitBetaSearch && settings.webSearch ? { webSearch: settings.webSearch } : {}),
+      ...(settings.update?.notifications ? { update: { notifications: true } } : {}),
     };
     await fs.writeFile(temporary, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
     await fs.rename(temporary, this.filename);

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { localize, type UiLanguage } from "./i18n.js";
 
@@ -5,6 +8,8 @@ export const XIU_NPM_PACKAGE = "@xiu-ai/cli";
 export const XIU_NPM_REGISTRY = "https://registry.npmjs.org";
 const REGISTRY_URL = `${XIU_NPM_REGISTRY}/%40xiu-ai%2Fcli/latest`;
 const MAX_RESPONSE_BYTES = 256 * 1024;
+export const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const UPDATE_CACHE_SCHEMA_VERSION = 1;
 
 export type UpdateStatus = "up-to-date" | "update-available" | "newer-than-registry";
 
@@ -14,6 +19,18 @@ export interface UpdateCheckResult {
   status: UpdateStatus;
   registry: string;
   checkedAt: string;
+}
+
+interface PersistedUpdateCache {
+  schemaVersion: 1;
+  latestVersion: string;
+  registry: string;
+  checkedAt: string;
+}
+
+export interface CachedUpdateCheck {
+  result: UpdateCheckResult;
+  fresh: boolean;
 }
 
 interface RegistryResponse {
@@ -124,6 +141,7 @@ export async function checkForUpdates(currentVersion: string, options: UpdateChe
   if (!Number.isInteger(timeoutMs) || timeoutMs < 500 || timeoutMs > 60_000) throw new Error("Update check timeout must be between 500 and 60000ms");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
   const proxy = validatedProxy(options.proxy);
   const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
   const fetcher = options.fetcher ?? ((url, init) => undiciFetch(url, init) as Promise<RegistryResponse>);
@@ -166,6 +184,84 @@ export async function checkForUpdates(currentVersion: string, options: UpdateChe
       catch { /* Closing a best-effort update-check dispatcher must not mask the actual result. */ }
     }
   }
+}
+
+function resultFromLatest(currentVersion: string, latestVersion: string, checkedAt: string): UpdateCheckResult {
+  parseVersion(currentVersion);
+  parseVersion(latestVersion);
+  const comparison = compareVersions(currentVersion, latestVersion);
+  return {
+    currentVersion,
+    latestVersion,
+    status: comparison < 0 ? "update-available" : comparison > 0 ? "newer-than-registry" : "up-to-date",
+    registry: XIU_NPM_REGISTRY,
+    checkedAt,
+  };
+}
+
+async function replaceFile(temporary: string, target: string): Promise<void> {
+  try {
+    await fs.rename(temporary, target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM" && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    await fs.rm(target, { force: true });
+    await fs.rename(temporary, target);
+  }
+}
+
+export class UpdateCheckCache {
+  constructor(private readonly filename = path.join(os.homedir(), ".xiu", "update-cache.json")) {}
+
+  async load(currentVersion: string, now = new Date()): Promise<CachedUpdateCheck | undefined> {
+    try {
+      const value = JSON.parse(await fs.readFile(this.filename, "utf8")) as Partial<PersistedUpdateCache>;
+      if (value.schemaVersion !== UPDATE_CACHE_SCHEMA_VERSION || value.registry !== XIU_NPM_REGISTRY) return undefined;
+      if (typeof value.latestVersion !== "string" || typeof value.checkedAt !== "string") return undefined;
+      const checkedAtMs = Date.parse(value.checkedAt);
+      if (!Number.isFinite(checkedAtMs) || checkedAtMs > now.getTime() + 5 * 60_000) return undefined;
+      const result = resultFromLatest(currentVersion, value.latestVersion, new Date(checkedAtMs).toISOString());
+      return { result, fresh: now.getTime() - checkedAtMs <= UPDATE_CACHE_TTL_MS };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return undefined;
+      return undefined;
+    }
+  }
+
+  async save(result: UpdateCheckResult): Promise<void> {
+    if (result.registry !== XIU_NPM_REGISTRY) throw new Error("Update cache accepts only the official npm registry");
+    parseVersion(result.latestVersion);
+    const checkedAtMs = Date.parse(result.checkedAt);
+    if (!Number.isFinite(checkedAtMs)) throw new Error("Update cache requires a valid check time");
+    const document: PersistedUpdateCache = {
+      schemaVersion: UPDATE_CACHE_SCHEMA_VERSION,
+      latestVersion: result.latestVersion,
+      registry: XIU_NPM_REGISTRY,
+      checkedAt: new Date(checkedAtMs).toISOString(),
+    };
+    await fs.mkdir(path.dirname(this.filename), { recursive: true });
+    const temporary = `${this.filename}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      await fs.writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await replaceFile(temporary, this.filename);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+export function formatUpdateReminder(result: UpdateCheckResult, language: UiLanguage, platform: NodeJS.Platform = process.platform): string {
+  return language === "zh-CN"
+    ? `Xiu 有新版本：${result.currentVersion} → ${result.latestVersion}\n升级命令（仅显示，未执行）：${upgradeCommand(platform)}\n可用 /update status 查看提醒状态。`
+    : `A new Xiu version is available: ${result.currentVersion} -> ${result.latestVersion}\nUpgrade command (displayed only; not executed): ${upgradeCommand(platform)}\nUse /update status to inspect reminder status.`;
+}
+
+export function formatUpdateNotificationStatus(enabled: boolean, cached: CachedUpdateCheck | undefined, language: UiLanguage): string {
+  const cacheStatus = !cached
+    ? localize(language, "无缓存", "no cache")
+    : `${cached.result.latestVersion} · ${cached.fresh ? localize(language, "有效", "fresh") : localize(language, "已过期", "stale")} · ${cached.result.checkedAt}`;
+  return language === "zh-CN"
+    ? ["Xiu 更新提醒", `状态：${enabled ? "已启用" : "已关闭（默认）"}`, "检查间隔：24 小时缓存", `缓存：${cacheStatus}`, "行为：仅在安全输入边界提示；不会自动安装、降级或修改全局 npm。"].join("\n")
+    : ["Xiu update reminders", `Status: ${enabled ? "enabled" : "disabled (default)"}`, "Check interval: 24-hour cache", `Cache: ${cacheStatus}`, "Behavior: reminders appear only at safe input boundaries; Xiu never installs, downgrades, or changes global npm automatically."].join("\n");
 }
 
 export function upgradeCommand(platform: NodeJS.Platform = process.platform): string {

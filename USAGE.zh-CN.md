@@ -56,6 +56,16 @@ xiu --check-update
 
 也可以进入 Xiu 后输入 `/update`。这两个命令只读取 npm 官方 Registry 并显示版本与更新命令，不会替你安装、降级或修改 npm 配置。普通 `xiu` 启动不会联网检查版本，因此不会因版本检查变慢。需要单独代理时可设置 `XIU_UPDATE_PROXY`；它不会继承模型 Provider 或联网搜索代理。
 
+从 `0.16.1` 起，可以显式开启非阻塞更新提醒：
+
+```text
+/update notifications on
+/update status
+/update notifications off
+```
+
+提醒默认关闭。开启后，Xiu 会复用 24 小时的公开 npm 版本缓存；缓存过期或不存在时，只在交互界面已经可用后静默后台刷新，并在下一次安全输入边界显示可用更新。网络失败不会打断启动、任务或输入，也不会反复弹错。提醒功能仍然只显示更新信息和可复制命令，不会自动执行 npm、安装、降级或修改全局配置。
+
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
 ## 三、配置 Provider 与模型
@@ -1145,6 +1155,9 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `/diagnostics` | 查看当前或最近任务诊断 |
 | `/status` | 查看模型、Token、调用和耗时 |
 | `/update` | 显式检查 npm 官方最新版并显示更新指导，不自动安装 |
+| `/update status` | 查看更新提醒开关、24 小时缓存和行为边界 |
+| `/update notifications on` | 显式开启非阻塞更新提醒 |
+| `/update notifications off` | 关闭更新提醒（默认状态） |
 | `/queue` | 查看明确安排的后续任务 |
 | `/queue <任务>` | 安排一项独立任务在当前任务之后运行 |
 | `/clear-queue` | 清空尚未执行的独立任务 |

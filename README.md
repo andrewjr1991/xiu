@@ -1,8 +1,10 @@
 # Xiu
 
+Version 0.16.1 adds opt-in, cached, non-blocking update reminders. Reminders are disabled by default and can be controlled with `/update notifications on`, `/update notifications off`, and `/update status`. When enabled, Xiu reuses a 24-hour cache of public npm version metadata, refreshes stale data only after the interactive UI is ready, and displays an available update only at a safe input boundary. Failures stay silent, and Xiu still never installs, downgrades, or changes global npm automatically.
+
 Version 0.16.0 adds explicit, read-only update diagnostics. Run `xiu --check-update` or `/update` to compare the local version with `@xiu-ai/cli@latest` on the official npm Registry and receive the exact upgrade command when needed. Xiu never performs the upgrade itself, never reads npm credentials, and ordinary startup performs no version-check network request. Update checks use a dedicated proxy path that is isolated from model providers and web search.
 
-中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.16.0 设计](./V0.16.0_DESIGN.zh-CN.md)。
+中文用户手册请参阅 [Xiu 完整使用指南](./USAGE.zh-CN.md)。维护者请参阅 [Xiu 更新、发布与安装指南](./PUBLISHING.zh-CN.md)。长期产品和工程规划记录在 [Xiu 路线图](./ROADMAP.zh-CN.md)，跨版本安全边界记录在 [安全与隐私边界](./SECURITY.zh-CN.md)。当前开发版本只保留一份 [v0.16.1 设计](./V0.16.1_DESIGN.zh-CN.md)。
 
 Xiu is an open-source autonomous coding agent for the terminal, developed by 静然. Give it an outcome; it inspects the repository, reads and edits files, runs commands, checks the diff, and iterates until the model reports completion.
 
