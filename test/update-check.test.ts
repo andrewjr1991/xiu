@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { checkForUpdates, compareVersions, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, inspectXiuCommandResolution, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, updateProxySourceFromEnvironment, upgradeCommand } from "../src/update-check.js";
+import { checkForUpdates, checkOfficialRelease, compareVersions, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, inspectXiuCommandResolution, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, updateProxySourceFromEnvironment, upgradeCommand, type OfficialReleaseMetadata } from "../src/update-check.js";
 
 function response(body: string, status = 200, contentLength?: number) {
   return {
@@ -11,6 +11,20 @@ function response(body: string, status = 200, contentLength?: number) {
     status,
     headers: { get: (name: string) => name.toLowerCase() === "content-length" && contentLength !== undefined ? String(contentLength) : null },
     text: async () => body,
+  };
+}
+
+const TEST_INTEGRITY = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
+
+function officialRelease(version: string, checkedAt = "2026-08-18T01:00:00.000Z"): OfficialReleaseMetadata {
+  return {
+    name: "@xiu-ai/cli",
+    version,
+    tarball: `https://registry.npmjs.org/@xiu-ai/cli/-/cli-${version}.tgz`,
+    integrity: TEST_INTEGRITY,
+    shasum: "a".repeat(40),
+    registry: "https://registry.npmjs.org",
+    checkedAt,
   };
 }
 
@@ -59,6 +73,45 @@ test("update check rejects malformed, failed, and oversized registry responses",
       })(),
     }),
   }), /too large/);
+});
+
+test("official release check validates exact package provenance metadata", async () => {
+  let requestedUrl = "";
+  const result = await checkOfficialRelease("0.16.4", {
+    now: () => new Date("2026-08-18T02:00:00.000Z"),
+    fetcher: async (url, init) => {
+      requestedUrl = url;
+      assert.equal(init.redirect, "error");
+      return response(JSON.stringify({
+        name: "@xiu-ai/cli",
+        version: "0.16.4",
+        dist: {
+          tarball: "https://registry.npmjs.org/@xiu-ai/cli/-/cli-0.16.4.tgz",
+          integrity: TEST_INTEGRITY,
+          shasum: "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        },
+      }));
+    },
+  });
+  assert.equal(requestedUrl, "https://registry.npmjs.org/%40xiu-ai%2Fcli/0.16.4");
+  assert.equal(result.integrity, TEST_INTEGRITY);
+  assert.equal(result.shasum, "abcdef0123456789abcdef0123456789abcdef01");
+  assert.equal(result.checkedAt, "2026-08-18T02:00:00.000Z");
+});
+
+test("official release check rejects mismatched or non-official metadata", async () => {
+  const payload = (overrides: Record<string, unknown>) => response(JSON.stringify({
+    name: "@xiu-ai/cli",
+    version: "0.16.4",
+    dist: { tarball: "https://registry.npmjs.org/@xiu-ai/cli/-/cli-0.16.4.tgz", integrity: TEST_INTEGRITY },
+    ...overrides,
+  }));
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => payload({ name: "lookalike" }) }), /package name/);
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => payload({ version: "0.16.3" }) }), /version does not match/);
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => payload({ dist: { tarball: "https://evil.example/xiu.tgz", integrity: TEST_INTEGRITY } }) }), /not hosted on the official registry/);
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => payload({ dist: { tarball: "not a URL", integrity: TEST_INTEGRITY } }) }), /invalid tarball URL/);
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => payload({ dist: { tarball: "https://registry.npmjs.org/xiu.tgz", integrity: "sha512-invalid" } }) }), /SHA-512/);
+  await assert.rejects(checkOfficialRelease("0.16.4", { fetcher: async () => response("{}", 404) }), /HTTP 404/);
 });
 
 test("formatting is localized and never claims to execute the upgrade", () => {
@@ -168,6 +221,11 @@ test("update doctor reports a healthy local installation without mutating npm", 
         checkedAt: "2026-08-18T01:00:00.000Z",
       };
     },
+    releaseChecker: async (version, proxy) => {
+      assert.equal(version, "0.16.2");
+      assert.equal(proxy, "http://127.0.0.1:12334/");
+      return officialRelease(version);
+    },
   });
   assert.equal(result.status, "pass");
   assert.equal(updateDoctorHasHardFailure(result), false);
@@ -175,6 +233,7 @@ test("update doctor reports a healthy local installation without mutating npm", 
   assert.match(formatUpdateDoctor(result, "zh-CN"), /已是最新版本/);
   assert.doesNotMatch(formatUpdateDoctor(result, "zh-CN"), /up-to-date/);
   assert.doesNotMatch(formatUpdateDoctor(result, "en-US"), /npm install/);
+  assert.match(formatUpdateDoctor(result, "zh-CN"), /未下载发布包，也未对本地安装文件计算哈希/);
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -221,6 +280,7 @@ test("command resolution groups npm shims and reports duplicate installations in
       registry: "https://registry.npmjs.org",
       checkedAt: "2026-08-18T00:00:00.000Z",
     }),
+    releaseChecker: async (version) => officialRelease(version),
   });
   assert.equal(doctor.status, "warning");
   const output = formatUpdateDoctor(doctor, "zh-CN");
@@ -250,6 +310,7 @@ test("command resolution reports stale launchers and a prefix bin missing from P
       registry: "https://registry.npmjs.org",
       checkedAt: "2026-08-18T00:00:00.000Z",
     }),
+    releaseChecker: async (version) => officialRelease(version),
   });
   assert.equal(updateDoctorHasHardFailure(result), false);
   assert.match(formatUpdateDoctor(result, "en-US"), /stale or unrecognized/);
@@ -281,12 +342,66 @@ test("update doctor distinguishes local hard failures from external warnings", a
     environment: {},
     cache: new UpdateCheckCache(path.join(warningRoot, "missing-cache.json")),
     checker: async () => { throw new Error("DNS unavailable"); },
+    releaseChecker: async () => { throw new Error("DNS unavailable"); },
   });
   assert.equal(warning.status, "warning");
   assert.equal(updateDoctorHasHardFailure(warning), false);
   assert.match(formatUpdateDoctor(warning, "en-US"), /usable with external warnings/);
+  assert.match(formatUpdateDoctor(warning, "zh-CN"), /DNS unavailable/);
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(warningRoot, { recursive: true, force: true });
+});
+
+test("update doctor enforces the dependency-compatible Node.js minimum", async () => {
+  const root = await createCompletePackageRoot();
+  const common = {
+    packageRoot: root,
+    environment: {},
+    platform: "linux" as const,
+    pathEntries: [] as string[],
+    cache: new UpdateCheckCache(path.join(root, "missing-cache.json")),
+    checker: async () => ({
+      currentVersion: "0.16.2",
+      latestVersion: "0.16.2",
+      status: "up-to-date" as const,
+      registry: "https://registry.npmjs.org",
+      checkedAt: "2026-08-18T00:00:00.000Z",
+    }),
+    releaseChecker: async (version: string) => officialRelease(version),
+  };
+
+  const tooOld = await diagnoseUpdateInstallation("0.16.2", {
+    ...common,
+    runtimeVersion: "20.18.0",
+  });
+  assert.equal(tooOld.items.find((item) => item.id === "runtime")?.level, "failure");
+  assert.equal(updateDoctorHasHardFailure(tooOld), true);
+  assert.match(formatUpdateDoctor(tooOld, "en-US"), /requires Node\.js 20\.18\.1 or newer/);
+
+  const minimum = await diagnoseUpdateInstallation("0.16.2", {
+    ...common,
+    runtimeVersion: "20.18.1",
+  });
+  assert.equal(minimum.items.find((item) => item.id === "runtime")?.level, "pass");
+  assert.equal(updateDoctorHasHardFailure(minimum), false);
+
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+test("official release metadata failures are localized without becoming hard failures", async () => {
+  const root = await createCompletePackageRoot();
+  const result = await diagnoseUpdateInstallation("0.16.4", {
+    packageRoot: root,
+    runtimeVersion: "22.20.0",
+    environment: {},
+    cache: new UpdateCheckCache(path.join(root, "missing-cache.json")),
+    checker: async () => ({ currentVersion: "0.16.4", latestVersion: "0.16.4", status: "up-to-date", registry: "https://registry.npmjs.org", checkedAt: "2026-08-18T01:00:00.000Z" }),
+    releaseChecker: async () => { throw new Error("npm release tarball is not hosted on the official registry"); },
+  });
+  assert.equal(result.status, "warning");
+  assert.equal(updateDoctorHasHardFailure(result), false);
+  assert.match(formatUpdateDoctor(result, "zh-CN"), /npm 发布包不在官方 Registry 域名上/);
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 test("update proxy source reports precedence without exposing credentials", () => {

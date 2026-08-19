@@ -21,7 +21,7 @@
 
 ### 2.1 安装 Node.js
 
-Xiu 要求 Node.js 20 或更高版本。安装 Node.js 后，重新打开 PowerShell并检查：
+Xiu 要求 Node.js 20.18.1 或更高版本。安装 Node.js 后，重新打开 PowerShell并检查：
 
 ```powershell
 node --version
@@ -710,3 +710,16 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 7. 普通 `xiu` 启动不得执行 PATH 诊断或新增版本检查联网；所有检查仍由用户显式触发。
 8. 中英文输出、PATH 顺序、shim 归组、重复安装、损坏启动器、prefix 不一致和警告退出码均有确定性测试。
 9. 完整测试、类型检查、构建、`npm pack --dry-run --json` 与干净安装验收全部通过；包内只保留 `V0.16.3_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。
+
+## 三十三、0.16.4 官方发布元数据核验发布门禁
+
+发布 `0.16.4` 前除通用流程外，还必须验证：
+
+1. `xiu --update-doctor` 与 `/update doctor` 查询 `@xiu-ai/cli` 当前精确版本，而不只读取 npm `latest` 标签。
+2. 返回包名和版本必须精确匹配；tarball 必须使用 HTTPS、不得含凭证，且主机名必须精确等于 `registry.npmjs.org`。
+3. `dist.integrity` 必须是可解码为 64 字节摘要的规范 SHA-512 SRI；可选 `dist.shasum` 必须是 40 位十六进制值。
+4. 诊断必须明确说明只核验官方 Registry 元数据，未下载发布包，也未对本地安装文件计算哈希，不得声称本地文件逐字节可信。
+5. 精确版本未发布、外部网络不可用或元数据异常只产生警告；现有 Node.js、包文件和不安全代理硬失败语义保持不变。
+6. 响应继续受 256 KiB 上限、禁用重定向、独立更新代理和有界超时保护；普通 `xiu` 启动不得新增联网。
+7. 错误包名、版本错配、非官方 tarball、无效完整性值、HTTP 404 和中文诊断均有确定性测试。
+8. 完整测试、类型检查、构建、`npm pack --dry-run --json` 与干净安装验收全部通过；包内只保留 `V0.16.4_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。

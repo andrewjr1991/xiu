@@ -22,6 +22,16 @@ export interface UpdateCheckResult {
   checkedAt: string;
 }
 
+export interface OfficialReleaseMetadata {
+  name: typeof XIU_NPM_PACKAGE;
+  version: string;
+  tarball: string;
+  integrity: string;
+  shasum?: string;
+  registry: string;
+  checkedAt: string;
+}
+
 interface PersistedUpdateCache {
   schemaVersion: 1;
   latestVersion: string;
@@ -49,9 +59,11 @@ export interface UpdateCheckOptions {
   fetcher?: (url: string, init: Record<string, unknown>) => Promise<RegistryResponse>;
 }
 
+export interface OfficialReleaseCheckOptions extends UpdateCheckOptions {}
+
 export type UpdateDoctorLevel = "pass" | "warning" | "failure";
 
-export type UpdateDoctorItemId = "runtime" | "package" | "command" | "prefix" | "proxy" | "cache" | "registry";
+export type UpdateDoctorItemId = "runtime" | "package" | "command" | "prefix" | "proxy" | "cache" | "registry" | "release";
 
 export interface UpdateDoctorItem {
   id: UpdateDoctorItemId;
@@ -66,6 +78,7 @@ export interface UpdateDoctorResult {
   status: UpdateDoctorLevel;
   items: UpdateDoctorItem[];
   update?: UpdateCheckResult;
+  release?: OfficialReleaseMetadata;
 }
 
 export interface UpdateDoctorOptions {
@@ -77,6 +90,7 @@ export interface UpdateDoctorOptions {
   now?: Date;
   cache?: UpdateCheckCache;
   checker?: (proxy?: string) => Promise<UpdateCheckResult>;
+  releaseChecker?: (version: string, proxy?: string) => Promise<OfficialReleaseMetadata>;
 }
 
 export interface XiuCommandCandidate {
@@ -398,10 +412,15 @@ function doctorStatus(items: UpdateDoctorItem[]): UpdateDoctorLevel {
 export async function diagnoseUpdateInstallation(currentVersion: string, options: UpdateDoctorOptions = {}): Promise<UpdateDoctorResult> {
   const items: UpdateDoctorItem[] = [];
   const runtimeVersion = options.runtimeVersion ?? process.versions.node;
-  const runtimeMajor = Number.parseInt(runtimeVersion.split(".")[0] ?? "", 10);
-  items.push(Number.isInteger(runtimeMajor) && runtimeMajor >= 20
+  let runtimeSupported = false;
+  try {
+    runtimeSupported = compareVersions(runtimeVersion, "20.18.1") >= 0;
+  } catch {
+    runtimeSupported = false;
+  }
+  items.push(runtimeSupported
     ? { id: "runtime", level: "pass", summary: `Node.js ${runtimeVersion}` }
-    : { id: "runtime", level: "failure", summary: `Node.js ${runtimeVersion}`, detail: "Xiu requires Node.js 20 or newer", detailZh: "Xiu 需要 Node.js 20 或更高版本" });
+    : { id: "runtime", level: "failure", summary: `Node.js ${runtimeVersion}`, detail: "Xiu requires Node.js 20.18.1 or newer", detailZh: "Xiu 需要 Node.js 20.18.1 或更高版本" });
 
   const packageRoot = options.packageRoot ?? path.resolve(fileURLToPath(new URL("..", import.meta.url)));
   const missing: string[] = [];
@@ -447,8 +466,10 @@ export async function diagnoseUpdateInstallation(currentVersion: string, options
       : { id: "cache", level: "warning", summary: `stale cache: ${cached.result.latestVersion}`, summaryZh: `缓存已过期：${cached.result.latestVersion}`, detail: cached.result.checkedAt });
 
   let update: UpdateCheckResult | undefined;
+  let release: OfficialReleaseMetadata | undefined;
   if (items.some((item) => item.id === "proxy" && item.level === "failure")) {
     items.push({ id: "registry", level: "warning", summary: "registry check skipped", summaryZh: "已跳过 Registry 检查", detail: "Fix the update proxy configuration first", detailZh: "请先修复更新代理配置" });
+    items.push({ id: "release", level: "warning", summary: "release metadata check skipped", summaryZh: "已跳过发布元数据核验", detail: "Fix the update proxy configuration first", detailZh: "请先修复更新代理配置" });
   } else {
     try {
       update = await (options.checker?.(proxy) ?? checkForUpdates(currentVersion, { proxy, now: () => now }));
@@ -467,9 +488,29 @@ export async function diagnoseUpdateInstallation(currentVersion: string, options
     } catch (error) {
       items.push({ id: "registry", level: "warning", summary: "official npm registry unavailable", summaryZh: "官方 npm Registry 暂不可用", detail: error instanceof Error ? error.message : String(error) });
     }
+    try {
+      release = await (options.releaseChecker?.(currentVersion, proxy) ?? checkOfficialRelease(currentVersion, { proxy, now: () => now }));
+      const fingerprint = `${release.integrity.slice(0, 31)}…`;
+      items.push({
+        id: "release",
+        level: "pass",
+        summary: `${release.name}@${release.version} · ${fingerprint}`,
+        detail: "Official registry metadata verified; installed files were not downloaded or hashed",
+        detailZh: "已核验官方 Registry 元数据；未下载发布包，也未对本地安装文件计算哈希",
+      });
+    } catch (error) {
+      items.push({
+        id: "release",
+        level: "warning",
+        summary: "installed version metadata could not be verified",
+        summaryZh: "无法核验当前安装版本的发布元数据",
+        detail: error instanceof Error ? error.message : String(error),
+        detailZh: formatUpdateCheckError(error, "zh-CN"),
+      });
+    }
   }
 
-  return { status: doctorStatus(items), items, ...(update ? { update } : {}) };
+  return { status: doctorStatus(items), items, ...(update ? { update } : {}), ...(release ? { release } : {}) };
 }
 
 export function updateDoctorHasHardFailure(result: UpdateDoctorResult): boolean {
@@ -485,6 +526,7 @@ export function formatUpdateDoctor(result: UpdateDoctorResult, language: UiLangu
     proxy: ["更新代理", "Update proxy"],
     cache: ["更新缓存", "Update cache"],
     registry: ["官方 Registry", "Official registry"],
+    release: ["发布元数据", "Release metadata"],
   };
   const marks: Record<UpdateDoctorLevel, string> = { pass: "✓", warning: "!", failure: "✗" };
   const status = result.status === "pass"
@@ -523,8 +565,7 @@ async function readBoundedBody(response: RegistryResponse, controller: AbortCont
   return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
-export async function checkForUpdates(currentVersion: string, options: UpdateCheckOptions = {}): Promise<UpdateCheckResult> {
-  parseVersion(currentVersion);
+async function fetchRegistryPayload(url: string, userAgentVersion: string, options: UpdateCheckOptions): Promise<unknown> {
   const timeoutMs = options.timeoutMs ?? 8_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 500 || timeoutMs > 60_000) throw new Error("Update check timeout must be between 500 and 60000ms");
   const controller = new AbortController();
@@ -532,34 +573,21 @@ export async function checkForUpdates(currentVersion: string, options: UpdateChe
   timer.unref?.();
   const proxy = validatedProxy(options.proxy);
   const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
-  const fetcher = options.fetcher ?? ((url, init) => undiciFetch(url, init) as Promise<RegistryResponse>);
+  const fetcher = options.fetcher ?? ((target, init) => undiciFetch(target, init) as Promise<RegistryResponse>);
   try {
-    const response = await fetcher(REGISTRY_URL, {
+    const response = await fetcher(url, {
       method: "GET",
       redirect: "error",
       signal: controller.signal,
-      headers: { accept: "application/json", "user-agent": `xiu/${currentVersion}` },
+      headers: { accept: "application/json", "user-agent": `xiu/${userAgentVersion}` },
       ...(dispatcher ? { dispatcher } : {}),
     });
     if (!response.ok) throw new Error(`npm registry returned HTTP ${response.status}`);
     const declaredLength = Number(response.headers.get("content-length") ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) throw new Error("npm registry response is too large");
     const body = await readBoundedBody(response, controller);
-    let payload: unknown;
-    try { payload = JSON.parse(body); }
+    try { return JSON.parse(body) as unknown; }
     catch { throw new Error("npm registry returned invalid JSON"); }
-    const latestVersion = typeof payload === "object" && payload !== null && typeof (payload as { version?: unknown }).version === "string"
-      ? (payload as { version: string }).version.trim()
-      : "";
-    parseVersion(latestVersion);
-    const comparison = compareVersions(currentVersion, latestVersion);
-    return {
-      currentVersion,
-      latestVersion,
-      status: comparison < 0 ? "update-available" : comparison > 0 ? "newer-than-registry" : "up-to-date",
-      registry: XIU_NPM_REGISTRY,
-      checkedAt: (options.now?.() ?? new Date()).toISOString(),
-    };
   } catch (error) {
     if (controller.signal.aborted && !(error instanceof Error && error.message === "npm registry response is too large")) {
       throw new Error(`npm registry request timed out after ${timeoutMs}ms`);
@@ -572,6 +600,74 @@ export async function checkForUpdates(currentVersion: string, options: UpdateChe
       catch { /* Closing a best-effort update-check dispatcher must not mask the actual result. */ }
     }
   }
+}
+
+function validatedOfficialTarball(value: unknown): string {
+  if (typeof value !== "string" || value.length > 2_048) throw new Error("npm release metadata has an invalid tarball URL");
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("npm release metadata has an invalid tarball URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org" || parsed.username || parsed.password) {
+    throw new Error("npm release tarball is not hosted on the official registry");
+  }
+  return parsed.toString();
+}
+
+function validatedSha512Integrity(value: unknown): string {
+  if (typeof value !== "string" || value.length > 256 || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    throw new Error("npm release metadata is missing a valid SHA-512 integrity value");
+  }
+  const encoded = value.slice("sha512-".length);
+  const digest = Buffer.from(encoded, "base64");
+  if (digest.byteLength !== 64 || digest.toString("base64") !== encoded) {
+    throw new Error("npm release metadata is missing a valid SHA-512 integrity value");
+  }
+  return value;
+}
+
+export async function checkOfficialRelease(version: string, options: OfficialReleaseCheckOptions = {}): Promise<OfficialReleaseMetadata> {
+  parseVersion(version);
+  const url = `${XIU_NPM_REGISTRY}/%40xiu-ai%2Fcli/${encodeURIComponent(version)}`;
+  const payload = await fetchRegistryPayload(url, version, options);
+  if (typeof payload !== "object" || payload === null) throw new Error("npm release metadata has an invalid shape");
+  const record = payload as { name?: unknown; version?: unknown; dist?: { tarball?: unknown; integrity?: unknown; shasum?: unknown } };
+  if (record.name !== XIU_NPM_PACKAGE) throw new Error("npm release metadata package name does not match Xiu");
+  if (record.version !== version) throw new Error("npm release metadata version does not match the installed version");
+  const tarball = validatedOfficialTarball(record.dist?.tarball);
+  const integrity = validatedSha512Integrity(record.dist?.integrity);
+  const shasum = record.dist?.shasum;
+  if (shasum !== undefined && (typeof shasum !== "string" || !/^[a-f0-9]{40}$/i.test(shasum))) {
+    throw new Error("npm release metadata has an invalid SHA-1 shasum");
+  }
+  return {
+    name: XIU_NPM_PACKAGE,
+    version,
+    tarball,
+    integrity,
+    ...(typeof shasum === "string" ? { shasum: shasum.toLowerCase() } : {}),
+    registry: XIU_NPM_REGISTRY,
+    checkedAt: (options.now?.() ?? new Date()).toISOString(),
+  };
+}
+
+export async function checkForUpdates(currentVersion: string, options: UpdateCheckOptions = {}): Promise<UpdateCheckResult> {
+  parseVersion(currentVersion);
+  const payload = await fetchRegistryPayload(REGISTRY_URL, currentVersion, options);
+  const latestVersion = typeof payload === "object" && payload !== null && typeof (payload as { version?: unknown }).version === "string"
+    ? (payload as { version: string }).version.trim()
+    : "";
+  parseVersion(latestVersion);
+  const comparison = compareVersions(currentVersion, latestVersion);
+  return {
+    currentVersion,
+    latestVersion,
+    status: comparison < 0 ? "update-available" : comparison > 0 ? "newer-than-registry" : "up-to-date",
+    registry: XIU_NPM_REGISTRY,
+    checkedAt: (options.now?.() ?? new Date()).toISOString(),
+  };
 }
 
 function resultFromLatest(currentVersion: string, latestVersion: string, checkedAt: string): UpdateCheckResult {
@@ -670,6 +766,13 @@ export function formatUpdateCheckError(error: unknown, language: UiLanguage): st
   if (message === "Update proxy must use http:// or https://") return "更新检查代理必须使用 http:// 或 https://";
   if (message === "Update proxy URL must not contain credentials") return "更新检查代理地址不能包含用户名或密码";
   if (message === "Update check timeout must be between 500 and 60000ms") return "更新检查超时必须介于 500 至 60000 毫秒之间";
+  if (message === "npm release metadata has an invalid tarball URL") return "npm 发布元数据中的 tarball 地址无效";
+  if (message === "npm release tarball is not hosted on the official registry") return "npm 发布包不在官方 Registry 域名上";
+  if (message === "npm release metadata is missing a valid SHA-512 integrity value") return "npm 发布元数据缺少有效的 SHA-512 完整性值";
+  if (message === "npm release metadata has an invalid shape") return "npm 发布元数据结构无效";
+  if (message === "npm release metadata package name does not match Xiu") return "npm 发布元数据中的包名与 Xiu 不一致";
+  if (message === "npm release metadata version does not match the installed version") return "npm 发布元数据中的版本与当前安装版本不一致";
+  if (message === "npm release metadata has an invalid SHA-1 shasum") return "npm 发布元数据中的 SHA-1 校验值无效";
   return message;
 }
 
