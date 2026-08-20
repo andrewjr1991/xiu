@@ -2,7 +2,7 @@
 
 This file summarizes released behavior. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## Unreleased — 0.17.0
+## 0.17.0 — 2026-08-20
 
 - Establish reproducible package smoke testing and cross-platform CI foundations.
 - Replace the version-first README with accurate English and Simplified Chinese product entry points.
