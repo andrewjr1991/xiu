@@ -306,6 +306,9 @@ test("run_command preserves UTF-8 PowerShell output", async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-specific behavior");
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-encoding-"));
   const tool = builtinTools.find((candidate) => candidate.name === "run_command")!;
+  const encoding = await executeTool(tool, { command: "[Console]::OutputEncoding.CodePage" }, { cwd, approve: async () => true });
+  const codePage = Number(encoding.match(/\b(?:437|936|950|54936|65001)\b/u)?.[0]);
+  if (![936, 950, 54936, 65001].includes(codePage)) return t.skip(`PowerShell code page ${codePage || "unknown"} cannot represent Chinese text`);
   const result = await executeTool(tool, { command: "Write-Output '编码正常'" }, { cwd, approve: async () => true });
   assert.match(result, /编码正常/);
 });

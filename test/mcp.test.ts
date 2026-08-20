@@ -376,7 +376,7 @@ test("undeclared MCP permissions require explicit first-use approval", async () 
   }
 });
 
-test("stdio MCP decodes Windows local-codepage stderr into readable text", async () => {
+test("stdio MCP decodes Windows local-codepage stderr into readable text", { skip: process.platform !== "win32" }, async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-local-stderr-"));
   const globalConfig = path.join(workspace, "global-mcp.json");
   await fs.writeFile(globalConfig, JSON.stringify({ mcpServers: { broken: {

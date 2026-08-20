@@ -103,8 +103,10 @@ export class WorktreeManager {
   }
 
   async create(runId: string, taskId: string): Promise<WorktreeInfo> {
-    const repositoryRoot = path.resolve(await git(this.cwd, ["rev-parse", "--show-toplevel"]));
-    if (repositoryRoot.toLowerCase() !== path.resolve(this.cwd).toLowerCase()) {
+    const repositoryRoot = await fs.realpath(path.resolve(await git(this.cwd, ["rev-parse", "--show-toplevel"])));
+    const workingDirectory = await fs.realpath(path.resolve(this.cwd));
+    const normalizeForComparison = (value: string): string => process.platform === "win32" ? value.toLowerCase() : value;
+    if (normalizeForComparison(repositoryRoot) !== normalizeForComparison(workingDirectory)) {
       throw new Error("Worktree agents currently require Xiu to run at the Git repository root.");
     }
     const baseCommit = await git(this.cwd, ["rev-parse", "HEAD"]);

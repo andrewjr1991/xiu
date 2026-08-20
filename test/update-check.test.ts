@@ -264,7 +264,7 @@ test("command resolution groups npm shims and reports duplicate installations in
   assert.equal(resolution.first?.version, "0.15.9");
   assert.equal(resolution.installations.length, 2);
   assert.equal(resolution.prefixBinOnPath, true);
-  assert.equal(resolution.installations[0]?.packageRoot.toLowerCase(), path.resolve(oldPackage).toLowerCase());
+  assert.equal(resolution.installations[0]?.packageRoot.toLowerCase(), (await fs.realpath(oldPackage)).toLowerCase());
 
   const doctor = await diagnoseUpdateInstallation("0.16.2", {
     packageRoot: currentPackage,
