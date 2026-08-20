@@ -13,7 +13,7 @@ if (testFiles.length === 0) {
   console.error("No test files were found in the test directory.");
   process.exitCode = 1;
 } else {
-  const child = spawn(process.execPath, ["--test", "--import", "tsx", ...testFiles], {
+  const child = spawn(process.execPath, ["--test", "--test-concurrency=4", "--import", "tsx", ...testFiles], {
     stdio: "inherit",
     windowsHide: true,
     env: { ...process.env, FORCE_COLOR: "0" },
