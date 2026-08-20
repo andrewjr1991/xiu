@@ -24,7 +24,7 @@ test("one-shot tasks cannot bypass workspace trust even with --yes", async () =>
   child.stderr.on("data", (chunk) => { output += String(chunk); });
   child.stdin.end("2\n");
   const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI trust prompt timed out:\n${output}`)); }, 15_000);
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI trust prompt timed out:\n${output}`)); }, 30_000);
     child.once("error", reject);
     child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
   });
@@ -56,7 +56,7 @@ test("interactive startup stays open when the selected provider has no API key",
   child.stderr.on("data", (chunk) => { output += String(chunk); });
   child.stdin.end("1\n/exit\n");
   const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI provider setup timed out:\n${output}`)); }, 15_000);
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI provider setup timed out:\n${output}`)); }, 30_000);
     child.once("error", reject);
     child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
   });

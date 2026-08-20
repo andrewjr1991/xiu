@@ -16,6 +16,7 @@ if (testFiles.length === 0) {
   const child = spawn(process.execPath, ["--test", "--import", "tsx", ...testFiles], {
     stdio: "inherit",
     windowsHide: true,
+    env: { ...process.env, FORCE_COLOR: "0" },
   });
 
   child.once("error", (error) => {
