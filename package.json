@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/cli",
-  "version": "0.16.5",
+  "version": "0.17.0",
   "description": "A safe terminal coding agent with risk-aware tools and multi-provider support.",
   "type": "module",
   "bin": {
@@ -10,18 +10,24 @@
     "dist",
     "scripts",
     "README.md",
+    "README.zh-CN.md",
+    "QUICKSTART.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "PUBLISHING.zh-CN.md",
     "USAGE.zh-CN.md",
     "ROADMAP.zh-CN.md",
     "SECURITY.zh-CN.md",
-    "V0.16.5_DESIGN.zh-CN.md"
+    "V0.17.0_DESIGN.zh-CN.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "node scripts/run-tests.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:docs": "node scripts/check-docs.mjs",
+    "smoke:package": "node scripts/package-smoke.mjs"
   },
   "engines": {
     "node": ">=20.18.1"

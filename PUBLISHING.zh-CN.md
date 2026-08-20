@@ -736,3 +736,16 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 6. `Ctrl+O` 和 `/details` 继续切换底部最近活动，不提交或清空正在输入的补充内容。
 7. 中文与英文模式、窄终端换行、任务结束尾部刷新、用户输入期间刷新和 Windows PowerShell/ConPTY 均完成回归验证。
 8. 完整测试、类型检查、构建、`npm pack --dry-run --json` 与干净安装验收全部通过；包内只保留 `V0.16.5_DESIGN.zh-CN.md`，不得包含 `.xiu/` 或旧版设计稿。
+
+## 三十五、0.17.0 可验证产品基础发布门禁
+
+发布 `0.17.0` 前除通用流程外，还必须验证：
+
+1. Windows、Ubuntu、macOS 的 CI 均执行 Node.js 20.18.1 下的类型检查、完整测试、构建、打包预览和临时目录安装冒烟；失败不得以 `continue-on-error` 伪装通过。
+2. Pull Request CI 不读取模型、npm 或其他外部服务密钥，不运行真实模型任务，也不执行发布、远端写入或全局安装。
+3. `npm run smoke:package` 只在临时目录安装当前工作区生成的包，验证包名、包版本与 `xiu --version` 一致，并在成功或失败后清理临时目录。
+4. `README.md`、`README.zh-CN.md`、`QUICKSTART.md`、`CHANGELOG.md`、`CONTRIBUTING.md` 的本地链接全部存在；中英文平台状态、安全边界和限制描述一致。
+5. README 不得声称实时视图与 `/report` 使用同一持久账本，不得声称任务只向 `~/.xiu/` 与 `.xiu/` 写入，也不得将 CI 目标误报为真实平台验收。
+6. `SECURITY.zh-CN.md` 明确禁止显示、保存或伪造 Provider API 未返回的隐藏思维链；实时输出只包含明确面向用户的摘要和程序可核验事件。
+7. 包内只保留 `V0.17.0_DESIGN.zh-CN.md`，不得包含旧版设计稿、`.xiu/`、`.github/` 或开发者本地状态。
+8. 发布仍由用户显式决定；发布后必须回读官方 Registry 的版本、latest、SHA-512 完整性和文件清单，再给精确发布提交打 `v0.17.0` tag。
