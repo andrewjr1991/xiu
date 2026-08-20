@@ -25,6 +25,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "node scripts/run-tests.mjs",
+    "test:ci": "node scripts/run-ci-tests.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:docs": "node scripts/check-docs.mjs",
     "smoke:package": "node scripts/package-smoke.mjs"
