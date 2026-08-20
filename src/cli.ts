@@ -25,7 +25,7 @@ import { MediaOperationStore, type MediaOperationRecord } from "./media-operatio
 import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
 import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
-import { readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
+import { persistentLiveOutput, readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry, type DiscoveredPlugin } from "./plugins.js";
@@ -50,6 +50,7 @@ import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializ
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { checkForUpdates, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -536,6 +537,7 @@ async function main(): Promise<void> {
       if (runningTaskView) runningTaskView.write(value);
       else process.stdout.write(value);
     };
+    const redactTerminalOutput = (value: string): string => redactSecrets(value, config.apiKey ? [config.apiKey] : []);
     const formatByteSize = (bytes: number): string => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
     const fileKind = (filename: string): string => ({
       ".html": "HTML", ".htm": "HTML", ".ts": "TypeScript", ".tsx": "TSX", ".js": "JavaScript", ".jsx": "JSX",
@@ -914,20 +916,35 @@ async function main(): Promise<void> {
       {
         onModelStart: (turn) => {
           runningTaskView?.setTurn(turn, config.maxTurns);
-          runningTaskView?.activity(localize(language, `模型第 ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} 轮开始`, `Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`));
+          const modelTurn = localize(language, `模型第 ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} 轮开始`, `Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`);
+          runningTaskView?.activity(modelTurn);
+          if (runningTaskView) emitLine(chalk.cyan(`● ${modelTurn}`));
           startPhase(verificationReadyForSummary
             ? localize(language, "验证已通过，正在整理最终结果", "Verification passed; preparing the final result")
             : localize(language, "思考中", "Thinking"));
         },
         onModelEnd: () => stopPhase(),
-        onText: (text) => emitLine(`${text}\n`),
+        onText: (text) => {
+          // Interactive final text is rendered once, after the complete turn
+          // has passed normalization and evidence gates. Tool-bound narration
+          // is persisted by onAssistantTurn below.
+          if (!runningTaskView) emitLine(`${text}\n`);
+        },
         onTextDelta: (text) => {
           stopPhase();
-          emitWrite(text);
+          // Interactive tasks wait until the complete assistant turn is known
+          // before making text persistent. This prevents a streamed draft that
+          // is later rejected by a verification/evidence gate from leaking into
+          // terminal scrollback. One-shot mode continues to stream directly.
+          if (!runningTaskView) emitWrite(text);
         },
-        onTextStreamEnd: () => emitWrite("\n\n"),
+        onTextStreamEnd: () => {
+          if (!runningTaskView) emitWrite("\n\n");
+        },
         onAssistantTurn: (text, hasToolCalls) => {
-          if (hasToolCalls) runningTaskView?.narrate(text);
+          if (!hasToolCalls || !runningTaskView) return;
+          const narration = runningTaskView.narrate(text);
+          if (narration) emitLine(`${chalk.cyan(localize(language, "思考摘要：", "Reasoning summary: "))}${redactTerminalOutput(narration)}\n`);
         },
         onToolStart: (name, description, details) => {
           if (!details.verification) verificationReadyForSummary = false;
@@ -949,7 +966,7 @@ async function main(): Promise<void> {
           const failed = /^(?:Tool error:|Tool execution denied|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
-          const summary = result.replace(/\s+/g, " ").trim();
+          const summary = redactTerminalOutput(result.replace(/\s+/g, " ").trim());
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
           emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
           if (!failed && activeToolDetails) {
@@ -1014,6 +1031,18 @@ async function main(): Promise<void> {
         onWorkspaceChange: (change) => {
           if (runningTaskView) {
             runningTaskView.recordWorkspaceChange(change);
+            emitLine(chalk.yellow(localize(language, `△ 文件变化：${redactTerminalOutput(change.description)}`, `△ File change: ${redactTerminalOutput(change.description)}`)));
+            for (const file of change.files) {
+              const label = ({ created: localize(language, "已创建", "Created"), modified: localize(language, "已修改", "Modified"), deleted: localize(language, "已删除", "Deleted") } as const)[file.kind];
+              const counts = file.additions !== undefined && file.deletions !== undefined ? ` +${file.additions} -${file.deletions}` : "";
+              emitLine(`  ${chalk.green("√")} ${label} ${file.path}${counts}`);
+              if (file.hunk) emitLine(chalk.dim(`    ${redactTerminalOutput(file.hunk)}`));
+              for (const preview of file.preview.slice(0, 8)) {
+                const color = preview.startsWith("+") ? chalk.green : preview.startsWith("-") ? chalk.red : chalk.dim;
+                emitLine(`    ${color(redactTerminalOutput(preview))}`);
+              }
+            }
+            emitLine();
           } else {
             if (initialTask) oneShotChanges.push(change);
             printWorkspaceChanges([change]);
@@ -1683,6 +1712,7 @@ async function main(): Promise<void> {
             onToggleDetails: () => { view.toggleDetails(); },
             onPaste: () => clipboard.paste(),
             enableRightClickPaste: rightClickPasteEnabled,
+            liveOutput: () => view.drain(),
             signal: inputController.signal,
             refreshMs: 250,
             language,
@@ -1692,7 +1722,6 @@ async function main(): Promise<void> {
           if (activeQueuedInputController === inputController) activeQueuedInputController = undefined;
           const liveChanges = view.drainWorkspaceChanges();
           replayChanges.push(...liveChanges);
-          printWorkspaceChanges(liveChanges);
           await draftStore.flush();
           await activeApproval;
           if (cancelledFromKeyboard) {
@@ -1816,8 +1845,8 @@ async function main(): Promise<void> {
         if (discoveredSkills.length) console.log(chalk.green(localize(language, `已发现并加载新技能：${discoveredSkills.map((skill) => skill.name).join("、")}。`, `Discovered and loaded new skill(s): ${discoveredSkills.map((skill) => skill.name).join(", ")}.`)));
         const finalChanges = view.drainWorkspaceChanges();
         replayChanges.push(...finalChanges);
-        printWorkspaceChanges(finalChanges);
-        view.discard();
+        const remainingLiveOutput = view.drain();
+        if (remainingLiveOutput) process.stdout.write(persistentLiveOutput(remainingLiveOutput));
         const receipts = view.receiptLines();
         if (receipts.length) console.log(`${chalk.cyan(localize(language, "关键操作", "Key actions"))}\n${receipts.map((line) => chalk.green(line)).join("\n")}\n`);
         const interaction = parseAssistantInteraction(finalResponse, language);

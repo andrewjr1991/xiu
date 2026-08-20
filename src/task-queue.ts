@@ -152,14 +152,15 @@ export class RunningTaskView {
     return this.pendingChanges.splice(0).map((change) => structuredClone(change));
   }
 
-  narrate(text: string): void {
+  narrate(text: string): string | undefined {
     const normalized = text
       .replace(/```[\s\S]*?```/g, " ")
       .replace(/[#*_`>]/g, "")
       .replace(/\s+/g, " ")
       .trim();
-    if (!normalized || (this.uiLanguage === "zh-CN" && isEnglishNarrative(normalized))) return;
+    if (!normalized || (this.uiLanguage === "zh-CN" && isEnglishNarrative(normalized))) return undefined;
     this.latestNarration = normalized.length > 600 ? `${normalized.slice(0, 597)}...` : normalized;
+    return this.latestNarration;
   }
 
   setCompletion(message: string, success: boolean): void {

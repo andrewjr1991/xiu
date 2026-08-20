@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, resolveCommandInput, shouldIgnoreEmptyInteractiveSubmit, terminalDisplayWidth, terminalKeyName, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, persistentLiveOutput, resolveCommandInput, shouldIgnoreEmptyInteractiveSubmit, terminalDisplayWidth, terminalKeyName, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -75,6 +75,12 @@ test("running-task input ignores blank Enter without discarding real steering", 
   assert.equal(shouldIgnoreEmptyInteractiveSubmit("  \r\n", true), true);
   assert.equal(shouldIgnoreEmptyInteractiveSubmit("继续检查", true), false);
   assert.equal(shouldIgnoreEmptyInteractiveSubmit("", false), false);
+});
+
+test("persistent live output always leaves the redraw frame on a new line", () => {
+  assert.equal(persistentLiveOutput(""), "");
+  assert.equal(persistentLiveOutput("tool started"), "tool started\n");
+  assert.equal(persistentLiveOutput("tool finished\n"), "tool finished\n");
 });
 
 test("terminal mouse reports recognize right click without treating release as another paste", () => {

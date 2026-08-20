@@ -23,6 +23,12 @@ export interface InteractiveInputOptions {
   enableRightClickPaste?: boolean;
   signal?: AbortSignal;
   refreshMs?: number;
+  /**
+   * Drain output produced while the live editor owns the terminal. The editor
+   * clears its repaintable frame, writes this text into terminal scrollback,
+   * and then redraws the prompt and footer below it.
+   */
+  liveOutput?: () => string;
   language?: UiLanguage;
   persistPrompt?: boolean;
   /** Keep an empty Enter inside the live editor instead of completing it. */
@@ -449,6 +455,11 @@ export function terminalOptionFrameLines<T>(
   return lines;
 }
 
+export function persistentLiveOutput(value: string): string {
+  if (!value) return "";
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
 function clearRenderedLines(lines: number): void {
   readline.cursorTo(process.stdout, 0);
   for (let index = 0; index < lines; index++) {
@@ -576,6 +587,8 @@ export async function readInteractiveInput(
     };
     const render = (): void => {
       clearRenderedFrame(renderedLines, cursorRow);
+      const liveOutput = persistentLiveOutput(options.liveOutput?.() ?? "");
+      if (liveOutput) process.stdout.write(liveOutput);
       const baseFooter = typeof footer === "function" ? footer() : footer;
       const currentFooter = [pasteNotice, baseFooter].filter(Boolean).join("\n");
       const frame = editorFrameLines(prompt, state, suggestions(), selected, currentFooter, process.stdout.columns || 100, searchQuery);

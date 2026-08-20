@@ -141,6 +141,12 @@ test("running task summary keeps concise narration while hidden logs can be disc
   assert.deepEqual(view.completionSummary(), { message: "Done - verified", success: true });
 });
 
+test("running task narration returns the safe visible summary for persistent output", () => {
+  const view = new RunningTaskView();
+  assert.equal(view.narrate("**Located the rendering gap.** Next I will patch the live output drain."), "Located the rendering gap. Next I will patch the live output drain.");
+  assert.match(view.progressLines().join("\n"), /Update: Located the rendering gap/);
+});
+
 test("Chinese task view localizes progress, actions, and footer controls", () => {
   const view = new RunningTaskView(256_000, "zh-CN");
   view.setTurn(3);
