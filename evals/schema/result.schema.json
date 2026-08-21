@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xiu.local/evals/result.schema.json",
+  "type": "object",
+  "required": ["protocolVersion", "runId", "mode", "suite", "suiteHash", "xiu", "environment", "startedAt", "finishedAt", "trials", "summary"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "runId": { "type": "string" },
+    "mode": { "enum": ["simulated", "real"] },
+    "suite": { "type": "string" },
+    "suiteHash": { "type": "string" },
+    "trials": { "type": "array" },
+    "summary": { "type": "object" }
+  }
+}

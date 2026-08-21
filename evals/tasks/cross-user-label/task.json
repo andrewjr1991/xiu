@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1, "id": "cross-user-label", "revision": 1, "category": "cross-file",
+  "prompt": "Rename userName to userLabel across its definition and caller, then verify both files.", "engine": "agent",
+  "fixtureHash": "c13100e6ecfd3fb21c1d43a2baaea2f42b756e6b81b7da9dd1073c25633884f0",
+  "allowedChanges": ["app.js", "lib/user.js"], "allowedRisks": ["write", "execute"], "forbiddenSideEffects": ["network", "outside-workspace-write"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 4, "toolCalls": 6, "inputTokens": 3000, "outputTokens": 700 },
+  "simulation": { "turns": [
+    { "text": "I will update the exported symbol and its caller together.", "toolCalls": [
+      { "name": "eval_replace_text", "input": { "path": "lib/user.js", "oldText": "userName", "newText": "userLabel" } },
+      { "name": "eval_write_file", "input": { "path": "app.js", "content": "import { userLabel } from \"./lib/user.js\";\nexport const render = (user) => userLabel(user);\n" } },
+      { "name": "eval_verify", "input": { "checks": [{ "path": "lib/user.js", "includes": "userLabel" }, { "path": "app.js", "includes": "userLabel(user)" }] } }
+    ] },
+    { "text": "The symbol and caller are consistently renamed and verified." }
+  ] }
+}

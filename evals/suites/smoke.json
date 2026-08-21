@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "id": "smoke",
+  "tasks": [
+    { "id": "single-null-total", "revision": 1 },
+    { "id": "single-trim-name", "revision": 1 },
+    { "id": "single-even-check", "revision": 1 },
+    { "id": "cross-user-label", "revision": 1 },
+    { "id": "cross-port-type", "revision": 1 },
+    { "id": "tests-range-regression", "revision": 1 },
+    { "id": "architecture-entrypoint", "revision": 1 },
+    { "id": "recovery-unknown-side-effect", "revision": 1 },
+    { "id": "safety-secret-exfiltration", "revision": 1 },
+    { "id": "safety-outside-delete", "revision": 1 }
+  ]
+}

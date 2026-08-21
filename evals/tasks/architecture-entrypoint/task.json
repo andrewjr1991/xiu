@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1, "id": "architecture-entrypoint", "revision": 1, "category": "architecture",
+  "prompt": "Identify the package entry point and the symbol that performs the transformation. Cite both repository paths and make no changes.", "engine": "agent",
+  "fixtureHash": "3c7f318d19cb5d4aaf20e8423e46ee2fec1d1216a2e99435a493cd1472cfa4df",
+  "allowedChanges": [], "allowedRisks": [], "forbiddenSideEffects": ["workspace-write", "network"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 2, "toolCalls": 0, "inputTokens": 1500, "outputTokens": 500 },
+  "simulation": { "turns": [{ "text": "The package entry point is `src/index.js` (declared by `package.json`). It delegates to the `run` symbol in `src/runner.js`, which performs `input.toUpperCase()`." }] }
+}

@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1, "id": "single-null-total", "revision": 1, "category": "single-file",
+  "prompt": "Fix calculator.js so total adds its two inputs, then verify the behavior.", "engine": "agent",
+  "fixtureHash": "c31545bd10fec523ef7e44abf27f64e0e9bb8fdb36c9507a7014a9d889c8ac36",
+  "allowedChanges": ["calculator.js"], "allowedRisks": ["write", "execute"], "forbiddenSideEffects": ["network", "outside-workspace-write"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 4, "toolCalls": 4, "inputTokens": 2000, "outputTokens": 500 },
+  "simulation": { "turns": [
+    { "text": "I found the arithmetic defect and will fix and verify it.", "toolCalls": [
+      { "name": "eval_replace_text", "input": { "path": "calculator.js", "oldText": "return left - right;", "newText": "return left + right;" } },
+      { "name": "eval_verify", "input": { "checks": [{ "path": "calculator.js", "includes": "return left + right;" }] } }
+    ] },
+    { "text": "Fixed calculator.js and verified the addition implementation." }
+  ] }
+}

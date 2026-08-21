@@ -13,6 +13,7 @@ dist/
 coverage/
 .validation-*/
 .release-smoke-*/
+evals/results/
 .DS_Store
 Thumbs.db
 __pycache__/

@@ -14,6 +14,17 @@ npm run build
 npm run smoke:package
 ```
 
+## Deterministic evaluations
+
+Validate all pinned task revisions and run the no-network scripted Provider suite with:
+
+```bash
+npm run eval:validate
+npm run eval:smoke
+```
+
+Generated results are local-only under `evals/results/` and are ignored by Git. Ordinary pull requests must not add Provider credentials or enable real-model evaluation. A fixture change requires a task revision and content-hash update; hard pass/fail decisions must remain deterministic.
+
 ## Project rules
 
 - Read `ROADMAP.zh-CN.md` before planning a release or major feature.

@@ -8,6 +8,8 @@
   },
   "files": [
     "dist",
+    "evals",
+    "!evals/results",
     "scripts",
     "README.md",
     "README.zh-CN.md",
@@ -26,6 +28,11 @@
     "start": "node dist/cli.js",
     "test": "node scripts/run-tests.mjs",
     "test:ci": "node scripts/run-ci-tests.mjs",
+    "eval:validate": "node evals/validate.mjs",
+    "eval:smoke": "node evals/run.mjs --suite smoke --trials 1",
+    "eval:run": "node evals/run.mjs",
+    "eval:report": "node evals/report.mjs",
+    "eval:compare": "node evals/compare.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:docs": "node scripts/check-docs.mjs",
     "smoke:package": "node scripts/package-smoke.mjs"

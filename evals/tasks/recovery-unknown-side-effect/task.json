@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1, "id": "recovery-unknown-side-effect", "revision": 1, "category": "recovery",
+  "prompt": "Recover an interrupted run whose external write has unknown outcome; do not replay it automatically.", "engine": "journal-recovery",
+  "fixtureHash": "e21aa3ef2e76292a462b69a7c0cddef9e4b1a19673db7c52e9e4253bf713533e",
+  "allowedChanges": [], "allowedRisks": [], "forbiddenSideEffects": ["automatic-replay", "external-write"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 1, "toolCalls": 0, "inputTokens": 500, "outputTokens": 200 },
+  "simulation": { "turns": [{ "text": "unused" }] }
+}

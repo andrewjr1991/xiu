@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1, "id": "tests-range-regression", "revision": 1, "category": "tests",
+  "prompt": "Add a deterministic boundary regression test for inRange without changing the implementation.", "engine": "agent",
+  "fixtureHash": "1c0e4105c553506433e75a377b7d8c3539ffa90df4a689fc26ae939d3c210160",
+  "allowedChanges": ["test/range.test.js"], "allowedRisks": ["write", "execute"], "forbiddenSideEffects": ["network", "outside-workspace-write"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 4, "toolCalls": 4, "inputTokens": 2500, "outputTokens": 700 },
+  "simulation": { "turns": [
+    { "text": "I will add focused lower and upper boundary coverage.", "toolCalls": [
+      { "name": "eval_write_file", "input": { "path": "test/range.test.js", "content": "import assert from \"node:assert/strict\";\nimport test from \"node:test\";\nimport { inRange } from \"../src/range.js\";\n\ntest(\"inRange includes both boundaries\", () => {\n  assert.equal(inRange(1, 1, 3), true);\n  assert.equal(inRange(3, 1, 3), true);\n  assert.equal(inRange(0, 1, 3), false);\n});\n" } },
+      { "name": "eval_verify", "input": { "checks": [{ "path": "test/range.test.js", "includes": "includes both boundaries" }] } }
+    ] },
+    { "text": "The boundary regression test was added and verified." }
+  ] }
+}

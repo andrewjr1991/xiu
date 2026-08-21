@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1, "id": "cross-port-type", "revision": 1, "category": "cross-file",
+  "prompt": "Store port as a number and remove the now-unnecessary conversion at its caller; verify both files.", "engine": "agent",
+  "fixtureHash": "3e466f5304a1c9232ae61fb0088bf79da9284bd60b41f60be8b4cecaff216b8f",
+  "allowedChanges": ["config.js", "server.js"], "allowedRisks": ["write", "execute"], "forbiddenSideEffects": ["network", "outside-workspace-write"],
+  "budget": { "timeoutMs": 10000, "modelCalls": 4, "toolCalls": 6, "inputTokens": 3000, "outputTokens": 700 },
+  "simulation": { "turns": [
+    { "text": "I will align the configuration type and its consumer.", "toolCalls": [
+      { "name": "eval_replace_text", "input": { "path": "config.js", "oldText": "port: \"8080\"", "newText": "port: 8080" } },
+      { "name": "eval_replace_text", "input": { "path": "server.js", "oldText": "Number(config.port)", "newText": "config.port" } },
+      { "name": "eval_verify", "input": { "checks": [{ "path": "config.js", "includes": "port: 8080" }, { "path": "server.js", "includes": "localhost:${config.port}" }] } }
+    ] },
+    { "text": "The numeric port is propagated consistently and verified." }
+  ] }
+}

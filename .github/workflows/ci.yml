@@ -34,5 +34,7 @@ jobs:
       - name: Run tests
         run: npm run test:ci
       - run: npm run build
+      - name: Run deterministic evaluation smoke
+        run: npm run eval:smoke
       - run: npm pack --dry-run --json
       - run: npm run smoke:package

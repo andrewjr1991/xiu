@@ -5,6 +5,8 @@ This file summarizes released behavior. Detailed implementation history remains 
 ## Unreleased — 0.18.0
 
 - Design a repeatable, security-preserving evaluation harness and a comparable v0.17.0 quality/cost baseline before optimization work begins.
+- Add versioned task/result protocols, isolated scripted-Provider execution, deterministic assertions, sanitized reports, comparison gates, and the first 10 fixed tasks.
+- Run the deterministic evaluation smoke in ordinary three-platform CI without network access, Provider credentials, or model spend.
 
 ## 0.17.0 — 2026-08-20
 
