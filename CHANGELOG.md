@@ -2,6 +2,10 @@
 
 This file summarizes released behavior. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## Unreleased — 0.18.0
+
+- Design a repeatable, security-preserving evaluation harness and a comparable v0.17.0 quality/cost baseline before optimization work begins.
+
 ## 0.17.0 — 2026-08-20
 
 - Establish reproducible package smoke testing and cross-platform CI foundations.
