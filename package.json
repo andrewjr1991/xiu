@@ -31,6 +31,7 @@
     "eval:validate": "node evals/validate.mjs",
     "eval:smoke": "node evals/run.mjs --suite smoke --trials 1",
     "eval:run": "node evals/run.mjs",
+    "eval:real": "node evals/real-run.mjs",
     "eval:report": "node evals/report.mjs",
     "eval:compare": "node evals/compare.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

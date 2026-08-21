@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadSuite, redact, safeWorkspacePath, validateAll, validateResult } from "../evals/lib/core.mjs";
+import { loadSuite, loadTask, redact, safeWorkspacePath, validateAll, validateResult } from "../evals/lib/core.mjs";
 import { createIsolation } from "../evals/lib/isolation.mjs";
 import { classifyFailure, enforceTrialBudget, scrubSensitiveEnvironment, TaskAssertionError } from "../evals/lib/policy.mjs";
+import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "../evals/lib/real-policy.mjs";
+import { fetchArtifactMetadata } from "../evals/lib/registry-artifact.mjs";
 
 test("evaluation suites pin ten valid task revisions", async () => {
   const suites = await validateAll();
@@ -65,4 +67,41 @@ test("simulated evaluation environment removes credential-like variables", () =>
   const environment: NodeJS.ProcessEnv = { PATH: "safe", OPENAI_API_KEY: "secret", CUSTOM_AUTH_TOKEN: "secret" };
   assert.equal(scrubSensitiveEnvironment(environment), 2);
   assert.deepEqual(environment, { PATH: "safe" });
+});
+
+test("approved real evaluation config produces an artifact-bound confirmation token", async () => {
+  const config = validateRealConfig(JSON.parse(await fs.readFile(path.resolve("evals/configs/agnes-enterprise-v0.17.0.json"), "utf8")));
+  const first = realConfirmationToken(config, "suite-hash", "sha512-first");
+  const second = realConfirmationToken(config, "suite-hash", "sha512-second");
+  assert.match(first, /^CONFIRM-REAL-EVAL-[A-F0-9]{16}$/);
+  assert.notEqual(first, second);
+});
+
+test("Enterprise free-model ledger enforces non-cost global budgets", async () => {
+  const config = validateRealConfig(JSON.parse(await fs.readFile(path.resolve("evals/configs/agnes-enterprise-v0.17.0.json"), "utf8")));
+  config.globalBudget.modelCalls = 1;
+  const ledger = new RealEvaluationLedger(config, () => 1000);
+  ledger.assertCanStartModelCall();
+  ledger.recordModelTurn({ usage: { inputTokens: 20, outputTokens: 5 }, raw: {} });
+  assert.equal(ledger.snapshot().estimatedCostUsd, 0);
+  assert.throws(() => ledger.assertCanStartModelCall(), /model-call budget/);
+});
+
+test("real evaluation global limits cover the conservative maximum of all pinned trials", async () => {
+  const config = validateRealConfig(JSON.parse(await fs.readFile(path.resolve("evals/configs/agnes-enterprise-v0.17.0.json"), "utf8")));
+  const suite = await loadSuite("baseline");
+  const tasks = [];
+  for (const reference of suite.suite.tasks) tasks.push((await loadTask(reference.id, reference.revision)).task);
+  const maximum = validateSuiteBudget(config, tasks);
+  assert.ok(maximum.modelCalls <= config.globalBudget.modelCalls);
+  const tooSmall = structuredClone(config);
+  tooSmall.globalBudget.modelCalls = maximum.modelCalls - 1;
+  assert.throws(() => validateSuiteBudget(tooSmall, tasks), /conservative maximum/);
+});
+
+test("Registry metadata validation pins package, version, integrity, and HTTPS origin", async () => {
+  const goodFetch = async () => ({ ok: true, json: async () => ({ name: "@xiu-ai/cli", version: "0.17.0", dist: { integrity: "sha512-abc", tarball: "https://registry.npmjs.org/@xiu-ai/cli/-/cli-0.17.0.tgz" } }) });
+  assert.equal((await fetchArtifactMetadata("@xiu-ai/cli", "0.17.0", goodFetch)).integrity, "sha512-abc");
+  const badFetch = async () => ({ ok: true, json: async () => ({ name: "@xiu-ai/cli", version: "0.17.0", dist: { integrity: "sha512-abc", tarball: "https://example.com/cli.tgz" } }) });
+  await assert.rejects(fetchArtifactMetadata("@xiu-ai/cli", "0.17.0", badFetch), /untrusted tarball origin/);
 });

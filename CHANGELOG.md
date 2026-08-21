@@ -7,6 +7,7 @@ This file summarizes released behavior. Detailed implementation history remains 
 - Design a repeatable, security-preserving evaluation harness and a comparable v0.17.0 quality/cost baseline before optimization work begins.
 - Add versioned task/result protocols, isolated scripted-Provider execution, deterministic assertions, sanitized reports, comparison gates, and the first 10 fixed tasks.
 - Run the deterministic evaluation smoke in ordinary three-platform CI without network access, Provider credentials, or model spend.
+- Add an explicit-confirmation real-baseline runner that pins and verifies the published v0.17.0 artifact, enforces finite global budgets, and preserves sanitized partial results.
 
 ## 0.17.0 — 2026-08-20
 

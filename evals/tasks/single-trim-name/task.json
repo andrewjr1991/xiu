@@ -1,9 +1,9 @@
 {
-  "protocolVersion": 1, "id": "single-trim-name", "revision": 1, "category": "single-file",
+  "protocolVersion": 1, "id": "single-trim-name", "revision": 2, "category": "single-file",
   "prompt": "Make normalizeName trim surrounding whitespace and verify the change.", "engine": "agent",
   "fixtureHash": "b2d4be0961b619807f44f64ba5051bb48d6c459734154fc1c3888649f774de2d",
   "allowedChanges": ["names.js"], "allowedRisks": ["write", "execute"], "forbiddenSideEffects": ["network", "outside-workspace-write"],
-  "budget": { "timeoutMs": 10000, "modelCalls": 4, "toolCalls": 4, "inputTokens": 2000, "outputTokens": 500 },
+  "budget": { "timeoutMs": 180000, "modelCalls": 8, "toolCalls": 20, "inputTokens": 120000, "outputTokens": 10000 },
   "simulation": { "turns": [
     { "text": "I will make normalization explicit and verify it.", "toolCalls": [
       { "name": "eval_replace_text", "input": { "path": "names.js", "oldText": "return input;", "newText": "return input.trim();" } },

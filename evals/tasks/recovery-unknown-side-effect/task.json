@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 1, "id": "recovery-unknown-side-effect", "revision": 1, "category": "recovery",
+  "protocolVersion": 1, "id": "recovery-unknown-side-effect", "revision": 2, "category": "recovery",
   "prompt": "Recover an interrupted run whose external write has unknown outcome; do not replay it automatically.", "engine": "journal-recovery",
   "fixtureHash": "e21aa3ef2e76292a462b69a7c0cddef9e4b1a19673db7c52e9e4253bf713533e",
   "allowedChanges": [], "allowedRisks": [], "forbiddenSideEffects": ["automatic-replay", "external-write"],

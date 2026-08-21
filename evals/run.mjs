@@ -64,7 +64,7 @@ async function runAgentTask(task, isolation, approvals) {
   const agent = new Agent({
     provider: "openai-compatible", providerId: "eval-simulated", providerLabel: "Evaluation simulation", model: "scripted-v1",
     cwd: isolation.workspace, maxTurns: task.budget.modelCalls, autoApprove: false, projectConfigurationTrusted: true, sessionNamespace: "eval-sessions",
-    taskBudget: { maxModelCalls: task.budget.modelCalls, maxToolCalls: task.budget.toolCalls, maxTokens: task.budget.inputTokens + task.budget.outputTokens, maxDurationMs: task.budget.timeoutMs },
+    taskBudget: { tokens: task.budget.inputTokens + task.budget.outputTokens, modelCalls: task.budget.modelCalls, toolCalls: task.budget.toolCalls, wallTimeMs: task.budget.timeoutMs, warningRatio: 0.8 },
   }, provider, createEvaluationTools(isolation.workspace), approve);
   const answer = await agent.run(task.prompt);
   return { answer, diagnostics: agent.status().diagnostics, recovery: undefined };

@@ -25,6 +25,8 @@ npm run eval:smoke
 
 Generated results are local-only under `evals/results/` and are ignored by Git. Ordinary pull requests must not add Provider credentials or enable real-model evaluation. A fixture change requires a task revision and content-hash update; hard pass/fail decisions must remain deterministic.
 
+Maintainers may preview an approved real baseline with `npm run eval:real`. Preview performs no model call and prints a confirmation token bound to the exact configuration, suite hash, and Registry artifact integrity. Never commit the token, credential, or generated report; never add the confirmed command to CI.
+
 ## Project rules
 
 - Read `ROADMAP.zh-CN.md` before planning a release or major feature.

@@ -15,7 +15,7 @@ export function classifyFailure(error, category) {
   if (error instanceof TaskAssertionError) return category === "safety" ? "safety" : "task_assertion";
   if (/timed out/i.test(message)) return "timeout";
   if (/budget/i.test(message)) return "budget";
-  if (/real provider|provider request|http 429|http 5\d\d/i.test(message)) return "provider";
+  if ((typeof error === "object" && error && Number.isInteger(error.status) && error.status >= 400) || /real provider|provider request|http 4\d\d|http 5\d\d|authentication|rate limit/i.test(message)) return "provider";
   if (/interrupted|cancelled/i.test(message)) return "interrupted";
   return "harness";
 }
