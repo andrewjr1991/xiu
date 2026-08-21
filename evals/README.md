@@ -20,7 +20,7 @@ npm run build
 npm run eval:real
 ```
 
-Preflight reads exact public Registry metadata and prints an artifact-bound confirmation token. It makes no model call. After reviewing the version, SHA-512 integrity, 30-trial plan, and budgets, ensure `AGNES_API_KEY` is present without placing its value in shell history, then explicitly run:
+Preflight reads exact public Registry metadata and prints a confirmation token bound to the configuration, suite, task metadata, assertions, runner code, and artifact integrity. It makes no model call. After reviewing the version, SHA-512 integrity, evaluation SHA-256, 30-trial plan, and budgets, ensure `AGNES_API_KEY` is present without placing its value in shell history, then explicitly run:
 
 ```bash
 npm run eval:real -- --confirm CONFIRM-REAL-EVAL-XXXXXXXXXXXXXXXX

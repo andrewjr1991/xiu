@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { changedFiles, loadSuite, loadTask, readJson, redact, resultsRoot, snapshotWorkspace, summarize, validateResult, writeJson } from "./lib/core.mjs";
+import { changedFiles, loadSuite, loadTask, readJson, redact, resultsRoot, sha256, snapshotWorkspace, summarize, validateResult, writeJson } from "./lib/core.mjs";
 import { createIsolation } from "./lib/isolation.mjs";
 import { classifyFailure, enforceTrialBudget, TaskAssertionError } from "./lib/policy.mjs";
 import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "./lib/real-policy.mjs";
@@ -22,11 +22,23 @@ function parseArguments(argv) {
   return result;
 }
 
-function printPreview(config, suite, metadata, token) {
+async function executionHash(loadedTasks) {
+  const files = [
+    "evals/real-run.mjs", "evals/lib/assertions.mjs", "evals/lib/core.mjs", "evals/lib/isolation.mjs", "evals/lib/policy.mjs",
+    "evals/lib/real-policy.mjs", "evals/lib/registry-artifact.mjs", "evals/lib/tools.mjs",
+    ...loadedTasks.flatMap((item) => [path.join(item.directory, "task.json"), path.join(item.directory, "assert.mjs")]),
+  ].map((file) => path.resolve(file)).sort((left, right) => left.localeCompare(right, "en"));
+  const chunks = [];
+  for (const file of files) chunks.push(path.relative(process.cwd(), file).split(path.sep).join("/"), "\0", await fs.readFile(file, "utf8"), "\0");
+  return sha256(chunks.join(""));
+}
+
+function printPreview(config, suite, metadata, executionDigest, token) {
   const totalTrials = suite.tasks.length * config.trials;
   console.log("REAL MODEL EVALUATION — no calls have been made");
   console.log(`Target: ${metadata.packageName}@${metadata.version}`);
   console.log(`Integrity: ${metadata.integrity}`);
+  console.log(`Evaluation code/tasks: sha256-${executionDigest}`);
   console.log(`Suite: ${suite.id} (${suite.tasks.length} tasks × ${config.trials} trials = ${totalTrials} trials)`);
   console.log(`Provider/model: ${config.provider.id} / ${config.provider.model}`);
   console.log(`Billing: Enterprise, model attested free; authorization ceiling ${config.billing.authorizationLimitUsd} ${config.billing.currency}`);
@@ -144,9 +156,10 @@ async function main() {
   const loadedTasks = [];
   for (const reference of suite.tasks) loadedTasks.push(await loadTask(reference.id, reference.revision));
   validateSuiteBudget(config, loadedTasks.map((item) => item.task));
+  const executionDigest = await executionHash(loadedTasks);
   const metadata = await fetchArtifactMetadata(config.target.package, config.target.version);
-  const token = realConfirmationToken(config, suiteHash, metadata.integrity);
-  printPreview(config, suite, metadata, token);
+  const token = realConfirmationToken(config, suiteHash, metadata.integrity, executionDigest);
+  printPreview(config, suite, metadata, executionDigest, token);
   if (!options.confirm) {
     console.log("No real model calls were made. Re-run with --confirm <token> only after reviewing this preview.");
     return;
@@ -171,7 +184,7 @@ async function main() {
     const output = options.output ? path.resolve(options.output) : path.join(resultsRoot, `real-${config.id}-${runId}.json`);
     const startedAt = new Date().toISOString();
     const trials = [];
-    const base = { protocolVersion: 1, runId, mode: "real", suite: suite.id, suiteHash, xiu: { version: metadata.version, package: metadata.packageName, integrity: metadata.integrity }, environment: { node: process.version, platform: process.platform, arch: process.arch, provider: config.provider.id, model: config.provider.model }, billing: config.billing, globalBudget: config.globalBudget, startedAt };
+    const base = { protocolVersion: 1, runId, mode: "real", suite: suite.id, suiteHash, executionHash: executionDigest, xiu: { version: metadata.version, package: metadata.packageName, integrity: metadata.integrity }, environment: { node: process.version, platform: process.platform, arch: process.arch, provider: config.provider.id, model: config.provider.model }, billing: config.billing, globalBudget: config.globalBudget, startedAt };
     await writeJson(output, validateResult(redact({ ...base, state: "running", finishedAt: startedAt, trials, summary: summarize(trials), ledger: ledger.snapshot() })));
     try {
       for (const reference of suite.tasks) {

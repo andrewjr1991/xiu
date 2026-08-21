@@ -26,8 +26,9 @@ export function validateRealConfig(config) {
   return config;
 }
 
-export function realConfirmationToken(config, suiteHash, artifactIntegrity) {
-  const digest = sha256(stableJson({ config, suiteHash, artifactIntegrity }));
+export function realConfirmationToken(config, suiteHash, artifactIntegrity, executionHash) {
+  if (!/^[a-f0-9]{64}$/.test(executionHash)) throw new Error("A full execution hash is required for real-evaluation confirmation.");
+  const digest = sha256(stableJson({ config, suiteHash, artifactIntegrity, executionHash }));
   return `CONFIRM-REAL-EVAL-${digest.slice(0, 16).toUpperCase()}`;
 }
 

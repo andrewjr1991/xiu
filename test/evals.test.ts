@@ -71,10 +71,12 @@ test("simulated evaluation environment removes credential-like variables", () =>
 
 test("approved real evaluation config produces an artifact-bound confirmation token", async () => {
   const config = validateRealConfig(JSON.parse(await fs.readFile(path.resolve("evals/configs/agnes-enterprise-v0.17.0.json"), "utf8")));
-  const first = realConfirmationToken(config, "suite-hash", "sha512-first");
-  const second = realConfirmationToken(config, "suite-hash", "sha512-second");
+  const executionHash = "a".repeat(64);
+  const first = realConfirmationToken(config, "suite-hash", "sha512-first", executionHash);
+  const second = realConfirmationToken(config, "suite-hash", "sha512-second", executionHash);
   assert.match(first, /^CONFIRM-REAL-EVAL-[A-F0-9]{16}$/);
   assert.notEqual(first, second);
+  assert.notEqual(first, realConfirmationToken(config, "suite-hash", "sha512-first", "b".repeat(64)));
 });
 
 test("Enterprise free-model ledger enforces non-cost global budgets", async () => {
