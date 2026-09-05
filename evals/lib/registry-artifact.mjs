@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resultsRoot } from "./core.mjs";
 
 const registryOrigin = "https://registry.npmjs.org";
 
@@ -61,14 +61,17 @@ function run(command, args, cwd) {
 }
 
 export async function installVerifiedArtifact(metadata) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-eval-artifact-"));
+  const temporaryRoot = path.join(resultsRoot, ".tmp");
+  await fs.mkdir(temporaryRoot, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporaryRoot, "artifact-"));
   try {
     await fs.writeFile(path.join(root, "package.json"), `${JSON.stringify({ private: true }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     const userConfig = path.join(root, "user.npmrc");
     const globalConfig = path.join(root, "global.npmrc");
+    const cache = path.join(root, "npm-cache");
     await fs.writeFile(userConfig, "", { encoding: "utf8", flag: "wx" });
     await fs.writeFile(globalConfig, "", { encoding: "utf8", flag: "wx" });
-    await run(process.execPath, [await npmCliPath(), "install", "--registry=https://registry.npmjs.org/", `--userconfig=${userConfig}`, `--globalconfig=${globalConfig}`, "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund", "--no-update-notifier", "--fetch-retries=1", "--fetch-timeout=30000", "--save-exact", `${metadata.packageName}@${metadata.version}`], root);
+    await run(process.execPath, [await npmCliPath(), "install", "--registry=https://registry.npmjs.org/", `--userconfig=${userConfig}`, `--globalconfig=${globalConfig}`, `--cache=${cache}`, "--ignore-scripts", "--omit=optional", "--no-audit", "--no-fund", "--no-update-notifier", "--fetch-retries=1", "--fetch-timeout=30000", "--save-exact", `${metadata.packageName}@${metadata.version}`], root);
     const lock = JSON.parse(await fs.readFile(path.join(root, "package-lock.json"), "utf8"));
     const locked = lock.packages?.[`node_modules/${metadata.packageName}`];
     if (locked?.version !== metadata.version || locked?.integrity !== metadata.integrity) throw new Error("Installed package lock does not match Registry version and integrity.");

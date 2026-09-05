@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const temporaryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "results", ".tmp");
 
 async function copyTree(source, target) {
   const stat = await fs.lstat(source);
@@ -15,7 +17,8 @@ async function copyTree(source, target) {
 }
 
 export async function createIsolation(taskDirectory) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-eval-"));
+  await fs.mkdir(temporaryRoot, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporaryRoot, "workspace-"));
   const workspace = path.join(root, "workspace");
   const home = path.join(root, "home");
   await fs.mkdir(home, { recursive: true });
