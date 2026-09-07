@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { resultsRoot, safeWorkspacePath, sha256, stableJson, summarize, validateResult } from "./core.mjs";
+import { shouldStopAfterTrial } from "./policy.mjs";
 
 const budgetFields = ["modelCalls", "toolCalls", "inputTokens", "outputTokens", "durationMs"];
 
@@ -63,7 +64,7 @@ function validateTrialPrefix(result, slots, loadedTasks) {
     if (stableJson(trial.unrelatedFiles) !== stableJson(expectedUnrelated) || trial.metrics.unrelatedFiles !== expectedUnrelated.length) throw new Error(`Resume result trial ${trial.taskId}:${trial.trial} has an inconsistent unrelated-file summary.`);
     if (trial.approvals.some((approval) => !approval || typeof approval.risk !== "string" || typeof approval.approved !== "boolean" || typeof approval.description !== "string" || Object.keys(approval).some((key) => !["risk", "approved", "description"].includes(key)))) throw new Error(`Resume result trial ${trial.taskId}:${trial.trial} has an invalid approval summary.`);
   }
-  if (result.state === "stopped" && (!result.trials.length || result.trials.at(-1).failureType !== "budget")) throw new Error("A stopped resume result must end with a recorded budget failure.");
+  if (result.state === "stopped" && (!result.trials.length || !shouldStopAfterTrial(result.trials.at(-1)))) throw new Error("A stopped resume result must end with a recorded suite-terminal failure.");
   if (stableJson(result.summary) !== stableJson(summarize(result.trials))) throw new Error("Resume result summary does not match its trials.");
   const trialCost = result.trials.reduce((total, trial) => total + trial.metrics.estimatedCostUsd, 0);
   if (Math.abs(trialCost - result.ledger.estimatedCostUsd) > 1e-8) throw new Error("Resume ledger cost does not match its trials.");

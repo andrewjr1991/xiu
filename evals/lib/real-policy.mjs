@@ -1,6 +1,10 @@
 import { sha256, stableJson } from "./core.mjs";
 
 const expectedKeys = new Set(["protocolVersion", "id", "target", "suite", "trials", "provider", "billing", "globalBudget"]);
+const approvedRuns = new Map([
+  ["agnes-enterprise-v0.17.0", { suite: "baseline", trials: 3, globalBudget: { modelCalls: 300, toolCalls: 600, inputTokens: 6000000, outputTokens: 600000, durationMs: 14400000 } }],
+  ["agnes-enterprise-v0.17.0-canary", { suite: "canary", trials: 1, globalBudget: { modelCalls: 12, toolCalls: 20, inputTokens: 120000, outputTokens: 10000, durationMs: 180000 } }],
+]);
 
 function exactKeys(value, keys, label) {
   if (!value || typeof value !== "object" || Object.keys(value).some((key) => !keys.includes(key)) || keys.some((key) => !(key in value))) throw new Error(`${label} has missing or unknown fields.`);
@@ -12,13 +16,15 @@ function finite(value, label, minimum, maximum) {
 
 export function validateRealConfig(config) {
   if (!config || config.protocolVersion !== 1 || Object.keys(config).some((key) => !expectedKeys.has(key))) throw new Error("Unsupported real-evaluation configuration.");
-  if (config.id !== "agnes-enterprise-v0.17.0") throw new Error("Unexpected real-evaluation configuration id.");
+  const approvedRun = approvedRuns.get(config.id);
+  if (!approvedRun) throw new Error("Unexpected real-evaluation configuration id.");
   exactKeys(config.target, ["package", "version"], "target");
   exactKeys(config.provider, ["id", "model", "baseURL", "apiKeyEnv"], "provider");
   exactKeys(config.billing, ["mode", "currency", "authorizationLimitUsd", "estimatedInputUsdPerMillionTokens", "estimatedOutputUsdPerMillionTokens", "attestedByUserOn", "reference"], "billing");
   exactKeys(config.globalBudget, ["modelCalls", "toolCalls", "inputTokens", "outputTokens", "durationMs"], "globalBudget");
   if (config.target?.package !== "@xiu-ai/cli" || config.target?.version !== "0.17.0") throw new Error("The first real baseline must use exact @xiu-ai/cli@0.17.0.");
-  if (config.suite !== "baseline" || config.trials !== 3) throw new Error("The approved baseline requires the baseline suite and three trials.");
+  if (config.suite !== approvedRun.suite || config.trials !== approvedRun.trials) throw new Error("The real-evaluation suite or trial count differs from its approved run profile.");
+  if (stableJson(config.globalBudget) !== stableJson(approvedRun.globalBudget)) throw new Error("The real-evaluation global budget differs from its approved run profile.");
   if (config.provider?.id !== "agnes" || config.provider?.model !== "agnes-2.5-flash" || config.provider?.baseURL !== "https://apihub.agnes-ai.com/v1" || config.provider?.apiKeyEnv !== "AGNES_API_KEY") throw new Error("Provider configuration differs from the approved Agnes configuration.");
   if (config.billing?.mode !== "enterprise-model-free" || config.billing?.currency !== "USD" || config.billing?.authorizationLimitUsd !== 100 || config.billing?.estimatedInputUsdPerMillionTokens !== 0 || config.billing?.estimatedOutputUsdPerMillionTokens !== 0) throw new Error("Billing configuration differs from the approved Enterprise free-model attestation and 100 USD limit.");
   if (config.billing.attestedByUserOn !== "2026-08-21" || config.billing.reference !== "https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md") throw new Error("Billing attestation and reference differ from the approved record.");

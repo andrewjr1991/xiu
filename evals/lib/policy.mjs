@@ -20,6 +20,19 @@ export function classifyFailure(error, category) {
   return "harness";
 }
 
+export function shouldStopAfterTrial(result) {
+  if (!result || result.passed) return false;
+  if (result.failureType === "budget") {
+    return !/^Task (?:budget exhausted|input token budget exceeded|output token budget exceeded)/i.test(String(result.failure ?? ""));
+  }
+  return !["task_assertion", "model_behavior", "safety"].includes(result.failureType);
+}
+
+export function forbiddenWriteAttemptCount(events) {
+  return (events ?? []).filter((event) => ["eval_write_file", "eval_replace_text"].includes(event?.name)
+    && ["outside_allowlist", "outside_workspace"].includes(event?.reasonCode)).length;
+}
+
 export function scrubSensitiveEnvironment(environment = process.env) {
   let removed = 0;
   for (const name of Object.keys(environment)) {

@@ -26,7 +26,21 @@ Preflight reads exact public Registry metadata and prints a confirmation token b
 npm run eval:real -- --confirm CONFIRM-REAL-EVAL-XXXXXXXXXXXXXXXX
 ```
 
-The confirmed path installs exact `@xiu-ai/cli@0.17.0` into a temporary directory with lifecycle scripts and optional dependencies disabled, verifies the lock integrity, and deletes the installation afterward. Ctrl+C and budget stops preserve the latest sanitized partial result. Never run this command in PR CI.
+The confirmed path installs exact `@xiu-ai/cli@0.17.0` into a temporary directory with lifecycle scripts and optional dependencies disabled, verifies the lock integrity, and deletes the installation afterward. Ctrl+C and suite-terminal stops preserve the latest sanitized partial result. Never run this command in PR CI.
+
+Each tool event records only its name, status, and a bounded semantic reason code; tool arguments and full paths are not retained in the result. Writes outside the task's declared `allowedChanges` set are blocked before execution, recorded as `outside_allowlist` or `outside_workspace`, and cannot become a passing trial.
+
+An isolated task-budget failure is a terminal result for that trial, not for the whole confirmed suite. After the temporary workspace has been cleaned successfully, the runner may continue to the next fresh trial under the already confirmed global limits. A global budget, timeout, interruption, Provider failure, harness failure, or cleanup failure still stops the run. The preflight prints this policy before asking for confirmation.
+
+### One-trial real canary
+
+Before restarting the full baseline after an evaluation-harness change, use the separately bounded canary profile:
+
+```bash
+npm run eval:real -- --config evals/configs/agnes-enterprise-v0.17.0-canary.json
+```
+
+It pins `single-trim-name` revision 3 for one trial, exact `@xiu-ai/cli@0.17.0`, Agnes Enterprise, and `agnes-2.5-flash`. Its global maximum is 12 model calls, 20 tool calls, 120,000 input tokens, 10,000 output tokens, and three minutes. The preflight makes no model calls and emits a confirmation token bound to this exact canary. A failed model outcome can still be a valid harness canary when it is correctly classified, bounded, cleaned up, and recorded without sensitive data; it is not a quality baseline.
 
 ### Resume a stopped run
 
@@ -43,5 +57,7 @@ npm run eval:real -- --resume evals/results/real-<run-id>.json --confirm CONFIRM
 ```
 
 The continuation writes a new result file and records immutable lineage; it never overwrites the source. Model calls, tool calls, Tokens, active duration, and estimated cost continue from the source ledger. A running, completed, damaged, reordered, modified-after-preview, incompatible, linked, or out-of-directory result fails closed. Results created before resume metadata was introduced are intentionally not resumable. Reports preserve the lineage and cumulative ledger, and the comparison command rejects partial reports whose state is not `completed`.
+
+Any harness change covered by the execution SHA-256 intentionally invalidates older resume tokens and sources. Preserve those files as diagnostic evidence, then start a newly confirmed canary or baseline instead of weakening the digest check.
 
 Fixtures must contain no secrets, external service dependencies, symlinks, or junctions. A task revision must change when its protocol or budget changes; `fixtureHash` must also change whenever its repository fixture changes.

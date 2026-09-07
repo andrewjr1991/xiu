@@ -131,7 +131,7 @@ npm run smoke:package
 - macOS Keychain and Linux Secret Service are not implemented.
 - MCP Sampling is not implemented.
 - Multi-agent conflicts are detected and preserved, not automatically resolved.
-- No public model-backed benchmark baseline has been published yet.
+- No public model-backed benchmark baseline has been published yet; partial local runs remain diagnostic evidence, and the formal baseline restarts only after the bounded C3 canary is accepted.
 
 ## License
 

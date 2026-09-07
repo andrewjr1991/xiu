@@ -9,6 +9,7 @@ This file summarizes released behavior. Detailed implementation history remains 
 - Run the deterministic evaluation smoke in ordinary three-platform CI without network access, Provider credentials, or model spend.
 - Add an explicit-confirmation real-baseline runner that pins and verifies the published v0.17.0 artifact, enforces finite global budgets, and preserves sanitized partial results.
 - Add trial-boundary continuation with source-digest confirmation, immutable result lineage, cumulative budgets, fail-closed compatibility checks, and non-replayed recorded trials.
+- Add a one-trial real canary, sanitized evaluation-tool failure codes, pre-execution write allowlists, and safe continuation after isolated task-budget terminals while retaining fail-closed global and infrastructure stops.
 
 ## 0.17.0 — 2026-08-20
 

@@ -1,0 +1,7 @@
+{
+  "protocolVersion": 1,
+  "id": "canary",
+  "tasks": [
+    { "id": "single-trim-name", "revision": 3 }
+  ]
+}

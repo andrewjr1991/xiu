@@ -5,11 +5,11 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { changedFiles, loadSuite, loadTask, readJson, redact, resultsRoot, snapshotWorkspace, summarize, validateResult, writeJson } from "./lib/core.mjs";
 import { createIsolation } from "./lib/isolation.mjs";
-import { classifyFailure, enforceTrialBudget, TaskAssertionError } from "./lib/policy.mjs";
+import { classifyFailure, enforceTrialBudget, forbiddenWriteAttemptCount, shouldStopAfterTrial, TaskAssertionError } from "./lib/policy.mjs";
 import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "./lib/real-policy.mjs";
 import { loadRealResume, realConfigHash, realExecutionHash, trialSlots } from "./lib/real-resume.mjs";
 import { fetchArtifactMetadata, installVerifiedArtifact } from "./lib/registry-artifact.mjs";
-import { createEvaluationTools } from "./lib/tools.mjs";
+import { createEvaluationTools, evaluationToolFailureCode } from "./lib/tools.mjs";
 
 function parseArguments(argv) {
   const result = { config: "evals/configs/agnes-enterprise-v0.17.0.json", confirm: undefined, output: undefined, resume: undefined };
@@ -33,6 +33,7 @@ function printPreview(config, suite, metadata, executionDigest, token, resume) {
   console.log(`Provider/model: ${config.provider.id} / ${config.provider.model}`);
   console.log(`Billing: Enterprise, model attested free; authorization ceiling ${config.billing.authorizationLimitUsd} ${config.billing.currency}`);
   console.log(`Global limits: ${config.globalBudget.modelCalls} model calls, ${config.globalBudget.toolCalls} tool calls, ${config.globalBudget.inputTokens} input tokens, ${config.globalBudget.outputTokens} output tokens, ${Math.round(config.globalBudget.durationMs / 60000)} minutes`);
+  console.log("Continuation policy: an isolated task-budget failure records that trial and continues; global budget, timeout, interruption, Provider, or harness failures stop the run.");
   console.log(`Credential: ${config.provider.apiKeyEnv} (presence checked only after confirmation; value is never logged)`);
   if (resume) {
     console.log(`Resume: ${resume.result.runId} (${resume.result.trials.length} recorded trials preserved; next ${resume.nextSlot.taskId} trial ${resume.nextSlot.trial})`);
@@ -79,8 +80,8 @@ async function runRecoveryTask(task, isolation, TaskRunJournal) {
   };
 }
 
-function auditedEvaluationTools(workspace, events) {
-  return createEvaluationTools(workspace).map((tool) => ({
+function auditedEvaluationTools(task, workspace, events) {
+  return createEvaluationTools(workspace, { allowedChanges: task.allowedChanges }).map((tool) => ({
     ...tool,
     execute: async (input) => {
       try {
@@ -88,7 +89,7 @@ function auditedEvaluationTools(workspace, events) {
         events.push({ name: tool.name, status: "succeeded" });
         return result;
       } catch (error) {
-        events.push({ name: tool.name, status: "failed" });
+        events.push({ name: tool.name, status: "failed", reasonCode: evaluationToolFailureCode(error) });
         throw error;
       }
     },
@@ -113,7 +114,7 @@ async function runAgentTask(task, isolation, approvals, toolEvents, runtime, led
     model: "agnes-2.5-flash", baseURL: "https://apihub.agnes-ai.com/v1", cwd: isolation.workspace, maxTurns: task.budget.modelCalls,
     autoApprove: false, projectConfigurationTrusted: true, sessionNamespace: "real-eval-sessions",
     taskBudget: { tokens: task.budget.inputTokens + task.budget.outputTokens, modelCalls: task.budget.modelCalls, toolCalls: task.budget.toolCalls, wallTimeMs: task.budget.timeoutMs, warningRatio: 0.8 },
-  }, meteredProvider(provider, ledger), auditedEvaluationTools(isolation.workspace, toolEvents), approve);
+  }, meteredProvider(provider, ledger), auditedEvaluationTools(task, isolation.workspace, toolEvents), approve);
   active.agent = agent;
   try {
     const answer = await agent.run(task.prompt);
@@ -151,6 +152,8 @@ async function runTrial(loaded, trialNumber, runtime, ledger, active) {
     const after = await snapshotWorkspace(isolation.workspace);
     const files = changedFiles(before, after);
     const unrelated = files.filter((file) => !task.allowedChanges.includes(file));
+    const forbiddenWrites = forbiddenWriteAttemptCount(toolEvents);
+    if (forbiddenWrites) throw new TaskAssertionError(`Attempted ${forbiddenWrites} write(s) outside the task allowlist.`);
     const assertion = await import(`${pathToFileURL(path.join(directory, "assert.mjs")).href}?trial=${randomUUID()}`);
     if (typeof assertion.default !== "function") throw new Error("Task assertion module has no default function.");
     const assertionResult = { changedFiles: files, approvals, recovery: execution.recovery, diagnostics: execution.diagnostics };
@@ -223,7 +226,7 @@ async function main() {
         trials.push(result);
         console.log(`${result.passed ? "PASS" : "FAIL"} ${slot.taskId} trial ${slot.trial}${result.failure ? `: ${result.failure}` : ""}`);
         await writeJson(output, validateResult(redact({ ...base, state: "running", finishedAt: new Date().toISOString(), trials, summary: summarize(trials), ledger: ledger.snapshot() })), { replace: true });
-        if (["budget", "interrupted"].includes(result.failureType)) throw new Error(result.failure);
+        if (shouldStopAfterTrial(result)) throw new Error(result.failure);
       }
     } catch (error) {
       const state = active.interrupted || /interrupted/i.test(error instanceof Error ? error.message : String(error)) ? "interrupted" : "stopped";

@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "id": "agnes-enterprise-v0.17.0-canary",
+  "target": { "package": "@xiu-ai/cli", "version": "0.17.0" },
+  "suite": "canary",
+  "trials": 1,
+  "provider": {
+    "id": "agnes",
+    "model": "agnes-2.5-flash",
+    "baseURL": "https://apihub.agnes-ai.com/v1",
+    "apiKeyEnv": "AGNES_API_KEY"
+  },
+  "billing": {
+    "mode": "enterprise-model-free",
+    "currency": "USD",
+    "authorizationLimitUsd": 100,
+    "estimatedInputUsdPerMillionTokens": 0,
+    "estimatedOutputUsdPerMillionTokens": 0,
+    "attestedByUserOn": "2026-08-21",
+    "reference": "https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md"
+  },
+  "globalBudget": {
+    "modelCalls": 12,
+    "toolCalls": 20,
+    "inputTokens": 120000,
+    "outputTokens": 10000,
+    "durationMs": 180000
+  }
+}
