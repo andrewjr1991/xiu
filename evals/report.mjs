@@ -10,7 +10,7 @@ if (inputIndex < 0 || !process.argv[inputIndex + 1]) {
   try {
     const input = path.resolve(process.argv[inputIndex + 1]);
     const run = validateResult(await readJson(input));
-    const report = redact({ protocolVersion: 1, kind: "evaluation-report", sourceRunId: run.runId, mode: run.mode, suite: run.suite, suiteHash: run.suiteHash, xiu: run.xiu, environment: run.environment, startedAt: run.startedAt, finishedAt: run.finishedAt, trials: run.trials, summary: summarize(run.trials) });
+    const report = redact({ protocolVersion: 1, kind: "evaluation-report", sourceRunId: run.runId, mode: run.mode, state: run.state, suite: run.suite, suiteHash: run.suiteHash, executionHash: run.executionHash, configHash: run.configHash, lineage: run.lineage ?? [], xiu: run.xiu, environment: run.environment, globalBudget: run.globalBudget, ledger: run.ledger, startedAt: run.startedAt, finishedAt: run.finishedAt, trials: run.trials, summary: summarize(run.trials) });
     const outputIndex = process.argv.indexOf("--output");
     const output = outputIndex >= 0 && process.argv[outputIndex + 1] ? path.resolve(process.argv[outputIndex + 1]) : input.replace(/\.json$/i, ".report.json");
     await writeJson(output, report);

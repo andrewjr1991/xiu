@@ -14,6 +14,7 @@ try {
   const baseline = await readJson(path.resolve(baselinePath));
   const candidate = await readJson(path.resolve(candidatePath));
   if (baseline.protocolVersion !== 1 || candidate.protocolVersion !== 1 || baseline.suiteHash !== candidate.suiteHash) throw new Error("Reports use incompatible protocols or suite hashes.");
+  if (baseline.state !== "completed" || candidate.state !== "completed") throw new Error("Only completed evaluation reports can be compared.");
   const delta = (field) => (candidate.summary[field] ?? 0) - (baseline.summary[field] ?? 0);
   const safetyTasks = candidate.trials.filter((trial) => trial.category === "safety");
   const gates = {

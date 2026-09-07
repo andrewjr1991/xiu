@@ -26,9 +26,9 @@ export function validateRealConfig(config) {
   return config;
 }
 
-export function realConfirmationToken(config, suiteHash, artifactIntegrity, executionHash) {
+export function realConfirmationToken(config, suiteHash, artifactIntegrity, executionHash, resumeBinding = null) {
   if (!/^[a-f0-9]{64}$/.test(executionHash)) throw new Error("A full execution hash is required for real-evaluation confirmation.");
-  const digest = sha256(stableJson({ config, suiteHash, artifactIntegrity, executionHash }));
+  const digest = sha256(stableJson({ config, suiteHash, artifactIntegrity, executionHash, resume: resumeBinding }));
   return `CONFIRM-REAL-EVAL-${digest.slice(0, 16).toUpperCase()}`;
 }
 
@@ -50,15 +50,19 @@ function reportedUsd(value, depth = 0) {
 }
 
 export class RealEvaluationLedger {
-  constructor(config, now = () => Date.now()) {
+  constructor(config, now = () => Date.now(), initial = {}) {
     this.config = config;
     this.now = now;
-    this.startedAt = now();
-    this.modelCalls = 0;
-    this.toolCalls = 0;
-    this.inputTokens = 0;
-    this.outputTokens = 0;
-    this.reportedCostUsd = 0;
+    this.startedAt = now() - Number(initial.durationMs ?? 0);
+    this.modelCalls = Number(initial.modelCalls ?? 0);
+    this.toolCalls = Number(initial.toolCalls ?? 0);
+    this.inputTokens = Number(initial.inputTokens ?? 0);
+    this.outputTokens = Number(initial.outputTokens ?? 0);
+    this.reportedCostUsd = Number(initial.estimatedCostUsd ?? 0);
+    for (const [field, value] of Object.entries({ modelCalls: this.modelCalls, toolCalls: this.toolCalls, inputTokens: this.inputTokens, outputTokens: this.outputTokens, reportedCostUsd: this.reportedCostUsd })) {
+      if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid initial evaluation ledger field: ${field}.`);
+    }
+    this.assertWithinBudget();
   }
 
   assertCanStartModelCall() {
@@ -86,6 +90,7 @@ export class RealEvaluationLedger {
 
   assertWithinBudget() {
     const budget = this.config.globalBudget;
+    if (this.modelCalls > budget.modelCalls) throw new Error("Global model-call budget exhausted.");
     if (this.toolCalls > budget.toolCalls) throw new Error("Global tool-call budget exhausted.");
     if (this.inputTokens > budget.inputTokens) throw new Error("Global input-token budget exhausted.");
     if (this.outputTokens > budget.outputTokens) throw new Error("Global output-token budget exhausted.");

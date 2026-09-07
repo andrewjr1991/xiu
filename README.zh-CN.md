@@ -126,7 +126,7 @@ npm run smoke:package
 - 尚未实现 macOS Keychain 和 Linux Secret Service。
 - 尚未实现 MCP Sampling。
 - 多 Agent 冲突会被检测并保留，不自动解决。
-- 尚未发布真实模型评测基线。
+- 尚未发布完整真实模型评测基线；本地部分运行只作为预算与续跑机制的校准证据。
 
 ## 许可
 

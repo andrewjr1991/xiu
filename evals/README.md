@@ -28,4 +28,20 @@ npm run eval:real -- --confirm CONFIRM-REAL-EVAL-XXXXXXXXXXXXXXXX
 
 The confirmed path installs exact `@xiu-ai/cli@0.17.0` into a temporary directory with lifecycle scripts and optional dependencies disabled, verifies the lock integrity, and deletes the installation afterward. Ctrl+C and budget stops preserve the latest sanitized partial result. Never run this command in PR CI.
 
+### Resume a stopped run
+
+Resume happens only at a trial boundary. The runner preserves every recorded success or failure and continues with the next unrecorded trial; it never replays a recorded trial or resumes inside an isolated workspace.
+
+```bash
+npm run eval:real -- --resume evals/results/real-<run-id>.json
+```
+
+The resume preflight makes no model call. It accepts only a direct, regular JSON file in `evals/results/` whose configuration hash, suite hash, execution hash, Registry artifact, Provider/model, ordered trial prefix, summary, and cumulative ledger all match the current evaluation. It prints the preserved trial count, next trial, source SHA-256, remaining budgets, and a new confirmation token bound to that exact source file. After review, run the same command with the printed token:
+
+```bash
+npm run eval:real -- --resume evals/results/real-<run-id>.json --confirm CONFIRM-REAL-EVAL-XXXXXXXXXXXXXXXX
+```
+
+The continuation writes a new result file and records immutable lineage; it never overwrites the source. Model calls, tool calls, Tokens, active duration, and estimated cost continue from the source ledger. A running, completed, damaged, reordered, modified-after-preview, incompatible, linked, or out-of-directory result fails closed. Results created before resume metadata was introduced are intentionally not resumable. Reports preserve the lineage and cumulative ledger, and the comparison command rejects partial reports whose state is not `completed`.
+
 Fixtures must contain no secrets, external service dependencies, symlinks, or junctions. A task revision must change when its protocol or budget changes; `fixtureHash` must also change whenever its repository fixture changes.

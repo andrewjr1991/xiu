@@ -8,6 +8,7 @@ This file summarizes released behavior. Detailed implementation history remains 
 - Add versioned task/result protocols, isolated scripted-Provider execution, deterministic assertions, sanitized reports, comparison gates, and the first 10 fixed tasks.
 - Run the deterministic evaluation smoke in ordinary three-platform CI without network access, Provider credentials, or model spend.
 - Add an explicit-confirmation real-baseline runner that pins and verifies the published v0.17.0 artifact, enforces finite global budgets, and preserves sanitized partial results.
+- Add trial-boundary continuation with source-digest confirmation, immutable result lineage, cumulative budgets, fail-closed compatibility checks, and non-replayed recorded trials.
 
 ## 0.17.0 — 2026-08-20
 

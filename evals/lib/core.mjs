@@ -195,11 +195,14 @@ export function summarize(trials) {
 
 export function validateResult(result) {
   if (!result || result.protocolVersion !== 1 || typeof result.runId !== "string" || !["simulated", "real"].includes(result.mode)) throw new Error("Invalid evaluation result identity.");
+  if (!["running", "completed", "stopped", "interrupted"].includes(result.state)) throw new Error("Invalid evaluation result state.");
   for (const field of ["suite", "suiteHash", "startedAt", "finishedAt"]) if (typeof result[field] !== "string" || !result[field]) throw new Error(`Invalid evaluation result field: ${field}.`);
   if (!result.xiu || typeof result.xiu.version !== "string" || !result.environment || typeof result.environment.node !== "string" || !Array.isArray(result.trials) || !result.summary) throw new Error("Evaluation result is missing required structured data.");
   for (const trial of result.trials) {
-    if (typeof trial.taskId !== "string" || !Number.isSafeInteger(trial.revision) || typeof trial.passed !== "boolean" || typeof trial.verified !== "boolean" || !trial.metrics) throw new Error(`Invalid trial result for ${trial.taskId ?? "unknown"}.`);
+    if (typeof trial.taskId !== "string" || !Number.isSafeInteger(trial.revision) || !Number.isSafeInteger(trial.trial) || trial.trial < 1 || typeof trial.passed !== "boolean" || typeof trial.verified !== "boolean" || !trial.metrics) throw new Error(`Invalid trial result for ${trial.taskId ?? "unknown"}.`);
+    if (trial.toolEvents !== undefined && (!Array.isArray(trial.toolEvents) || trial.toolEvents.some((event) => !event || typeof event.name !== "string" || !["succeeded", "failed"].includes(event.status) || Object.keys(event).some((key) => !["name", "status"].includes(key))))) throw new Error(`Invalid tool event summary for ${trial.taskId}.`);
   }
+  if (result.lineage !== undefined && (!Array.isArray(result.lineage) || result.lineage.some((entry) => !entry || typeof entry.runId !== "string" || !/^[a-f0-9]{64}$/.test(entry.resultSha256) || !["stopped", "interrupted"].includes(entry.state) || typeof entry.finishedAt !== "string"))) throw new Error("Invalid evaluation result lineage.");
   return result;
 }
 

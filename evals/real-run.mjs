@@ -3,18 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { changedFiles, loadSuite, loadTask, readJson, redact, resultsRoot, sha256, snapshotWorkspace, summarize, validateResult, writeJson } from "./lib/core.mjs";
+import { changedFiles, loadSuite, loadTask, readJson, redact, resultsRoot, snapshotWorkspace, summarize, validateResult, writeJson } from "./lib/core.mjs";
 import { createIsolation } from "./lib/isolation.mjs";
 import { classifyFailure, enforceTrialBudget, TaskAssertionError } from "./lib/policy.mjs";
 import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "./lib/real-policy.mjs";
+import { loadRealResume, realConfigHash, realExecutionHash, trialSlots } from "./lib/real-resume.mjs";
 import { fetchArtifactMetadata, installVerifiedArtifact } from "./lib/registry-artifact.mjs";
 import { createEvaluationTools } from "./lib/tools.mjs";
 
 function parseArguments(argv) {
-  const result = { config: "evals/configs/agnes-enterprise-v0.17.0.json", confirm: undefined, output: undefined };
+  const result = { config: "evals/configs/agnes-enterprise-v0.17.0.json", confirm: undefined, output: undefined, resume: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
-    if (!["--config", "--confirm", "--output"].includes(flag)) throw new Error(`Unknown argument: ${flag}`);
+    if (!["--config", "--confirm", "--output", "--resume"].includes(flag)) throw new Error(`Unknown argument: ${flag}`);
     const value = argv[++index];
     if (!value) throw new Error(`Missing value for ${flag}.`);
     result[flag.slice(2)] = value;
@@ -22,20 +23,9 @@ function parseArguments(argv) {
   return result;
 }
 
-async function executionHash(loadedTasks) {
-  const files = [
-    "evals/real-run.mjs", "evals/lib/assertions.mjs", "evals/lib/core.mjs", "evals/lib/isolation.mjs", "evals/lib/policy.mjs",
-    "evals/lib/real-policy.mjs", "evals/lib/registry-artifact.mjs", "evals/lib/tools.mjs",
-    ...loadedTasks.flatMap((item) => [path.join(item.directory, "task.json"), path.join(item.directory, "assert.mjs")]),
-  ].map((file) => path.resolve(file)).sort((left, right) => left.localeCompare(right, "en"));
-  const chunks = [];
-  for (const file of files) chunks.push(path.relative(process.cwd(), file).split(path.sep).join("/"), "\0", await fs.readFile(file, "utf8"), "\0");
-  return sha256(chunks.join(""));
-}
-
-function printPreview(config, suite, metadata, executionDigest, token) {
+function printPreview(config, suite, metadata, executionDigest, token, resume) {
   const totalTrials = suite.tasks.length * config.trials;
-  console.log("REAL MODEL EVALUATION — no calls have been made");
+  console.log("REAL MODEL EVALUATION — this invocation has made no calls");
   console.log(`Target: ${metadata.packageName}@${metadata.version}`);
   console.log(`Integrity: ${metadata.integrity}`);
   console.log(`Evaluation code/tasks: sha256-${executionDigest}`);
@@ -44,6 +34,12 @@ function printPreview(config, suite, metadata, executionDigest, token) {
   console.log(`Billing: Enterprise, model attested free; authorization ceiling ${config.billing.authorizationLimitUsd} ${config.billing.currency}`);
   console.log(`Global limits: ${config.globalBudget.modelCalls} model calls, ${config.globalBudget.toolCalls} tool calls, ${config.globalBudget.inputTokens} input tokens, ${config.globalBudget.outputTokens} output tokens, ${Math.round(config.globalBudget.durationMs / 60000)} minutes`);
   console.log(`Credential: ${config.provider.apiKeyEnv} (presence checked only after confirmation; value is never logged)`);
+  if (resume) {
+    console.log(`Resume: ${resume.result.runId} (${resume.result.trials.length} recorded trials preserved; next ${resume.nextSlot.taskId} trial ${resume.nextSlot.trial})`);
+    console.log(`Preserved outcome: ${resume.result.summary.passed}/${resume.result.summary.eligibleTrials} passed; failures ${JSON.stringify(resume.result.summary.failures)}`);
+    console.log(`Resume result SHA-256: ${resume.digest}`);
+    console.log(`Remaining limits: ${resume.remainingBudget.modelCalls} model calls, ${resume.remainingBudget.toolCalls} tool calls, ${resume.remainingBudget.inputTokens} input tokens, ${resume.remainingBudget.outputTokens} output tokens, ${Math.floor(resume.remainingBudget.durationMs / 60000)} minutes`);
+  }
   console.log(`Confirmation token: ${token}`);
 }
 
@@ -83,7 +79,23 @@ async function runRecoveryTask(task, isolation, TaskRunJournal) {
   };
 }
 
-async function runAgentTask(task, isolation, approvals, runtime, ledger, active) {
+function auditedEvaluationTools(workspace, events) {
+  return createEvaluationTools(workspace).map((tool) => ({
+    ...tool,
+    execute: async (input) => {
+      try {
+        const result = await tool.execute(input);
+        events.push({ name: tool.name, status: "succeeded" });
+        return result;
+      } catch (error) {
+        events.push({ name: tool.name, status: "failed" });
+        throw error;
+      }
+    },
+  }));
+}
+
+async function runAgentTask(task, isolation, approvals, toolEvents, runtime, ledger, active) {
   const provider = runtime.createProvider({
     provider: "agnes", providerId: "agnes", providerLabel: "Agnes Enterprise evaluation", apiKeyEnv: "AGNES_API_KEY",
     model: "agnes-2.5-flash", baseURL: "https://apihub.agnes-ai.com/v1", cwd: isolation.workspace, maxTurns: task.budget.modelCalls,
@@ -101,11 +113,16 @@ async function runAgentTask(task, isolation, approvals, runtime, ledger, active)
     model: "agnes-2.5-flash", baseURL: "https://apihub.agnes-ai.com/v1", cwd: isolation.workspace, maxTurns: task.budget.modelCalls,
     autoApprove: false, projectConfigurationTrusted: true, sessionNamespace: "real-eval-sessions",
     taskBudget: { tokens: task.budget.inputTokens + task.budget.outputTokens, modelCalls: task.budget.modelCalls, toolCalls: task.budget.toolCalls, wallTimeMs: task.budget.timeoutMs, warningRatio: 0.8 },
-  }, meteredProvider(provider, ledger), createEvaluationTools(isolation.workspace), approve);
+  }, meteredProvider(provider, ledger), auditedEvaluationTools(isolation.workspace, toolEvents), approve);
   active.agent = agent;
   try {
     const answer = await agent.run(task.prompt);
     return { answer, diagnostics: agent.status().diagnostics, recovery: undefined };
+  } catch (error) {
+    const failure = new Error(error instanceof Error ? error.message : String(error), { cause: error });
+    if (typeof error === "object" && error && "status" in error) failure.status = error.status;
+    failure.evaluationDiagnostics = agent.status().diagnostics;
+    throw failure;
   } finally {
     active.agent = undefined;
     ledger.recordTools(agent.status().diagnostics?.tools?.calls ?? 0);
@@ -125,10 +142,12 @@ async function runTrial(loaded, trialNumber, runtime, ledger, active) {
   const ledgerBefore = ledger.snapshot();
   const isolation = await createIsolation(directory);
   const approvals = [];
+  const toolEvents = [];
+  let before;
   try {
     ledger.assertWithinBudget();
-    const before = await snapshotWorkspace(isolation.workspace);
-    const execution = await withTimeout(task.engine === "journal-recovery" ? runRecoveryTask(task, isolation, runtime.TaskRunJournal) : runAgentTask(task, isolation, approvals, runtime, ledger, active), task.budget.timeoutMs);
+    before = await snapshotWorkspace(isolation.workspace);
+    const execution = await withTimeout(task.engine === "journal-recovery" ? runRecoveryTask(task, isolation, runtime.TaskRunJournal) : runAgentTask(task, isolation, approvals, toolEvents, runtime, ledger, active), task.budget.timeoutMs);
     const after = await snapshotWorkspace(isolation.workspace);
     const files = changedFiles(before, after);
     const unrelated = files.filter((file) => !task.allowedChanges.includes(file));
@@ -140,10 +159,14 @@ async function runTrial(loaded, trialNumber, runtime, ledger, active) {
     if (unrelated.length) throw new TaskAssertionError(`Files outside the allowlist changed: ${unrelated.join(", ")}.`);
     enforceTrialBudget(task, execution.diagnostics);
     const ledgerAfter = ledger.snapshot();
-    return redact({ taskId: task.id, revision: task.revision, category: task.category, trial: trialNumber, passed: true, verified: task.engine === "journal-recovery" || task.category === "architecture" || task.category === "safety" || execution.diagnostics?.outcome === "completed", failureType: null, failure: null, changedFiles: files, unrelatedFiles: unrelated, approvals, recovery: execution.recovery, answer: execution.answer, metrics: { inputTokens: ledgerAfter.inputTokens - ledgerBefore.inputTokens, outputTokens: ledgerAfter.outputTokens - ledgerBefore.outputTokens, modelCalls: ledgerAfter.modelCalls - ledgerBefore.modelCalls, toolCalls: ledgerAfter.toolCalls - ledgerBefore.toolCalls, approvals: approvals.length, durationMs: Math.round(performance.now() - started), unrelatedFiles: unrelated.length, estimatedCostUsd: ledgerAfter.estimatedCostUsd - ledgerBefore.estimatedCostUsd }, startedAt, finishedAt: new Date().toISOString() });
+    return redact({ taskId: task.id, revision: task.revision, category: task.category, trial: trialNumber, passed: true, verified: task.engine === "journal-recovery" || task.category === "architecture" || task.category === "safety" || execution.diagnostics?.outcome === "completed", failureType: null, failure: null, changedFiles: files, unrelatedFiles: unrelated, approvals, toolEvents, recovery: execution.recovery, answer: execution.answer, metrics: { inputTokens: ledgerAfter.inputTokens - ledgerBefore.inputTokens, outputTokens: ledgerAfter.outputTokens - ledgerBefore.outputTokens, modelCalls: ledgerAfter.modelCalls - ledgerBefore.modelCalls, toolCalls: ledgerAfter.toolCalls - ledgerBefore.toolCalls, retries: execution.diagnostics?.model?.retries ?? 0, approvals: approvals.length, durationMs: Math.round(performance.now() - started), unrelatedFiles: unrelated.length, estimatedCostUsd: ledgerAfter.estimatedCostUsd - ledgerBefore.estimatedCostUsd }, startedAt, finishedAt: new Date().toISOString() });
   } catch (error) {
     const after = ledger.snapshot();
-    return redact({ taskId: task.id, revision: task.revision, category: task.category, trial: trialNumber, passed: false, verified: false, failureType: classifyFailure(error, task.category), failure: error instanceof Error ? error.message : String(error), changedFiles: [], unrelatedFiles: [], approvals, metrics: { inputTokens: after.inputTokens - ledgerBefore.inputTokens, outputTokens: after.outputTokens - ledgerBefore.outputTokens, modelCalls: after.modelCalls - ledgerBefore.modelCalls, toolCalls: after.toolCalls - ledgerBefore.toolCalls, approvals: approvals.length, durationMs: Math.round(performance.now() - started), unrelatedFiles: 0, estimatedCostUsd: after.estimatedCostUsd - ledgerBefore.estimatedCostUsd }, startedAt, finishedAt: new Date().toISOString() });
+    let files = [];
+    try { if (before) files = changedFiles(before, await snapshotWorkspace(isolation.workspace)); } catch { /* retain the primary failure */ }
+    const unrelated = files.filter((file) => !task.allowedChanges.includes(file));
+    const diagnostics = error?.evaluationDiagnostics;
+    return redact({ taskId: task.id, revision: task.revision, category: task.category, trial: trialNumber, passed: false, verified: false, failureType: classifyFailure(error, task.category), failure: error instanceof Error ? error.message : String(error), changedFiles: files, unrelatedFiles: unrelated, approvals, toolEvents, metrics: { inputTokens: after.inputTokens - ledgerBefore.inputTokens, outputTokens: after.outputTokens - ledgerBefore.outputTokens, modelCalls: after.modelCalls - ledgerBefore.modelCalls, toolCalls: after.toolCalls - ledgerBefore.toolCalls, retries: diagnostics?.model?.retries ?? 0, approvals: approvals.length, durationMs: Math.round(performance.now() - started), unrelatedFiles: unrelated.length, estimatedCostUsd: after.estimatedCostUsd - ledgerBefore.estimatedCostUsd }, startedAt, finishedAt: new Date().toISOString() });
   } finally {
     await isolation.cleanup();
   }
@@ -152,16 +175,18 @@ async function runTrial(loaded, trialNumber, runtime, ledger, active) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const config = validateRealConfig(await readJson(path.resolve(options.config)));
+  const configHash = realConfigHash(config);
   const { suite, hash: suiteHash } = await loadSuite(config.suite);
   const loadedTasks = [];
   for (const reference of suite.tasks) loadedTasks.push(await loadTask(reference.id, reference.revision));
   validateSuiteBudget(config, loadedTasks.map((item) => item.task));
-  const executionDigest = await executionHash(loadedTasks);
+  const executionDigest = await realExecutionHash(loadedTasks);
   const metadata = await fetchArtifactMetadata(config.target.package, config.target.version);
-  const token = realConfirmationToken(config, suiteHash, metadata.integrity, executionDigest);
-  printPreview(config, suite, metadata, executionDigest, token);
+  const resume = options.resume ? await loadRealResume(options.resume, { config, configHash, suite, suiteHash, executionHash: executionDigest, metadata, loadedTasks }) : undefined;
+  const token = realConfirmationToken(config, suiteHash, metadata.integrity, executionDigest, resume?.binding);
+  printPreview(config, suite, metadata, executionDigest, token, resume);
   if (!options.confirm) {
-    console.log("No real model calls were made. Re-run with --confirm <token> only after reviewing this preview.");
+    console.log("No real model calls were made by this preflight. Re-run with --confirm <token> only after reviewing this preview.");
     return;
   }
   if (options.confirm !== token) throw new Error("Confirmation token does not match the exact configuration, suite, and Registry artifact.");
@@ -179,24 +204,26 @@ async function main() {
       import(`${pathToFileURL(path.join(artifact.moduleRoot, "dist", "task-run.js")).href}${query}`),
     ]);
     const runtime = { Agent, createProvider, TaskRunJournal };
-    const ledger = new RealEvaluationLedger(config);
+    const ledger = new RealEvaluationLedger(config, () => Date.now(), resume?.result.ledger);
     const runId = randomUUID();
     const output = options.output ? path.resolve(options.output) : path.join(resultsRoot, `real-${config.id}-${runId}.json`);
-    const startedAt = new Date().toISOString();
-    const trials = [];
-    const base = { protocolVersion: 1, runId, mode: "real", suite: suite.id, suiteHash, executionHash: executionDigest, xiu: { version: metadata.version, package: metadata.packageName, integrity: metadata.integrity }, environment: { node: process.version, platform: process.platform, arch: process.arch, provider: config.provider.id, model: config.provider.model }, billing: config.billing, globalBudget: config.globalBudget, startedAt };
+    if (resume && path.resolve(output) === path.resolve(resume.file)) throw new Error("Resume output must not overwrite its source result.");
+    const segmentStartedAt = new Date().toISOString();
+    const startedAt = resume?.result.startedAt ?? segmentStartedAt;
+    const trials = resume ? structuredClone(resume.result.trials) : [];
+    const preservedTrialCount = trials.length;
+    const lineage = resume ? [...(resume.result.lineage ?? []), { runId: resume.result.runId, resultSha256: resume.digest, state: resume.result.state, finishedAt: resume.result.finishedAt }] : [];
+    const base = { protocolVersion: 1, runId, mode: "real", suite: suite.id, suiteHash, executionHash: executionDigest, configHash, xiu: { version: metadata.version, package: metadata.packageName, integrity: metadata.integrity }, environment: { node: process.version, platform: process.platform, arch: process.arch, provider: config.provider.id, model: config.provider.model }, billing: config.billing, globalBudget: config.globalBudget, startedAt, segmentStartedAt, lineage };
     await writeJson(output, validateResult(redact({ ...base, state: "running", finishedAt: startedAt, trials, summary: summarize(trials), ledger: ledger.snapshot() })));
     try {
-      for (const reference of suite.tasks) {
-        const loaded = await loadTask(reference.id, reference.revision);
-        for (let number = 1; number <= config.trials; number += 1) {
-          if (active.interrupted) throw new Error("Real evaluation interrupted by user.");
-          const result = await runTrial(loaded, number, runtime, ledger, active);
-          trials.push(result);
-          console.log(`${result.passed ? "PASS" : "FAIL"} ${reference.id} trial ${number}${result.failure ? `: ${result.failure}` : ""}`);
-          await writeJson(output, validateResult(redact({ ...base, state: "running", finishedAt: new Date().toISOString(), trials, summary: summarize(trials), ledger: ledger.snapshot() })), { replace: true });
-          if (["budget", "interrupted"].includes(result.failureType)) throw new Error(result.failure);
-        }
+      const tasksById = new Map(loadedTasks.map((item) => [item.task.id, item]));
+      for (const slot of trialSlots(suite, config.trials).slice(preservedTrialCount)) {
+        if (active.interrupted) throw new Error("Real evaluation interrupted by user.");
+        const result = await runTrial(tasksById.get(slot.taskId), slot.trial, runtime, ledger, active);
+        trials.push(result);
+        console.log(`${result.passed ? "PASS" : "FAIL"} ${slot.taskId} trial ${slot.trial}${result.failure ? `: ${result.failure}` : ""}`);
+        await writeJson(output, validateResult(redact({ ...base, state: "running", finishedAt: new Date().toISOString(), trials, summary: summarize(trials), ledger: ledger.snapshot() })), { replace: true });
+        if (["budget", "interrupted"].includes(result.failureType)) throw new Error(result.failure);
       }
     } catch (error) {
       const state = active.interrupted || /interrupted/i.test(error instanceof Error ? error.message : String(error)) ? "interrupted" : "stopped";
