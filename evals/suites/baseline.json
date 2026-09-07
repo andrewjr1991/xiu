@@ -2,7 +2,7 @@
   "protocolVersion": 1,
   "id": "baseline",
   "tasks": [
-    { "id": "single-null-total", "revision": 3 },
+    { "id": "single-null-total", "revision": 4 },
     { "id": "single-trim-name", "revision": 3 },
     { "id": "single-even-check", "revision": 3 },
     { "id": "cross-user-label", "revision": 3 },
