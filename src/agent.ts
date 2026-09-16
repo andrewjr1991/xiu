@@ -16,8 +16,8 @@ import { normalizeAssistantText } from "./language-output.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
-import { executeTool, formatProcessInvocation, looksLikeVerification } from "./tools.js";
-import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider } from "./types.js";
+import { executeToolResult, formatProcessInvocation, looksLikeVerification } from "./tools.js";
+import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider, ToolResult } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 import { sanitizeSecrets } from "./secret-redaction.js";
@@ -28,16 +28,21 @@ import { determineProviderRoutingPhase, type ProviderRoutingController, type Pro
 import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
+import { normalizeToolResult } from "./tool-result.js";
+import { VerificationLedger, captureVerificationStamp, verificationCheckKey } from "./verification.js";
+import { SafeDraftPreview } from "./stream-preview.js";
+
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
   onModelEnd?: () => void;
   onText?: (text: string) => void;
   onTextDelta?: (text: string) => void;
+  onDraftPreview?: (text: string, receivedChars: number) => void;
   onTextStreamEnd?: () => void;
   onAssistantTurn?: (text: string, hasToolCalls: boolean) => void;
   onToolStart?: (name: string, description: string, details: { changesWorkspace: boolean; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" }) => void;
   onToolProgress?: (name: string, message: string) => void;
-  onToolEnd?: (name: string, result: string) => void;
+  onToolEnd?: (name: string, result: string, details?: { result: ToolResult; verification: boolean }) => void;
   onCompletionGate?: (message: string) => void;
   onCompaction?: (message: string) => void;
   onRetry?: (message: string) => void;
@@ -442,6 +447,9 @@ export class Agent {
 
     let workspaceChanged = false;
     let verifiedAfterChange = false;
+    const verification = new VerificationLedger();
+    const verificationPaths = new Set<string>();
+    let verificationStamp: string | undefined;
     let verificationAttempted = false;
     let completionReminderSent = false;
     let auditedSteeringCount = 0;
@@ -479,8 +487,8 @@ export class Agent {
       let streamed = false;
       const modelOperation = await this.taskRunJournal?.beginOperation({ kind: "model", name: `turn ${turn}`, sideEffect: "none" });
       try {
-        // Buffer Chinese output so it can be normalized before anything is
-        // rendered. Streaming partial tokens cannot be converted reliably.
+        // Legacy Chinese streams remain buffered; preview consumers receive only
+        // complete, normalized, redacted draft segments, separate from final text.
         const activePlanStep = this.planManager?.snapshot()?.steps.find((step) => step.status === "in_progress")?.title ?? "";
         const routing = determineProviderRoutingPhase({
           turn,
@@ -488,7 +496,7 @@ export class Agent {
           completionGateActive: completionReminderSent,
           activePlanStep,
         });
-        const requested = await this.requestModel(signal, !identityQuestion && this.config.language !== "zh-CN", true, undefined, undefined, routing.phase, routing.reason);
+        const requested = await this.requestModel(signal, !identityQuestion && (this.config.language !== "zh-CN" || Boolean(this.events.onDraftPreview)), true, undefined, undefined, routing.phase, routing.reason);
         response = requested.response;
         streamed = requested.streamed;
       } catch (error) {
@@ -496,6 +504,26 @@ export class Agent {
         throw error;
       } finally {
         this.events.onModelEnd?.();
+      }
+      // An incomplete/filtered protocol turn is never an executable plan or a completion.
+      if (response.finishReason && (["length", "content_filter", "unknown"].includes(response.finishReason)
+        || (response.finishReason === "tool_calls" && response.toolCalls.length === 0))) {
+        const reason = response.finishReason;
+        const text = localize(this.config.language ?? "en-US",
+          `模型响应未完整结束（${reason}）；本轮工具未执行，任务未完成。请检查输出上限或 Provider 配置后继续。`,
+          `Model response did not finish normally (${reason}); no tools from this turn were executed and the task is incomplete. Check the output limit or provider configuration before continuing.`);
+        this.recordUsage(response.usage, response.text);
+        if (modelOperation) await this.taskRunJournal?.finishOperation(modelOperation, "failed", text);
+        this.messages.push({ role: "assistant", content: text });
+        await this.log(sessionPath, { type: "assistant", turn, text, finishReason: reason, toolCalls: [] });
+        this.events.onText?.(text);
+        this.events.onAssistantTurn?.(text, false);
+        this.lastRunOutcome = "failed";
+        this.taskDiagnostics?.complete("failed");
+        await this.checkpointDiagnostics();
+        this.events.onTaskComplete?.({ turns: turn, toolCalls: toolCallCount, changed: workspaceChanged,
+          verified: false, outcome: "failed", durationMs: Date.now() - startedAt, diagnostics: this.taskDiagnostics?.snapshot() });
+        return text;
       }
       if (identityQuestion) {
         response = {
@@ -579,7 +607,7 @@ export class Agent {
         }
       }
       this.recordUsage(response.usage, response.text);
-      if (response.text && !streamed) this.events.onText?.(response.text);
+      if (response.text && !streamed && response.toolCalls.length > 0) this.events.onText?.(response.text);
       if (streamed && response.text) this.events.onTextStreamEnd?.();
       if (response.text) this.events.onAssistantTurn?.(response.text, response.toolCalls.length > 0);
       this.messages.push({ role: "assistant", content: response.text, raw: response.raw, toolCalls: response.toolCalls });
@@ -625,8 +653,13 @@ export class Agent {
           auditedSteeringCount = this.steeringHistory.length;
           continue;
         }
-        if (workspaceChanged && !verifiedAfterChange && !completionReminderSent) {
-          const gate = `Completion gate: files changed but no verification has passed${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
+        if (verificationStamp && verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths])) {
+          verification.invalidate();
+          verifiedAfterChange = false;
+          verificationStamp = undefined;
+        }
+        if ((workspaceChanged || verificationAttempted) && !verifiedAfterChange && !completionReminderSent) {
+          const gate = `Completion gate: required checks are missing, failed, or stale after workspace changes${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
           this.messages.push({ role: "user", content: gate });
           await this.log(sessionPath, { type: "completion_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
@@ -635,7 +668,7 @@ export class Agent {
         }
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
-          : lastToolFailed && !webAnswerVerified ? "failed" : workspaceChanged && !verifiedAfterChange ? "unverified" : "completed";
+          : verification.failed || (lastToolFailed && !webAnswerVerified) ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
         this.lastRunOutcome = outcome;
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
@@ -648,11 +681,12 @@ export class Agent {
           durationMs: Date.now() - startedAt,
           diagnostics: this.taskDiagnostics?.snapshot(),
         });
+        if (response.text && !streamed) this.events.onText?.(response.text);
         return response.text;
       }
 
-      let toolBatchSucceeded = false;
       let toolBatchFailed = false;
+      let toolBatchSucceeded = false;
       for (const call of response.toolCalls) {
         this.enforceBudget();
         toolCallCount++;
@@ -660,6 +694,9 @@ export class Agent {
         this.taskDiagnostics?.beginTool(call.name, call.input);
         const tool = this.tools.find((candidate) => candidate.name === call.name);
         let result: string;
+        let structured: ToolResult | undefined;
+        let checkPassed = false;
+        let beforeVerificationStamp: string | undefined;
         let abortForLoop = false;
         let taskOperationId: string | undefined;
         let taskOperationKind: "tool" | "verification" = "tool";
@@ -696,6 +733,14 @@ export class Agent {
             result = "Tool execution blocked by crash recovery: this exact side-effecting operation was in-flight when Xiu stopped. Verify its effect first; do not replay it automatically.";
           } else {
             taskOperationKind = this.isVerificationAttempt(call.name, call.input) ? "verification" : "tool";
+            if (taskOperationKind === "verification" || tool.isVerification) {
+              beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+              if (verificationStamp && verificationStamp !== beforeVerificationStamp) verification.invalidate();
+              if (call.name === "verify_output" && typeof call.input.path === "string" && !verificationPaths.has(call.input.path)) {
+                beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths, call.input.path]);
+                verificationPaths.add(call.input.path);
+              }
+            }
             try {
               taskOperationId = await this.taskRunJournal?.beginOperation({
                 kind: taskOperationKind,
@@ -707,7 +752,7 @@ export class Agent {
             } catch (error) {
               throw new Error(`Task recovery journal unavailable: ${error instanceof Error ? error.message : String(error)}`);
             }
-            result = await executeTool(tool, call.input, {
+            structured = await executeToolResult(tool, call.input, {
               cwd: this.config.cwd,
               approve: async (request) => {
                 this.taskDiagnostics?.beginApproval(request.description);
@@ -739,9 +784,10 @@ export class Agent {
                 else this.taskDiagnostics?.beginWait(state, detail ?? call.name);
               },
             });
+            result = structured.output;
           }
-          this.events.onToolEnd?.(call.name, result);
-          if (this.toolResultFailed(result)) {
+          structured ??= normalizeToolResult(result);
+          if (structured.status !== "success") {
             this.repeatedFailures.set(failureKey, (this.repeatedFailures.get(failureKey) ?? 0) + 1);
             this.events.onFailure?.(`${call.name}: ${result.split(/\r?\n/, 1)[0]}`);
           } else this.repeatedFailures.delete(failureKey);
@@ -751,33 +797,60 @@ export class Agent {
             if (plan) this.events.onPlanUpdate?.(plan);
             if (plan) this.taskDiagnostics?.recordProgress();
           }
-          if (changesWorkspace && !/^Tool (error|execution denied)/.test(result)) {
+          const verificationCandidate = this.isVerificationAttempt(call.name, call.input);
+          if (changesWorkspace && structured.sideEffectState !== "none") {
             workspaceChanged = true;
-            this.taskDiagnostics?.recordProgress();
-            verifiedAfterChange = false;
-            loopGuard.reset();
+            if (structured.status === "success") this.taskDiagnostics?.recordProgress();
+            if (!verificationCandidate) {
+              verification.invalidate();
+              verifiedAfterChange = false;
+              verificationStamp = undefined;
+            }
             this.projectIndex?.invalidate();
             if (workspacePaths.length) {
               const workspaceAfter = await captureWorkspaceFiles(this.config.cwd, workspacePaths);
               const change = buildWorkspaceChangeNotice(call.name, description, workspacePaths, workspaceBefore, workspaceAfter);
-              if (change) this.events.onWorkspaceChange?.(change);
+              if (change) {
+                this.events.onWorkspaceChange?.(change);
+                if (structured.status === "success") loopGuard.reset();
+              }
             }
           }
-          if (tool.isVerification?.(call.input, result)) {
-            verifiedAfterChange = true;
-            this.taskDiagnostics?.recordProgress();
+          checkPassed = structured.status === "success" && Boolean(tool.isVerification?.(call.input, result));
+          if (verificationCandidate || checkPassed) {
+            verificationAttempted = true;
+            const currentStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+            if (beforeVerificationStamp !== currentStamp) {
+              verification.invalidate();
+              checkPassed = false;
+              result += "\nVerification stale: workspace inputs changed while the check was running; rerun the check.";
+            }
+            verificationStamp = currentStamp;
+            verification.record(verificationCheckKey(call.name, call.input), checkPassed);
+            verifiedAfterChange = verification.passed;
+            if (checkPassed) this.taskDiagnostics?.recordProgress();
           }
-          if (tool.isVerification?.(call.input, result) || this.isVerificationAttempt(call.name, call.input)) verificationAttempted = true;
           } catch (error) {
             if (error instanceof BackgroundApprovalRequiredError) throw error;
             const message = error instanceof Error ? error.message : String(error);
             if (message.startsWith("Task recovery journal unavailable:")) throw error;
-            result = `Tool error: invalid arguments for ${call.name}: ${message}`;
-            this.events.onToolEnd?.(call.name, result);
+            result = `Tool error: ${call.name}: ${message}`;
+            structured = normalizeToolResult(result);
             this.events.onFailure?.(`${call.name}: ${result}`);
           }
         }
-        const callFailed = this.toolResultFailed(result) || /^Tool execution denied by user\./i.test(result);
+        structured ??= normalizeToolResult(result);
+        const callFailed = structured.status !== "success";
+        if (this.isVerificationAttempt(call.name, call.input) && !checkPassed) {
+          verificationAttempted = true;
+          verification.record(verificationCheckKey(call.name, call.input), false);
+          verifiedAfterChange = false;
+        }
+        const outcomeLoop = loopGuard.result(call.name, structured.status, structured.errorCode, structured.output);
+        // Web tools already have stricter source-aware budgets and a final evidence-only turn.
+        if (call.name !== "web_open" && call.name !== "web_search") abortForLoop ||= outcomeLoop.abort;
+        if (outcomeLoop.blocked && outcomeLoop.reason) result += `\nLoop guidance: ${outcomeLoop.reason}`;
+        this.events.onToolEnd?.(call.name, result, { result: structured, verification: checkPassed && verifiedAfterChange });
         if (call.name === "web_search") {
           const budgetReached = /Web search discovery budget reached/i.test(result);
           if (!budgetReached) {
@@ -795,7 +868,7 @@ export class Agent {
         if (call.name === "web_open" && callFailed && !/failure budget exhausted/i.test(result)) webOpenFailures += 1;
         if (callFailed) toolBatchFailed = true;
         else toolBatchSucceeded = true;
-        const diagnosticOutcome = /^Tool execution denied by user\./i.test(result) ? "denied" : (this.toolResultFailed(result) ? "failure" : "success");
+        const diagnosticOutcome = structured.status === "denied" ? "denied" : callFailed ? "failure" : "success";
         this.taskDiagnostics?.finishTool(diagnosticOutcome, result);
         this.recordToolEvidence(call.name, call.input, result);
         const contextResult = this.boundToolContext(result);
@@ -807,16 +880,19 @@ export class Agent {
           name: call.name,
           input: call.input,
           result,
+          status: structured.status, errorCode: structured.errorCode, exitCode: structured.exitCode,
+          sideEffectState: structured.sideEffectState, verification: checkPassed,
           ...(contextResult === result ? {} : { contextResult }),
         });
         if (taskOperationId) {
-          await this.taskRunJournal?.finishOperation(taskOperationId, callFailed ? "failed" : "succeeded", result);
+          await this.taskRunJournal?.finishOperation(taskOperationId, structured.status === "cancelled" ? "cancelled" : (callFailed || (taskOperationKind === "verification" && !checkPassed)) ? "failed" : "succeeded", result);
           await this.taskRunJournal?.recoveryPoint(taskOperationKind, `${call.name} ${callFailed ? "failed" : "succeeded"}`, taskOperationId);
         }
         await this.checkpointDiagnostics();
         this.enforceBudget();
         if (abortForLoop) throw new Error("Agent stopped after repeatedly revisiting the same tool calls without making progress.");
       }
+      // Required verification failures are retained independently by the ledger.
       lastToolFailed = toolBatchFailed && !toolBatchSucceeded;
       if (fatalWebSearchFailure) {
         const text = localize(this.config.language ?? "en-US",
@@ -1285,12 +1361,19 @@ export class Agent {
         let response: Awaited<ReturnType<ModelProvider["complete"]>>;
         let streamed = false;
         const modelTools = toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools);
-        if (allowStreaming && this.provider.stream && this.events.onTextDelta) {
+        if (allowStreaming && this.provider.stream && (this.events.onTextDelta || this.events.onDraftPreview)) {
+          const preview = this.events.onDraftPreview ? new SafeDraftPreview(this.config.language ?? "en-US",
+            [this.config.apiKey, readEnvironmentCredential(this.config.apiKeyEnv)].filter((value): value is string => Boolean(value))) : undefined;
+          let visibleDraft = "";
           response = await this.provider.stream(this.system!, this.messages, modelTools, (delta) => {
             emitted = true;
-            this.events.onTextDelta?.(delta);
+            if (preview) {
+              visibleDraft = preview.push(delta) ?? visibleDraft;
+              this.events.onDraftPreview?.(visibleDraft, preview.receivedChars);
+            } else this.events.onTextDelta?.(delta);
           }, signal);
-          streamed = emitted;
+          preview?.finish();
+          streamed = emitted && !preview;
         } else {
           response = await this.provider.complete(this.system!, this.messages, modelTools, signal);
         }
@@ -1386,10 +1469,6 @@ export class Agent {
         attempt = 1;
       }
     }
-  }
-
-  private toolResultFailed(result: string): boolean {
-    return /^(?:Tool error:|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
   }
 
   private async checkpointDiagnostics(): Promise<void> {

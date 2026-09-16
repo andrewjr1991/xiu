@@ -199,3 +199,26 @@ test("Chinese task view suppresses untranslated model narration and old English 
   assert.match(output, /步骤 inspect/);
   assert.match(output, /运行 npm test/);
 });
+
+test("draft previews appear only in the running footer, never transcript drains or receipts", () => {
+  const view = new RunningTaskView(256_000, "zh-CN");
+  view.line("persisted tool output");
+  view.recordImportantAction("verified operation");
+  view.setDraftPreview("独立草稿标识，尚未验证。\n", 32);
+  const footer = formatRunningInputFooter(view, 0, 0, "model");
+  assert.match(footer, /独立草稿标识/);
+  assert.match(footer, /草稿.*未验证/);
+  assert.equal(view.drain(), "persisted tool output\n");
+  assert.equal(view.drain(), "");
+  assert.doesNotMatch(view.receiptLines().join("\n"), /独立草稿标识|草稿/);
+  assert.deepEqual(view.drainWorkspaceChanges(), []);
+  assert.equal(view.completionSummary(), undefined);
+
+  view.clearDraftPreview();
+  assert.doesNotMatch(formatRunningInputFooter(view, 0, 0, "model"), /独立草稿标识|32 字符/);
+  view.setDraftPreview("下一轮不得继承的草稿", 99);
+  view.setTurn(2, 8);
+  assert.doesNotMatch(formatRunningInputFooter(view, 0, 0, "model"), /不得继承|99 字符/);
+  assert.equal(view.drain(), "");
+  assert.doesNotMatch(view.receiptLines().join("\n"), /不得继承/);
+});

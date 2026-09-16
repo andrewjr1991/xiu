@@ -11,6 +11,8 @@ import { configureBackgroundWorkspace, listBackgroundProcesses, readBackgroundPr
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
+import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
+import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
@@ -64,7 +66,12 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/compact", "压缩对话上下文", "Compress conversation context"),
     item("/plan", "查看计划或切换只读规划模式", "Show plan or toggle read-only plan mode"),
     item("/tasks", "查看当前任务计划", "Show the live task plan"),
-    item("/diff", "查看本会话修改的文件与 Git 差异", "Show files and Git diff changed this session"),
+    item("/diff", "查看最近任务开始以来的变化（来源可能未知）", "Show changes since the latest task started (attribution may be unknown)"),
+    item("/diff workspace", "查看工作区全部变化，含新文件", "Show all workspace changes, including new files"),
+    item("/diff staged", "查看 Git 暂存区变化", "Show staged Git changes"),
+    item("/check", "发现项目检查脚本并显示最近结果", "Discover project check scripts and show recent results"),
+    item("/check all", "依次运行可用的标准项目检查", "Run available standard project checks in order"),
+    ...PROJECT_CHECK_NAMES.map((name) => item(`/check ${name}`, `运行项目 ${name} 检查`, `Run the project ${name} check`)),
     item("/paste", "粘贴文字、图片或复制的文件", "Paste clipboard text, image, or copied files"),
     item("/checkpoints", "列出安全恢复点", "List safe file restore points"),
     item("/rewind", "选择恢复点回退", "Choose a checkpoint to restore"),
@@ -527,6 +534,10 @@ async function main(): Promise<void> {
     const planManager = new TaskPlanManager(restored?.plan, restored?.planMode, language);
     const checkpointManager = new CheckpointManager(config.cwd, restored?.id);
     let runningTaskView: RunningTaskView | undefined;
+    let latestTaskBaseline: TaskChangeSnapshot | undefined;
+    let latestProjectCheck: ProjectCheckRun | undefined;
+    let activeCheckController: AbortController | undefined;
+    let activeTaskPreparationController: AbortController | undefined;
     const oneShotChanges: WorkspaceChangeNotice[] = [];
     let activeQueuedInputController: AbortController | undefined;
     const emitLine = (value = ""): void => {
@@ -915,6 +926,7 @@ async function main(): Promise<void> {
       approveRequest,
       {
         onModelStart: (turn) => {
+          runningTaskView?.clearDraftPreview();
           runningTaskView?.setTurn(turn, config.maxTurns);
           const modelTurn = localize(language, `模型第 ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} 轮开始`, `Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`);
           runningTaskView?.activity(modelTurn);
@@ -923,7 +935,14 @@ async function main(): Promise<void> {
             ? localize(language, "验证已通过，正在整理最终结果", "Verification passed; preparing the final result")
             : localize(language, "思考中", "Thinking"));
         },
-        onModelEnd: () => stopPhase(),
+        onModelEnd: () => {
+          runningTaskView?.clearDraftPreview();
+          stopPhase();
+        },
+        onDraftPreview: (text, receivedChars) => {
+          runningTaskView?.setDraftPreview(redactTerminalOutput(text), receivedChars);
+          if (!runningTaskView) startPhase(localize(language, `正在接收回复 · ${receivedChars} 字符`, `Receiving response · ${receivedChars} characters`));
+        },
         onText: (text) => {
           // Interactive final text is rendered once, after the complete turn
           // has passed normalization and evidence gates. Tool-bound narration
@@ -961,16 +980,18 @@ async function main(): Promise<void> {
           runningTaskView?.activity(`${name}: ${displayMessage}`);
           startPhase(`${name}: ${displayMessage}`);
         },
-        onToolEnd: (_name, result) => {
+        onToolEnd: (_name, result, details) => {
           stopPhase();
-          const failed = /^(?:Tool error:|Tool execution denied|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed))/i.test(result);
+          const failed = details ? details.result.status !== "success"
+            : /^(?:Tool error:|Tool execution denied|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed)|(?:Process|Command|Verification) cancelled)/i.test(result);
+          if (failed) verificationReadyForSummary = false;
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
           const summary = redactTerminalOutput(result.replace(/\s+/g, " ").trim());
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
           emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
           if (!failed && activeToolDetails) {
-            if (activeToolDetails.verification) {
+            if (details?.verification) {
               verificationReadyForSummary = true;
               runningTaskView?.markVerificationPassed();
               runningTaskView?.recordImportantAction(localize(language, `验证通过：${activeToolDetails.description}`, `Verified: ${activeToolDetails.description}`));
@@ -979,7 +1000,10 @@ async function main(): Promise<void> {
           }
           activeToolDetails = undefined;
         },
-        onCompletionGate: () => emitLine(chalk.yellow(localize(language, "完成前需要验证。\n", "Verification required before completion.\n"))),
+        onCompletionGate: () => {
+          verificationReadyForSummary = false;
+          emitLine(chalk.yellow(localize(language, "完成前需要验证。\n", "Verification required before completion.\n")));
+        },
         onCompaction: (message) => startPhase(message),
         onRetry: (message) => startPhase(localizeToolProgress(message, language)),
         onBudgetWarning: (message) => {
@@ -1317,9 +1341,132 @@ async function main(): Promise<void> {
       }
     };
 
+    const runWithTaskBaseline = async (task: string, onStarted?: () => void): Promise<string> => {
+      const preparation = new AbortController();
+      activeTaskPreparationController = preparation;
+      latestTaskBaseline = undefined;
+      emitLine(chalk.cyan(localize(language, "已接收任务，正在记录开始时的文件状态。", "Task received; recording the starting file state.")));
+      startPhase(localize(language, "正在准备任务", "Preparing task"));
+      try {
+        latestTaskBaseline = await captureTaskBaseline(config.cwd, { sensitiveValues: config.apiKey ? [config.apiKey] : [] });
+      } catch (error) {
+        emitLine(chalk.yellow(redactTerminalOutput(localize(language,
+          `无法记录任务改动起点：${error instanceof Error ? error.message : String(error)}。可使用 /diff workspace 查看工作区。`,
+          `Could not record the task baseline: ${error instanceof Error ? error.message : String(error)}. Use /diff workspace to inspect the workspace.`))));
+      } finally {
+        if (activeTaskPreparationController === preparation) activeTaskPreparationController = undefined;
+      }
+      if (preparation.signal.aborted) {
+        stopPhase();
+        throw new Error(localize(language, "任务已在准备阶段取消。", "Task cancelled during preparation."));
+      }
+      onStarted?.();
+      return agent.run(task);
+    };
+
+    const printDiff = async (command: string): Promise<void> => {
+      const requested = command.slice("/diff".length).trim() || "task";
+      if (!["task", "workspace", "staged"].includes(requested)) {
+        console.log(chalk.yellow(localize(language, "用法：/diff [task|workspace|staged]\n", "Usage: /diff [task|workspace|staged]\n")));
+        return;
+      }
+      if (requested === "task" && !latestTaskBaseline) {
+        console.log(chalk.dim(localize(language,
+          "本次会话还没有任务起点快照。恢复的历史会话不会重建旧快照；使用 /diff workspace 或 /diff staged 查看当前状态。\n",
+          "No task baseline is available in this session. Historical baselines are not reconstructed on resume; use /diff workspace or /diff staged for the current state.\n")));
+        return;
+      }
+      try {
+        const diffOptions = { sensitiveValues: config.apiKey ? [config.apiKey] : [] };
+        const report = requested === "task"
+          ? await inspectTaskChanges(config.cwd, latestTaskBaseline!, diffOptions)
+          : await getWorkspaceDiff(config.cwd, requested as "workspace" | "staged", diffOptions);
+        console.log(`${redactTerminalOutput(formatTaskChanges(report, language))}\n`);
+      } catch (error) {
+        console.error(chalk.red(redactTerminalOutput(`${localize(language, "读取改动失败", "Could not inspect changes")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+      }
+    };
+
+    const checkStatusLabel = (value: ProjectCheckStatus): string => ({
+      passed: localize(language, "脚本通过（退出码 0）", "script passed (exit 0)"),
+      failed: localize(language, "失败", "failed"),
+      cancelled: localize(language, "已取消", "cancelled"),
+      denied: localize(language, "已拒绝", "denied"),
+      skipped: localize(language, "已跳过", "skipped"),
+    })[value];
+    const printCheckSummary = (result: ProjectCheckRun): void => {
+      console.log(localize(language,
+        `检查结果：${result.counts.passed} 通过 / ${result.counts.failed} 失败 / ${result.counts.cancelled} 取消 / ${result.counts.denied} 拒绝 / ${result.counts.skipped} 跳过 · ${(result.elapsedMs / 1000).toFixed(1)} 秒`,
+        `Checks: ${result.counts.passed} passed / ${result.counts.failed} failed / ${result.counts.cancelled} cancelled / ${result.counts.denied} denied / ${result.counts.skipped} skipped · ${(result.elapsedMs / 1000).toFixed(1)}s`));
+      console.log(chalk.dim(localize(language, "通过仅表示脚本退出码为 0，不保证功能正确；后续改动需要重新检查。\n", "Passed means the script exited with code 0, not a guarantee of functional correctness; rerun after changes.\n")));
+    };
+    const handleCheckCommand = async (command: string): Promise<void> => {
+      const selection = command.slice("/check".length).trim();
+      if (selection && selection !== "all" && !(PROJECT_CHECK_NAMES as readonly string[]).includes(selection)) {
+        console.log(chalk.yellow(localize(language, "用法：/check [typecheck|lint|test|build|all]\n", "Usage: /check [typecheck|lint|test|build|all]\n")));
+        return;
+      }
+      const controller = new AbortController();
+      activeCheckController = controller;
+      const checkContext = { cwd: config.cwd, signal: controller.signal, approve: approveRequest };
+      const sensitiveValues = config.apiKey ? [config.apiKey] : [];
+      try {
+        if (!selection) {
+          const discovery = await discoverProjectChecks(checkContext, { sensitiveValues });
+          if (discovery.error) console.log(chalk.yellow(redactTerminalOutput(discovery.error)));
+          for (const check of discovery.checks) {
+            console.log(check.available
+              ? `${chalk.cyan(check.name)}\n${redactTerminalOutput(projectCheckPreview(check))}\n`
+              : chalk.dim(`${check.name}: ${redactTerminalOutput(check.reason ?? localize(language, "不可用", "unavailable"))}`));
+          }
+          if (latestProjectCheck) {
+            console.log(chalk.dim(localize(language, "上次检查记录（未重新运行）：", "Previous check record (not rerun):")));
+            for (const check of latestProjectCheck.checks) console.log(`${check.name}: ${checkStatusLabel(check.status)}`);
+            printCheckSummary(latestProjectCheck);
+          }
+          console.log(chalk.dim(localize(language, "使用 /check <检查名> 或 /check all 执行。\n", "Run /check <name> or /check all to execute.\n")));
+          return;
+        }
+        const checkActivities = new Map<string, string>();
+        latestProjectCheck = await runProjectChecks(selection as ProjectCheckSelection, checkContext, {
+          planMode: agent.status().planMode,
+          sensitiveValues,
+          onCheckStart: (check) => {
+            console.log(`${chalk.cyan(localize(language, "准备运行项目检查", "Preparing project check"))}\n${redactTerminalOutput(projectCheckPreview(check))}`);
+            checkActivities.set(check.name, activities.start("tool", "validate_project", check.command));
+            status.start(localize(language, `正在检查 ${check.name} · Ctrl+C 取消`, `Checking ${check.name} · Ctrl+C to cancel`));
+          },
+          onCheckResult: (check) => {
+            status.stop();
+            const activity = checkActivities.get(check.name);
+            if (activity) activities.finish(activity, check.output, check.status !== "passed");
+            const label = `${check.name}: ${checkStatusLabel(check.status)} · ${(check.elapsedMs / 1000).toFixed(1)}s`;
+            console.log(check.status === "passed" ? chalk.green(label) : check.status === "failed" ? chalk.red(label) : chalk.yellow(label));
+            if (check.status !== "passed" && check.output) {
+              const output = redactTerminalOutput(check.output);
+              console.log(chalk.dim(output.length > 2_000 ? `${output.slice(0, 2_000)}\n${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : output));
+            }
+          },
+        });
+        printCheckSummary(latestProjectCheck);
+        projectIndex.invalidate();
+      } catch (error) {
+        console.error(chalk.red(redactTerminalOutput(`${localize(language, "项目检查失败", "Project check failed")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+      } finally {
+        status.stop();
+        if (activeCheckController === controller) activeCheckController = undefined;
+      }
+    };
+
     const onSigint = () => {
       status.stop();
-      if (agent.cancel()) {
+      if (activeCheckController) {
+        activeCheckController.abort();
+        console.log(chalk.yellow(localize(language, "\n正在取消项目检查……", "\nCancelling project checks...")));
+      } else if (activeTaskPreparationController) {
+        activeTaskPreparationController.abort();
+        console.log(chalk.yellow(localize(language, "\n正在取消任务准备……", "\nCancelling task preparation...")));
+      } else if (agent.cancel()) {
         runningTaskView?.setPhase(localize(language, "正在取消", "Cancelling"));
         console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
       }
@@ -1338,10 +1485,11 @@ async function main(): Promise<void> {
     await configureStartupProvider();
 
     if (initialTask) {
+      let taskStarted = false;
       try {
-        await agent.run(initialTask);
+        await runWithTaskBaseline(initialTask, () => { taskStarted = true; });
       } finally {
-        await agent.recordReplayTurn({
+        if (taskStarted) await agent.recordReplayTurn({
           task: initialTask,
           inputKind: "task",
           supplements: [],
@@ -1682,10 +1830,12 @@ async function main(): Promise<void> {
         let settled = false;
         let failure: unknown;
         let finalResponse = "";
-        const runPromise = agent.run(current.text)
+        let taskStarted = false;
+        const runPromise = runWithTaskBaseline(current.text, () => { taskStarted = true; })
           .then((response) => { finalResponse = response; })
           .catch((error) => { failure = error; })
           .finally(() => {
+            view.clearDraftPreview();
             settled = true;
             activeQueuedInputController?.abort();
           });
@@ -1707,6 +1857,7 @@ async function main(): Promise<void> {
               cancelledFromKeyboard = true;
               view.setPhase(localize(language, "正在取消", "Cancelling"));
               view.activity(localize(language, "用户按下 Ctrl+C，正在中止当前模型或工具调用", "Ctrl+C pressed; aborting the active model or tool call"));
+              activeTaskPreparationController?.abort();
               agent.cancel();
             },
             onToggleDetails: () => { view.toggleDetails(); },
@@ -1733,6 +1884,7 @@ async function main(): Promise<void> {
           inputHistory.push(followUp);
 
           if (followUp === "/cancel") {
+            activeTaskPreparationController?.abort();
             agent.cancel();
             console.log(chalk.yellow(localize(language, "正在取消当前任务，排队任务会保留。\n", "Cancelling current task. Queued follow-ups are preserved.\n")));
             break;
@@ -1740,6 +1892,7 @@ async function main(): Promise<void> {
           if (followUp === "/exit" || followUp === "/quit") {
             exitRequested = true;
             queue.clear();
+            activeTaskPreparationController?.abort();
             agent.cancel();
             console.log(chalk.yellow(localize(language, "退出前正在取消当前任务。\n", "Cancelling current task before exit.\n")));
             break;
@@ -1752,6 +1905,10 @@ async function main(): Promise<void> {
             continue;
           }
           if (followUp.startsWith("/queue ")) {
+            if (/^\/(?:check|diff)(?:\s|$)/.test(followUp.slice("/queue ".length).trim())) {
+              console.log(chalk.dim(localize(language, "项目检查和差异命令请直接使用，不进入模型任务队列。\n", "Use check and diff commands directly; they are not queued model tasks.\n")));
+              continue;
+            }
             try {
               const queued = queue.enqueue(followUp.slice("/queue ".length));
               console.log(chalk.green(localize(language, `已安排下一项 ${queued.id}：${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`, `Scheduled next ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`)));
@@ -1773,6 +1930,14 @@ async function main(): Promise<void> {
           }
           if (followUp === "/web" || followUp === "/web status") {
             await printWebSearchStatus();
+            continue;
+          }
+          if (followUp === "/check" || followUp.startsWith("/check ")) {
+            console.log(chalk.dim(localize(language, "请在当前任务结束后执行 /check；检查命令没有作为模型补充发送。\n", "Run /check after the current task finishes; the command was not sent as model steering.\n")));
+            continue;
+          }
+          if (followUp === "/diff" || followUp.startsWith("/diff ")) {
+            await printDiff(followUp);
             continue;
           }
           if (followUp.startsWith("/web ")) {
@@ -1863,7 +2028,7 @@ async function main(): Promise<void> {
           console.log(chalk.yellow(localize(language, "等待你的回答 · 当前上下文已保存", "Waiting for your answer · current context saved")));
           console.log(chalk.dim("─".repeat(Math.max(20, Math.min((process.stdout.columns || 100) - 2, 120)))));
         }
-        await agent.recordReplayTurn({
+        if (taskStarted) await agent.recordReplayTurn({
           ...replayInput,
           supplements: replaySupplements,
           response: finalResponse,
@@ -1964,6 +2129,8 @@ async function main(): Promise<void> {
           }
         }
         agent.restoreSession(selected);
+        latestTaskBaseline = undefined;
+        latestProjectCheck = undefined;
         agent.setRecoverySource(interrupted);
         renderReplay(selected);
         await runTaskSequence(recoveryContinuation(interrupted, language), {
@@ -1984,6 +2151,8 @@ async function main(): Promise<void> {
             }
           }
           agent.restoreSession(selected);
+          latestTaskBaseline = undefined;
+          latestProjectCheck = undefined;
           awaitingReply = undefined;
           renderReplay(selected);
         }
@@ -2266,6 +2435,8 @@ async function main(): Promise<void> {
       }
       if (task === "/clear") {
         agent.clearConversation();
+        latestTaskBaseline = undefined;
+        latestProjectCheck = undefined;
         awaitingReply = undefined;
         console.log(chalk.dim(localize(language, "对话上下文已清空。\n", "Conversation context cleared.\n")));
         continue;
@@ -2300,8 +2471,12 @@ async function main(): Promise<void> {
         console.log(chalk.green(localize(language, `规划模式已${enabled ? "启用（只读）" : "关闭"}。\n`, `Plan mode ${enabled ? "enabled (read-only)" : "disabled"}.\n`)));
         continue;
       }
-      if (task === "/diff") {
-        console.log(`${await checkpointManager.diff()}\n`);
+      if (task === "/diff" || task.startsWith("/diff ")) {
+        await printDiff(task);
+        continue;
+      }
+      if (task === "/check" || task.startsWith("/check ")) {
+        await handleCheckCommand(task);
         continue;
       }
       if (task === "/paste") {

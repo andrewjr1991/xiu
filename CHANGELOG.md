@@ -1,10 +1,16 @@
 # Changelog
 
-This file summarizes released behavior. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
+This file distinguishes the unreleased candidate from released behavior. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
 ## Unreleased — 0.18.0
 
-- Design a repeatable, security-preserving evaluation harness and a comparable v0.17.0 quality/cost baseline before optimization work begins.
+- Reprioritize P0/P1 around daily coding quality and interaction. This is an unreleased candidate, not a statement that release checks or user acceptance have passed.
+- Add structured tool outcomes and error categories, result-aware loop protection, and conservative verification evidence. Informational commands do not count as checks; task edits invalidate earlier evidence and one passing check does not hide another failure.
+- Add transient Chinese/English streamed previews with cross-chunk redaction and preserved code literals; drafts remain separate from completion verdicts and durable output.
+- Add bounded task-start, workspace, and staged `/diff` views, including pre-existing changes and explicit unknown attribution. Task snapshots remain in memory only.
+- Add `/check` discovery and approved execution of standard root npm scripts, with Plan-mode read-only enforcement, cancellation, and per-check results.
+- Rebuild cross-Provider history from canonical visible text/tool calls, remove hidden reasoning from retained response fields, and treat truncated or unknown responses as incomplete rather than executing partial tools.
+- Preserve the legacy evaluation harness and raw results. The last real run stopped at 14/30 records; it is not a complete product baseline and is not required to resume feature development.
 - Add versioned task/result protocols, isolated scripted-Provider execution, deterministic assertions, sanitized reports, comparison gates, and the first 10 fixed tasks.
 - Run the deterministic evaluation smoke in ordinary three-platform CI without network access, Provider credentials, or model spend.
 - Add an explicit-confirmation real-baseline runner that pins and verifies the published v0.17.0 artifact, enforces finite global budgets, and preserves sanitized partial results.

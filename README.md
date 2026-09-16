@@ -2,7 +2,7 @@
 
 # Xiu
 
-**An audit-oriented, recovery-aware terminal coding agent.**
+**A terminal coding assistant for everyday development, with reviewable changes.**
 
 Give Xiu an outcome. It inspects the repository, edits files, runs commands, verifies the result, and leaves bounded evidence you can review.
 
@@ -14,6 +14,8 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
+The published product baseline is `0.17.0`. This checkout contains the **unreleased `0.18.0` P0/P1 candidate**; candidate features below require a local build until a release is approved.
+
 ## Install
 
 Requires Node.js 20.18.1 or newer.
@@ -22,6 +24,8 @@ Requires Node.js 20.18.1 or newer.
 npm install -g @xiu-ai/cli
 xiu "Find the cause of the failing login test, fix it, and run the tests"
 ```
+
+In Windows PowerShell, use `npm.cmd` instead of `npm` if the PowerShell shim is restricted by execution policy or ConstrainedLanguage.
 
 For interactive work and resumable sessions:
 
@@ -72,6 +76,16 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 - Multi-agent roles with isolated Git worktrees and review-gated integration
 - Simplified Chinese and English UI and model-output contracts
 
+## In the 0.18.0 candidate
+
+- `/check` discovers the root npm project's `typecheck`, `lint`, `test`, and `build` scripts; `/check test` runs one and `/check all` runs the available checks in order. The actual scripts and lifecycle hooks are previewed through the existing approval path. Plan mode allows discovery only; `Ctrl+C` cancels active checks.
+- `/diff` (or `/diff task`) shows changes since the current task's in-memory starting point, `/diff workspace` includes staged, unstaged, and untracked workspace changes against HEAD, and `/diff staged` compares the index with HEAD. Existing changes and uncertain attribution are labeled. Snapshots and previews are bounded; omitted files are reported, and task baselines do not survive a restart.
+- Chinese and English streamed drafts appear temporarily while a response is arriving. Redaction precedes display, code literals retain their spelling, and a draft is not a completion verdict.
+- Tool failures carry consistent status and error categories. Repeated failures can stop even when arguments change; a failed command is not progress. Verification rejects `echo test`, help/version output, and similar non-checks; another passing check cannot conceal a recorded failure, and subsequent task edits invalidate prior checks.
+- Provider histories are rebuilt from visible text and tool calls. Truncated, filtered, or unknown endings cannot be reported as completed work or execute partial tool calls.
+
+A successful script exit records an execution result, not proof that every requirement is correct. See the [usage guide](./USAGE.zh-CN.md) for command details and limits.
+
 ## Platform status
 
 | Capability | Windows | macOS | Linux |
@@ -100,7 +114,7 @@ $env:OPENAI_API_KEY = "..."
 xiu
 ```
 
-Inside a session, type `/` to open the command palette. Useful starting points include `/providers`, `/models`, `/status`, `/diagnostics`, `/diff`, `/report`, `/recover`, and `/help`.
+Inside a session, type `/` to open the command palette. Useful starting points include `/providers`, `/models`, `/status`, `/diagnostics`, `/diff`, `/check` (0.18.0 candidate), `/report`, `/recover`, and `/help`.
 
 ## Documentation
 
@@ -110,7 +124,7 @@ Inside a session, type `/` to open the command palette. Useful starting points i
 | [完整使用指南](./USAGE.zh-CN.md) | Complete Simplified Chinese command reference |
 | [Security boundaries](./SECURITY.zh-CN.md) | Permanent security and privacy rules |
 | [Roadmap](./ROADMAP.zh-CN.md) | Current state, current release, and next actions |
-| [Changelog](./CHANGELOG.md) | Released-version summary |
+| [Changelog](./CHANGELOG.md) | Unreleased candidate and released-version summary |
 | [Publishing guide](./PUBLISHING.zh-CN.md) | Maintainer release and installation gates |
 | [Contributing](./CONTRIBUTING.md) | Development and pull-request checks |
 
@@ -121,6 +135,9 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+npm run check:docs
+npm run eval:smoke
+npm pack --dry-run --json
 npm run smoke:package
 ```
 
@@ -131,7 +148,7 @@ npm run smoke:package
 - macOS Keychain and Linux Secret Service are not implemented.
 - MCP Sampling is not implemented.
 - Multi-agent conflicts are detected and preserved, not automatically resolved.
-- No public model-backed benchmark baseline has been published yet; partial local runs remain diagnostic evidence, the bounded C3 canary passed its infrastructure checks, and the formal baseline still requires a fresh run and human review.
+- No public model-backed benchmark baseline has been published. The last legacy run contains 14/30 trials and remains incomplete; its constrained tool setup cannot establish product success rates. Raw results are retained, but completing that run is no longer a development gate. P0/P1 uses targeted offline scenarios and candidate checks; it does not authorize new model spend.
 
 ## License
 

@@ -714,7 +714,7 @@ test("a malformed redundant tool call cannot override successful verification in
   assert.equal(agent.status().outcome, "completed");
   assert.equal(agent.status().diagnostics?.tools.calls, 3);
   assert.equal(agent.status().diagnostics?.tools.failures, 1);
-  assert.match(failures.at(-1) ?? "", /invalid arguments for run_process/);
+  assert.match(failures.at(-1) ?? "", /run_process.*args must be an array/);
 });
 
 test("agent rebuilds its language contract immediately after a runtime switch", async () => {

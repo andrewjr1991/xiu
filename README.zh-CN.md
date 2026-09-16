@@ -2,7 +2,7 @@
 
 # Xiu
 
-**一个面向审计、重视恢复边界的终端编码 Agent。**
+**中文友好、改动可审查的日常终端编码助手。**
 
 给 Xiu 一个目标。它会检查仓库、修改文件、运行命令、验证结果，并留下有界、可复查的执行证据。
 
@@ -14,6 +14,8 @@
 
 </div>
 
+当前公开产品基线为 `0.17.0`。本工作区是**尚未发布的 `0.18.0` P0/P1 候选版**；以下候选功能在批准发布前需要从源码构建使用。
+
 ## 安装
 
 需要 Node.js 20.18.1 或更高版本。
@@ -22,6 +24,8 @@
 npm install -g @xiu-ai/cli
 xiu "找出登录测试失败的原因，修好它，然后运行测试"
 ```
+
+Windows PowerShell 中若 `npm.ps1` 被执行策略或 ConstrainedLanguage 限制，请使用 `npm.cmd` 代替 `npm`。
 
 交互式工作和恢复会话：
 
@@ -72,6 +76,16 @@ Xiu 默认不上传项目代码、会话、审计或诊断数据。模型调用�
 - 隔离 Git Worktree 与审查门禁的多 Agent 协作
 - 简体中文和英文界面与模型输出契约
 
+## 0.18.0 候选版变化
+
+- `/check` 发现根目录 npm 项目的 `typecheck`、`lint`、`test`、`build` 脚本；`/check test` 执行单项，`/check all` 按顺序运行可用检查。真实脚本及前后置脚本会展示并复用审批路径；Plan 模式只允许发现，执行时可按 `Ctrl+C` 取消。
+- `/diff`（或 `/diff task`）显示本任务内存起点以来的变化；`/diff workspace` 对比 HEAD，包含暂存、未暂存和未跟踪文件；`/diff staged` 对比暂存区与 HEAD。已有修改、来源不确定和覆盖限制会明确标注；快照与预览有上限，重启后不恢复原任务起点。
+- 中文和英文响应到达时显示临时草稿；先脱敏再展示，代码字面量保留原文，草稿不代表任务已完成。
+- 工具失败统一状态与原因；换参数但持续同类失败会有界停止，失败命令不算进展。`echo test`、版本和帮助输出不算验证，另一项通过不能覆盖已记录的失败，本任务再次修改后旧验证过期。
+- 跨 Provider 历史从公开文本和工具调用重建；截断、过滤或未知结束状态不能误报完成，也不能执行不完整工具调用。
+
+脚本退出成功只证明一次执行结果，不等于所有需求均已正确实现。详细命令与边界见[使用指南](./USAGE.zh-CN.md)。
+
 ## 平台状态
 
 | 能力 | Windows | macOS | Linux |
@@ -95,7 +109,7 @@ $env:OPENAI_API_KEY = "..."
 xiu
 ```
 
-会话中输入 `/` 打开命令面板。常用入口包括 `/providers`、`/models`、`/status`、`/diagnostics`、`/diff`、`/report`、`/recover` 和 `/help`。
+会话中输入 `/` 打开命令面板。常用入口包括 `/providers`、`/models`、`/status`、`/diagnostics`、`/diff`、`/check`（0.18.0 候选）、`/report`、`/recover` 和 `/help`。
 
 ## 文档
 
@@ -105,7 +119,7 @@ xiu
 | [完整使用指南](./USAGE.zh-CN.md) | 全部命令与能力参考 |
 | [安全与隐私边界](./SECURITY.zh-CN.md) | 跨版本永久安全规则 |
 | [路线图](./ROADMAP.zh-CN.md) | 当前状态、当前版本和下一步 |
-| [变更日志](./CHANGELOG.md) | 已发布版本摘要 |
+| [变更日志](./CHANGELOG.md) | 未发布候选与已发布版本摘要 |
 | [发布指南](./PUBLISHING.zh-CN.md) | 维护者发布与安装门禁 |
 | [贡献指南](./CONTRIBUTING.md) | 开发和 Pull Request 检查 |
 
@@ -116,6 +130,9 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+npm run check:docs
+npm run eval:smoke
+npm pack --dry-run --json
 npm run smoke:package
 ```
 
@@ -126,7 +143,7 @@ npm run smoke:package
 - 尚未实现 macOS Keychain 和 Linux Secret Service。
 - 尚未实现 MCP Sampling。
 - 多 Agent 冲突会被检测并保留，不自动解决。
-- 尚未发布完整真实模型评测基线；既有本地部分运行只作为诊断证据，C3 单 trial canary 已通过基础设施验收，正式基线仍需从头运行和人工复核。
+- 尚未发布完整真实模型评测基线。旧评测最近留下 14/30 条记录且仍未完成，其受限工具配置不能证明产品成功率。保留原始结果，完成旧评测不再是开发门槛；P0/P1 使用针对性离线场景和候选检查，不自动授权新模型费用。
 
 ## 许可
 

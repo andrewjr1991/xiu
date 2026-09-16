@@ -2,11 +2,14 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import fg from "fast-glob";
 import iconv from "iconv-lite";
 import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
-import type { AgentTool, ToolContext, ToolRisk } from "./types.js";
+import type { AgentTool, ToolContext, ToolRisk, ToolResult } from "./types.js";
+import { normalizeToolResult, toolResult, toolErrorCode } from "./tool-result.js";
+import { isVerificationCommand } from "./verification.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
 import { resolveWorkspacePath, validateWorkspaceGlob } from "./workspace-path.js";
 
@@ -237,21 +240,34 @@ function classifyGitInvocation(command: string, shell: string): ToolRisk | undef
 }
 
 export function looksLikeVerification(command: string): boolean {
-  const namedCheck = /(^|\s)(test|tests|lint|check|typecheck|build|verify|validate)(\s|$|:)/i.test(command)
-    || /\b(tsc\b|pytest\b|vitest\b|jest\b|eslint\b|cargo\s+test\b|go\s+test\b)/i.test(command)
-    || /验证|校验/.test(command);
-  const verifierScript = /(?:^|[\\/\s])(?:test|tests|check|verify|validate)(?:[_-][^\\/\s]+)?\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command)
-    || /(?:^|[\\/\s])[^\\/\s]+[_-](?:test|tests|check|verify|validate)\.(?:py|mjs|cjs|js|ts|ps1|sh|bat|cmd)\b/i.test(command);
-  return namedCheck || verifierScript;
+  return isVerificationCommand(command);
+}
+
+async function projectScriptEvidenceNote(cwd: string, command: string, seen = new Set<string>()): Promise<string> {
+  const [executable, ...args] = commandTokens(command);
+  if (!["npm", "pnpm", "yarn", "bun"].includes(programName(executable ?? "")) || !looksLikeVerification(command)) return "";
+  if (args[0] === "run" || args[0] === "run-script") args.shift();
+  const check = args[0] ?? "";
+  const unavailable = "\nCheck evidence unavailable: project script is informational or is not a recognized deterministic check.";
+  if (seen.has(check) || seen.size >= 5) return unavailable;
+  seen.add(check);
+  try {
+    const pkg = JSON.parse(await fs.readFile(resolveWorkspacePath(cwd, "package.json"), "utf8")) as { scripts?: Record<string, unknown> };
+    const script = pkg.scripts?.[check];
+    if (typeof script !== "string" || !looksLikeVerification(script)) return unavailable;
+    return projectScriptEvidenceNote(cwd, script, seen);
+  } catch { return unavailable; }
 }
 
 export function verificationCommandPassed(result: string): boolean {
   if (!/^Exit code: 0\b/.test(result)) return false;
+  if (result.includes("Check evidence unavailable:")) return false;
   const negativeEvidence = [
     /(?:验证|校验)(?:失败|未通过|错误)/i,
     /\b(?:verification|validation|check)\s*(?::|result\s*:?)?\s*(?:false|failed|failure|error)\b/im,
     /^\s*(?:false|failed|failure|error)\s*$/im,
     /\b[1-9]\d*\s+(?:failed|failures|errors)\b/i,
+    /^\s*(?:FAIL\b|not ok\b)/im,
   ];
   return !negativeEvidence.some((pattern) => pattern.test(result));
 }
@@ -549,9 +565,11 @@ export const builtinTools: AgentTool[] = [
       const resolved = resolveProcessProgram(program, context.cwd);
       return `Direct process (no shell parsing):\n${formatProcessInvocation(resolved, processArgs(input))}`;
     },
-    async execute(input, context) {
+    async execute(input, context) { return (await this.executeResult!(input, context)).output; },
+    async executeResult(input, context) {
       const requestedProgram = processProgram(input);
       const requestedArgs = processArgs(input);
+      const evidenceNote = await projectScriptEvidenceNote(context.cwd, formatProcessInvocation(requestedProgram, requestedArgs));
       const nodePackageCli = await resolveWindowsNodePackageCli(requestedProgram);
       const program = nodePackageCli ? process.execPath : resolveProcessProgram(requestedProgram, context.cwd);
       const args = nodePackageCli ? [nodePackageCli, ...requestedArgs] : requestedArgs;
@@ -561,15 +579,15 @@ export const builtinTools: AgentTool[] = [
         const result = await execFileAsync(program, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
         const stdout = decodeOutput(result.stdout, outputEncoding);
         const stderr = decodeOutput(result.stderr, outputEncoding);
-        return truncate(`Exit code: 0\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        return toolResult(truncate(`Exit code: 0${evidenceNote}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim()), "success", { exitCode: 0, sideEffectState: "possible" });
       } catch (error) {
         const failure = error as Error & { code?: string | number; stdout?: string | Buffer; stderr?: string | Buffer; killed?: boolean };
         const stdout = decodeOutput(failure.stdout, outputEncoding);
         const stderr = decodeOutput(failure.stderr, outputEncoding);
-        if (context.signal?.aborted) return "Process cancelled by user.";
-        if (failure.killed) return truncate(`Process timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        if (context.signal?.aborted) return toolResult("Process cancelled by user.", "cancelled", { errorCode: "cancelled", sideEffectState: "unknown" });
+        if (failure.killed) return toolResult(truncate(`Process timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim()), "failure", { errorCode: "timeout", sideEffectState: "unknown" });
         const output = `Exit code: ${failure.code ?? "failed"}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim();
-        return truncate(`${output}${directProcessFailureHint(requestedProgram, failure.code)}`);
+        return toolResult(truncate(`${output}${directProcessFailureHint(requestedProgram, failure.code)}`), "failure", { errorCode: typeof failure.code === "number" ? "execution_failed" : toolErrorCode(String(failure.code)), exitCode: typeof failure.code === "number" ? failure.code : undefined, sideEffectState: "unknown" });
       }
     },
   },
@@ -596,8 +614,10 @@ export const builtinTools: AgentTool[] = [
         throw new Error("This runtime uses Windows PowerShell 5.1. Retry without Bash operators (&& or ||) and /dev/null; the command already starts in the workspace.");
       }
     },
-    async execute(input, context) {
+    async execute(input, context) { return (await this.executeResult!(input, context)).output; },
+    async executeResult(input, context) {
       const command = stringArg(input, "command");
+      const evidenceNote = await projectScriptEvidenceNote(context.cwd, command);
       const timeout = typeof input.timeout_ms === "number" ? input.timeout_ms : 120_000;
       const isWindows = process.platform === "win32";
       const executable = isWindows ? "powershell.exe" : "/bin/sh";
@@ -607,15 +627,15 @@ export const builtinTools: AgentTool[] = [
         const result = await execFileAsync(executable, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
         const stdout = decodeOutput(result.stdout, outputEncoding);
         const stderr = decodeOutput(result.stderr, outputEncoding);
-        return truncate(`Exit code: 0\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        return toolResult(truncate(`Exit code: 0${evidenceNote}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim()), "success", { exitCode: 0, sideEffectState: "possible" });
       } catch (error) {
         const failure = error as Error & { code?: string | number; stdout?: string | Buffer; stderr?: string | Buffer; killed?: boolean };
         const stdout = decodeOutput(failure.stdout, outputEncoding);
         const stderr = decodeOutput(failure.stderr, outputEncoding);
-        if (context.signal?.aborted) return "Command cancelled by user.";
-        if (failure.killed) return truncate(`Command timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim());
+        if (context.signal?.aborted) return toolResult("Command cancelled by user.", "cancelled", { errorCode: "cancelled", sideEffectState: "unknown" });
+        if (failure.killed) return toolResult(truncate(`Command timed out after ${timeout}ms.\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim()), "failure", { errorCode: "timeout", sideEffectState: "unknown" });
         const output = `Exit code: ${failure.code ?? "failed"}\n${stdout}${stderr ? `\nSTDERR:\n${stderr}` : ""}`.trim();
-        return truncate(`${output}${shellFailureHint(command, output)}`);
+        return toolResult(truncate(`${output}${shellFailureHint(command, output)}`), "failure", { errorCode: "execution_failed", exitCode: typeof failure.code === "number" ? failure.code : undefined, sideEffectState: "unknown" });
       }
     },
   },
@@ -756,23 +776,27 @@ export const builtinTools: AgentTool[] = [
       additionalProperties: false,
     },
     describe: (input) => `run project ${String(input.check)}`,
-    isVerification: (_input, result) => /^Exit code: 0\b/.test(result),
-    async execute(input, context) {
+    isVerification: (_input, result) => verificationCommandPassed(result) && !result.includes("Check evidence unavailable:"),
+    async execute(input, context) { return (await this.executeResult!(input, context)).output; },
+    async executeResult(input, context) {
       const check = stringArg(input, "check");
-      const packageFile = path.join(context.cwd, "package.json");
+      const packageFile = resolveWorkspacePath(context.cwd, "package.json");
       const pkg = JSON.parse(await fs.readFile(packageFile, "utf8")) as { scripts?: Record<string, string> };
-      if (!pkg.scripts?.[check]) return `Verification unavailable: package.json has no ${check} script.`;
-      const executable = process.platform === "win32" ? "npm.cmd" : "npm";
+      if (!["typecheck", "lint", "test", "build"].includes(check) || !pkg.scripts?.[check]) return toolResult(`Verification unavailable: package.json has no ${check} script.`, "failure", { errorCode: "unavailable" });
+      const nodePackageCli = await resolveWindowsNodePackageCli("npm");
+      const executable = nodePackageCli ? process.execPath : process.platform === "win32" ? "npm.cmd" : "npm";
+      const args = nodePackageCli ? [nodePackageCli, "run", check] : ["run", check];
       const timeout = typeof input.timeout_ms === "number" ? input.timeout_ms : 120_000;
       const outputEncoding = process.platform === "win32" ? await windowsConsoleEncoding() : "utf8";
       try {
-        const result = await execFileAsync(executable, ["run", check], { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
-        return truncate(`Exit code: 0\n${decodeOutput(result.stdout, outputEncoding)}${result.stderr.length ? `\nSTDERR:\n${decodeOutput(result.stderr, outputEncoding)}` : ""}`.trim());
+        const result = await execFileAsync(executable, args, { cwd: context.cwd, timeout, maxBuffer: 2 * 1024 * 1024, windowsHide: true, encoding: "buffer", signal: context.signal, env: { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" } });
+        const evidenceNote = await projectScriptEvidenceNote(context.cwd, `npm run ${check}`);
+        return toolResult(truncate(`Exit code: 0${evidenceNote}\n${decodeOutput(result.stdout, outputEncoding)}${result.stderr.length ? `\nSTDERR:\n${decodeOutput(result.stderr, outputEncoding)}` : ""}`.trim()), "success", { exitCode: 0, sideEffectState: "possible" });
       } catch (error) {
         const failure = error as Error & { code?: string | number; stdout?: string | Buffer; stderr?: string | Buffer; killed?: boolean };
-        if (context.signal?.aborted) return "Verification cancelled by user.";
-        if (failure.killed) return `Verification timed out after ${timeout}ms.`;
-        return truncate(`Exit code: ${failure.code ?? "failed"}\n${decodeOutput(failure.stdout, outputEncoding)}${failure.stderr ? `\nSTDERR:\n${decodeOutput(failure.stderr, outputEncoding)}` : ""}`.trim());
+        if (context.signal?.aborted) return toolResult("Verification cancelled by user.", "cancelled", { errorCode: "cancelled", sideEffectState: "unknown" });
+        if (failure.killed) return toolResult(`Verification timed out after ${timeout}ms.`, "failure", { errorCode: "timeout", sideEffectState: "unknown" });
+        return toolResult(truncate(`Exit code: ${failure.code ?? "failed"}\n${decodeOutput(failure.stdout, outputEncoding)}${failure.stderr ? `\nSTDERR:\n${decodeOutput(failure.stderr, outputEncoding)}` : ""}`.trim()), "failure", { errorCode: "execution_failed", exitCode: typeof failure.code === "number" ? failure.code : undefined, sideEffectState: "unknown" });
       }
     },
   },
@@ -794,36 +818,61 @@ export const builtinTools: AgentTool[] = [
 ];
 
 export async function executeTool(tool: AgentTool, input: Record<string, unknown>, context: ToolContext): Promise<string> {
+  return (await executeToolResult(tool, input, context)).output;
+}
+
+export async function executeToolResult(tool: AgentTool, input: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+  const cancelled = () => toolResult("Task cancelled by user.", "cancelled", { errorCode: "cancelled" });
+  if (context.signal?.aborted) return cancelled();
   try { tool.validate?.(input); }
-  catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
-  const risk = typeof tool.risk === "function" ? tool.risk(input) : tool.risk;
+  catch (error) { return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure", { errorCode: "invalid_input" }); }
+  let risk = typeof tool.risk === "function" ? tool.risk(input) : tool.risk;
+  let scriptSnapshot: string | undefined;
+  let packageFile: string | undefined;
+  let scriptPreview = "";
+  let scriptHash = "";
+  if (tool.name === "validate_project") {
+    try {
+      if (!["typecheck", "lint", "test", "build"].includes(String(input.check))) throw new Error("Unknown project check.");
+      packageFile = resolveWorkspacePath(context.cwd, "package.json");
+      scriptSnapshot = await fs.readFile(packageFile, "utf8");
+      const scripts = (JSON.parse(scriptSnapshot) as { scripts?: Record<string, string> }).scripts ?? {};
+      const check = String(input.check);
+      if (typeof scripts[check] !== "string" || !scripts[check]?.trim()) return toolResult(`Verification unavailable: package.json has no ${check} script.`, "failure", { errorCode: "unavailable" });
+      const entries = [`pre${check}`, check, `post${check}`].filter(name => typeof scripts[name] === "string");
+      scriptPreview = entries.map(name => `${name}: ${scripts[name]}`).join("\n");
+      scriptHash = createHash("sha256").update(scriptSnapshot).digest("hex");
+      if (entries.some(name => classifyCommand(scripts[name]!) === "dangerous" || /\b(?:npm\s+(?:publish|unpublish)|git\s+push\b.*--force)/i.test(scripts[name]!))) risk = "dangerous";
+    } catch (error) { return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure", { errorCode: "invalid_input" }); }
+  }
   if (risk !== "read") {
     let preview: string | undefined;
-    try { preview = await tool.preview?.(input, context); }
-    catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
-    const sessionScope = typeof tool.approvalScope === "function" ? tool.approvalScope(input) : tool.approvalScope;
-    if (!(await context.approve({ description: tool.describe(input), risk, preview, sessionScope }))) return "Tool execution denied by user.";
+    try { preview = scriptPreview || await tool.preview?.(input, context); }
+    catch (error) { return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure", { errorCode: toolErrorCode(String(error)) }); }
+    const scope = typeof tool.approvalScope === "function" ? tool.approvalScope(input) : tool.approvalScope;
+    const sessionScope = scriptHash ? `${scope}:${input.check}:${scriptHash}` : scope;
+    if (!(await context.approve({ description: tool.describe(input), risk, preview, sessionScope }))) return toolResult("Tool execution denied by user.", "denied", { errorCode: "denied" });
   }
-  const replaySafety = typeof tool.replaySafety === "function"
-    ? tool.replaySafety(input)
-    : tool.replaySafety ?? (risk === "read" ? "safe" : "side-effecting");
+  if (context.signal?.aborted) return cancelled();
+  if (packageFile && await fs.readFile(packageFile, "utf8") !== scriptSnapshot) return toolResult("Tool error: package.json changed after approval. Review the scripts again.", "failure", { errorCode: "stale_input" });
+  const replaySafety = typeof tool.replaySafety === "function" ? tool.replaySafety(input) : tool.replaySafety ?? (risk === "read" ? "safe" : "side-effecting");
   const maxAttempts = Math.max(1, Math.min(5, tool.maxAttempts ?? (replaySafety === "safe" || replaySafety === "idempotent" ? 3 : 1)));
   for (let attempt = 1; ; attempt += 1) {
-    try { return await tool.execute(input, context); }
-    catch (error) {
-      const decision = retryDecision({
-        operation: tool.name.startsWith("mcp__") ? "mcp" : "tool",
-        error,
-        attempt,
-        maxAttempts,
-        replaySafety,
-        commitState: replaySafety === "safe" || replaySafety === "idempotent" ? "not-committed" : "unknown",
-      });
-      if (!decision.retry) return `Tool error: ${error instanceof Error ? error.message : String(error)}`;
+    try {
+      if (context.signal?.aborted) return cancelled();
+      const result = normalizeToolResult(tool.executeResult ? await tool.executeResult(input, context) : await tool.execute(input, context));
+      if (risk !== "read" && result.status === "success") result.sideEffectState = "possible";
+      return result;
+    } catch (error) {
+      if (context.signal?.aborted) return { ...cancelled(), sideEffectState: risk === "read" ? "none" : "unknown" };
+      const decision = retryDecision({ operation: tool.name.startsWith("mcp__") ? "mcp" : "tool", error, attempt, maxAttempts, replaySafety,
+        commitState: replaySafety === "safe" || replaySafety === "idempotent" ? "not-committed" : "unknown" });
+      if (!decision.retry) return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure",
+        { errorCode: toolErrorCode(String(error)), sideEffectState: risk === "read" ? "none" : "unknown" });
       context.reportProgress?.(`${tool.name}: transient ${decision.category} failure; retrying ${attempt + 1}/${maxAttempts} in ${decision.delayMs}ms`);
       context.setRuntimeState?.("backoff", `${tool.name} retry ${attempt + 1}/${maxAttempts}`);
       try { await retryDelay(decision.delayMs ?? 0, context.signal); }
-      catch (error) { return `Tool error: ${error instanceof Error ? error.message : String(error)}`; }
+      catch { return cancelled(); }
       finally { context.setRuntimeState?.("working"); }
     }
   }

@@ -7,8 +7,12 @@ import { createSkillTools, SkillRegistry } from "../src/skills.js";
 
 const skillMarkdown = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nFollow these instructions carefully.\n`;
 
-test("skill registry discovers project, compatible, and global skills with project precedence", async () => {
+test("skill registry discovers project, compatible, and global skills with project precedence", async (t) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skills-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  // A custom globalRoot does not disable the compatible ~/.agents/skills root.
+  // Keep host-installed user skills out of this deterministic fixture.
+  t.mock.method(os, "homedir", () => path.join(cwd, "fixture-home"));
   const globalRoot = path.join(cwd, "global-skills");
   await fs.mkdir(path.join(cwd, ".xiu", "skills", "review"), { recursive: true });
   await fs.mkdir(path.join(cwd, ".claude", "skills", "deploy"), { recursive: true });
@@ -20,7 +24,7 @@ test("skill registry discovers project, compatible, and global skills with proje
   await fs.writeFile(path.join(globalRoot, "review", "SKILL.md"), skillMarkdown("review", "Global review workflow"));
   const registry = new SkillRegistry(cwd, globalRoot);
   await registry.refresh(true);
-  assert.equal(registry.list().length, 3);
+  assert.deepEqual(registry.list().map((skill) => skill.name).sort(), ["deploy", "grill-me", "review"]);
   assert.equal(registry.list().find((skill) => skill.name === "review")?.scope, "project");
   assert.match(registry.catalog(), /deploy \[compatible\]/);
   assert.match(registry.catalog(), /grill-me \[compatible\]/);

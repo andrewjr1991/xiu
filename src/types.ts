@@ -17,6 +17,7 @@ export interface AssistantTurn {
   toolCalls: ToolCall[];
   raw: unknown;
   usage?: ModelUsage;
+  finishReason?: "stop" | "tool_calls" | "length" | "content_filter" | "unknown";
 }
 
 export interface ModelUsage {
@@ -69,6 +70,15 @@ export interface ModelProvider {
 
 export type ToolRisk = "read" | "write" | "execute" | "dangerous";
 
+export interface ToolResult {
+  status: "success" | "failure" | "denied" | "cancelled";
+  output: string;
+  errorCode?: string;
+  exitCode?: number;
+  retryable: boolean;
+  sideEffectState: "none" | "possible" | "unknown";
+}
+
 export interface ApprovalRequest {
   description: string;
   risk: Exclude<ToolRisk, "read">;
@@ -101,4 +111,6 @@ export interface AgentTool extends ToolDefinition {
   changesWorkspace?: boolean | ((input: Record<string, unknown>) => boolean);
   isVerification?(input: Record<string, unknown>, result: string): boolean;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<string>;
+  /** Optional native result; legacy execute callers remain supported. */
+  executeResult?(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }

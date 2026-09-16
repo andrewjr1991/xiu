@@ -22,11 +22,32 @@ export class ToolLoopGuard {
   private history: string[] = [];
   private blocks = 0;
   private usefulCallsSinceBlock = 0;
+  private failureCounts = new Map<string, number>();
+  private lastEvidence = new Map<string, string>();
+
+  result(name: string, status: string, code: string | undefined, evidence: string): LoopObservation {
+    if (status === "success") {
+      if (this.lastEvidence.get(name) !== evidence) {
+        this.failureCounts.clear();
+        this.blocks = 0;
+        this.lastEvidence.set(name, evidence);
+        if (this.lastEvidence.size > 32) this.lastEvidence.delete(this.lastEvidence.keys().next().value!);
+      }
+      return { blocked: false, abort: false };
+    }
+    const key = `${name}:${code ?? status}`;
+    const count = (this.failureCounts.get(key) ?? 0) + 1;
+    this.failureCounts.set(key, count);
+    return { blocked: count >= 3, abort: count >= 5,
+      reason: count >= 3 ? `Repeated ${code ?? status} failure (${count}). Inspect available paths or current content and change approach; do not guess arguments.` : undefined };
+  }
 
   reset(): void {
     this.history = [];
     this.blocks = 0;
     this.usefulCallsSinceBlock = 0;
+    this.failureCounts.clear();
+    this.lastEvidence.clear();
   }
 
   observe(name: string, input: Record<string, unknown>): LoopObservation {

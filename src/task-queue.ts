@@ -95,6 +95,8 @@ export class RunningTaskView {
   private changes: Array<{ timestamp: number; text: string }> = [];
   private pendingChanges: WorkspaceChangeNotice[] = [];
   private latestNarration = "";
+  private draftPreview = "";
+  private draftReceivedChars = 0;
   private completion?: { message: string; success: boolean };
   private importantActions: string[] = [];
   private diagnostics?: TaskDiagnosticSnapshot;
@@ -109,8 +111,20 @@ export class RunningTaskView {
   }
 
   setTurn(turn: number, maximum?: number): void {
+    this.clearDraftPreview();
     this.currentTurn = turn;
     this.maximumTurns = maximum ?? 0;
+  }
+
+  setDraftPreview(text: string, receivedChars: number): void {
+    // Ephemeral display only: never add unverified drafts to the transcript or receipts.
+    this.draftPreview = text.slice(-4096);
+    this.draftReceivedChars = receivedChars;
+  }
+
+  clearDraftPreview(): void {
+    this.draftPreview = "";
+    this.draftReceivedChars = 0;
   }
 
   setPlan(plan?: TaskPlan): void {
@@ -238,6 +252,7 @@ export class RunningTaskView {
     this.uiLanguage = language;
     this.currentPhase = localize(language, "处理中", "Working");
     this.latestNarration = "";
+    this.clearDraftPreview();
     this.activities = [];
     this.changes = [];
     this.importantActions = [];
@@ -277,6 +292,7 @@ export class RunningTaskView {
 
   private summaryLines(): string[] {
     const lines = this.currentPlan ? this.planSummaryLines(this.currentPlan) : this.automaticSummaryLines();
+    if (this.draftReceivedChars) lines.push(localize(this.uiLanguage, `生成中（草稿，未经验证；${this.draftReceivedChars} 字符）：`, `Generating (unverified draft; ${this.draftReceivedChars} characters): `) + this.draftPreview.replace(/\s+/g, " ").slice(-320));
     if (this.latestNarration) lines.push(`${localize(this.uiLanguage, "进展：", "Update: ")}${this.latestNarration}`);
     const latestChange = this.changes.at(-1)?.text;
     if (latestChange) lines.push(`${localize(this.uiLanguage, "变更：", "Changed: ")}${latestChange}`);

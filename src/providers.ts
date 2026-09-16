@@ -4,10 +4,76 @@ import OpenAI from "openai";
 import { ProxyAgent } from "undici";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
-import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolDefinition } from "./types.js";
+import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolCall, ToolDefinition } from "./types.js";
 import { SafeRequestCache } from "./request-cache.js";
 
 const modelDiscoveryCache = new SafeRequestCache(60_000, 100);
+
+function openAIFinishReason(reason: string | null | undefined): NonNullable<AssistantTurn["finishReason"]> {
+  if (reason === "stop" || reason === "tool_calls" || reason === "length" || reason === "content_filter") return reason;
+  return "unknown";
+}
+
+function anthropicFinishReason(reason: string | null): NonNullable<AssistantTurn["finishReason"]> {
+  if (reason === "end_turn" || reason === "stop_sequence") return "stop";
+  if (reason === "tool_use") return "tool_calls";
+  if (reason === "max_tokens") return "length";
+  if (reason === "refusal") return "content_filter";
+  return "unknown";
+}
+
+function finishedToolArguments(reason: AssistantTurn["finishReason"]): boolean {
+  return reason === "stop" || reason === "tool_calls";
+}
+
+function parseToolInput(value: unknown, name: string): Record<string, unknown> {
+  let input = value;
+  if (typeof input === "string") {
+    try { input = JSON.parse(input); }
+    catch { throw new Error(`Invalid tool arguments from model for ${name}`); }
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error(`Invalid tool arguments from model for ${name}`);
+  return input as Record<string, unknown>;
+}
+
+/** Old sessions may only contain raw tool metadata; never send raw protocol objects back. */
+function historyToolCalls(message: ConversationMessage): ToolCall[] {
+  if (message.toolCalls !== undefined) return message.toolCalls;
+  const raw = message.raw;
+  const calls: ToolCall[] = [];
+  if (Array.isArray(raw)) {
+    for (const block of raw) {
+      if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        calls.push({ id: block.id, name: block.name, input: parseToolInput(block.input, block.name) });
+      }
+    }
+  } else if (raw && typeof raw === "object" && "tool_calls" in raw && Array.isArray(raw.tool_calls)) {
+    for (const call of raw.tool_calls) {
+      if (call?.type === "function" && typeof call.id === "string" && typeof call.function?.name === "string") {
+        calls.push({ id: call.id, name: call.function.name, input: parseToolInput(call.function.arguments, call.function.name) });
+      }
+    }
+  }
+  return calls;
+}
+
+function openAIAssistantMessage(text: string, toolCalls: ToolCall[]): OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam {
+  return {
+    role: "assistant",
+    content: text || null,
+    ...(toolCalls.length ? { tool_calls: toolCalls.map((call) => ({
+      id: call.id, type: "function" as const,
+      function: { name: call.name, arguments: JSON.stringify(call.input) },
+    })) } : {}),
+  };
+}
+
+function anthropicAssistantContent(text: string, toolCalls: ToolCall[]): Anthropic.ContentBlockParam[] {
+  return [
+    ...(text ? [{ type: "text" as const, text }] : []),
+    ...toolCalls.map((call) => ({ type: "tool_use" as const, id: call.id, name: call.name, input: call.input })),
+  ];
+}
 
 function requestFingerprint(config: AgentConfig): string {
   return createHash("sha256").update(JSON.stringify({
@@ -81,12 +147,17 @@ class OpenAIProvider implements ModelProvider {
       ...openAIPromptCache(this.config, system),
       ...(formattedTools.length ? { tools: formattedTools, tool_choice: "auto" as const } : {}),
     }, { signal });
-    const message = response.choices[0]?.message;
+    const choice = response.choices[0];
+    const message = choice?.message;
     if (!message) throw new Error("Model returned no message");
+    const finishReason = openAIFinishReason(choice.finish_reason);
+    const text = message.content ?? message.refusal ?? "";
+    const toolCalls = finishedToolArguments(finishReason) ? this.parseToolCalls(message.tool_calls ?? []) : [];
     return {
-      text: message.content ?? "",
-      toolCalls: this.parseToolCalls(message.tool_calls ?? []),
-      raw: message,
+      text,
+      toolCalls,
+      raw: openAIAssistantMessage(text, toolCalls),
+      finishReason,
       usage: openAIUsage(response.usage),
     };
   }
@@ -146,14 +217,18 @@ class OpenAIProvider implements ModelProvider {
       stream_options: { include_usage: true },
     }, { signal });
     let text = "";
+    let finishReason: NonNullable<AssistantTurn["finishReason"]> = "unknown";
     let usage: ReturnType<typeof openAIUsage>;
     const pending = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const chunk of response) {
       if (chunk.usage) usage = openAIUsage(chunk.usage);
-      const delta = chunk.choices[0]?.delta;
-      if (delta?.content) {
-        text += delta.content;
-        onTextDelta(delta.content);
+      const choice = chunk.choices[0];
+      if (choice?.finish_reason) finishReason = openAIFinishReason(choice.finish_reason);
+      const delta = choice?.delta;
+      const visibleText = delta?.content || delta?.refusal;
+      if (visibleText) {
+        text += visibleText;
+        onTextDelta(visibleText);
       }
       for (const call of delta?.tool_calls ?? []) {
         const current = pending.get(call.index) ?? { id: "", name: "", arguments: "" };
@@ -163,18 +238,14 @@ class OpenAIProvider implements ModelProvider {
         pending.set(call.index, current);
       }
     }
-    const toolCalls = [...pending.values()].map((call) => {
-      let input: Record<string, unknown>;
-      try { input = JSON.parse(call.arguments || "{}"); }
-      catch { throw new Error(`Invalid tool arguments from model for ${call.name}`); }
-      return { id: call.id, name: call.name, input };
-    });
-    const raw = {
-      role: "assistant" as const,
-      content: text || null,
-      ...(toolCalls.length ? { tool_calls: toolCalls.map((call) => ({ id: call.id, type: "function" as const, function: { name: call.name, arguments: JSON.stringify(call.input) } })) } : {}),
-    };
-    return { text, toolCalls, raw, usage };
+    // A truncated stream can end halfway through JSON, or after a valid-looking
+    // first call in an unfinished batch. Neither is permission to execute it.
+    const toolCalls = finishedToolArguments(finishReason)
+      ? [...pending.entries()].sort(([left], [right]) => left - right).map(([, call]) => ({
+        id: call.id, name: call.name, input: parseToolInput(call.arguments, call.name),
+      }))
+      : [];
+    return { text, toolCalls, raw: openAIAssistantMessage(text, toolCalls), usage, finishReason };
   }
 
   private formatMessages(system: string, messages: ConversationMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
@@ -184,17 +255,7 @@ class OpenAIProvider implements ModelProvider {
     for (const message of messages) {
       if (message.role === "user") formatted.push({ role: "user", content: message.content });
       else if (message.role === "tool") formatted.push({ role: "tool", tool_call_id: message.toolCallId!, content: message.content });
-      else if (message.raw) formatted.push(message.raw as OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam);
-      else if (message.toolCalls?.length) formatted.push({
-        role: "assistant",
-        content: message.content || null,
-        tool_calls: message.toolCalls.map((call) => ({
-          id: call.id,
-          type: "function" as const,
-          function: { name: call.name, arguments: JSON.stringify(call.input) },
-        })),
-      });
-      else formatted.push({ role: "assistant", content: message.content });
+      else formatted.push(openAIAssistantMessage(message.content, historyToolCalls(message)));
     }
     return formatted;
   }
@@ -208,10 +269,7 @@ class OpenAIProvider implements ModelProvider {
 
   private parseToolCalls(calls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[]) {
     return calls.filter((call) => call.type === "function").map((call) => {
-        let input: Record<string, unknown>;
-        try { input = JSON.parse(call.function.arguments); }
-        catch { throw new Error(`Invalid tool arguments from model for ${call.function.name}`); }
-        return { id: call.id, name: call.function.name, input };
+        return { id: call.id, name: call.function.name, input: parseToolInput(call.function.arguments, call.function.name) };
       });
   }
 }
@@ -283,16 +341,16 @@ class AnthropicProvider implements ModelProvider {
     const formatted: Anthropic.MessageParam[] = [];
     for (const message of messages) {
       if (message.role === "user") formatted.push({ role: "user", content: message.content });
-      else if (message.role === "assistant" && message.raw) {
-        formatted.push({ role: "assistant", content: message.raw as Anthropic.ContentBlock[] });
-      } else if (message.role === "assistant" && message.toolCalls?.length) {
-        formatted.push({ role: "assistant", content: [
-          ...(message.content ? [{ type: "text" as const, text: message.content }] : []),
-          ...message.toolCalls.map((call) => ({ type: "tool_use" as const, id: call.id, name: call.name, input: call.input })),
-        ] });
-      } else if (message.role === "assistant") formatted.push({ role: "assistant", content: message.content });
+      else if (message.role === "assistant") {
+        const calls = historyToolCalls(message);
+        formatted.push({ role: "assistant", content: calls.length ? anthropicAssistantContent(message.content, calls) : message.content });
+      }
       else if (message.role === "tool") {
-        formatted.push({ role: "user", content: [{ type: "tool_result", tool_use_id: message.toolCallId!, content: message.content }] });
+        const result: Anthropic.ToolResultBlockParam = { type: "tool_result", tool_use_id: message.toolCallId!, content: message.content };
+        const previous = formatted.at(-1);
+        if (previous?.role === "user" && Array.isArray(previous.content) && previous.content.every((block) => block.type === "tool_result")) {
+          previous.content.push(result);
+        } else formatted.push({ role: "user", content: [result] });
       }
     }
     return formatted;
@@ -310,14 +368,18 @@ class AnthropicProvider implements ModelProvider {
     const cacheCreationInputTokens = Math.max(0, response.usage.cache_creation_input_tokens ?? 0);
     const cacheReadInputTokens = Math.max(0, response.usage.cache_read_input_tokens ?? 0);
     const inputTokens = response.usage.input_tokens + cacheCreationInputTokens + cacheReadInputTokens;
+    const finishReason = anthropicFinishReason(response.stop_reason);
+    const text = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    const toolCalls = finishedToolArguments(finishReason)
+      ? response.content.filter((block) => block.type === "tool_use").map((block) => ({
+        id: block.id, name: block.name, input: parseToolInput(block.input, block.name),
+      }))
+      : [];
     return {
-      text: response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n"),
-      toolCalls: response.content.filter((block) => block.type === "tool_use").map((block) => ({
-        id: block.id,
-        name: block.name,
-        input: block.input as Record<string, unknown>,
-      })),
-      raw: response.content,
+      text,
+      toolCalls,
+      raw: anthropicAssistantContent(text, toolCalls),
+      finishReason,
       usage: {
         inputTokens,
         outputTokens: response.usage.output_tokens,
