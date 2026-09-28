@@ -15,11 +15,14 @@ import {
   stopBackgroundProcess,
 } from "../src/background.js";
 
+function removeBackgroundTestRoot(root: string): Promise<void> {
+  return fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+}
+
 test("background commands can be listed, inspected, and stopped", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(async () => { await stopAllBackgroundProcesses(); });
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(async () => { await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
   const command = "node -e \"console.log('ready'); setInterval(() => {}, 1000)\"";
   const started = startBackgroundProcess(command, process.cwd());
   // Parallel test workers can delay a new PowerShell + Node process well past
@@ -39,8 +42,7 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
 test("background state and output cursors survive a new foreground manager", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-resume-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllBackgroundProcesses(); });
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
   const started = startBackgroundProcess("node -e \"console.log('first'); setTimeout(() => console.log('second'), 500); setTimeout(() => {}, 5000)\"", process.cwd());
   for (let attempt = 0; attempt < 100 && !backgroundProcessOutput(started.id).includes("first"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const first = readBackgroundProcessOutput(started.id, 0);
@@ -60,7 +62,7 @@ test("background state and output cursors survive a new foreground manager", asy
 test("completed detached commands retain exit evidence", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-complete-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeBackgroundTestRoot(root));
   const started = startBackgroundProcess("node -e \"console.log('done')\"", process.cwd());
   for (let attempt = 0; attempt < 100; attempt++) {
     const record = listBackgroundProcesses().find((item) => item.id === started.id);
@@ -77,7 +79,7 @@ test("completed detached commands retain exit evidence", async (t) => {
 test("rapid detached commands cannot have terminal evidence overwritten by the launcher", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-rapid-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeBackgroundTestRoot(root));
   const started = Array.from({ length: 8 }, (_, index) => startBackgroundProcess(`node -e "console.log(${index})"`, process.cwd()));
   for (let attempt = 0; attempt < 150; attempt++) {
     const records = listBackgroundProcesses().filter((item) => started.some((entry) => entry.id === item.id));
@@ -93,8 +95,7 @@ test("rapid detached commands cannot have terminal evidence overwritten by the l
 test("a detached job survives the launcher process exiting and is discoverable by a new process", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-disconnect-"));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-workspace-"));
-  t.after(async () => { configureBackgroundWorkspace(workspace, root); await stopAllBackgroundProcesses(); });
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(async () => { configureBackgroundWorkspace(workspace, root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   const moduleUrl = pathToFileURL(path.resolve("src/background.ts")).href;
   const script = [
@@ -119,7 +120,7 @@ test("a detached job survives the launcher process exiting and is discoverable b
 test("persisted background previews and output redact common credential values", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-redaction-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => removeBackgroundTestRoot(root));
   const secret = "background-secret-canary";
   const started = startBackgroundProcess(`node -e \"console.log('api_key=${secret}')\"`, process.cwd());
   for (let attempt = 0; attempt < 100 && listBackgroundProcesses().find((item) => item.id === started.id)?.running; attempt++) await new Promise((resolve) => setTimeout(resolve, 100));

@@ -5,7 +5,7 @@ This file summarizes released behavior and the next unreleased change. Detailed 
 ## 0.18.1 — 2026-09-28
 
 - Add bounded, path-confined retry cleanup for Windows evaluation temporary directories.
-- Prevent the detached-process launcher from overwriting terminal evidence written by its worker.
+- Prevent the detached-process launcher from overwriting terminal evidence written by its worker, and make explicit stop wait boundedly for worker shutdown before cleanup.
 - Re-check non-Git directory entries with `lstat` so Windows junctions are never traversed or captured.
 - Upgrade `csv-parse` to 7.0.3 to address GHSA-8cw4-87c7-c6xx.
 - Reconcile release documentation, the default branch, tags, Registry metadata, and verification evidence after the 0.18.0 release.

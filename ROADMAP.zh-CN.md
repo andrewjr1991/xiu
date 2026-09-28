@@ -47,7 +47,7 @@ Windows 系统凭证后端在既有外部矩阵完成前继续显式选择，不
 
 `0.18.0` 已于 2026-09-16 发布，npm `latest`、发布包 `gitHead` 与 `v0.18.0` 标签均对应提交 `56fbf41`。但该提交的 Windows CI 失败，默认分支、README、使用说明与路线图也未及时收束，因此 `0.18.1` 不扩功能，先修复发布债务。
 
-当前交付：评测临时目录只允许删除本次创建的精确路径，并对 Windows 短暂占用做有界重试；后台 worker 独占启动后的状态迁移，launcher 不再覆盖终态，并为 worker 退出与终态原子写入之间保留 2 秒有界交接窗口；无 Git 扫描对实际目录项执行 `lstat`，不遍历 Junction；`csv-parse` 升级到已修复版本。完整本地门禁通过，精确远程状态见 `docs/verification/V0.18.1_2026-09-28.zh-CN.md` 与 GitHub Actions。
+当前交付：评测临时目录只允许删除本次创建的精确路径，并对 Windows 短暂占用做有界重试；后台 worker 独占启动后的状态迁移，launcher 不再覆盖终态，为 worker 退出与终态原子写入之间保留 2 秒有界交接窗口，显式停止还会有界等待 worker 退出后再返回；无 Git 扫描对实际目录项执行 `lstat`，不遍历 Junction；`csv-parse` 升级到已修复版本。完整本地门禁通过，精确远程状态见 `docs/verification/V0.18.1_2026-09-28.zh-CN.md` 与 GitHub Actions。
 
 ### 实施范围
 

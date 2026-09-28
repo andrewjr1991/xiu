@@ -103,6 +103,14 @@ function processAlive(pid: number | undefined): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
+async function waitForProcessExit(pid: number, attempts = 40): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (!processAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !processAlive(pid);
+}
+
 function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
   const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
   const withinHandoffGrace = (record.state === "starting" && age < 10_000) || (record.state === "running" && age < 2_000);
@@ -226,6 +234,10 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
     });
   } else if (record.pid) {
     try { process.kill(-record.pid, "SIGTERM"); } catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* already gone */ } }
+    if (!(await waitForProcessExit(record.pid))) {
+      try { process.kill(-record.pid, "SIGKILL"); } catch { try { process.kill(record.pid, "SIGKILL"); } catch { /* already gone */ } }
+      await waitForProcessExit(record.pid);
+    }
   }
   const next = { ...record, state: "cancelled" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(id) };
   atomicWrite(recordFile(id), next);
