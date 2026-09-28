@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The published product baseline is `0.18.0`. The `0.18.1` Windows-stability and release-alignment update has passed local and three-platform CI gates and is awaiting npm publication.
+The current release is `0.18.1`, a Windows-stability, dependency-security, and release-alignment update verified locally and in three-platform CI.
 
 ## Install
 
