@@ -1,6 +1,6 @@
 # Xiu 更新、发布与安装指南
 
-当前公开产品基线为 `0.18.1`，该版本的 Windows 稳定性、安全依赖与发布收束修复已通过本地和三平台 CI。当前要求见第 36 节；历史版本门禁保留用于追溯，不要求每次普通修复重新手工验收全部历史平台矩阵。任何发布仍需用户明确决定，先核对 Registry，不能覆盖已发布版本。
+当前公开产品基线为 `0.18.2`，该版本的完成判定与终端可用性修复已通过本地、三平台 CI 和真实 Windows PowerShell 工作流验收。当前开发要求见第 38 节；历史版本门禁保留用于追溯，不要求每次普通修复重新手工验收全部历史平台矩阵。任何发布仍需用户明确决定，先核对 Registry，不能覆盖已发布版本。
 
 这份文档写给第一次维护或安装 npm 命令行工具的人。内容分为两部分：
 
@@ -799,3 +799,30 @@ Windows PowerShell 统一使用 `npm.cmd`，避免 `npm.ps1` 在 ConstrainedLang
 9. `extract_html`、`extract_json` 和 `extract_csv` 收到超过安全上限的 `max_value_characters` 时按上限执行，不产生一次可避免的失败重试。
 
 真实产品验收记录（2026-09-28）：Windows PowerShell 下从 Excel 生成 HTML 看板和主管话术，共 9 轮模型调用、12 次工具调用、0 失败；两项 `verify_output` 通过，后续只读 Python 完整性检查未使验证过期；未调用 `read_skill`；最终显示“已完成、已验证”。相较前次失败复测的 17 轮、24 次工具调用和 471,717 tokens，本次为 9 轮、12 次工具调用和 169,220 tokens。
+
+## 三十八、0.19.0 更新命令模块化与真实平台候选包验收
+
+`0.19.0` 首先拆分 `/update` 命令域，并把现有三平台 CI 推进到候选包实际安装路径。除通用门禁外，还必须验证：
+
+1. `/update`、`/update status`、`/update doctor` 和通知开关由独立控制器路由；未知子命令只显示用法，不进入普通任务。
+2. `--check-update` 和 `--update-doctor` 复用命令模块，保留成功/失败退出码；不自动运行 npm、不读取 npm Token、不修改 npm 配置。
+3. 24 小时缓存命中只提醒一次；关闭通知会取消飞行中刷新结果；后台刷新失败保持静默，显式检查仍给出清晰错误。
+4. `npm run smoke:platform` 从当前 tarball 安装候选包，在含空格和 Unicode 的路径中调用实际 npm `xiu` shim，并核对精确版本。
+5. 平台 smoke 通过安装包的更新诊断解析实际 shim，并从安装包启动后台 worker、等待 `completed` 终态和核对 Unicode 输出。
+6. GitHub Actions 的 Windows、Ubuntu、macOS 真 runner 都必须通过平台 smoke；不得用模拟 `process.platform` 代替真实 runner，也不得把 CI 描述为企业设备或用户真实终端验收。
+7. 候选包版本为 `0.19.0`，只包含 `V0.19.0_DESIGN.zh-CN.md`，不包含个人评估文件；官方 Registry 已有 `0.18.2`，不得覆盖。
+
+本地 PowerShell 应使用：
+
+```powershell
+npm.cmd run check:docs
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
+npm.cmd run eval:smoke
+npm.cmd pack --dry-run --json
+npm.cmd run smoke:package
+npm.cmd run smoke:platform
+```
+
+推送候选分支后读取三平台作业最终结果；任一平台未运行或失败时，状态只能写为“待验收”或“失败”。GUI 在该矩阵稳定后另行设计，不纳入本版本。

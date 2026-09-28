@@ -12,6 +12,7 @@ import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
+import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
 import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
@@ -51,7 +52,6 @@ import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from ".
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
-import { checkForUpdates, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
 import { redactSecrets } from "./secret-redaction.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -60,6 +60,14 @@ function compactTerminalDescription(value: string, maximum = 180): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   const characters = [...normalized];
   return characters.length > maximum ? `${characters.slice(0, maximum - 3).join("")}...` : normalized;
+}
+
+function printUpdateMessage(message: UpdateMessage): void {
+  const formatted = message.kind === "error" ? chalk.red(message.text)
+    : message.kind === "success" ? chalk.green(message.text)
+      : message.kind === "warning" ? chalk.yellow(message.text)
+        : message.text;
+  (message.kind === "error" ? console.error : console.log)(`${formatted}\n`);
 }
 
 function slashCommands(language: UiLanguage): SlashCommand[] {
@@ -296,24 +304,18 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
-  const updateCache = new UpdateCheckCache();
   if (options.updateDoctor) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
-    console.log(`${formatUpdateDoctor(result, language)}\n`);
-    if (updateDoctorHasHardFailure(result)) process.exitCode = 1;
+    const result = await runUpdateDoctorOnce({ currentVersion: packageJson.version, language });
+    printUpdateMessage(result.message);
+    process.exitCode = result.exitCode;
     return;
   }
   if (options.checkUpdate) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    try {
-      const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
-      await updateCache.save(result).catch(() => undefined);
-      console.log(`${formatUpdateCheck(result, language)}\n`);
-    } catch (error) {
-      console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}`));
-      process.exitCode = 1;
-    }
+    const result = await runUpdateCheckOnce({ currentVersion: packageJson.version, language });
+    printUpdateMessage(result.message);
+    process.exitCode = result.exitCode;
     return;
   }
   let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
@@ -1525,30 +1527,13 @@ async function main(): Promise<void> {
     console.log(chalk.dim(localize(language, "交互模式 · 输入 / 查看命令 · Ctrl+C 或 /exit 退出\n", "Interactive mode · type / for commands · Ctrl+C or /exit to quit\n")));
     const inputHistory: string[] = [];
     let awaitingReply: { question: string; originalTask: string } | undefined;
-    let pendingUpdateReminder: UpdateCheckResult | undefined;
-    let updateReminderGeneration = 0;
-    let remindedUpdateVersion: string | undefined;
-    const showUpdateReminder = (result: UpdateCheckResult): void => {
-      if (result.status !== "update-available" || remindedUpdateVersion === result.latestVersion) return;
-      remindedUpdateVersion = result.latestVersion;
-      console.log(`${chalk.yellow(formatUpdateReminder(result, language))}\n`);
-    };
-    const scheduleUpdateReminderRefresh = (): void => {
-      const generation = ++updateReminderGeneration;
-      void checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment(), timeoutMs: 3_000 })
-        .then(async (result) => {
-          await updateCache.save(result).catch(() => undefined);
-          if (generation === updateReminderGeneration && settings.update?.notifications) pendingUpdateReminder = result;
-        })
-        .catch(() => undefined);
-    };
-    const initializeUpdateReminders = async (): Promise<void> => {
-      if (!settings.update?.notifications) return;
-      const cached = await updateCache.load(packageJson.version);
-      if (cached?.fresh) showUpdateReminder(cached.result);
-      else scheduleUpdateReminderRefresh();
-    };
-    await initializeUpdateReminders();
+    const updateCommands = new UpdateCommandController({
+      currentVersion: packageJson.version,
+      language,
+      settings,
+      saveSettings: () => settingsStore.save(settings),
+    });
+    for (const message of await updateCommands.initialize()) printUpdateMessage(message);
     const promptFooter = (): string => {
       const dashboard = agent.status();
       const agentRuns = coordinator.list();
@@ -2097,11 +2082,7 @@ async function main(): Promise<void> {
     }
 
     while (true) {
-      if (pendingUpdateReminder) {
-        const reminder = pendingUpdateReminder;
-        pendingUpdateReminder = undefined;
-        showUpdateReminder(reminder);
-      }
+      for (const message of updateCommands.flushPendingReminder()) printUpdateMessage(message);
       const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
@@ -3775,46 +3756,9 @@ async function main(): Promise<void> {
         ].join("\n") + "\n");
         continue;
       }
-      if (task === "/update status") {
-        const cached = await updateCache.load(packageJson.version);
-        console.log(`${formatUpdateNotificationStatus(Boolean(settings.update?.notifications), cached, language)}\n`);
-        continue;
-      }
-      if (task === "/update doctor") {
-        const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
-        console.log(`${formatUpdateDoctor(result, language)}\n`);
-        continue;
-      }
-      if (task === "/update notifications on") {
-        settings.update = { notifications: true };
-        await settingsStore.save(settings);
-        const cached = await updateCache.load(packageJson.version);
-        console.log(chalk.green(`${localize(language, "更新提醒已启用；检查使用 24 小时缓存，并只在安全输入边界显示。", "Update reminders enabled with a 24-hour cache and safe-boundary display only.")}\n`));
-        if (cached?.fresh) showUpdateReminder(cached.result);
-        else scheduleUpdateReminderRefresh();
-        continue;
-      }
-      if (task === "/update notifications off") {
-        settings.update = { notifications: false };
-        updateReminderGeneration += 1;
-        pendingUpdateReminder = undefined;
-        await settingsStore.save(settings);
-        console.log(chalk.green(`${localize(language, "更新提醒已关闭。显式 /update 和 xiu --check-update 仍可使用。", "Update reminders disabled. Explicit /update and xiu --check-update remain available.")}\n`));
-        continue;
-      }
-      if (task.startsWith("/update ")) {
-        console.log(`${localize(language, "用法：/update、/update doctor、/update status、/update notifications on、/update notifications off", "Usage: /update, /update doctor, /update status, /update notifications on, /update notifications off")}\n`);
-        continue;
-      }
-      if (task === "/update") {
-        try {
-          const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
-          await updateCache.save(result).catch(() => undefined);
-          if (result.status === "update-available") remindedUpdateVersion = result.latestVersion;
-          console.log(`${formatUpdateCheck(result, language)}\n`);
-        } catch (error) {
-          console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}\n`));
-        }
+      const updateCommand = await updateCommands.execute(task);
+      if (updateCommand.handled) {
+        for (const message of updateCommand.messages) printUpdateMessage(message);
         continue;
       }
       if (task === "/help") {

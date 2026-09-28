@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The current release is `0.18.1`, a Windows-stability, dependency-security, and release-alignment update verified locally and in three-platform CI.
+The current release is `0.18.2`, a task-completion correctness and Windows terminal usability update verified locally, in three-platform CI, and through a real Windows PowerShell workflow.
 
 ## Install
 
@@ -139,6 +139,7 @@ npm run check:docs
 npm run eval:smoke
 npm pack --dry-run --json
 npm run smoke:package
+npm run smoke:platform
 ```
 
 ## Current limitations

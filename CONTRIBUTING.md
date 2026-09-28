@@ -12,6 +12,7 @@ npm run typecheck
 npm test
 npm run build
 npm run smoke:package
+npm run smoke:platform
 ```
 
 ## Deterministic evaluations

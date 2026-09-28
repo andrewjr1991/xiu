@@ -14,7 +14,7 @@
 
 </div>
 
-当前公开产品基线为 `0.18.1`，该版本完成 Windows 稳定性、安全依赖与发布状态收束，并已通过本地和三平台 CI 门禁。
+当前公开产品基线为 `0.18.2`，该版本修复任务完成判定与 Windows 终端可用性问题，并已通过本地、三平台 CI 和真实 Windows PowerShell 工作流验收。
 
 ## 安装
 
@@ -134,6 +134,7 @@ npm run check:docs
 npm run eval:smoke
 npm pack --dry-run --json
 npm run smoke:package
+npm run smoke:platform
 ```
 
 ## 当前限制
