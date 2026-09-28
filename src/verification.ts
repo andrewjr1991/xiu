@@ -56,7 +56,10 @@ function stringExpectations(input: Record<string, unknown>, key: "required_subst
 
 function normalizedVerificationPath(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  const normalized = path.normalize(value.trim()).replace(/\\/g, "/");
+  // Tool inputs may come from a different host style than the current runner.
+  // Normalize separators before applying POSIX dot-segment rules so the same
+  // workspace-relative artifact has one ledger identity on every platform.
+  const normalized = path.posix.normalize(value.trim().replace(/\\/g, "/"));
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
