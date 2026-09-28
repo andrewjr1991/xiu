@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resultsRoot } from "./core.mjs";
+import { removeTemporaryDirectory, resultsRoot } from "./core.mjs";
 
 const registryOrigin = "https://registry.npmjs.org";
 
@@ -78,9 +78,9 @@ export async function installVerifiedArtifact(metadata) {
     const moduleRoot = path.join(root, "node_modules", ...metadata.packageName.split("/"));
     const manifest = JSON.parse(await fs.readFile(path.join(moduleRoot, "package.json"), "utf8"));
     if (manifest.name !== metadata.packageName || manifest.version !== metadata.version) throw new Error("Installed package manifest does not match the approved artifact.");
-    return { root, moduleRoot, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
+    return { root, moduleRoot, cleanup: () => removeTemporaryDirectory(root, "artifact-") };
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryDirectory(root, "artifact-");
     throw error;
   }
 }

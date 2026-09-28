@@ -148,8 +148,14 @@ async function nonGitFiles(root: string, maximum: number): Promise<{ paths: stri
       const relative = `${base}${entry.name}`;
       if (!eligible(relative)) continue;
       if (inherited.some((rule) => rule.test(relative))) { ignored.push(relative); continue; }
-      if (entry.isDirectory() && !entry.isSymbolicLink()) await walk(relative, inherited);
-      else paths.push(relative);
+      let stat;
+      try { stat = await fs.lstat(path.join(root, ...relative.split("/"))); }
+      catch { complete = false; continue; }
+      // Dirent type bits are not reliable for Windows junctions. Re-check the
+      // path itself and omit every link/reparse traversal candidate entirely.
+      if (stat.isSymbolicLink()) { ignored.push(relative); continue; }
+      if (stat.isDirectory()) await walk(relative, inherited);
+      else if (stat.isFile()) paths.push(relative);
       if (!complete) break;
     }
   }

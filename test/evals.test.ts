@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadSuite, loadTask, redact, resultsRoot, safeWorkspacePath, summarize, validateAll, validateResult } from "../evals/lib/core.mjs";
+import { loadSuite, loadTask, redact, removeTemporaryDirectory, resultsRoot, safeWorkspacePath, summarize, validateAll, validateResult } from "../evals/lib/core.mjs";
 import { createIsolation } from "../evals/lib/isolation.mjs";
 import { classifyFailure, enforceTrialBudget, forbiddenWriteAttemptCount, scrubSensitiveEnvironment, shouldStopAfterTrial, TaskAssertionError } from "../evals/lib/policy.mjs";
 import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "../evals/lib/real-policy.mjs";
@@ -56,6 +56,16 @@ test("evaluation isolation rejects fixture links and junctions", async (t) => {
   }
   await assert.rejects(createIsolation(fixture), /link is forbidden/);
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test("evaluation cleanup is bounded to its own temporary directory", async () => {
+  const temporaryRoot = path.join(resultsRoot, ".tmp");
+  await fs.mkdir(temporaryRoot, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporaryRoot, "workspace-cleanup-test-"));
+  await fs.writeFile(path.join(root, "evidence.txt"), "temporary\n");
+  await removeTemporaryDirectory(root, "workspace-");
+  await assert.rejects(fs.access(root));
+  await assert.rejects(removeTemporaryDirectory(path.dirname(resultsRoot), "workspace-"), /Refusing/);
 });
 
 test("evaluation policy separates budget, task assertion, safety, and harness failures", () => {

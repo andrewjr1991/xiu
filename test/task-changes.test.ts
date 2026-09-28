@@ -106,6 +106,7 @@ test("task diff works without Git, honors ignore files, and never traverses junc
   assert.equal(baseline.git, false);
   assert.equal(baseline.files.has("ignored.txt"), false);
   assert.equal(baseline.files.has("ignored-dir/data.txt"), false);
+  assert.equal(baseline.files.has("linked"), false);
   assert.equal(baseline.files.has("linked/private.txt"), false);
   await fs.unlink(path.join(root, "a.txt"));
   await fs.writeFile(path.join(root, "new.txt"), "new\n");

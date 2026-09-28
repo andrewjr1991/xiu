@@ -12,6 +12,16 @@ const taskKeys = new Set(["protocolVersion", "id", "revision", "category", "prom
 const budgetKeys = new Set(["timeoutMs", "modelCalls", "toolCalls", "inputTokens", "outputTokens"]);
 const simulationTools = new Map([["eval_read_file", "read"], ["eval_write_file", "write"], ["eval_replace_text", "write"], ["eval_verify", "execute"]]);
 
+export async function removeTemporaryDirectory(root, prefix) {
+  const temporaryRoot = path.join(resultsRoot, ".tmp");
+  const resolved = path.resolve(root);
+  const name = path.basename(resolved);
+  if (path.dirname(resolved) !== temporaryRoot || !name.startsWith(prefix) || name.length <= prefix.length) {
+    throw new Error("Refusing to remove a directory outside the evaluation temporary root.");
+  }
+  await fs.rm(resolved, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+}
+
 export async function readJson(file) {
   return JSON.parse(await fs.readFile(file, "utf8"));
 }

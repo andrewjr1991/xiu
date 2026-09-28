@@ -74,6 +74,22 @@ test("completed detached commands retain exit evidence", async (t) => {
   assert.fail("background command did not complete");
 });
 
+test("rapid detached commands cannot have terminal evidence overwritten by the launcher", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-rapid-"));
+  configureBackgroundWorkspace(process.cwd(), root);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const started = Array.from({ length: 8 }, (_, index) => startBackgroundProcess(`node -e "console.log(${index})"`, process.cwd()));
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const records = listBackgroundProcesses().filter((item) => started.some((entry) => entry.id === item.id));
+    if (records.length === started.length && records.every((item) => !item.running)) {
+      assert.deepEqual(records.map((item) => item.state), Array.from({ length: started.length }, () => "completed"));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail("rapid background commands did not preserve terminal evidence");
+});
+
 test("a detached job survives the launcher process exiting and is discoverable by a new process", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-disconnect-"));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-workspace-"));

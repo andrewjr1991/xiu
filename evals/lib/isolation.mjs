@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTemporaryDirectory } from "./core.mjs";
 
 const temporaryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "results", ".tmp");
 
@@ -25,8 +26,8 @@ export async function createIsolation(taskDirectory) {
   try {
     await copyTree(path.join(taskDirectory, "repo"), workspace);
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryDirectory(root, "workspace-");
     throw error;
   }
-  return { root, workspace, home, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
+  return { root, workspace, home, cleanup: () => removeTemporaryDirectory(root, "workspace-") };
 }

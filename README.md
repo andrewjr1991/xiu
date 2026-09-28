@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The published product baseline is `0.17.0`. This checkout contains the **unreleased `0.18.0` P0/P1 candidate**; candidate features below require a local build until a release is approved.
+The published product baseline is `0.18.0`. This checkout contains the `0.18.1` Windows-stability and release-alignment update under development.
 
 ## Install
 
@@ -76,7 +76,7 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 - Multi-agent roles with isolated Git worktrees and review-gated integration
 - Simplified Chinese and English UI and model-output contracts
 
-## In the 0.18.0 candidate
+## Added in 0.18.0
 
 - `/check` discovers the root npm project's `typecheck`, `lint`, `test`, and `build` scripts; `/check test` runs one and `/check all` runs the available checks in order. The actual scripts and lifecycle hooks are previewed through the existing approval path. Plan mode allows discovery only; `Ctrl+C` cancels active checks.
 - `/diff` (or `/diff task`) shows changes since the current task's in-memory starting point, `/diff workspace` includes staged, unstaged, and untracked workspace changes against HEAD, and `/diff staged` compares the index with HEAD. Existing changes and uncertain attribution are labeled. Snapshots and previews are bounded; omitted files are reported, and task baselines do not survive a restart.
@@ -114,7 +114,7 @@ $env:OPENAI_API_KEY = "..."
 xiu
 ```
 
-Inside a session, type `/` to open the command palette. Useful starting points include `/providers`, `/models`, `/status`, `/diagnostics`, `/diff`, `/check` (0.18.0 candidate), `/report`, `/recover`, and `/help`.
+Inside a session, type `/` to open the command palette. Useful starting points include `/providers`, `/models`, `/status`, `/diagnostics`, `/diff`, `/check`, `/report`, `/recover`, and `/help`.
 
 ## Documentation
 
@@ -124,7 +124,7 @@ Inside a session, type `/` to open the command palette. Useful starting points i
 | [完整使用指南](./USAGE.zh-CN.md) | Complete Simplified Chinese command reference |
 | [Security boundaries](./SECURITY.zh-CN.md) | Permanent security and privacy rules |
 | [Roadmap](./ROADMAP.zh-CN.md) | Current state, current release, and next actions |
-| [Changelog](./CHANGELOG.md) | Unreleased candidate and released-version summary |
+| [Changelog](./CHANGELOG.md) | Unreleased work and released-version summary |
 | [Publishing guide](./PUBLISHING.zh-CN.md) | Maintainer release and installation gates |
 | [Contributing](./CONTRIBUTING.md) | Development and pull-request checks |
 

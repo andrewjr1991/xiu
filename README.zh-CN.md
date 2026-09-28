@@ -14,7 +14,7 @@
 
 </div>
 
-当前公开产品基线为 `0.17.0`。本工作区是**尚未发布的 `0.18.0` P0/P1 候选版**；以下候选功能在批准发布前需要从源码构建使用。
+当前公开产品基线为 `0.18.0`。本工作区正在开发 `0.18.1` Windows 稳定性与发布收束更新。
 
 ## 安装
 
@@ -76,7 +76,7 @@ Xiu 默认不上传项目代码、会话、审计或诊断数据。模型调用�
 - 隔离 Git Worktree 与审查门禁的多 Agent 协作
 - 简体中文和英文界面与模型输出契约
 
-## 0.18.0 候选版变化
+## 0.18.0 已交付变化
 
 - `/check` 发现根目录 npm 项目的 `typecheck`、`lint`、`test`、`build` 脚本；`/check test` 执行单项，`/check all` 按顺序运行可用检查。真实脚本及前后置脚本会展示并复用审批路径；Plan 模式只允许发现，执行时可按 `Ctrl+C` 取消。
 - `/diff`（或 `/diff task`）显示本任务内存起点以来的变化；`/diff workspace` 对比 HEAD，包含暂存、未暂存和未跟踪文件；`/diff staged` 对比暂存区与 HEAD。已有修改、来源不确定和覆盖限制会明确标注；快照与预览有上限，重启后不恢复原任务起点。
@@ -109,7 +109,7 @@ $env:OPENAI_API_KEY = "..."
 xiu
 ```
 
-会话中输入 `/` 打开命令面板。常用入口包括 `/providers`、`/models`、`/status`、`/diagnostics`、`/diff`、`/check`（0.18.0 候选）、`/report`、`/recover` 和 `/help`。
+会话中输入 `/` 打开命令面板。常用入口包括 `/providers`、`/models`、`/status`、`/diagnostics`、`/diff`、`/check`、`/report`、`/recover` 和 `/help`。
 
 ## 文档
 
@@ -119,7 +119,7 @@ xiu
 | [完整使用指南](./USAGE.zh-CN.md) | 全部命令与能力参考 |
 | [安全与隐私边界](./SECURITY.zh-CN.md) | 跨版本永久安全规则 |
 | [路线图](./ROADMAP.zh-CN.md) | 当前状态、当前版本和下一步 |
-| [变更日志](./CHANGELOG.md) | 未发布候选与已发布版本摘要 |
+| [变更日志](./CHANGELOG.md) | 未发布工作与已发布版本摘要 |
 | [发布指南](./PUBLISHING.zh-CN.md) | 维护者发布与安装门禁 |
 | [贡献指南](./CONTRIBUTING.md) | 开发和 Pull Request 检查 |
 

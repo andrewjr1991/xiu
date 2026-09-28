@@ -165,13 +165,8 @@ export function startBackgroundProcess(command: string, cwd = workspace): { id: 
   try {
     const child = spawn(invocation.program, invocation.args, { detached: true, windowsHide: true, stdio: "ignore" });
     child.unref();
-    const latest = readRecord(recordFile(id));
-    if (!latest || latest.state === "starting") {
-      record.pid = child.pid;
-      record.state = "running";
-      record.updatedAt = new Date().toISOString();
-      atomicWrite(recordFile(id), record);
-    }
+    // The worker exclusively owns state transitions after spawn. A parent-side
+    // write here can race with, and overwrite, the worker's terminal record.
     return { id, pid: child.pid };
   } catch (error) {
     try { fs.unlinkSync(requestFile); } catch { /* best effort */ }

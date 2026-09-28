@@ -1,10 +1,18 @@
 # Changelog
 
-This file distinguishes the unreleased candidate from released behavior. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
+This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## Unreleased — 0.18.0
+## Unreleased — 0.18.1
 
-- Reprioritize P0/P1 around daily coding quality and interaction. This is an unreleased candidate, not a statement that release checks or user acceptance have passed.
+- Add bounded, path-confined retry cleanup for Windows evaluation temporary directories.
+- Prevent the detached-process launcher from overwriting terminal evidence written by its worker.
+- Re-check non-Git directory entries with `lstat` so Windows junctions are never traversed or captured.
+- Upgrade `csv-parse` to 7.0.3 to address GHSA-8cw4-87c7-c6xx.
+- Reconcile release documentation, the default branch, tags, Registry metadata, and verification evidence after the 0.18.0 release.
+
+## 0.18.0 — 2026-09-16
+
+- Reprioritize P0/P1 around daily coding quality and interaction.
 - Add structured tool outcomes and error categories, result-aware loop protection, and conservative verification evidence. Informational commands do not count as checks; task edits invalidate earlier evidence and one passing check does not hide another failure.
 - Add transient Chinese/English streamed previews with cross-chunk redaction and preserved code literals; drafts remain separate from completion verdicts and durable output.
 - Add bounded task-start, workspace, and staged `/diff` views, including pre-existing changes and explicit unknown attribution. Task snapshots remain in memory only.
