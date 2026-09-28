@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The published product baseline is `0.18.1`. It stabilizes Windows evaluation cleanup and detached-process evidence, tightens Junction handling, and closes the 0.18.0 release-alignment gap.
+The published product baseline is `0.18.0`. The `0.18.1` Windows-stability and release-alignment update has passed local and three-platform CI gates and is awaiting npm publication.
 
 ## Install
 
