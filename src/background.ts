@@ -104,8 +104,9 @@ function processAlive(pid: number | undefined): boolean {
 }
 
 function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
-  const withinStartupGrace = record.state === "starting" && Date.now() - Date.parse(record.startedAt) < 10_000;
-  if ((record.state === "starting" || record.state === "running") && !withinStartupGrace && !processAlive(record.pid)) {
+  const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
+  const withinHandoffGrace = (record.state === "starting" && age < 10_000) || (record.state === "running" && age < 2_000);
+  if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !processAlive(record.pid)) {
     const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(record.id) };
     atomicWrite(recordFile(record.id), next);
     return next;
