@@ -2,7 +2,7 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## Unreleased — 0.18.1
+## 0.18.1 — 2026-09-28
 
 - Add bounded, path-confined retry cleanup for Windows evaluation temporary directories.
 - Prevent the detached-process launcher from overwriting terminal evidence written by its worker.

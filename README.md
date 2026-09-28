@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The published product baseline is `0.18.0`. This checkout contains the `0.18.1` Windows-stability and release-alignment update under development.
+The published product baseline is `0.18.1`. It stabilizes Windows evaluation cleanup and detached-process evidence, tightens Junction handling, and closes the 0.18.0 release-alignment gap.
 
 ## Install
 
