@@ -826,3 +826,5 @@ npm.cmd run smoke:platform
 ```
 
 推送候选分支后读取三平台作业最终结果；任一平台未运行或失败时，状态只能写为“待验收”或“失败”。GUI 在该矩阵稳定后另行设计，不纳入本版本。
+
+候选验收记录（2026-09-28）：GitHub Actions 运行 `36403307522` 在 Windows、Ubuntu、macOS 的 Node 20.18.1 真 runner 上全部通过；三项作业均完成 590 项测试、构建、离线评测、打包、基础安装 smoke 和候选包平台 smoke。该结果不替代 Windows ARM64、企业策略设备或 macOS/Linux 用户真实终端验收。
