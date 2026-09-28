@@ -8,9 +8,20 @@ import { McpAuthStore } from "../src/mcp-auth-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, waitForOAuthCallback, windowsBrowserOpenAttempts, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
 import { McpManager } from "../src/mcp.js";
 
+// WHATWG Fetch rejects a small set of historically unsafe ports before a
+// request is sent. Some hosts allocate ephemeral ports from a wider range, so
+// do not let an unlucky test port race the cancellation assertion.
+const FETCH_BLOCKED_TEST_PORTS = new Set([
+  2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080,
+]);
+
 async function listen(server: http.Server, port = 0): Promise<number> {
-  await new Promise<void>((resolve, reject) => server.listen(port, "127.0.0.1", resolve).once("error", reject));
-  return (server.address() as { port: number }).port;
+  for (;;) {
+    await new Promise<void>((resolve, reject) => server.listen(port, "127.0.0.1", resolve).once("error", reject));
+    const assigned = (server.address() as { port: number }).port;
+    if (port !== 0 || !FETCH_BLOCKED_TEST_PORTS.has(assigned)) return assigned;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 }
 
 async function availablePort(): Promise<number> {

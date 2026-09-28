@@ -1,11 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createHash } from "node:crypto";
 import OpenAI from "openai";
-import { ProxyAgent } from "undici";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
 import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolCall, ToolDefinition } from "./types.js";
 import { SafeRequestCache } from "./request-cache.js";
+import { createTrustedDispatcher } from "./trusted-dispatcher.js";
 
 const modelDiscoveryCache = new SafeRequestCache(60_000, 100);
 
@@ -130,10 +130,11 @@ class OpenAIProvider implements ModelProvider {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv)
       ?? config.apiKey
       ?? readEnvironmentCredential(config.provider === "agnes" ? "AGNES_API_KEY" : "OPENAI_API_KEY");
+    const dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new OpenAI({
       apiKey: apiKey || "xiu-local",
       baseURL: config.baseURL,
-      fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
+      fetchOptions: dispatcher ? { dispatcher } : undefined,
     });
   }
 
@@ -278,10 +279,11 @@ class AnthropicProvider implements ModelProvider {
   private client: Anthropic;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
+    const dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new Anthropic({
       apiKey,
       baseURL: config.baseURL,
-      fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
+      fetchOptions: dispatcher ? { dispatcher } : undefined,
     });
   }
 

@@ -370,8 +370,11 @@ export function editorFrameLines(
   if (searchQuery !== undefined) lines.push(chalk.dim(`(reverse-i-search) ${truncateDisplay(searchQuery, Math.max(1, lineWidth - 19))}`));
   for (const [index, candidate] of candidates.entries()) {
     const pointer = index === selected ? chalk.green(">") : " ";
-    const label = truncateDisplay(candidate.label.replace(/\s+/g, " "), Math.max(8, Math.floor(lineWidth * 0.65)));
-    lines.push(`${pointer} ${index === selected ? chalk.green(label) : label} ${chalk.dim(candidate.description)}`.trimEnd());
+    const labelWidth = Math.max(8, Math.floor(lineWidth * 0.65));
+    const label = truncateDisplay(candidate.label.replace(/\s+/g, " "), labelWidth);
+    const descriptionWidth = Math.max(0, lineWidth - terminalDisplayWidth(label) - 3);
+    const description = truncateDisplay(candidate.description.replace(/\s+/g, " "), descriptionWidth);
+    lines.push(`${pointer} ${index === selected ? chalk.green(label) : label}${description ? ` ${chalk.dim(description)}` : ""}`.trimEnd());
   }
   if (footer) {
     lines.push(chalk.dim("-".repeat(Math.max(19, Math.min(lineWidth, 120)))));
@@ -585,9 +588,13 @@ export async function readInteractiveInput(
         replaceStart: 0, replaceEnd: characters(state.value).length,
       }));
     };
-    const render = (): void => {
-      clearRenderedFrame(renderedLines, cursorRow);
+    const render = (force = true): void => {
       const liveOutput = persistentLiveOutput(options.liveOutput?.() ?? "");
+      // A timer exists to drain new task output, not to repaint an unchanged
+      // prompt merely because the elapsed-time label advanced. Repeated no-op
+      // repaints can leave ghost prompts in Windows ConPTY scrollback.
+      if (!force && !liveOutput) return;
+      clearRenderedFrame(renderedLines, cursorRow);
       if (liveOutput) process.stdout.write(liveOutput);
       const baseFooter = typeof footer === "function" ? footer() : footer;
       const currentFooter = [pasteNotice, baseFooter].filter(Boolean).join("\n");
@@ -727,7 +734,7 @@ export async function readInteractiveInput(
     process.stdout.on("resize", render);
     options.signal?.addEventListener("abort", abortInput, { once: true });
     if (options.refreshMs && options.refreshMs > 0) {
-      refreshTimer = setInterval(render, Math.max(100, options.refreshMs));
+      refreshTimer = setInterval(() => render(false), Math.max(100, options.refreshMs));
       refreshTimer.unref();
     }
     render();

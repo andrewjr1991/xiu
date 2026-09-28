@@ -48,6 +48,15 @@ function optionalInteger(input: Record<string, unknown>, name: string, fallback:
   return Number(value);
 }
 
+function optionalClampedInteger(input: Record<string, unknown>, name: string, fallback: number, minimum: number, maximum: number): number {
+  const value = input[name];
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || Number(value) < minimum) {
+    throw new Error(`${name} must be an integer greater than or equal to ${minimum}`);
+  }
+  return Math.min(Number(value), maximum);
+}
+
 async function readStructuredFile(cwd: string, requested: string, requestedEncoding?: unknown): Promise<DecodedFile> {
   const target = resolveWorkspacePath(cwd, requested);
   const stat = await fs.stat(target);
@@ -81,7 +90,9 @@ function pageOptions(input: Record<string, unknown>): { offset: number; limit: n
   return {
     offset: optionalInteger(input, "offset", 0, 0, Number.MAX_SAFE_INTEGER),
     limit: optionalInteger(input, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT),
-    maxValueCharacters: optionalInteger(input, "max_value_characters", DEFAULT_VALUE_CHARACTERS, 1, MAX_VALUE_CHARACTERS),
+    // Providers occasionally overshoot this advisory schema maximum. Clamping a
+    // read-only output budget is safe and avoids wasting a model turn on a retry.
+    maxValueCharacters: optionalClampedInteger(input, "max_value_characters", DEFAULT_VALUE_CHARACTERS, 1, MAX_VALUE_CHARACTERS),
   };
 }
 

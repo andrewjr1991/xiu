@@ -83,17 +83,18 @@ test("P1 a different passing check cannot erase a failed required check", async 
     action("write_file", { path: "notes.md", content: "The checks must both pass.\n" }),
     check("calc.test.mjs"), check("other.test.mjs"), done(), done(),
   ]);
-  let verified: boolean | undefined;
+  let summary: Parameters<NonNullable<AgentEvents["onTaskComplete"]>>[0] | undefined;
   const outputs: string[] = [];
   const agent = createAgent(cwd, provider, {
-    onTaskComplete: (summary) => { verified = summary.verified; },
+    onTaskComplete: (value) => { summary = value; },
     onToolEnd: (name, output) => { if (name === "run_process") outputs.push(output); },
   });
   await agent.run("Document the required checks and run both calc.test.mjs and other.test.mjs.");
   assert.match(outputs[0]!, /^Exit code: 1/);
   assert.match(outputs[1]!, /^Exit code: 0/);
   assert.notEqual(agent.status().outcome, "completed");
-  assert.equal(verified, false);
+  assert.equal(summary?.verified, false);
+  assert.equal(summary?.failureReason, "verification_failed");
 });
 
 test("P1 an edit after a passing check expires verification until a fresh check runs", async () => {
@@ -230,6 +231,39 @@ test("P1 repairing a failed check and rerunning that same check can complete", a
   assert.match(checks[1]!, /adds two numbers/);
   assert.equal(agent.status().outcome, "completed");
   assert.equal(verified, true);
+});
+
+test("P1 a stronger artifact verification replaces its stale predecessor after a read-only inline process", async () => {
+  const cwd = await fixture();
+  const provider = new ScriptedProvider([
+    action("write_file", { path: "report.html", content: "<html>Alice Bob</html>\n" }),
+    action("verify_output", { path: "report.html", required_substrings: ["Alice"] }, "first-verify"),
+    action("run_process", { program: "node", args: ["-e", "console.log('inspected')"] }, "inspect"),
+    action("verify_output", { path: "report.html", required_substrings: ["Alice", "Bob"], forbidden_substrings: ["TBD"] }, "final-verify"),
+    done(),
+  ]);
+  let summary: Parameters<NonNullable<AgentEvents["onTaskComplete"]>>[0] | undefined;
+  const agent = createAgent(cwd, provider, { onTaskComplete: (value) => { summary = value; } });
+  await agent.run("Create and deterministically verify report.html.");
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(summary?.verified, true);
+  assert.equal(summary?.outcome, "completed");
+});
+
+test("P1 a read-only inline process preserves current artifact verification", async () => {
+  const cwd = await fixture();
+  const provider = new ScriptedProvider([
+    action("write_file", { path: "report.html", content: "<html>Alice Bob</html>\n" }),
+    action("verify_output", { path: "report.html", required_substrings: ["Alice", "Bob"], forbidden_substrings: ["TBD"] }),
+    action("run_process", { program: "node", args: ["-e", "require('node:fs').readFileSync('report.html', 'utf8')"] }, "inspect"),
+    done(),
+  ]);
+  let summary: Parameters<NonNullable<AgentEvents["onTaskComplete"]>>[0] | undefined;
+  const agent = createAgent(cwd, provider, { onTaskComplete: (value) => { summary = value; } });
+  await agent.run("Create, inspect, and deterministically verify report.html.");
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(summary?.verified, true);
+  assert.equal(provider.calls, 4, "a read-only inspection must not trigger another completion-gate turn");
 });
 
 test("P1 Chinese Agent streams only redacted draft previews and persists its final answer once", async () => {

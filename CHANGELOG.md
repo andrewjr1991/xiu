@@ -2,6 +2,18 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.18.2 — Unreleased
+
+- Preserve passed verification across conservatively classified execute tools when a bounded post-command workspace and explicit-artifact fingerprint proves that no relevant file changed; fail closed when the fingerprint changes or cannot be captured.
+- Let a successful, stricter `verify_output` for the same artifact safely supersede stale weaker evidence without allowing unrelated or weaker checks to hide failures.
+- Clamp oversized structured-extraction value budgets to the safe maximum instead of spending another model turn on a deterministic parameter retry.
+- Use the Windows system certificate store together with Node's bundled roots for direct and proxied OpenAI/Anthropic HTTPS connections, without weakening TLS verification.
+- Report structured task failure reasons so verification, tool, web-evidence, model-protocol, and runtime failures are described accurately.
+- Avoid no-output timer redraws that can leave repeated steering prompts in Windows ConPTY scrollback, and keep completion candidates within the tracked terminal width.
+- Bound persistent tool/action summaries, reduce the live plan to completion/current/next progress, and omit redundant global workflow Skills from the model catalog while keeping explicit reads available.
+- Re-read detached-worker state after observing process exit so a stale foreground snapshot cannot overwrite freshly completed terminal evidence.
+- Keep the OAuth cancellation regression deterministic when a host allocates an ephemeral port that WHATWG Fetch blocks before network I/O.
+
 ## 0.18.1 — 2026-09-28
 
 - Add bounded, path-confined retry cleanup for Windows evaluation temporary directories.

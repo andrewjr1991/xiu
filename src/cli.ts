@@ -56,6 +56,12 @@ import { redactSecrets } from "./secret-redaction.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
+function compactTerminalDescription(value: string, maximum = 180): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const characters = [...normalized];
+  return characters.length > maximum ? `${characters.slice(0, maximum - 3).join("")}...` : normalized;
+}
+
 function slashCommands(language: UiLanguage): SlashCommand[] {
   const item = (name: string, zh: string, en: string): SlashCommand => ({ name, description: localize(language, zh, en) });
   return [
@@ -968,10 +974,11 @@ async function main(): Promise<void> {
         onToolStart: (name, description, details) => {
           if (!details.verification) verificationReadyForSummary = false;
           const displayDescription = localizeToolDescription(name, description, language);
+          const terminalDescription = compactTerminalDescription(displayDescription);
           activeToolActivity = activities.start("tool", name, displayDescription);
-          activeToolDetails = { name, description: displayDescription, verification: details.verification, risk: details.risk };
-          runningTaskView?.beginTool(name, displayDescription, details.changesWorkspace, details.verification);
-          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(displayDescription)}`);
+          activeToolDetails = { name, description: terminalDescription, verification: details.verification, risk: details.risk };
+          runningTaskView?.beginTool(name, terminalDescription, details.changesWorkspace, details.verification);
+          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(terminalDescription)}`);
           startPhase(localize(language, `正在运行 ${name}`, `Running ${name}`));
         },
         onToolProgress: (name, message) => {
@@ -989,7 +996,11 @@ async function main(): Promise<void> {
           activeToolActivity = undefined;
           const summary = redactTerminalOutput(result.replace(/\s+/g, " ").trim());
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
-          emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
+          // onPlanUpdate already writes the bounded user-facing receipt. Avoid
+          // printing the tool result again (historically this was the full plan).
+          if (_name !== "update_task_plan") {
+            emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
+          }
           if (!failed && activeToolDetails) {
             if (details?.verification) {
               verificationReadyForSummary = true;
@@ -1050,7 +1061,11 @@ async function main(): Promise<void> {
         },
         onPlanUpdate: (plan) => {
           runningTaskView?.setPlan(plan);
-          emitLine(`${chalk.cyan(localize(language, "任务计划已更新", "Task plan updated"))}\n${chalk.dim(planManager.format())}\n`);
+          const completed = plan.steps.filter((step) => step.status === "completed").length;
+          const current = plan.steps.find((step) => step.status === "in_progress")?.title
+            ?? plan.steps.find((step) => step.status === "pending")?.title
+            ?? localize(language, "等待最终总结", "awaiting final summary");
+          emitLine(`${chalk.cyan(localize(language, `任务计划已更新：${completed}/${plan.steps.length}；当前：${compactTerminalDescription(current, 100)}`, `Task plan updated: ${completed}/${plan.steps.length}; now: ${compactTerminalDescription(current, 100)}`))}\n${chalk.dim(localize(language, "完整计划可使用 /tasks 查看。", "Use /tasks to view the full plan."))}\n`);
         },
         onWorkspaceChange: (change) => {
           if (runningTaskView) {
@@ -2040,7 +2055,19 @@ async function main(): Promise<void> {
           exact: true,
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
-        if (!failure && agent.status().outcome === "failed") failure = new Error(localize(language, "最后一次工具操作失败或被拒绝，目标尚未完成。", "The last tool operation failed or was denied, so the goal is incomplete."));
+        if (!failure && agent.status().outcome === "failed") {
+          const reason = agent.status().failureReason;
+          const message = reason === "verification_failed"
+            ? localize(language, "仍有失败或已过期的必要验证，目标尚未完成。", "A required verification is still failed or stale, so the goal is incomplete.")
+            : reason === "web_evidence"
+              ? localize(language, "联网证据不足或获取失败，目标尚未完成。", "Required web evidence was unavailable or insufficient, so the goal is incomplete.")
+              : reason === "model_incomplete"
+                ? localize(language, "模型响应未正常结束，目标尚未完成。", "The model response did not finish normally, so the goal is incomplete.")
+                : reason === "tool_failed"
+                  ? localize(language, "最后一批工具操作均失败或被拒绝，目标尚未完成。", "Every operation in the last tool batch failed or was denied, so the goal is incomplete.")
+                  : localize(language, "任务因运行时错误停止，目标尚未完成。", "The task stopped because of a runtime error, so the goal is incomplete.");
+          failure = new Error(message);
+        }
         if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));

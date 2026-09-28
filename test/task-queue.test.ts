@@ -119,8 +119,7 @@ test("running task summary shows explicit plan, current and next steps, and file
   });
   const summary = view.progressLines().join("\n");
   assert.match(summary, /Plan: 1\/3 completed/);
-  assert.match(summary, /√ Inspect current UI/);
-  assert.match(summary, /→ Implement progress panel/);
+  assert.doesNotMatch(summary, /Inspect current UI/);
   assert.match(summary, /Now: Implement progress panel/);
   assert.match(summary, /Next: Run regression tests/);
   assert.match(summary, /Changed: Modified: src\/task-queue\.ts/);
@@ -158,6 +157,14 @@ test("Chinese task view localizes progress, actions, and footer controls", () =>
   assert.match(footer, /当前：思考中/);
   assert.match(footer, /Ctrl\+O 显示详情/);
   assert.deepEqual(view.receiptLines(), ["  √ 验证通过：npm test"]);
+});
+
+test("important action receipts remain bounded when commands contain large inline scripts", () => {
+  const view = new RunningTaskView();
+  view.recordImportantAction(`Ran: python -c ${"print('large command') ".repeat(100)}`);
+  const receipt = view.receiptLines()[0]!;
+  assert.ok([...receipt].length <= 244);
+  assert.match(receipt, /\.\.\.$/);
 });
 
 test("successful verification advances the automatic view to final summary", () => {

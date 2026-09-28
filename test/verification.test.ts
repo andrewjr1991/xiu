@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { captureVerificationStamp, isVerificationCommand, verificationCheckKey } from "../src/verification.js";
+import { captureVerificationStamp, isVerificationCommand, VerificationLedger, verificationCheckKey, verifyOutputSupersedes } from "../src/verification.js";
 
 test("verification command classification rejects information-only variants and =value flags", () => {
   for (const command of [
@@ -30,6 +30,47 @@ test("verification check identity ignores execution controls but preserves actua
   assert.notEqual(first, verificationCheckKey("run_process", { program: "node", args: ["--test", "two.mjs"] }));
   assert.notEqual(verificationCheckKey("verify_output", { path: "one.txt", min_bytes: 3 }), verificationCheckKey("verify_output", { path: "one.txt", min_bytes: 4 }));
   assert.notEqual(verificationCheckKey("validate_project", { check: "test" }), verificationCheckKey("validate_project", { check: "build" }));
+});
+
+test("stronger verify_output expectations safely supersede stale checks for the same artifact", () => {
+  const weaker = { path: "report.html", required_substrings: ["Alice"], forbidden_substrings: ["TBD"], min_bytes: 100 };
+  const stronger = { path: ".\\report.html", required_substrings: ["Alice", "Bob"], forbidden_substrings: ["TBD", "undefined"], min_bytes: 200, max_bytes: 30_000 };
+  assert.equal(verifyOutputSupersedes(stronger, weaker), true);
+  assert.equal(verifyOutputSupersedes(weaker, stronger), false);
+  assert.equal(verifyOutputSupersedes({ ...stronger, path: "other.html" }, weaker), false);
+
+  const ledger = new VerificationLedger();
+  ledger.recordTool("verify_output", weaker, true);
+  ledger.invalidate();
+  ledger.recordTool("verify_output", stronger, true);
+  assert.equal(ledger.passed, true);
+  assert.equal(ledger.failed, false);
+  assert.equal(ledger.snapshot().checks.length, 1);
+});
+
+test("weaker or unrelated output checks cannot erase stale required verification", () => {
+  const ledger = new VerificationLedger();
+  ledger.recordTool("verify_output", { path: "report.html", required_substrings: ["Alice", "Bob"] }, true);
+  ledger.invalidate();
+  ledger.recordTool("verify_output", { path: "report.html", required_substrings: ["Alice"] }, true);
+  ledger.recordTool("verify_output", { path: "other.html", required_substrings: ["Bob"] }, true);
+  assert.equal(ledger.passed, false);
+  assert.equal(ledger.failed, true);
+});
+
+test("longer required strings and shorter forbidden strings imply prior expectations", () => {
+  const previous = {
+    path: "report.html",
+    required_substrings: ["共完成19位", "优势"],
+    forbidden_substrings: ["TBD: pending"],
+  };
+  const current = {
+    path: "report.html",
+    required_substrings: ["主管好，9月18日—24日共完成19位候选人", "<h4>优势</h4>"],
+    forbidden_substrings: ["TBD"],
+  };
+  assert.equal(verifyOutputSupersedes(current, previous), true);
+  assert.equal(verifyOutputSupersedes(previous, current), false);
 });
 
 test("explicit verification stamps cover ignored binary artifacts using raw bytes", async () => {

@@ -69,6 +69,21 @@ export class TaskPlanManager {
   mode(): boolean { return this.planMode; }
   snapshot(): TaskPlan | undefined { return this.current ? structuredClone(this.current) : undefined; }
 
+  updateSummary(): string {
+    if (!this.current) return localize(this.language, "任务计划已清空。", "Task plan cleared.");
+    const completed = this.current.steps.filter((step) => step.status === "completed").length;
+    const active = this.current.steps.find((step) => step.status === "in_progress")
+      ?? this.current.steps.find((step) => step.status === "pending");
+    const current = active
+      ? (this.language === "zh-CN" && looksLikeEnglishNaturalLanguage(active.title) ? `步骤 ${active.id}` : active.title)
+      : localize(this.language, "等待最终总结", "awaiting final summary");
+    return localize(
+      this.language,
+      `任务计划已更新：${completed}/${this.current.steps.length}；当前：${current}。完整计划可使用 /tasks 查看。`,
+      `Task plan updated: ${completed}/${this.current.steps.length}; now: ${current}. Use /tasks to view the full plan.`,
+    );
+  }
+
   format(): string {
     if (!this.current) return `${localize(this.language, "规划模式", "Plan mode")}: ${this.planMode ? localize(this.language, "开启", "ON") : localize(this.language, "关闭", "OFF")}\n${localize(this.language, "尚无任务计划。", "No task plan yet.")}`;
     const icon: Record<PlanStepStatus, string> = { pending: "○", in_progress: "→", completed: "√", blocked: "!" };
@@ -124,7 +139,7 @@ export function createPlanTools(manager: TaskPlanManager): AgentTool[] {
         return { id: step.id, title: step.title, status: step.status as PlanStepStatus, ...(typeof step.note === "string" ? { note: step.note } : {}) };
       });
       manager.update(input.goal, steps);
-      return manager.format();
+      return manager.updateSummary();
     },
   }];
 }
