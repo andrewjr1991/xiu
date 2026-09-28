@@ -101,7 +101,7 @@ test("a detached job survives the launcher process exiting and is discoverable b
   const script = [
     `import { configureBackgroundWorkspace, startBackgroundProcess } from ${JSON.stringify(moduleUrl)};`,
     `configureBackgroundWorkspace(${JSON.stringify(workspace)}, ${JSON.stringify(root)});`,
-    `console.log(startBackgroundProcess(${JSON.stringify("node -e \"console.log('survived'); setTimeout(() => {}, 10000)\"")}, ${JSON.stringify(workspace)}).id);`,
+    `console.log(startBackgroundProcess(${JSON.stringify("node -e \"console.log('survived'); setInterval(() => {}, 1000)\"")}, ${JSON.stringify(workspace)}).id);`,
   ].join("\n");
   const launcher = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";
