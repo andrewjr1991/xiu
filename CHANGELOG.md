@@ -2,7 +2,7 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## 0.20.0 — Unreleased
+## 0.20.0 — 2026-09-30
 
 - Design a local-first desktop workbench with project/task navigation, a task conversation, a review inspector, explicit approvals, verification evidence, and safe recovery.
 - Select an isolated Electron renderer and a shared headless runtime so the CLI and desktop client keep one source of truth for trust, permissions, checkpoints, and completion.

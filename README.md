@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The current release is `0.19.0`, which modularizes the update command and validates the packaged CLI through real npm launchers on Windows, Ubuntu, and macOS CI runners.
+The current release is `0.20.0`. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI.
 
 ## Install
 
@@ -143,7 +143,7 @@ npm run smoke:package
 npm run smoke:platform
 ```
 
-The unreleased v0.20.0 desktop preview is developed separately from the CLI package:
+The v0.20.0 Windows desktop preview is packaged separately from the CLI npm package:
 
 Desktop development and packaging require Node.js 22.12.0 or newer; the published CLI keeps its Node.js 20.18.1 baseline.
 

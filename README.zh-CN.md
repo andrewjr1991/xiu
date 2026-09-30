@@ -14,7 +14,7 @@
 
 </div>
 
-当前公开产品基线为 `0.19.0`，该版本完成更新命令模块化，并在 Windows、Ubuntu、macOS CI 上通过真实 npm 启动器完成候选包平台验收。
+当前公开产品基线为 `0.20.0`。该版本新增 Windows 桌面预览、可持久复查的任务变更、受控交互终端，以及 Provider 中立的视觉、生图、视频和音频模型路由，同时保留跨平台 CLI。
 
 ## 安装
 
@@ -138,7 +138,7 @@ npm run smoke:package
 npm run smoke:platform
 ```
 
-尚未发布的 v0.20.0 桌面预览与 CLI 包独立开发：
+v0.20.0 Windows 桌面预览与 CLI npm 包独立打包：
 
 ```bash
 npm --prefix apps/desktop ci
