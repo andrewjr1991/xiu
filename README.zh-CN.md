@@ -14,7 +14,7 @@
 
 </div>
 
-当前公开产品基线为 `0.20.0`。该版本新增 Windows 桌面预览、可持久复查的任务变更、受控交互终端，以及 Provider 中立的视觉、生图、视频和音频模型路由，同时保留跨平台 CLI。
+当前公开产品基线为 `0.20.1`。该版本新增 Windows 桌面预览、可持久复查的任务变更、受控交互终端，以及 Provider 中立的视觉、生图、视频和音频模型路由，同时保留跨平台 CLI；补丁版本还持久化各能力模型选择、统一限制生成媒体下载大小，并修复 Windows 后台进程交接。
 
 ## 安装
 
@@ -138,7 +138,7 @@ npm run smoke:package
 npm run smoke:platform
 ```
 
-v0.20.0 Windows 桌面预览与 CLI npm 包独立打包：
+v0.20.1 Windows 桌面预览与 CLI npm 包独立打包：
 
 ```bash
 npm --prefix apps/desktop ci

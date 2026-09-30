@@ -2,6 +2,12 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.1 — 2026-09-30
+
+- Persist independently selected vision, image, video, and audio models for every built-in and custom Provider, and expose those selections to the desktop runtime.
+- Apply the 250 MB download bound consistently to generated image, audio, and video assets.
+- Preserve live background-process state when a new Windows foreground manager attaches.
+
 ## 0.20.0 — 2026-09-30
 
 - Design a local-first desktop workbench with project/task navigation, a task conversation, a review inspector, explicit approvals, verification evidence, and safe recovery.
