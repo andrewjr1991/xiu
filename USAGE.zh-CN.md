@@ -1787,4 +1787,4 @@ npm run desktop:smoke:installer:win
 
 Markdown 原始 HTML 会先按文本处理；HTML 预览由主进程移除脚本、样式、表单、嵌入内容、远程资源和全部属性，再放入无权限 sandbox iframe。中断任务只有在运行记录与请求的 `runId` 精确匹配后才能继续或放弃；存在未知副作用时必须再次确认，恢复不会自动重放写入、命令或远端操作。
 
-当前 G5C 已完成本机 Windows x64 NSIS 候选包、安装/覆盖升级/中断重启/卸载验收和自动化 UI smoke；核心的 30 轮长任务、取消、崩溃恢复与未知副作用失败关闭仍由完整测试覆盖。MCP、插件贡献和多 Agent 桌面入口仍待后续接入；Windows ARM64、企业策略设备以及 macOS/Linux 真实桌面尚未验收，因此仍显示预览标签，不能据此宣称跨平台稳定发布。
+当前 G5C 已完成本机 Windows x64 NSIS 候选包、安装/覆盖升级/中断重启/卸载验收和自动化 UI smoke；GitHub Actions 运行 `36691490514` 的 Windows、Ubuntu、macOS CLI 与 Desktop 六个作业全部通过，核心的 30 轮长任务、取消、崩溃恢复与未知副作用失败关闭仍由完整测试覆盖。MCP、插件贡献和多 Agent 桌面入口仍待后续接入；Windows ARM64、企业策略设备以及 macOS/Linux 真实用户桌面尚未验收，因此仍显示预览标签，不能据此宣称跨平台稳定发布。
