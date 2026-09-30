@@ -85,7 +85,8 @@ function validRecord(value: unknown): value is BackgroundProcessRecord {
     && typeof item.startedAt === "string" && Number.isFinite(Date.parse(item.startedAt))
     && typeof item.updatedAt === "string" && Number.isFinite(Date.parse(item.updatedAt))
     && Number.isSafeInteger(item.outputBytes) && item.outputBytes! >= 0
-    && (item.pid === undefined || (Number.isSafeInteger(item.pid) && item.pid! > 0));
+    && (item.pid === undefined || (Number.isSafeInteger(item.pid) && item.pid! > 0))
+    && (item.childPid === undefined || (Number.isSafeInteger(item.childPid) && item.childPid! > 0));
 }
 
 function readRecord(file: string): BackgroundProcessRecord | undefined {
@@ -103,6 +104,10 @@ function processAlive(pid: number | undefined): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
+function backgroundRecordAlive(record: BackgroundProcessRecord): boolean {
+  return processAlive(record.pid) || processAlive(record.childPid);
+}
+
 async function waitForProcessExit(pid: number, attempts = 40): Promise<boolean> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (!processAlive(pid)) return true;
@@ -114,7 +119,7 @@ async function waitForProcessExit(pid: number, attempts = 40): Promise<boolean> 
 function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
   const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
   const withinHandoffGrace = (record.state === "starting" && age < 10_000) || (record.state === "running" && age < 2_000);
-  if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !processAlive(record.pid)) {
+  if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !backgroundRecordAlive(record)) {
     // The worker can publish its terminal record between the directory scan and
     // this liveness check. Re-read after observing the worker exit so a stale
     // in-memory "running" snapshot can never overwrite completed evidence.
@@ -237,6 +242,12 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
       const child = spawn("taskkill.exe", ["/PID", String(record.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       child.once("exit", () => resolve()); child.once("error", () => resolve());
     });
+    if (record.childPid && processAlive(record.childPid)) {
+      await new Promise<void>((resolve) => {
+        const child = spawn("taskkill.exe", ["/PID", String(record.childPid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+        child.once("exit", () => resolve()); child.once("error", () => resolve());
+      });
+    }
   } else if (record.pid) {
     try { process.kill(-record.pid, "SIGTERM"); } catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* already gone */ } }
     if (!(await waitForProcessExit(record.pid))) {
