@@ -335,13 +335,14 @@ function createWindow(): BrowserWindow {
   // through every shell. Keep the argument for developers and an explicit,
   // test-only environment switch for deterministic packaged acceptance.
   const smokeTest = process.argv.includes("--smoke-test") || process.env.XIU_DESKTOP_SMOKE === "1";
-  smokeMilestone(`create-window smoke=${smokeTest}`);
+  const smokeHold = process.env.XIU_DESKTOP_SMOKE_HOLD === "1";
+  smokeMilestone(`create-window smoke=${smokeTest} hold=${smokeHold}`);
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 840,
     minHeight: 600,
-    show: !smokeTest,
+    show: !smokeTest && !smokeHold,
     backgroundColor: "#f7f9fc",
     title: "Xiu",
     autoHideMenuBar: true,
@@ -370,9 +371,9 @@ function createWindow(): BrowserWindow {
   });
   window.webContents.once("did-finish-load", () => {
     smokeMilestone("load-finished");
-    if (smokeTest) app.exit(0);
+    if (smokeTest && !smokeHold) app.exit(0);
   });
-  if (!smokeTest) window.once("ready-to-show", () => window.show());
+  if (!smokeTest && !smokeHold) window.once("ready-to-show", () => window.show());
   void window.loadURL("xiu-app://bundle/index.html");
   return window;
 }

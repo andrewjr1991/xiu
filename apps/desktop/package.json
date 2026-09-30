@@ -13,8 +13,11 @@
     "dev": "npm run build && electron .",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pack:win": "npm run build && electron-builder --win dir --x64",
-    "smoke": "node scripts/smoke.mjs"
+    "pack:win": "npm run build && node scripts/package-windows.mjs dir",
+    "installer:win": "npm run build && node scripts/package-windows.mjs nsis",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:ui": "npm run build && electron scripts/ui-smoke-harness.cjs",
+    "smoke:installer:win": "node scripts/windows-installer-smoke.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -54,9 +57,21 @@
     "win": {
       "icon": "assets/icon.ico",
       "target": [
-        "dir"
+        "dir",
+        "nsis"
       ],
       "artifactName": "Xiu-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Xiu",
+      "uninstallDisplayName": "Xiu",
+      "deleteAppDataOnUninstall": false
     }
   },
   "optionalDependencies": {

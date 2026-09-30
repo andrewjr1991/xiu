@@ -1,0 +1,92 @@
+const { contextBridge } = require("electron");
+
+const now = () => new Date().toISOString();
+const workspace = {
+  bridgeVersion: 1,
+  trust: "trusted",
+  workspace: { id: "smoke-workspace", name: "G5C 验收工作区", path: "C:\\Xiu UI Smoke", lock: "available" },
+  recent: [{ id: "smoke-workspace", name: "G5C 验收工作区", trusted: true, lastOpenedAt: now() }],
+  tasks: [],
+};
+let sequence = 0;
+let task;
+let approvalMode = "ask";
+let activeProviderId = "openai";
+let activeModel = "gpt-5";
+let terminal = { state: "idle" };
+let recoveryActive = false;
+const runtimeListeners = new Set();
+const terminalListeners = new Set();
+const calls = [];
+
+const runtime = () => ({ runtime: { snapshot: { schemaVersion: 1, sequence, generatedAt: now(), ...(task ? { task } : {}) }, events: [], resyncRequired: false }, conversationId: task?.id, provider: { id: activeProviderId, label: activeProviderId === "openai" ? "OpenAI" : "Agnes", model: activeModel }, writer: "available", approvalMode });
+const emit = (type, payload) => {
+  sequence += 1;
+  const event = { schemaVersion: 1, eventId: `event-${sequence}`, taskId: task.id, sequence, timestamp: now(), type, payload };
+  for (const listener of runtimeListeners) listener(event);
+};
+const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
+const review = () => ({ generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], validations: [], checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
+const providers = () => ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
+  { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { source: "environment", configured: true, editable: false }, features: { tools: true, vision: true, image: true, video: false } },
+  { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, features: { tools: true, vision: true, image: false, video: false } },
+], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] } });
+
+const bridge = {
+  snapshot: async () => workspace,
+  chooseWorkspace: async () => workspace,
+  closeWorkspace: async () => workspace,
+  openRecentWorkspace: async () => workspace,
+  removeRecentWorkspace: async () => workspace,
+  trustWorkspace: async () => workspace,
+  runtimeConnect: async () => runtime(),
+  createTask: async ({ text }) => {
+    const approval = { id: "approval-1", description: "写入验收文件", risk: "write", preview: "src/example.ts", sessionScope: "workspace-files:write", scope: "once", effects: ["修改工作区文件"], recovery: "可从检查点恢复", requestedAt: now() };
+    task = { id: "smoke-task", state: "waiting_approval", taskPreview: text, startedAt: now(), updatedAt: now(), pendingApproval: approval };
+    calls.push("task:create");
+    return runtime();
+  },
+  continueTask: async ({ text }) => bridge.createTask({ text }),
+  newConversation: async () => { task = undefined; sequence = 0; return runtime(); },
+  steerTask: async () => true,
+  stopTask: async () => { calls.push("task:stop"); recoveryActive = true; task = { ...task, state: "cancelled", updatedAt: now() }; emit("task.finished", { state: "cancelled", error: "用户已停止" }); return true; },
+  setApprovalMode: async ({ mode }) => { approvalMode = mode; calls.push(`approval-mode:${mode}`); return runtime(); },
+  decideApproval: async ({ approvalId, allowed }) => {
+    calls.push(`approval:${allowed}`);
+    task = { ...task, state: "running", pendingApproval: undefined, updatedAt: now() };
+    emit("approval.decided", { approvalId, allowed, source: "handler" });
+    for (let turn = 1; turn <= 30; turn += 1) {
+      emit("model.started", { turn });
+      emit("assistant.message", { text: `第 ${turn} 轮公开进展`, hasToolCalls: turn < 30 });
+    }
+    calls.push("long-task:30-turns");
+  },
+  openTaskHistory: async () => { throw new Error("not used"); },
+  deleteTask: async () => workspace,
+  chooseAttachments: async () => ({ insertText: "", attachments: [] }),
+  pasteAttachments: async () => ({ insertText: "", attachments: [] }),
+  importAttachments: async () => ({ insertText: "", attachments: [] }),
+  reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView } }),
+  previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
+  restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
+  recoverTask: async () => runtime(),
+  abandonRecovery: async () => review(),
+  providerSnapshot: async () => providers(),
+  discoverProviderModels: async () => providers(),
+  selectProvider: async ({ providerId, model }) => { activeProviderId = providerId; activeModel = model; calls.push(`provider:${providerId}/${model}`); return { settings: providers(), connection: runtime() }; },
+  saveProviderCredential: async () => ({ settings: providers(), connection: runtime() }),
+  testProvider: async () => ({ ok: true, message: "连接成功", modelsDiscovered: 1 }),
+  upsertProvider: async () => ({ settings: providers(), connection: runtime() }),
+  deleteProvider: async () => ({ settings: providers(), connection: runtime() }),
+  terminalSnapshot: async () => terminal,
+  startTerminal: async ({ cols = 80, rows = 24 } = {}) => { terminal = { state: "running", sessionId: "terminal-1", shell: "PowerShell", cols, rows, output: "PS C:\\Xiu UI Smoke> " }; calls.push("terminal:start"); return terminal; },
+  writeTerminal: async ({ data }) => { calls.push(`terminal:write:${data}`); },
+  resizeTerminal: async ({ cols, rows }) => { terminal = { ...terminal, cols, rows }; return terminal; },
+  stopTerminal: async () => { terminal = { state: "exited", sessionId: "terminal-1", shell: "PowerShell", cols: terminal.cols, rows: terminal.rows, exitCode: 0 }; calls.push("terminal:stop"); return terminal; },
+  onSnapshot: () => () => {},
+  onRuntimeEvent: (listener) => { runtimeListeners.add(listener); return () => runtimeListeners.delete(listener); },
+  onTerminalEvent: (listener) => { terminalListeners.add(listener); return () => terminalListeners.delete(listener); },
+};
+
+contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
+contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls] }));
