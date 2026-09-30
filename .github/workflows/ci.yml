@@ -85,6 +85,8 @@ jobs:
       - name: Run desktop UI smoke under Xvfb
         if: matrix.platform == 'linux'
         run: xvfb-run --auto-servernum npm run desktop:smoke:ui
+        env:
+          ELECTRON_DISABLE_SANDBOX: "1"
       - name: Build and install Windows x64 candidate
         if: matrix.platform == 'win32'
         run: npm run desktop:installer:win
