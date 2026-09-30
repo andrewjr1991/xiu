@@ -339,6 +339,8 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
     const fit = () => {
       try {
         fitRef.current?.fit();
+        const terminal = terminalRef.current;
+        if (terminal) terminal.refresh(0, terminal.rows - 1);
         if (snapshotRef.current.state === "running") terminalRef.current?.focus();
       } catch { /* Hidden or closing terminal. */ }
     };
@@ -353,10 +355,17 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
     terminalRef.current?.reset();
     try {
       const terminal = terminalRef.current;
+      fitRef.current?.fit();
       const next = await window.xiuDesktop.startTerminal({ cols: terminal?.cols, rows: terminal?.rows });
       applySnapshot(next);
       if (next.output) terminal?.write(next.output);
-      if (next.state === "running") terminal?.focus();
+      if (next.state === "running") requestAnimationFrame(() => {
+        try {
+          fitRef.current?.fit();
+          terminal?.refresh(0, terminal.rows - 1);
+          terminal?.focus();
+        } catch { /* Terminal may be closing. */ }
+      });
       if (next.state === "error") setError(next.message ?? "终端启动失败。");
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
@@ -394,6 +403,8 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
   onRecover: (runId: string) => void;
   onAbandon: (runId: string) => void;
 }) {
+  const [terminalMounted, setTerminalMounted] = useState(tab === "terminal");
+  useEffect(() => { if (tab === "terminal") setTerminalMounted(true); }, [tab]);
   const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "终端"], ["evidence", "证据"]];
   const historicalTask = Boolean(history && changeView === "task");
   const displayedChanges = historicalTask ? history?.changes : review?.changes;
@@ -413,7 +424,7 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
       {!preview && <div className="file-list">{review.files.map((file) => <button key={file.path} onClick={() => onPreview(file.path)}><span>{file.kind === "image" ? "▧" : file.kind === "markdown" || file.kind === "html" ? "◫" : "◻"}</span><span>{file.path}</span><small>{Math.ceil(file.bytes / 1024)} KB</small></button>)}</div>}
       {preview && <div className="file-preview"><header><button onClick={() => onPreview("")}>‹ 文件</button><strong>{preview.path}</strong>{preview.safeHtml && <div className="preview-toggle"><button className={previewMode === "source" ? "selected" : ""} onClick={() => onPreviewMode("source")}>源码</button><button className={previewMode === "preview" ? "selected" : ""} onClick={() => onPreviewMode("preview")}>预览</button></div>}</header>{preview.warning && <p className="review-warning">{preview.warning}</p>}{preview.kind === "image" && preview.dataUrl && <img src={preview.dataUrl} alt={preview.path} />}{previewMode === "preview" && preview.safeHtml ? <iframe title={`${preview.path} 安全预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.safeHtml} /> : preview.source !== undefined && <pre><SyntaxCode code={`${preview.source}${preview.truncated ? "\n…预览已截断" : ""}`} language={languageFromPath(preview.path)} /></pre>}</div>}
     </section>}
-    {review && <InteractiveTerminal visible={tab === "terminal"} disabled={active} />}
+    {review && terminalMounted && <InteractiveTerminal visible={tab === "terminal"} disabled={active} />}
     {review && tab === "evidence" && <section className="review-pane evidence-pane">
       {review.recovery && <article className="recovery-card"><span className="eyebrow">中断恢复</span><h3>{review.recovery.taskPreview}</h3><p>{review.recovery.recommendation}</p>{review.recovery.lastRecoveryPoint && <p>最后安全点：{review.recovery.lastRecoveryPoint.evidence}</p>}<strong>{review.recovery.unknownOperations.length} 项操作待核验</strong><div><button onClick={() => onAbandon(review.recovery!.runId)}>放弃旧任务</button><button className="primary-button compact" onClick={() => onRecover(review.recovery!.runId)}>确认恢复</button></div></article>}
       <h3>命令证据</h3><p className="pane-intro">这里只展示 Agent 已执行命令的有界、脱敏记录；交互终端输出不会进入这里。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}
