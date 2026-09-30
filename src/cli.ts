@@ -53,6 +53,8 @@ import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializ
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { redactSecrets } from "./secret-redaction.js";
+import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
+import { XiuRuntime } from "./runtime/xiu-runtime.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -927,12 +929,16 @@ async function main(): Promise<void> {
     let activeToolActivity: string | undefined;
     let activeToolDetails: { name: string; description: string; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" } | undefined;
     let verificationReadyForSummary = false;
+    const xiuRuntime = new XiuRuntime({
+      sanitize: redactTerminalOutput,
+      approvalHandler: approveRequest,
+    });
     const agent = new Agent(
       config,
       provider,
       tools,
-      approveRequest,
-      {
+      (request) => xiuRuntime.requestApproval(request),
+      xiuRuntime.agentEvents({
         onModelStart: (turn) => {
           runningTaskView?.clearDraftPreview();
           runningTaskView?.setTurn(turn, config.maxTurns);
@@ -1106,7 +1112,7 @@ async function main(): Promise<void> {
           if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
           else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
-      },
+      }),
       restored,
       projectIndex,
       planManager,
@@ -1114,6 +1120,7 @@ async function main(): Promise<void> {
       skillRegistry,
       taskRunJournal,
     );
+    xiuRuntime.attachDriver(new AgentRuntimeAdapter(agent));
     const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
     const refreshWebSearchRuntime = (): void => {
       managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
@@ -1148,7 +1155,16 @@ async function main(): Promise<void> {
       // the active line editor. /mcp exposes connection failures on demand.
       void mcpStartup.then(attachMcpTools);
     }
-    if (recoverySource) agent.setRecoverySource(recoverySource);
+    if (recoverySource) {
+      xiuRuntime.recordRecovery({
+        runId: recoverySource.runId,
+        status: recoverySource.status === "paused" ? "paused" : "recoverable",
+        interruptedOperations: recoverySource.interruptedOperations.length,
+        unknownSideEffects: recoverySource.pendingSideEffects.length,
+        recommendation: recoverySource.recommendation,
+      });
+      agent.setRecoverySource(recoverySource);
+    }
     const featureNames = (profile: ProviderProfile, model = profile.model): string => {
       profile = runtimeProfile(profile, model);
       const names = [localize(language, "文本", "text")];
@@ -1378,7 +1394,7 @@ async function main(): Promise<void> {
         throw new Error(localize(language, "任务已在准备阶段取消。", "Task cancelled during preparation."));
       }
       onStarted?.();
-      return agent.run(task);
+      return xiuRuntime.createTask(task);
     };
 
     const printDiff = async (command: string): Promise<void> => {
@@ -1483,7 +1499,7 @@ async function main(): Promise<void> {
       } else if (activeTaskPreparationController) {
         activeTaskPreparationController.abort();
         console.log(chalk.yellow(localize(language, "\n正在取消任务准备……", "\nCancelling task preparation...")));
-      } else if (agent.cancel()) {
+      } else if (xiuRuntime.stopTask()) {
         runningTaskView?.setPhase(localize(language, "正在取消", "Cancelling"));
         console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
       }
@@ -1574,7 +1590,7 @@ async function main(): Promise<void> {
       agent.setLanguage(selected);
       if (runningTaskView) {
         runningTaskView.setLanguage(selected);
-        agent.steer(localize(selected,
+        xiuRuntime.steerTask(localize(selected,
           "运行时语言已切换为简体中文。继续原始任务，并确保后续所有用户可见的进展、问题和最终回答使用简体中文。",
           "The runtime language changed to English. Continue the original task and use English for all subsequent user-visible progress, questions, and the final answer."));
       }
@@ -1858,7 +1874,7 @@ async function main(): Promise<void> {
               view.setPhase(localize(language, "正在取消", "Cancelling"));
               view.activity(localize(language, "用户按下 Ctrl+C，正在中止当前模型或工具调用", "Ctrl+C pressed; aborting the active model or tool call"));
               activeTaskPreparationController?.abort();
-              agent.cancel();
+              xiuRuntime.stopTask();
             },
             onToggleDetails: () => { view.toggleDetails(); },
             onPaste: () => clipboard.paste(),
@@ -1885,7 +1901,7 @@ async function main(): Promise<void> {
 
           if (followUp === "/cancel") {
             activeTaskPreparationController?.abort();
-            agent.cancel();
+            xiuRuntime.stopTask();
             console.log(chalk.yellow(localize(language, "正在取消当前任务，排队任务会保留。\n", "Cancelling current task. Queued follow-ups are preserved.\n")));
             break;
           }
@@ -1893,7 +1909,7 @@ async function main(): Promise<void> {
             exitRequested = true;
             queue.clear();
             activeTaskPreparationController?.abort();
-            agent.cancel();
+            xiuRuntime.stopTask();
             console.log(chalk.yellow(localize(language, "退出前正在取消当前任务。\n", "Cancelling current task before exit.\n")));
             break;
           }
@@ -1984,7 +2000,7 @@ async function main(): Promise<void> {
             continue;
           }
 
-          if (!settled && agent.steer(followUp)) {
+          if (!settled && xiuRuntime.steerTask(followUp)) {
             replaySupplements.push(followUp);
             view.activity(localize(language, `已接受用户补充：${followUp.slice(0, 100)}`, `User steering accepted: ${followUp.slice(0, 100)}`));
             console.log(chalk.green(localize(language, `\u21B3 已补充当前任务：${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`, `\u21B3 Steering current task: ${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`)));

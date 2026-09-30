@@ -195,3 +195,13 @@ test("new file previews have no invented deletion and total snapshot bytes are b
   assert.ok([...bounded.files.values()].some((file) => file.omitted === "total-limit"));
   assert.ok([...bounded.files.values()].filter((file) => !!file.digest).reduce((sum, file) => sum + file.bytes, 0) <= 15);
 });
+
+test("task change previews retain useful multi-line review detail within the 16 KiB bound", async () => {
+  const root = await project();
+  const baseline = await captureTaskBaseline(root);
+  await fs.writeFile(path.join(root, "review.txt"), Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n") + "\n");
+  const report = await inspectTaskChanges(root, baseline);
+  const preview = report.changes.find((change) => change.path === "review.txt")?.preview ?? "";
+  assert.match(preview, /line 40/);
+  assert.ok(Buffer.byteLength(preview, "utf8") <= 16 * 1024);
+});

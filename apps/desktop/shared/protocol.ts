@@ -1,0 +1,288 @@
+export const DESKTOP_BRIDGE_VERSION = 1 as const;
+export { applyRuntimeEvent } from "../../../src/runtime/protocol.js";
+export type { RuntimeApprovalSnapshot, RuntimeConnection, RuntimeEvent, RuntimeTaskState, XiuRuntimeSnapshot } from "../../../src/runtime/protocol.js";
+export type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
+import type { RuntimeConnection, RuntimeEvent } from "../../../src/runtime/protocol.js";
+import type { TaskChangeReport } from "../../../src/task-changes.js";
+import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
+
+export type WorkspaceTrustState = "none" | "required" | "trusted";
+
+export interface DesktopTaskSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+  status: "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned" | "session";
+}
+
+export interface DesktopRecentWorkspace {
+  id: string;
+  name: string;
+  trusted: boolean;
+  lastOpenedAt: string;
+}
+
+export interface DesktopWorkspaceSnapshot {
+  bridgeVersion: typeof DESKTOP_BRIDGE_VERSION;
+  trust: WorkspaceTrustState;
+  workspace?: {
+    id: string;
+    name: string;
+    path?: string;
+    lock: "available" | "active-elsewhere" | "recoverable";
+  };
+  recent: DesktopRecentWorkspace[];
+  tasks: DesktopTaskSummary[];
+  error?: string;
+}
+
+export interface TrustWorkspaceRequest {
+  workspaceId: string;
+  acknowledged: true;
+}
+
+export interface DesktopRuntimeConnection {
+  runtime: RuntimeConnection;
+  /** Stable conversation/session identity; runtime task ids change on follow-up. */
+  conversationId?: string;
+  provider: { id: string; label: string; model: string };
+  writer: "available" | "active-here" | "active-elsewhere";
+  approvalMode?: DesktopApprovalMode;
+}
+
+export type DesktopApprovalMode = "ask" | "workspace" | "full";
+export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode }
+
+export interface DesktopProviderProfile {
+  id: string;
+  name: string;
+  kind: string;
+  defaultModel: string;
+  selectedModel: string;
+  builtin: boolean;
+  baseURL?: string;
+  apiKeyEnv?: string;
+  contextWindow?: number;
+  credential: {
+    source: "environment" | "system" | "legacy-file" | "missing" | "not-required";
+    configured: boolean;
+    editable: boolean;
+  };
+  features: { tools: boolean; vision: boolean; image: boolean; video: boolean };
+}
+
+export type DesktopProviderKind = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
+export interface DesktopProviderUpsertRequest {
+  existingId?: string;
+  id: string;
+  name: string;
+  kind: DesktopProviderKind;
+  model: string;
+  baseURL?: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  contextWindow?: number;
+  features: { tools: boolean; vision: boolean; image: boolean; video: boolean };
+}
+export interface DesktopProviderDeleteRequest { providerId: string; confirmed: true }
+
+export interface DesktopModelOption {
+  id: string;
+  name?: string;
+  description?: string;
+  source: "api" | "builtin" | "current";
+  contextWindow?: number;
+}
+
+export interface DesktopProviderSnapshot {
+  activeProviderId: string;
+  activeModel: string;
+  profiles: DesktopProviderProfile[];
+  models: DesktopModelOption[];
+  modelProviderId: string;
+  modelsByProvider: Record<string, DesktopModelOption[]>;
+  discoveryError?: string;
+}
+
+export interface DesktopProviderSelectRequest { providerId: string; model: string }
+export interface DesktopProviderModelsRequest { providerId: string }
+export interface DesktopProviderCredentialRequest { providerId: string; apiKey: string }
+export interface DesktopProviderTestRequest { providerId: string; model?: string }
+export interface DesktopProviderTestResult { ok: true; message: string; modelsDiscovered: number }
+export interface DesktopProviderMutationResult {
+  settings: DesktopProviderSnapshot;
+  connection: DesktopRuntimeConnection;
+}
+
+export interface RuntimeConnectRequest { afterSequence?: number }
+export interface RuntimeTaskRequest { text: string }
+export interface DesktopTaskContinueRequest extends RuntimeTaskRequest { taskId: string }
+export interface DesktopAttachment {
+  reference: string;
+  path: string;
+  name: string;
+  bytes: number;
+  kind: "image" | "file";
+  previewDataUrl?: string;
+}
+export interface DesktopAttachmentResult { insertText: string; attachments: DesktopAttachment[]; notice?: string }
+export interface DesktopAttachmentUploadRequest { files: Array<{ name: string; data: Uint8Array }> }
+export interface RuntimeApprovalDecisionRequest {
+  approvalId: string;
+  allowed: boolean;
+  rememberForSession?: true;
+  confirmedRisk?: "dangerous";
+}
+
+export interface DesktopTaskHistoryRequest { taskId: string }
+export interface DesktopTaskDeleteRequest { taskId: string; confirmed: true }
+export interface DesktopTaskHistoryEntry {
+  id: string;
+  kind: "user" | "assistant" | "activity" | "completion";
+  title: string;
+  text: string;
+}
+export interface DesktopTaskHistorySnapshot {
+  taskId: string;
+  title: string;
+  status: DesktopTaskSummary["status"];
+  updatedAt: string;
+  providerId?: string;
+  model?: string;
+  entries: DesktopTaskHistoryEntry[];
+  events: RuntimeEvent[];
+  fidelity: "exact" | "reconstructed";
+  changes?: TaskChangeReport;
+}
+
+export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence";
+export type DesktopChangeView = "task" | "workspace" | "staged";
+
+export interface DesktopReviewOperation {
+  id: string;
+  kind: "command" | "verification";
+  name: string;
+  status: "planned" | "started" | "succeeded" | "failed" | "cancelled" | "unknown";
+  sideEffect: "none" | "workspace" | "process" | "external" | "unknown";
+  risk?: "read" | "write" | "execute" | "dangerous";
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  evidence?: string;
+}
+
+export interface DesktopReviewCheckpoint {
+  id: string;
+  createdAt: string;
+  tool: string;
+  description: string;
+  files: Array<{ path: string; existed: boolean }>;
+}
+
+export interface DesktopRecoveryEvidence {
+  runId: string;
+  taskPreview: string;
+  status: "paused" | "recoverable";
+  recommendation: string;
+  unknownOperations: DesktopReviewOperation[];
+  lastRecoveryPoint?: { at: string; kind: string; evidence: string };
+}
+
+export interface DesktopReviewSnapshot {
+  generatedAt: string;
+  changeView: DesktopChangeView;
+  changes: TaskChangeReport;
+  files: ReviewFileEntry[];
+  commands: DesktopReviewOperation[];
+  validations: DesktopReviewOperation[];
+  checkpoints: DesktopReviewCheckpoint[];
+  run?: { id: string; status: string; startedAt: string; updatedAt: string; finishedAt?: string };
+  recovery?: DesktopRecoveryEvidence;
+}
+
+export interface DesktopReviewRequest { changeView?: DesktopChangeView }
+export interface DesktopFilePreviewRequest { path: string }
+export interface DesktopCheckpointRestoreRequest { checkpointId: string }
+export interface DesktopRecoveryRequest { runId: string }
+export interface DesktopRecoveryAbandonRequest { runId: string }
+
+export interface OpenRecentWorkspaceRequest {
+  workspaceId: string;
+}
+
+export interface RemoveRecentWorkspaceRequest {
+  workspaceId: string;
+  confirmed: true;
+}
+
+export interface XiuDesktopBridge {
+  snapshot(): Promise<DesktopWorkspaceSnapshot>;
+  chooseWorkspace(): Promise<DesktopWorkspaceSnapshot>;
+  closeWorkspace(): Promise<DesktopWorkspaceSnapshot>;
+  openRecentWorkspace(request: OpenRecentWorkspaceRequest): Promise<DesktopWorkspaceSnapshot>;
+  removeRecentWorkspace(request: RemoveRecentWorkspaceRequest): Promise<DesktopWorkspaceSnapshot>;
+  trustWorkspace(request: TrustWorkspaceRequest): Promise<DesktopWorkspaceSnapshot>;
+  runtimeConnect(request?: RuntimeConnectRequest): Promise<DesktopRuntimeConnection>;
+  createTask(request: RuntimeTaskRequest): Promise<DesktopRuntimeConnection>;
+  continueTask(request: DesktopTaskContinueRequest): Promise<DesktopRuntimeConnection>;
+  newConversation(): Promise<DesktopRuntimeConnection>;
+  steerTask(request: RuntimeTaskRequest): Promise<boolean>;
+  stopTask(): Promise<boolean>;
+  setApprovalMode(request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection>;
+  decideApproval(request: RuntimeApprovalDecisionRequest): Promise<void>;
+  openTaskHistory(request: DesktopTaskHistoryRequest): Promise<DesktopTaskHistorySnapshot>;
+  deleteTask(request: DesktopTaskDeleteRequest): Promise<DesktopWorkspaceSnapshot>;
+  chooseAttachments(): Promise<DesktopAttachmentResult>;
+  pasteAttachments(): Promise<DesktopAttachmentResult>;
+  importAttachments(request: DesktopAttachmentUploadRequest): Promise<DesktopAttachmentResult>;
+  reviewSnapshot(request?: DesktopReviewRequest): Promise<DesktopReviewSnapshot>;
+  previewFile(request: DesktopFilePreviewRequest): Promise<ReviewFilePreview>;
+  restoreCheckpoint(request: DesktopCheckpointRestoreRequest): Promise<DesktopReviewSnapshot>;
+  recoverTask(request: DesktopRecoveryRequest): Promise<DesktopRuntimeConnection>;
+  abandonRecovery(request: DesktopRecoveryAbandonRequest): Promise<DesktopReviewSnapshot>;
+  providerSnapshot(): Promise<DesktopProviderSnapshot>;
+  discoverProviderModels(request: DesktopProviderModelsRequest): Promise<DesktopProviderSnapshot>;
+  selectProvider(request: DesktopProviderSelectRequest): Promise<DesktopProviderMutationResult>;
+  saveProviderCredential(request: DesktopProviderCredentialRequest): Promise<DesktopProviderMutationResult>;
+  testProvider(request: DesktopProviderTestRequest): Promise<DesktopProviderTestResult>;
+  upsertProvider(request: DesktopProviderUpsertRequest): Promise<DesktopProviderMutationResult>;
+  deleteProvider(request: DesktopProviderDeleteRequest): Promise<DesktopProviderMutationResult>;
+  onSnapshot(listener: (snapshot: DesktopWorkspaceSnapshot) => void): () => void;
+  onRuntimeEvent(listener: (event: RuntimeEvent) => void): () => void;
+}
+
+export const desktopChannels = {
+  snapshot: "desktop:snapshot",
+  chooseWorkspace: "workspace:choose",
+  closeWorkspace: "workspace:close",
+  openRecentWorkspace: "workspace:open-recent",
+  removeRecentWorkspace: "workspace:remove-recent",
+  trustWorkspace: "workspace:trust",
+  snapshotChanged: "desktop:snapshot-changed",
+  runtimeConnect: "runtime:connect",
+  taskCreate: "runtime:task-create",
+  taskContinue: "runtime:task-continue",
+  conversationNew: "runtime:conversation-new",
+  taskSteer: "runtime:task-steer",
+  taskStop: "runtime:task-stop",
+  approvalModeSet: "runtime:approval-mode-set",
+  approvalDecide: "runtime:approval-decide",
+  taskHistoryOpen: "runtime:task-history-open",
+  taskDelete: "runtime:task-delete",
+  attachmentsChoose: "attachments:choose",
+  attachmentsPaste: "attachments:paste",
+  attachmentsImport: "attachments:import",
+  runtimeEvent: "runtime:event",
+  reviewSnapshot: "review:snapshot",
+  filePreview: "review:file-preview",
+  checkpointRestore: "review:checkpoint-restore",
+  recoveryResume: "recovery:resume",
+  recoveryAbandon: "recovery:abandon",
+  providerSnapshot: "provider:snapshot",
+  providerModels: "provider:models",
+  providerSelect: "provider:select",
+  providerCredentialSave: "provider:credential-save",
+  providerTest: "provider:test",
+  providerUpsert: "provider:upsert",
+  providerDelete: "provider:delete",
+} as const;

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+apps/desktop/dist/
+apps/desktop/release/
+apps/desktop/release-*/
 .forge/
 .xiu/*
 !.xiu/mcp.json

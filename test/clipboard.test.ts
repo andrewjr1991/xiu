@@ -116,6 +116,30 @@ test("external copied files are imported while workspace files stay in place", a
   assert.equal(await fs.readFile(path.join(cwd, result.attachments[0]!), "utf8"), "notes");
 });
 
+test("desktop file picker imports files through the same bounded attachment path", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-picker-workspace-"));
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-picker-source-"));
+  t.after(() => Promise.all([fs.rm(cwd, { recursive: true, force: true }), fs.rm(external, { recursive: true, force: true })]));
+  const source = path.join(external, "界面参考.png");
+  await fs.writeFile(source, Buffer.from([137, 80, 78, 71]));
+  const result = await new ClipboardAttachmentManager(cwd, new FakeClipboard({ kind: "empty" })).attachFiles([source]);
+  assert.equal(result.attachments.length, 1);
+  assert.match(result.insertText, /@"?\.xiu\/attachments\/.+界面参考\.png"?/);
+  assert.deepEqual(await fs.readFile(path.join(cwd, result.attachments[0]!)), Buffer.from([137, 80, 78, 71]));
+});
+
+test("dragged attachment bytes are filename-sanitized and workspace-contained", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-dropped-bytes-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const result = await new ClipboardAttachmentManager(cwd, new FakeClipboard({ kind: "empty" })).attachBytes([
+    { name: "../危险<截图>.png", data: new Uint8Array([1, 2, 3]) },
+  ]);
+  assert.equal(result.attachments.length, 1);
+  assert.doesNotMatch(result.attachments[0]!, /\.\./);
+  assert.match(result.attachments[0]!, /^\.xiu[\\/]attachments[\\/]/);
+  assert.deepEqual(await fs.readFile(path.join(cwd, result.attachments[0]!)), Buffer.from([1, 2, 3]));
+});
+
 test("clipboard directories are rejected instead of recursively imported", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clipboard-directory-"));
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clipboard-source-directory-"));

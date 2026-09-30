@@ -70,6 +70,11 @@ export interface ClipboardPasteResult {
   attachments: string[];
 }
 
+export interface AttachmentBytes {
+  name: string;
+  data: Uint8Array;
+}
+
 export interface ClipboardBackend {
   read(imageOutputPath: string): Promise<ClipboardPayload>;
   supportsRightClick?(): Promise<boolean>;
@@ -345,6 +350,35 @@ export class ClipboardAttachmentManager {
       return { insertText: `${reference(relative)} `, notice: `Attached clipboard image: ${relative}`, attachments: [relative] };
     }
     return await this.importFiles(payload.files ?? [], attachmentDirectory);
+  }
+
+  async attachFiles(files: string[]): Promise<ClipboardPasteResult> {
+    const attachmentDirectory = path.join(this.cwd, ".xiu", "attachments");
+    await fs.mkdir(attachmentDirectory, { recursive: true });
+    return this.importFiles(files, attachmentDirectory);
+  }
+
+  async attachBytes(files: AttachmentBytes[]): Promise<ClipboardPasteResult> {
+    if (!files.length) throw new Error("The attachment list is empty");
+    if (files.length > MAX_ATTACHMENTS) throw new Error(`Attach at most ${MAX_ATTACHMENTS} files at once`);
+    const attachmentDirectory = path.join(this.cwd, ".xiu", "attachments");
+    await fs.mkdir(attachmentDirectory, { recursive: true });
+    const attachments: string[] = [];
+    let totalBytes = 0;
+    for (const [index, file] of files.entries()) {
+      if (typeof file.name !== "string" || !file.name.trim() || !(file.data instanceof Uint8Array)) throw new Error("Invalid attachment payload");
+      if (file.data.byteLength > MAX_FILE_BYTES) throw new Error(`Attachment exceeds 25 MB: ${safeName(file.name)}`);
+      totalBytes += file.data.byteLength;
+      if (totalBytes > MAX_TOTAL_BYTES) throw new Error("Attachments exceed the 50 MB total limit");
+      const destination = await uniqueDestination(attachmentDirectory, file.name, index);
+      await fs.writeFile(destination, file.data, { flag: "wx" });
+      attachments.push(path.relative(this.cwd, destination));
+    }
+    return {
+      insertText: `${attachments.map(reference).join(" ")} `,
+      notice: `Attached ${attachments.length} file(s): ${attachments.join(", ")}`,
+      attachments,
+    };
   }
 
   private async importFiles(files: string[], attachmentDirectory: string): Promise<ClipboardPasteResult> {
