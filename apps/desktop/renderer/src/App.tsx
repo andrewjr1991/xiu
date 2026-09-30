@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { desktopTerminalVisuals } from "./terminal-visuals.js";
 import {
   applyRuntimeEvent,
   type DesktopAttachment,
@@ -272,6 +273,7 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
   const fitRef = useRef<FitAddon | undefined>(undefined);
   const snapshotRef = useRef<DesktopTerminalSnapshot>({ state: "idle" });
   const lastSequenceRef = useRef(0);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [snapshot, setSnapshot] = useState<DesktopTerminalSnapshot>({ state: "idle" });
   const [error, setError] = useState<string>();
 
@@ -283,13 +285,13 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
   useEffect(() => {
     if (!hostRef.current) return;
     const terminal = new Terminal({
+      ...desktopTerminalVisuals,
       cursorBlink: true,
       convertEol: false,
       scrollback: 2_000,
       fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.2,
-      theme: { background: "#111827", foreground: "#d7e0ec", cursor: "#73b7ff", selectionBackground: "#27476d" },
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
@@ -299,7 +301,10 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
     const input = terminal.onData((data) => {
       const current = snapshotRef.current;
       if (current.state !== "running" || !current.sessionId) return;
-      void window.xiuDesktop.writeTerminal({ sessionId: current.sessionId, data }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      const sessionId = current.sessionId;
+      writeQueueRef.current = writeQueueRef.current
+        .then(() => window.xiuDesktop.writeTerminal({ sessionId, data }))
+        .catch((reason) => { setError(reason instanceof Error ? reason.message : String(reason)); });
     });
     const resize = terminal.onResize(({ cols, rows }) => {
       const current = snapshotRef.current;
@@ -331,7 +336,12 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
 
   useEffect(() => {
     if (!visible || !hostRef.current) return;
-    const fit = () => { try { fitRef.current?.fit(); } catch { /* Hidden or closing terminal. */ } };
+    const fit = () => {
+      try {
+        fitRef.current?.fit();
+        if (snapshotRef.current.state === "running") terminalRef.current?.focus();
+      } catch { /* Hidden or closing terminal. */ }
+    };
     const observer = new ResizeObserver(fit);
     observer.observe(hostRef.current);
     requestAnimationFrame(fit);
@@ -359,10 +369,10 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
 
   return <section className={`review-pane terminal-pane ${visible ? "visible" : "hidden"}`} aria-hidden={!visible}>
     <div className="terminal-toolbar"><div><strong>交互终端</strong><small>{snapshot.state === "running" ? `${snapshot.shell ?? "Shell"} · 运行中` : snapshot.state === "exited" ? `已退出${snapshot.exitCode === undefined ? "" : ` · ${snapshot.exitCode}`}` : snapshot.state === "error" ? "启动失败" : "未启动"}</small></div><div><button onClick={() => terminalRef.current?.clear()}>清屏</button>{snapshot.state === "running" ? <button className="terminal-stop" onClick={() => void stop()}>关闭</button> : <button className="terminal-start" disabled={disabled} onClick={() => void start()}>启动终端</button>}</div></div>
-    <p className="terminal-notice">由你直接控制，固定绑定当前可信工作区。输入不经过 Agent 审批，输出不会写入任务审计，也不会作为 Agent 完成证据。</p>
+    <p className="terminal-notice">点击下方终端后直接输入，按 Enter 执行。固定绑定当前可信工作区；输入不经过 Agent 审批，输出不会写入任务审计，也不会作为 Agent 完成证据。</p>
     {disabled && snapshot.state !== "running" && <p className="terminal-disabled">Agent 任务运行期间不能启动终端。</p>}
     {error && <p className="terminal-error">{error}</p>}
-    <div className="terminal-surface" ref={hostRef} />
+    <div className="terminal-surface" ref={hostRef} onMouseDown={() => terminalRef.current?.focus()} />
   </section>;
 }
 

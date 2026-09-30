@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DesktopTerminalController, controlledShell, type TerminalPty, type TerminalPtyFactory } from "../apps/desktop/main/terminal-controller.js";
+import { desktopTerminalVisuals } from "../apps/desktop/renderer/src/terminal-visuals.js";
 import type { DesktopTerminalEvent } from "../apps/desktop/shared/protocol.js";
 
 class FakePty implements TerminalPty {
@@ -122,4 +123,24 @@ test("controlled shell ignores arbitrary SHELL values", () => {
   assert.deepEqual(controlledShell("linux", { SHELL: "/tmp/bash" }), { file: "/bin/sh", args: [], label: "sh" });
   assert.deepEqual(controlledShell("darwin", { SHELL: "/bin/zsh" }), { file: "/bin/zsh", args: [], label: "zsh" });
   assert.deepEqual(controlledShell("win32", { COMSPEC: "C:\\evil.exe", SystemRoot: "C:\\Windows" }), { file: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", args: ["-NoLogo"], label: "PowerShell" });
+});
+
+test("desktop terminal keeps default and ANSI input colors readable on its dark surface", () => {
+  const channel = (hex: string, offset: number) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+  const luminance = (hex: string) => {
+    const linear = [1, 3, 5].map((offset) => {
+      const value = channel(hex, offset);
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * linear[0]! + 0.7152 * linear[1]! + 0.0722 * linear[2]!;
+  };
+  const contrast = (first: string, second: string) => {
+    const [light, dark] = [luminance(first), luminance(second)].sort((a, b) => b - a);
+    return (light! + 0.05) / (dark! + 0.05);
+  };
+
+  assert.ok(desktopTerminalVisuals.minimumContrastRatio >= 7);
+  assert.ok(contrast(desktopTerminalVisuals.theme.foreground, desktopTerminalVisuals.theme.background) >= 7);
+  assert.ok(contrast(desktopTerminalVisuals.theme.black, desktopTerminalVisuals.theme.background) >= 4.5);
+  assert.ok(contrast(desktopTerminalVisuals.theme.blue, desktopTerminalVisuals.theme.background) >= 4.5);
 });
