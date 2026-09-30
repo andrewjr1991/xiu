@@ -12,6 +12,7 @@ import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
+import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
 import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
@@ -51,10 +52,25 @@ import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from ".
 import { buildExecutionReport, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport, type ExecutionReportFormat, type ExecutionReportScope } from "./execution-report.js";
 import { createWebFetch, createWebSearchTools, type WebSearchConfig, type WebSearchProvider } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
-import { checkForUpdates, diagnoseUpdateInstallation, formatUpdateCheck, formatUpdateCheckError, formatUpdateDoctor, formatUpdateNotificationStatus, formatUpdateReminder, UpdateCheckCache, updateDoctorHasHardFailure, updateProxyFromEnvironment, type UpdateCheckResult } from "./update-check.js";
 import { redactSecrets } from "./secret-redaction.js";
+import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
+import { XiuRuntime } from "./runtime/xiu-runtime.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
+
+function compactTerminalDescription(value: string, maximum = 180): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const characters = [...normalized];
+  return characters.length > maximum ? `${characters.slice(0, maximum - 3).join("")}...` : normalized;
+}
+
+function printUpdateMessage(message: UpdateMessage): void {
+  const formatted = message.kind === "error" ? chalk.red(message.text)
+    : message.kind === "success" ? chalk.green(message.text)
+      : message.kind === "warning" ? chalk.yellow(message.text)
+        : message.text;
+  (message.kind === "error" ? console.error : console.log)(`${formatted}\n`);
+}
 
 function slashCommands(language: UiLanguage): SlashCommand[] {
   const item = (name: string, zh: string, en: string): SlashCommand => ({ name, description: localize(language, zh, en) });
@@ -290,24 +306,18 @@ async function main(): Promise<void> {
   const options = program.opts();
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
-  const updateCache = new UpdateCheckCache();
   if (options.updateDoctor) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
-    console.log(`${formatUpdateDoctor(result, language)}\n`);
-    if (updateDoctorHasHardFailure(result)) process.exitCode = 1;
+    const result = await runUpdateDoctorOnce({ currentVersion: packageJson.version, language });
+    printUpdateMessage(result.message);
+    process.exitCode = result.exitCode;
     return;
   }
   if (options.checkUpdate) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    try {
-      const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
-      await updateCache.save(result).catch(() => undefined);
-      console.log(`${formatUpdateCheck(result, language)}\n`);
-    } catch (error) {
-      console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}`));
-      process.exitCode = 1;
-    }
+    const result = await runUpdateCheckOnce({ currentVersion: packageJson.version, language });
+    printUpdateMessage(result.message);
+    process.exitCode = result.exitCode;
     return;
   }
   let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
@@ -919,12 +929,16 @@ async function main(): Promise<void> {
     let activeToolActivity: string | undefined;
     let activeToolDetails: { name: string; description: string; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" } | undefined;
     let verificationReadyForSummary = false;
+    const xiuRuntime = new XiuRuntime({
+      sanitize: redactTerminalOutput,
+      approvalHandler: approveRequest,
+    });
     const agent = new Agent(
       config,
       provider,
       tools,
-      approveRequest,
-      {
+      (request) => xiuRuntime.requestApproval(request),
+      xiuRuntime.agentEvents({
         onModelStart: (turn) => {
           runningTaskView?.clearDraftPreview();
           runningTaskView?.setTurn(turn, config.maxTurns);
@@ -968,10 +982,11 @@ async function main(): Promise<void> {
         onToolStart: (name, description, details) => {
           if (!details.verification) verificationReadyForSummary = false;
           const displayDescription = localizeToolDescription(name, description, language);
+          const terminalDescription = compactTerminalDescription(displayDescription);
           activeToolActivity = activities.start("tool", name, displayDescription);
-          activeToolDetails = { name, description: displayDescription, verification: details.verification, risk: details.risk };
-          runningTaskView?.beginTool(name, displayDescription, details.changesWorkspace, details.verification);
-          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(displayDescription)}`);
+          activeToolDetails = { name, description: terminalDescription, verification: details.verification, risk: details.risk };
+          runningTaskView?.beginTool(name, terminalDescription, details.changesWorkspace, details.verification);
+          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(terminalDescription)}`);
           startPhase(localize(language, `正在运行 ${name}`, `Running ${name}`));
         },
         onToolProgress: (name, message) => {
@@ -989,7 +1004,11 @@ async function main(): Promise<void> {
           activeToolActivity = undefined;
           const summary = redactTerminalOutput(result.replace(/\s+/g, " ").trim());
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
-          emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
+          // onPlanUpdate already writes the bounded user-facing receipt. Avoid
+          // printing the tool result again (historically this was the full plan).
+          if (_name !== "update_task_plan") {
+            emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
+          }
           if (!failed && activeToolDetails) {
             if (details?.verification) {
               verificationReadyForSummary = true;
@@ -1050,7 +1069,11 @@ async function main(): Promise<void> {
         },
         onPlanUpdate: (plan) => {
           runningTaskView?.setPlan(plan);
-          emitLine(`${chalk.cyan(localize(language, "任务计划已更新", "Task plan updated"))}\n${chalk.dim(planManager.format())}\n`);
+          const completed = plan.steps.filter((step) => step.status === "completed").length;
+          const current = plan.steps.find((step) => step.status === "in_progress")?.title
+            ?? plan.steps.find((step) => step.status === "pending")?.title
+            ?? localize(language, "等待最终总结", "awaiting final summary");
+          emitLine(`${chalk.cyan(localize(language, `任务计划已更新：${completed}/${plan.steps.length}；当前：${compactTerminalDescription(current, 100)}`, `Task plan updated: ${completed}/${plan.steps.length}; now: ${compactTerminalDescription(current, 100)}`))}\n${chalk.dim(localize(language, "完整计划可使用 /tasks 查看。", "Use /tasks to view the full plan."))}\n`);
         },
         onWorkspaceChange: (change) => {
           if (runningTaskView) {
@@ -1089,7 +1112,7 @@ async function main(): Promise<void> {
           if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
           else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
         },
-      },
+      }),
       restored,
       projectIndex,
       planManager,
@@ -1097,6 +1120,7 @@ async function main(): Promise<void> {
       skillRegistry,
       taskRunJournal,
     );
+    xiuRuntime.attachDriver(new AgentRuntimeAdapter(agent));
     const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
     const refreshWebSearchRuntime = (): void => {
       managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
@@ -1131,7 +1155,16 @@ async function main(): Promise<void> {
       // the active line editor. /mcp exposes connection failures on demand.
       void mcpStartup.then(attachMcpTools);
     }
-    if (recoverySource) agent.setRecoverySource(recoverySource);
+    if (recoverySource) {
+      xiuRuntime.recordRecovery({
+        runId: recoverySource.runId,
+        status: recoverySource.status === "paused" ? "paused" : "recoverable",
+        interruptedOperations: recoverySource.interruptedOperations.length,
+        unknownSideEffects: recoverySource.pendingSideEffects.length,
+        recommendation: recoverySource.recommendation,
+      });
+      agent.setRecoverySource(recoverySource);
+    }
     const featureNames = (profile: ProviderProfile, model = profile.model): string => {
       profile = runtimeProfile(profile, model);
       const names = [localize(language, "文本", "text")];
@@ -1361,7 +1394,7 @@ async function main(): Promise<void> {
         throw new Error(localize(language, "任务已在准备阶段取消。", "Task cancelled during preparation."));
       }
       onStarted?.();
-      return agent.run(task);
+      return xiuRuntime.createTask(task);
     };
 
     const printDiff = async (command: string): Promise<void> => {
@@ -1466,7 +1499,7 @@ async function main(): Promise<void> {
       } else if (activeTaskPreparationController) {
         activeTaskPreparationController.abort();
         console.log(chalk.yellow(localize(language, "\n正在取消任务准备……", "\nCancelling task preparation...")));
-      } else if (agent.cancel()) {
+      } else if (xiuRuntime.stopTask()) {
         runningTaskView?.setPhase(localize(language, "正在取消", "Cancelling"));
         console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
       }
@@ -1510,30 +1543,13 @@ async function main(): Promise<void> {
     console.log(chalk.dim(localize(language, "交互模式 · 输入 / 查看命令 · Ctrl+C 或 /exit 退出\n", "Interactive mode · type / for commands · Ctrl+C or /exit to quit\n")));
     const inputHistory: string[] = [];
     let awaitingReply: { question: string; originalTask: string } | undefined;
-    let pendingUpdateReminder: UpdateCheckResult | undefined;
-    let updateReminderGeneration = 0;
-    let remindedUpdateVersion: string | undefined;
-    const showUpdateReminder = (result: UpdateCheckResult): void => {
-      if (result.status !== "update-available" || remindedUpdateVersion === result.latestVersion) return;
-      remindedUpdateVersion = result.latestVersion;
-      console.log(`${chalk.yellow(formatUpdateReminder(result, language))}\n`);
-    };
-    const scheduleUpdateReminderRefresh = (): void => {
-      const generation = ++updateReminderGeneration;
-      void checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment(), timeoutMs: 3_000 })
-        .then(async (result) => {
-          await updateCache.save(result).catch(() => undefined);
-          if (generation === updateReminderGeneration && settings.update?.notifications) pendingUpdateReminder = result;
-        })
-        .catch(() => undefined);
-    };
-    const initializeUpdateReminders = async (): Promise<void> => {
-      if (!settings.update?.notifications) return;
-      const cached = await updateCache.load(packageJson.version);
-      if (cached?.fresh) showUpdateReminder(cached.result);
-      else scheduleUpdateReminderRefresh();
-    };
-    await initializeUpdateReminders();
+    const updateCommands = new UpdateCommandController({
+      currentVersion: packageJson.version,
+      language,
+      settings,
+      saveSettings: () => settingsStore.save(settings),
+    });
+    for (const message of await updateCommands.initialize()) printUpdateMessage(message);
     const promptFooter = (): string => {
       const dashboard = agent.status();
       const agentRuns = coordinator.list();
@@ -1574,7 +1590,7 @@ async function main(): Promise<void> {
       agent.setLanguage(selected);
       if (runningTaskView) {
         runningTaskView.setLanguage(selected);
-        agent.steer(localize(selected,
+        xiuRuntime.steerTask(localize(selected,
           "运行时语言已切换为简体中文。继续原始任务，并确保后续所有用户可见的进展、问题和最终回答使用简体中文。",
           "The runtime language changed to English. Continue the original task and use English for all subsequent user-visible progress, questions, and the final answer."));
       }
@@ -1858,7 +1874,7 @@ async function main(): Promise<void> {
               view.setPhase(localize(language, "正在取消", "Cancelling"));
               view.activity(localize(language, "用户按下 Ctrl+C，正在中止当前模型或工具调用", "Ctrl+C pressed; aborting the active model or tool call"));
               activeTaskPreparationController?.abort();
-              agent.cancel();
+              xiuRuntime.stopTask();
             },
             onToggleDetails: () => { view.toggleDetails(); },
             onPaste: () => clipboard.paste(),
@@ -1885,7 +1901,7 @@ async function main(): Promise<void> {
 
           if (followUp === "/cancel") {
             activeTaskPreparationController?.abort();
-            agent.cancel();
+            xiuRuntime.stopTask();
             console.log(chalk.yellow(localize(language, "正在取消当前任务，排队任务会保留。\n", "Cancelling current task. Queued follow-ups are preserved.\n")));
             break;
           }
@@ -1893,7 +1909,7 @@ async function main(): Promise<void> {
             exitRequested = true;
             queue.clear();
             activeTaskPreparationController?.abort();
-            agent.cancel();
+            xiuRuntime.stopTask();
             console.log(chalk.yellow(localize(language, "退出前正在取消当前任务。\n", "Cancelling current task before exit.\n")));
             break;
           }
@@ -1984,7 +2000,7 @@ async function main(): Promise<void> {
             continue;
           }
 
-          if (!settled && agent.steer(followUp)) {
+          if (!settled && xiuRuntime.steerTask(followUp)) {
             replaySupplements.push(followUp);
             view.activity(localize(language, `已接受用户补充：${followUp.slice(0, 100)}`, `User steering accepted: ${followUp.slice(0, 100)}`));
             console.log(chalk.green(localize(language, `\u21B3 已补充当前任务：${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`, `\u21B3 Steering current task: ${followUp.replace(/\s+/g, " ").slice(0, 100)}\n`)));
@@ -2040,7 +2056,19 @@ async function main(): Promise<void> {
           exact: true,
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
-        if (!failure && agent.status().outcome === "failed") failure = new Error(localize(language, "最后一次工具操作失败或被拒绝，目标尚未完成。", "The last tool operation failed or was denied, so the goal is incomplete."));
+        if (!failure && agent.status().outcome === "failed") {
+          const reason = agent.status().failureReason;
+          const message = reason === "verification_failed"
+            ? localize(language, "仍有失败或已过期的必要验证，目标尚未完成。", "A required verification is still failed or stale, so the goal is incomplete.")
+            : reason === "web_evidence"
+              ? localize(language, "联网证据不足或获取失败，目标尚未完成。", "Required web evidence was unavailable or insufficient, so the goal is incomplete.")
+              : reason === "model_incomplete"
+                ? localize(language, "模型响应未正常结束，目标尚未完成。", "The model response did not finish normally, so the goal is incomplete.")
+                : reason === "tool_failed"
+                  ? localize(language, "最后一批工具操作均失败或被拒绝，目标尚未完成。", "Every operation in the last tool batch failed or was denied, so the goal is incomplete.")
+                  : localize(language, "任务因运行时错误停止，目标尚未完成。", "The task stopped because of a runtime error, so the goal is incomplete.");
+          failure = new Error(message);
+        }
         if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
@@ -2070,11 +2098,7 @@ async function main(): Promise<void> {
     }
 
     while (true) {
-      if (pendingUpdateReminder) {
-        const reminder = pendingUpdateReminder;
-        pendingUpdateReminder = undefined;
-        showUpdateReminder(reminder);
-      }
+      for (const message of updateCommands.flushPendingReminder()) printUpdateMessage(message);
       const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
         paths: projectIndex.paths("", 1_000),
         initialValue: restoredDraft,
@@ -3748,46 +3772,9 @@ async function main(): Promise<void> {
         ].join("\n") + "\n");
         continue;
       }
-      if (task === "/update status") {
-        const cached = await updateCache.load(packageJson.version);
-        console.log(`${formatUpdateNotificationStatus(Boolean(settings.update?.notifications), cached, language)}\n`);
-        continue;
-      }
-      if (task === "/update doctor") {
-        const result = await diagnoseUpdateInstallation(packageJson.version, { cache: updateCache });
-        console.log(`${formatUpdateDoctor(result, language)}\n`);
-        continue;
-      }
-      if (task === "/update notifications on") {
-        settings.update = { notifications: true };
-        await settingsStore.save(settings);
-        const cached = await updateCache.load(packageJson.version);
-        console.log(chalk.green(`${localize(language, "更新提醒已启用；检查使用 24 小时缓存，并只在安全输入边界显示。", "Update reminders enabled with a 24-hour cache and safe-boundary display only.")}\n`));
-        if (cached?.fresh) showUpdateReminder(cached.result);
-        else scheduleUpdateReminderRefresh();
-        continue;
-      }
-      if (task === "/update notifications off") {
-        settings.update = { notifications: false };
-        updateReminderGeneration += 1;
-        pendingUpdateReminder = undefined;
-        await settingsStore.save(settings);
-        console.log(chalk.green(`${localize(language, "更新提醒已关闭。显式 /update 和 xiu --check-update 仍可使用。", "Update reminders disabled. Explicit /update and xiu --check-update remain available.")}\n`));
-        continue;
-      }
-      if (task.startsWith("/update ")) {
-        console.log(`${localize(language, "用法：/update、/update doctor、/update status、/update notifications on、/update notifications off", "Usage: /update, /update doctor, /update status, /update notifications on, /update notifications off")}\n`);
-        continue;
-      }
-      if (task === "/update") {
-        try {
-          const result = await checkForUpdates(packageJson.version, { proxy: updateProxyFromEnvironment() });
-          await updateCache.save(result).catch(() => undefined);
-          if (result.status === "update-available") remindedUpdateVersion = result.latestVersion;
-          console.log(`${formatUpdateCheck(result, language)}\n`);
-        } catch (error) {
-          console.error(chalk.red(`${localize(language, "版本检查失败", "Update check failed")}: ${formatUpdateCheckError(error, language)}\n`));
-        }
+      const updateCommand = await updateCommands.execute(task);
+      if (updateCommand.handled) {
+        for (const message of updateCommand.messages) printUpdateMessage(message);
         continue;
       }
       if (task === "/help") {

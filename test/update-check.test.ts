@@ -249,6 +249,26 @@ async function createWindowsGlobalInstall(directory: string, version: string): P
   return packageRoot;
 }
 
+test("command resolution recognizes Windows local node_modules shims", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-local-shim-空格-"));
+  const nodeModules = path.join(root, "node_modules");
+  const bin = path.join(nodeModules, ".bin");
+  const packageRoot = path.join(nodeModules, "@xiu-ai", "cli");
+  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version: "0.19.0" }), "utf8");
+  await fs.writeFile(path.join(packageRoot, "dist", "cli.js"), "export {};\n", "utf8");
+  await fs.writeFile(path.join(bin, "xiu.ps1"), "& node $PSScriptRoot/../@xiu-ai/cli/dist/cli.js $args\n", "utf8");
+  await fs.writeFile(path.join(bin, "xiu.cmd"), "@node ../@xiu-ai/cli/dist/cli.js %*\n", "utf8");
+
+  const resolution = await inspectXiuCommandResolution({ packageRoot, platform: "win32", pathEntries: [bin] });
+  assert.equal(resolution.first?.version, "0.19.0");
+  assert.equal(resolution.first?.issue, undefined);
+  assert.equal(resolution.installations.length, 1);
+  assert.equal(resolution.installations[0].packageRoot.toLowerCase(), (await fs.realpath(packageRoot)).toLowerCase());
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("command resolution groups npm shims and reports duplicate installations in PATH order", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-command-resolution-"));
   const oldBin = path.join(root, "old-bin");

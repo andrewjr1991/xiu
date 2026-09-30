@@ -270,6 +270,14 @@ test("persistent task progress remains bounded in a narrow terminal", () => {
   assert.ok(frame.lines.some((line) => /Now: Implement/.test(line)));
 });
 
+test("editor candidates cannot wrap beyond the tracked terminal frame", () => {
+  const frame = editorFrameLines("xiu> ", { value: "/", cursor: 1 }, [{
+    kind: "command", label: "/very-long-command-name", description: "long description ".repeat(20),
+    replacement: "/very-long-command-name", replaceStart: 0, replaceEnd: 1,
+  }], 0, undefined, 32);
+  assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 31));
+});
+
 test("path completion replaces only the active @ reference", () => {
   const state = { value: "检查 @src/int 然后测试", cursor: [..."检查 @src/int"].length };
   const candidates = pathCandidates(state, ["src/agent.ts", "src/interactive-ui.ts", "test/interactive-ui.test.ts"]);

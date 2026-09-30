@@ -144,3 +144,11 @@ test("structured output stays valid and bounded for giant values", async () => {
   assert.ok(result.returned_count >= 1 && result.returned_count < 100);
   assert.equal(typeof result.next_offset, "number");
 });
+
+test("structured extractors clamp oversized value budgets instead of wasting a retry", async () => {
+  const cwd = await workspace("xiu-extract-clamp-");
+  await fs.writeFile(path.join(cwd, "case.html"), `<main>${"X".repeat(20_000)}</main>`, "utf8");
+  const output = await run("extract_html", { path: "case.html", selector: "main", max_value_characters: 20_000 }, cwd);
+  const result = JSON.parse(output);
+  assert.equal(result.truncated_values, 1);
+});

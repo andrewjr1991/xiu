@@ -115,6 +115,11 @@ function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
   const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
   const withinHandoffGrace = (record.state === "starting" && age < 10_000) || (record.state === "running" && age < 2_000);
   if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !processAlive(record.pid)) {
+    // The worker can publish its terminal record between the directory scan and
+    // this liveness check. Re-read after observing the worker exit so a stale
+    // in-memory "running" snapshot can never overwrite completed evidence.
+    const latest = readRecord(recordFile(record.id));
+    if (latest && (latest.state !== record.state || latest.updatedAt !== record.updatedAt || latest.pid !== record.pid)) return refresh(latest);
     const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(record.id) };
     atomicWrite(recordFile(record.id), next);
     return next;

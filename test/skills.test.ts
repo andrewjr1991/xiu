@@ -52,6 +52,22 @@ test("local skill installation uses a recoverable backup when replacing", async 
   assert.match(await fs.readFile(path.join(second[0]!.backup!, "SKILL.md"), "utf8"), /First version/);
 });
 
+test("model catalog omits redundant global workflow skills but explicit reads still work", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skills-workflow-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "fixture-home"));
+  const globalRoot = path.join(cwd, "global-skills");
+  await fs.mkdir(path.join(globalRoot, "using-superpowers"), { recursive: true });
+  await fs.mkdir(path.join(globalRoot, "domain-review"), { recursive: true });
+  await fs.writeFile(path.join(globalRoot, "using-superpowers", "SKILL.md"), skillMarkdown("using-superpowers", "Generic startup workflow"));
+  await fs.writeFile(path.join(globalRoot, "domain-review", "SKILL.md"), skillMarkdown("domain-review", "Review domain data"));
+  const registry = new SkillRegistry(cwd, globalRoot);
+  await registry.refresh(false);
+  assert.doesNotMatch(registry.catalog(), /using-superpowers/);
+  assert.match(registry.catalog(), /domain-review/);
+  assert.match(await registry.read("using-superpowers"), /Generic startup workflow/);
+});
+
 test("skill permission expansion requires acknowledgement and preserves the old install when declined", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-permissions-"));
   const globalRoot = path.join(cwd, "installed");

@@ -29,7 +29,7 @@ import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, ty
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
-import { VerificationLedger, captureVerificationStamp, verificationCheckKey } from "./verification.js";
+import { VerificationLedger, captureVerificationStamp } from "./verification.js";
 import { SafeDraftPreview } from "./stream-preview.js";
 
 export interface AgentEvents {
@@ -56,10 +56,11 @@ export interface AgentEvents {
   onPlanUpdate?: (plan: TaskPlan) => void;
   onWorkspaceChange?: (change: WorkspaceChangeNotice) => void;
   onCheckpoint?: (message: string) => void;
-  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified" | "failed"; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
+  onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified" | "failed"; failureReason?: AgentFailureReason; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
 }
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
+export type AgentFailureReason = "model_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
 
 export class BackgroundApprovalRequiredError extends Error {
   override readonly name = "BackgroundApprovalRequiredError";
@@ -235,6 +236,7 @@ export class Agent {
   private primaryTask?: string;
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
+  private lastRunFailureReason?: AgentFailureReason;
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
   private failoverController?: ProviderFailoverController;
@@ -278,6 +280,7 @@ export class Agent {
     const controller = new AbortController();
     this.activeController = controller;
     this.lastRunOutcome = "running";
+    this.lastRunFailureReason = undefined;
     this.currentTurn = 0;
     this.repeatedFailures.clear();
     this.primaryTask = task.trim();
@@ -328,6 +331,7 @@ export class Agent {
         ));
       }
       this.lastRunOutcome = "failed";
+      this.lastRunFailureReason = "runtime_error";
       this.taskDiagnostics?.complete("failed");
       if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("failed");
       throw error;
@@ -519,10 +523,11 @@ export class Agent {
         this.events.onText?.(text);
         this.events.onAssistantTurn?.(text, false);
         this.lastRunOutcome = "failed";
+        this.lastRunFailureReason = "model_incomplete";
         this.taskDiagnostics?.complete("failed");
         await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({ turns: turn, toolCalls: toolCallCount, changed: workspaceChanged,
-          verified: false, outcome: "failed", durationMs: Date.now() - startedAt, diagnostics: this.taskDiagnostics?.snapshot() });
+          verified: false, outcome: "failed", failureReason: "model_incomplete", durationMs: Date.now() - startedAt, diagnostics: this.taskDiagnostics?.snapshot() });
         return text;
       }
       if (identityQuestion) {
@@ -669,7 +674,12 @@ export class Agent {
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
           : verification.failed || (lastToolFailed && !webAnswerVerified) ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
+        const failureReason: AgentFailureReason | undefined = outcome !== "failed" ? undefined
+          : webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0) ? "web_evidence"
+          : verification.failed ? "verification_failed"
+          : "tool_failed";
         this.lastRunOutcome = outcome;
+        this.lastRunFailureReason = failureReason;
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({
@@ -678,6 +688,7 @@ export class Agent {
           changed: workspaceChanged,
           verified: verifiedAfterChange,
           outcome,
+          failureReason,
           durationMs: Date.now() - startedAt,
           diagnostics: this.taskDiagnostics?.snapshot(),
         });
@@ -802,9 +813,21 @@ export class Agent {
             workspaceChanged = true;
             if (structured.status === "success") this.taskDiagnostics?.recordProgress();
             if (!verificationCandidate) {
-              verification.invalidate();
-              verifiedAfterChange = false;
-              verificationStamp = undefined;
+              // Execute tools are conservatively classified as possible writers,
+              // even when an inline script only inspects files. Preserve existing
+              // evidence only when the bounded workspace + explicit artifact stamp
+              // proves that nothing relevant changed. Any stamp error fails closed.
+              let observedChange = true;
+              if (verificationStamp) {
+                try {
+                  observedChange = verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+                } catch { observedChange = true; }
+              }
+              if (observedChange) {
+                verification.invalidate();
+                verifiedAfterChange = false;
+                verificationStamp = undefined;
+              }
             }
             this.projectIndex?.invalidate();
             if (workspacePaths.length) {
@@ -826,7 +849,7 @@ export class Agent {
               result += "\nVerification stale: workspace inputs changed while the check was running; rerun the check.";
             }
             verificationStamp = currentStamp;
-            verification.record(verificationCheckKey(call.name, call.input), checkPassed);
+            verification.recordTool(call.name, call.input, checkPassed);
             verifiedAfterChange = verification.passed;
             if (checkPassed) this.taskDiagnostics?.recordProgress();
           }
@@ -843,7 +866,7 @@ export class Agent {
         const callFailed = structured.status !== "success";
         if (this.isVerificationAttempt(call.name, call.input) && !checkPassed) {
           verificationAttempted = true;
-          verification.record(verificationCheckKey(call.name, call.input), false);
+          verification.recordTool(call.name, call.input, false);
           verifiedAfterChange = false;
         }
         const outcomeLoop = loopGuard.result(call.name, structured.status, structured.errorCode, structured.output);
@@ -903,6 +926,7 @@ export class Agent {
         this.events.onAssistantTurn?.(text, false);
         await this.log(sessionPath, { type: "assistant", turn, text, toolCalls: [] });
         this.lastRunOutcome = "failed";
+        this.lastRunFailureReason = "web_evidence";
         this.taskDiagnostics?.complete("failed");
         await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({
@@ -911,6 +935,7 @@ export class Agent {
           changed: workspaceChanged,
           verified: verifiedAfterChange,
           outcome: "failed",
+          failureReason: "web_evidence",
           durationMs: Date.now() - startedAt,
           diagnostics: this.taskDiagnostics?.snapshot(),
         });
@@ -940,6 +965,7 @@ export class Agent {
     this.sessionId = undefined;
     this.stats = emptySessionStats();
     this.lastRunOutcome = "idle";
+    this.lastRunFailureReason = undefined;
     this.currentTurn = 0;
     this.pendingSteering = [];
     this.steeringHistory = [];
@@ -969,7 +995,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; failureReason?: AgentFailureReason; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
@@ -982,6 +1008,7 @@ export class Agent {
       index: this.projectIndex?.status(),
       planMode: this.planManager?.mode() ?? false,
       outcome: this.lastRunOutcome,
+      failureReason: this.lastRunFailureReason,
       turn: this.currentTurn,
       maxTurns: this.config.maxTurns,
       pendingSteering: this.pendingSteering.length,
@@ -1049,6 +1076,7 @@ export class Agent {
     this.stats = restored.stats;
     this.system = undefined;
     this.lastRunOutcome = "idle";
+    this.lastRunFailureReason = undefined;
     this.currentTurn = 0;
     this.pendingSteering = [];
     this.steeringHistory = [];

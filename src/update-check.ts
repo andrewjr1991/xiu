@@ -44,6 +44,10 @@ export interface CachedUpdateCheck {
   fresh: boolean;
 }
 
+export interface UpdateCheckCacheReader {
+  load(currentVersion: string, now?: Date): Promise<CachedUpdateCheck | undefined>;
+}
+
 interface RegistryResponse {
   ok: boolean;
   status: number;
@@ -88,7 +92,7 @@ export interface UpdateDoctorOptions {
   platform?: NodeJS.Platform;
   pathEntries?: string[];
   now?: Date;
-  cache?: UpdateCheckCache;
+  cache?: UpdateCheckCacheReader;
   checker?: (proxy?: string) => Promise<UpdateCheckResult>;
   releaseChecker?: (version: string, proxy?: string) => Promise<OfficialReleaseMetadata>;
 }
@@ -247,6 +251,9 @@ async function inspectCommandCandidate(launcher: string, platform: NodeJS.Platfo
       : undefined;
     if (!identity && platform === "win32") {
       identity = await readPackageIdentity(path.join(path.dirname(launcher), "node_modules", "@xiu-ai", "cli"));
+      if (!identity && path.basename(path.dirname(launcher)).toLowerCase() === ".bin") {
+        identity = await readPackageIdentity(path.join(path.dirname(launcher), "..", "@xiu-ai", "cli"));
+      }
     }
     if (!identity && stat.isFile() && stat.size <= MAX_LAUNCHER_BYTES) {
       identity = await packageRootFromTarget(launcher);

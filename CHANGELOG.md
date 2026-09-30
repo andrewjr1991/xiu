@@ -2,6 +2,55 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.0 — Unreleased
+
+- Design a local-first desktop workbench with project/task navigation, a task conversation, a review inspector, explicit approvals, verification evidence, and safe recovery.
+- Select an isolated Electron renderer and a shared headless runtime so the CLI and desktop client keep one source of truth for trust, permissions, checkpoints, and completion.
+- Add the first shared `XiuRuntime` vertical slice with versioned snapshots, monotonic typed events, bounded replay/resync, task steering and cancellation, approval commands, recovery guards, and secret redaction; route the CLI's primary task path through an `Agent` adapter without changing terminal behavior.
+- Add the G2 Electron/React desktop shell with an isolated sandboxed Renderer, a narrow typed Preload bridge, local-only CSP, blocked navigation and permissions, single-instance behavior, and hardened Electron fuses.
+- Add the trusted-workspace slice: native directory selection, explicit trust confirmation before project reads, trusted recent projects, bounded task history, read-only writer-lock state, and fail-closed corrupt-history handling.
+- Add the gray-white/light-blue Xiu visual system and abstract crossing-X app mark, plus a separate Windows x64 development package and packaged-app startup smoke; the desktop remains an unreleased development preview.
+- Add the G3 desktop task loop backed by the real shared Agent: trusted-workspace task creation, bounded typed streaming events, steering, stop, live plans, core-enforced one-shot approvals, explicit dangerous confirmation, provider/system-credential reuse, and CLI/GUI single-writer blocking.
+- Add the G4 review inspector with task/workspace/staged changes, bounded file browsing, source and sanitized Markdown/HTML previews, read-only command and verification evidence, checkpoint restore, and interrupted-task recovery.
+- Keep G4 security decisions outside the renderer: confine preview paths, refuse links and credential-like files, redact text evidence, sandbox sanitized previews, create a safety checkpoint before restore, require native confirmation for destructive actions, and never replay unknown side effects automatically.
+- Add the G5A desktop Provider/model manager backed by the shared Provider registry: create, edit, and delete custom channels; discover models, select the active model, test connectivity, and reload the idle workspace Agent without exposing secrets to the renderer.
+- Keep the active Provider first and hide channels without real credentials or a previously discovered model catalog, including unused keyless local presets.
+- Add a compact composer permission selector for per-action prompts, workspace-scoped automation, or broad non-dangerous automation; dangerous actions, workspace trust, and path boundaries remain mandatory core checks.
+- Replace native task/workspace deletion alerts with an in-app confirmation sheet, while requiring an explicit confirmed request again in the main process.
+- Give the active Provider/model control the remaining composer width and preserve the full model name in its accessible title instead of clipping the identifier behind a fixed percentage cap.
+- Add confirmation-gated task-history deletion and recent-workspace removal; task deletion removes the conversation/run records but preserves project files and checkpoints, while workspace removal never deletes the directory.
+- Keep discovered desktop model catalogs in a bounded non-secret cache per Provider, so refreshing or switching one catalog no longer empties the others and successful discovery survives restart.
+- Render pasted, dropped, and selected attachments as compact file cards or bounded image thumbnails while keeping internal workspace references out of the visible composer.
+- Persist the bounded runtime event stream for newly completed desktop tasks and reuse the live timeline when reopening history; reconstruct legacy task history only from retained evidence.
+- Keep desktop credential changes fail-closed: report only credential source, require Windows Credential Manager for newly saved keys, reject environment-key replacement, redact Provider failures, and block reconfiguration while a task or external writer is active.
+- Tighten the desktop density around a 1280×800 default window, narrower navigation and headers, smaller controls and spacing, and a task-column-bound Provider popover whose credential actions remain visible at compact sizes.
+- Make desktop task submission optimistic: echo the user's request immediately, expose the current runtime phase while the model or a tool is working, follow live output without stealing a manually scrolled position, and remove blank or duplicate assistant/completion cards.
+- Make recent desktop tasks resumable through a bounded, redacted transcript without replaying prior tools; add explicit new-task reset, native file/image selection, paste and drag/drop attachments, expandable factual runtime details, and session-scoped approval only when the core supplies an exact non-dangerous operation scope.
+- Render the Provider's visible assistant text directly as a public summary, and give tool-only model turns a clearly labeled factual progress summary derived from plans, tool activity, workspace changes, and verification; hidden chain-of-thought remains neither requested nor exposed.
+- Group public model progress, commands, edits, failures, and verification into compact expandable process sections; keep completed objectives and per-step states expandable, and color added/removed Diff lines distinctly.
+- Persist a bounded, redacted workspace-local change report for completed desktop tasks, restore it into historical change summaries and the Changes / This task Diff view, clean it up with task deletion, and keep legacy tasks explicit when no snapshot exists.
+- Show the same Codex-style change-summary card when a live task finishes, include per-file additions/deletions, and open each saved bounded Diff from either the card or the review inspector.
+
+## 0.19.0 — 2026-09-28
+
+- Move interactive `/update` routing, opt-in reminder lifecycle, and the `--check-update` / `--update-doctor` one-shot entry points into an independently tested command module without adding automatic installation behavior.
+- Add packaged platform acceptance that installs the candidate tarball under a path containing spaces and Unicode, invokes the real npm launcher, checks update-command resolution, and runs the packaged background worker.
+- Recognize Windows project-local `node_modules/.bin` PowerShell and CMD shims in update diagnostics instead of reporting a healthy local install as stale.
+- Run the packaged platform acceptance on the Windows, Ubuntu, and macOS CI runners while retaining external-terminal and enterprise-device caveats.
+- Normalize Windows and POSIX separators before comparing verified artifact identities, and keep detached-lifecycle tests independent of shell parsing for inline JavaScript.
+
+## 0.18.2 — 2026-09-28
+
+- Preserve passed verification across conservatively classified execute tools when a bounded post-command workspace and explicit-artifact fingerprint proves that no relevant file changed; fail closed when the fingerprint changes or cannot be captured.
+- Let a successful, stricter `verify_output` for the same artifact safely supersede stale weaker evidence without allowing unrelated or weaker checks to hide failures.
+- Clamp oversized structured-extraction value budgets to the safe maximum instead of spending another model turn on a deterministic parameter retry.
+- Use the Windows system certificate store together with Node's bundled roots for direct and proxied OpenAI/Anthropic HTTPS connections, without weakening TLS verification.
+- Report structured task failure reasons so verification, tool, web-evidence, model-protocol, and runtime failures are described accurately.
+- Avoid no-output timer redraws that can leave repeated steering prompts in Windows ConPTY scrollback, and keep completion candidates within the tracked terminal width.
+- Bound persistent tool/action summaries, reduce the live plan to completion/current/next progress, and omit redundant global workflow Skills from the model catalog while keeping explicit reads available.
+- Re-read detached-worker state after observing process exit so a stale foreground snapshot cannot overwrite freshly completed terminal evidence.
+- Keep the OAuth cancellation regression deterministic when a host allocates an ephemeral port that WHATWG Fetch blocks before network I/O.
+
 ## 0.18.1 — 2026-09-28
 
 - Add bounded, path-confined retry cleanup for Windows evaluation temporary directories.

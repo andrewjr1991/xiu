@@ -18,8 +18,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        node: [20.18.1]
+        include:
+          - os: windows-latest
+            node: 20.18.1
+            platform: win32
+          - os: ubuntu-latest
+            node: 20.18.1
+            platform: linux
+          - os: macos-latest
+            node: 20.18.1
+            platform: darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -38,3 +46,7 @@ jobs:
         run: npm run eval:smoke
       - run: npm pack --dry-run --json
       - run: npm run smoke:package
+      - name: Run packaged platform acceptance
+        run: npm run smoke:platform
+        env:
+          XIU_EXPECTED_PLATFORM: ${{ matrix.platform }}

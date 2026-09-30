@@ -117,6 +117,19 @@ export async function listSessions(cwd: string): Promise<SessionListItem[]> {
   return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** Delete one exact local conversation log without touching workspace content. */
+export async function deleteSession(cwd: string, requested: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9-]{1,160}$/.test(requested)) throw new Error("Invalid session deletion request.");
+  const selected = (await listSessions(cwd)).filter((item) => item.id === requested);
+  if (!selected.length) return false;
+  for (const item of selected) {
+    const stat = await fs.lstat(item.file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe session deletion target.");
+  }
+  for (const item of selected) await fs.unlink(item.file);
+  return true;
+}
+
 export async function loadSession(cwd: string, requested?: string): Promise<RestoredSession> {
   const sessions = await listSessions(cwd);
   if (!sessions.length) throw new Error("No Xiu sessions exist in this workspace.");

@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The current release is `0.18.1`, a Windows-stability, dependency-security, and release-alignment update verified locally and in three-platform CI.
+The current release is `0.19.0`, which modularizes the update command and validates the packaged CLI through real npm launchers on Windows, Ubuntu, and macOS CI runners.
 
 ## Install
 
@@ -139,7 +139,20 @@ npm run check:docs
 npm run eval:smoke
 npm pack --dry-run --json
 npm run smoke:package
+npm run smoke:platform
 ```
+
+The unreleased v0.20.0 desktop preview is developed separately from the CLI package:
+
+```bash
+npm --prefix apps/desktop ci
+npm run desktop:typecheck
+npm run desktop:build
+npm run desktop:smoke
+npm run desktop:pack:win
+```
+
+The G5A preview runs the real shared Agent, provides the G4 review/recovery inspector, and lets an idle trusted workspace discover and select Provider models, test connectivity, and save new keys to Windows Credential Manager. The picker shows the active Provider first and hides channels that have neither a real credential nor a successfully discovered model catalog; unused keyless local presets no longer occupy the list. Discovered model catalogs are cached separately per Provider, so refreshing one Provider neither clears another nor disappears after restart. The compact composer keeps the full Provider/model identity visible and offers Ask every time, Workspace auto, and High access modes; the main process applies those modes, dangerous actions still require exact confirmation, and trust/path controls cannot be bypassed. Recent tasks can be resumed without replaying old tools; completed new tasks persist and reopen the same bounded runtime-event timeline plus a separate bounded, redacted workspace-local change report. Both live completions and historical conversations show a Codex-style change-summary card; selecting a file opens its saved bounded Diff, and Changes / This task uses the same report. Legacy tasks without a snapshot say so explicitly instead of substituting the current workspace Diff, and deleting a task removes its change snapshot without deleting project files or checkpoints. Tasks can be explicitly deleted from Xiu history, and recent workspaces can be removed without deleting their directories; both actions use an in-app confirmation sheet, require a second confirmed request at the main-process boundary, and are blocked while a task is running. Explicit new-task reset, native file/image selection, paste, and drag/drop attachments are available; the composer shows file cards and bounded image thumbnails instead of raw internal attachment paths. Each model turn shows progress: Provider-visible text is labeled as a public summary, while tool-only turns receive a clearly labeled factual summary derived only from plans, tool activity, workspace changes, and verification events. Xiu neither requests nor stores, fabricates, or exposes hidden chain-of-thought. The renderer receives credential-source status, never stored keys or Base URLs; active tasks and external writers block reconfiguration. The inspector's “Command” tab remains read-only evidence—an interactive terminal is planned for G5B. Installers, long-task acceptance, automated UI smoke, and stable cross-platform desktop validation are still pending; the desktop is not included in the published CLI package.
 
 ## Current limitations
 

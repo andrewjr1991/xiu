@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { redactSecrets } from "./secret-redaction.js";
+import type { RuntimeEvent } from "./runtime/protocol.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
 
@@ -60,6 +61,7 @@ export interface TaskRunRecord {
   operations: TaskRunOperation[];
   recoveryPoints: TaskRecoveryPoint[];
   events: TaskRunEvent[];
+  runtimeEvents?: RuntimeEvent[];
   resumedFrom?: string;
 }
 
@@ -92,6 +94,13 @@ interface TaskRunLock {
   ownerPid: number;
   ownerInstance: string;
   createdAt: string;
+}
+
+export interface TaskRunLockStatus {
+  active: boolean;
+  live: boolean;
+  runId?: string;
+  ownerPid?: number;
 }
 
 function workspaceIdentity(workspace: string): string {
@@ -343,6 +352,29 @@ export class TaskRunJournal {
     return parsed;
   }
 
+  /** Delete one exact inactive journal record. Workspace content and checkpoints are untouched. */
+  async delete(runId: string): Promise<boolean> {
+    if (!/^[A-Za-z0-9-]{1,160}$/.test(runId)) throw new Error("Invalid task-run deletion request.");
+    if (this.current?.runId === runId) throw new Error("Cannot delete an active task run.");
+    const file = this.runFile(runId);
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!stat) return false;
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run journal entry: ${file}`);
+    await fs.unlink(file);
+    return true;
+  }
+
+  /** Persist the sanitized desktop event stream after a run reaches a terminal state. */
+  async saveRuntimeEvents(runId: string, events: RuntimeEvent[]): Promise<void> {
+    const record = await this.read(runId);
+    if (!record) throw new Error(`Task-run journal not found: ${runId}`);
+    record.runtimeEvents = structuredClone(events.slice(-1_000));
+    await atomicWrite(this.runFile(runId), record);
+  }
+
   /** Returns the newest run for this workspace, including terminal runs. */
   async latest(): Promise<TaskRunRecord | undefined> {
     return (await this.recent(1))[0];
@@ -364,6 +396,32 @@ export class TaskRunJournal {
   }
 
   currentRun(): TaskRunRecord | undefined { return this.current ? structuredClone(this.current) : undefined; }
+
+  /** Read-only lock inspection for CLI/desktop coexistence. Never removes or takes over a lock. */
+  async lockStatus(): Promise<TaskRunLockStatus> {
+    const file = this.lockFile();
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!stat) return { active: false, live: false };
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run lock path: ${file}`);
+    let lock: Partial<TaskRunLock>;
+    try { lock = JSON.parse(await fs.readFile(file, "utf8")) as Partial<TaskRunLock>; }
+    catch { throw new Error(`Corrupt task-run lock: ${file}`); }
+    if (lock.version !== TASK_RUN_SCHEMA_VERSION
+      || lock.workspaceId !== this.workspaceId
+      || typeof lock.runId !== "string"
+      || !Number.isSafeInteger(lock.ownerPid)) {
+      throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
+    }
+    return {
+      active: true,
+      live: this.processAlive(lock.ownerPid!),
+      runId: lock.runId,
+      ownerPid: lock.ownerPid,
+    };
+  }
 
   private requireCurrent(): TaskRunRecord {
     if (!this.current || this.current.status !== "running") throw new Error("No active task run journal.");

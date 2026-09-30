@@ -50,15 +50,63 @@ export function verificationCheckKey(name: string, input: Record<string, unknown
   return toolCallSignature(name, Object.fromEntries(Object.entries(input).filter(([key]) => !executionControls.has(key))));
 }
 
+function stringExpectations(input: Record<string, unknown>, key: "required_substrings" | "forbidden_substrings"): Set<string> {
+  return new Set(Array.isArray(input[key]) ? input[key].filter((value): value is string => typeof value === "string") : []);
+}
+
+function normalizedVerificationPath(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  // Tool inputs may come from a different host style than the current runner.
+  // Normalize separators before applying POSIX dot-segment rules so the same
+  // workspace-relative artifact has one ledger identity on every platform.
+  const normalized = path.posix.normalize(value.trim().replace(/\\/g, "/"));
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+/** A successful verify_output may replace an older check only when it proves at
+ * least the same facts about the same artifact. This prevents a weaker or
+ * unrelated check from erasing required verification evidence. */
+export function verifyOutputSupersedes(current: Record<string, unknown>, previous: Record<string, unknown>): boolean {
+  const currentPath = normalizedVerificationPath(current.path);
+  if (!currentPath || currentPath !== normalizedVerificationPath(previous.path)) return false;
+  const currentRequired = stringExpectations(current, "required_substrings");
+  const currentForbidden = stringExpectations(current, "forbidden_substrings");
+  // Requiring a longer string also proves every substring within it exists.
+  if ([...stringExpectations(previous, "required_substrings")]
+    .some((previousValue) => ![...currentRequired].some((currentValue) => currentValue.includes(previousValue)))) return false;
+  // For forbidden strings the implication is reversed: proving a shorter token
+  // absent also proves that a longer string containing it is absent.
+  if ([...stringExpectations(previous, "forbidden_substrings")]
+    .some((previousValue) => ![...currentForbidden].some((currentValue) => previousValue.includes(currentValue)))) return false;
+  const currentMinimum = typeof current.min_bytes === "number" ? current.min_bytes : 0;
+  const previousMinimum = typeof previous.min_bytes === "number" ? previous.min_bytes : 0;
+  if (currentMinimum < previousMinimum) return false;
+  const currentMaximum = typeof current.max_bytes === "number" ? current.max_bytes : Number.POSITIVE_INFINITY;
+  const previousMaximum = typeof previous.max_bytes === "number" ? previous.max_bytes : Number.POSITIVE_INFINITY;
+  return currentMaximum <= previousMaximum;
+}
+
 export class VerificationLedger {
-  private checks = new Map<string, boolean>();
+  private checks = new Map<string, { passed: boolean; name?: string; input?: Record<string, unknown> }>();
   private revision = 0;
-  invalidate(): void { this.revision++; for (const key of this.checks.keys()) this.checks.set(key, false); }
-  record(check: string, passed: boolean): void { this.checks.set(check, passed); }
-  get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every(Boolean); }
-  get failed(): boolean { return [...this.checks.values()].some(value => !value); }
+  invalidate(): void {
+    this.revision++;
+    for (const [key, value] of this.checks) this.checks.set(key, { ...value, passed: false });
+  }
+  record(check: string, passed: boolean): void { this.checks.set(check, { passed }); }
+  recordTool(name: string, input: Record<string, unknown>, passed: boolean): void {
+    const check = verificationCheckKey(name, input);
+    if (passed && name === "verify_output") {
+      for (const [key, previous] of this.checks) {
+        if (previous.name === "verify_output" && previous.input && verifyOutputSupersedes(input, previous.input)) this.checks.delete(key);
+      }
+    }
+    this.checks.set(check, { passed, name, input: structuredClone(input) });
+  }
+  get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every((value) => value.passed); }
+  get failed(): boolean { return [...this.checks.values()].some((value) => !value.passed); }
   snapshot(): { revision: number; checks: Array<{ check: string; passed: boolean }> } {
-    return { revision: this.revision, checks: [...this.checks].map(([check, passed]) => ({ check, passed })) };
+    return { revision: this.revision, checks: [...this.checks].map(([check, value]) => ({ check, passed: value.passed })) };
   }
 }
 

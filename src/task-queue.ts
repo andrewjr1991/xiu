@@ -17,6 +17,13 @@ function isEnglishNarrative(value: string): boolean {
 
 export type FailureRecoveryAction = "stop" | "retry" | "continue";
 
+const MAX_ACTION_CHARACTERS = 240;
+
+function boundedAction(value: string): string {
+  const characters = [...value];
+  return characters.length > MAX_ACTION_CHARACTERS ? `${characters.slice(0, MAX_ACTION_CHARACTERS - 3).join("")}...` : value;
+}
+
 type AutomaticStage = "analyzing" | "investigating" | "editing" | "verifying" | "finishing";
 
 function automaticSteps(language: UiLanguage): Array<{ stage: AutomaticStage; title: string }> {
@@ -152,7 +159,7 @@ export class RunningTaskView {
   }
 
   recordImportantAction(action: string): void {
-    const normalized = action.replace(/\s+/g, " ").trim();
+    const normalized = boundedAction(action.replace(/\s+/g, " ").trim());
     if (!normalized || this.importantActions.at(-1) === normalized) return;
     this.importantActions.push(normalized);
     if (this.importantActions.length > 8) this.importantActions.shift();
@@ -303,16 +310,7 @@ export class RunningTaskView {
     const completed = plan.steps.filter((step) => step.status === "completed").length;
     const currentIndex = plan.steps.findIndex((step) => step.status === "in_progress");
     const nextIndex = plan.steps.findIndex((step, index) => index > currentIndex && step.status === "pending");
-    const visible = plan.steps.length <= 12
-      ? plan.steps
-      : plan.steps.filter((step, index) => step.status === "in_progress" || step.status === "blocked" || index === nextIndex).slice(0, 8);
     const lines = [`${localize(this.uiLanguage, "计划：", "Plan: ")}${completed}/${plan.steps.length} ${localize(this.uiLanguage, "已完成", "completed")}`];
-    for (const step of visible) {
-      const title = this.uiLanguage === "zh-CN" && isEnglishNarrative(step.title) ? `步骤 ${step.id}` : step.title;
-      const note = step.note && !(this.uiLanguage === "zh-CN" && isEnglishNarrative(step.note)) ? ` - ${step.note}` : "";
-      lines.push(`  ${this.stepIcon(step.status)} ${title}${note}`);
-    }
-    if (visible.length < plan.steps.length) lines.push(`  ... ${localize(this.uiLanguage, `另有 ${plan.steps.length - visible.length} 步`, `${plan.steps.length - visible.length} more step(s)`)}`);
     const current = currentIndex >= 0 ? plan.steps[currentIndex] : undefined;
     const next = nextIndex >= 0 ? plan.steps[nextIndex] : plan.steps.find((step) => step.status === "pending");
     const currentTitle = current && this.uiLanguage === "zh-CN" && isEnglishNarrative(current.title) ? `步骤 ${current.id}` : current?.title;

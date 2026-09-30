@@ -10,6 +10,12 @@ import type { AgentTool } from "./types.js";
 const execFileAsync = promisify(execFile);
 const MAX_SKILL_FILES = 300;
 const MAX_INSTALL_BYTES = 20 * 1024 * 1024;
+const GENERIC_WORKFLOW_SKILLS = new Set([
+  "using-superpowers",
+  "brainstorming",
+  "writing-plans",
+  "verification-before-completion",
+]);
 
 export interface XiuSkill {
   name: string;
@@ -174,9 +180,12 @@ export class SkillRegistry {
 
   catalog(): string {
     if (!this.skills.length) return "No Xiu skills are installed.";
+    const taskSkills = this.skills.filter((skill) => skill.scope === "project"
+      || skill.scope === "plugin"
+      || !GENERIC_WORKFLOW_SKILLS.has(skill.name.toLowerCase()));
     return [
-      "Available Xiu skills (call read_skill before following a relevant skill):",
-      ...this.skills.map((skill) => `- ${skill.name} [${skill.scope}] [permissions: ${skill.permissions.join(", ")}${skill.permissionWarnings.length ? `; unknown: ${skill.permissionWarnings.join(", ")}` : ""}]: ${skill.description}`),
+      "Available Xiu skills (call read_skill only for a skill directly relevant to the user's domain task; Xiu already provides planning, execution, and completion verification, so generic workflow skills are omitted. An installed skill explicitly named by the user may still be loaded with read_skill. Do not reread a skill already loaded in this task):",
+      ...taskSkills.map((skill) => `- ${skill.name} [${skill.scope}] [permissions: ${skill.permissions.join(", ")}${skill.permissionWarnings.length ? `; unknown: ${skill.permissionWarnings.join(", ")}` : ""}]: ${skill.description}`),
     ].join("\n");
   }
 

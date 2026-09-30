@@ -95,13 +95,19 @@ test("rapid detached commands cannot have terminal evidence overwritten by the l
 test("a detached job survives the launcher process exiting and is discoverable by a new process", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-disconnect-"));
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-workspace-"));
+  const workload = path.join(workspace, "survive.mjs");
+  await fs.writeFile(workload, "console.log('survived');\nsetInterval(() => {}, 1000);\n", "utf8");
+  const quotePowerShell = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const command = process.platform === "win32"
+    ? `& ${quotePowerShell(process.execPath)} ${quotePowerShell(workload)}`
+    : `${JSON.stringify(process.execPath)} ${JSON.stringify(workload)}`;
   t.after(async () => { configureBackgroundWorkspace(workspace, root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   const moduleUrl = pathToFileURL(path.resolve("src/background.ts")).href;
   const script = [
     `import { configureBackgroundWorkspace, startBackgroundProcess } from ${JSON.stringify(moduleUrl)};`,
     `configureBackgroundWorkspace(${JSON.stringify(workspace)}, ${JSON.stringify(root)});`,
-    `console.log(startBackgroundProcess(${JSON.stringify("node -e \"console.log('survived'); setInterval(() => {}, 1000)\"")}, ${JSON.stringify(workspace)}).id);`,
+    `console.log(startBackgroundProcess(${JSON.stringify(command)}, ${JSON.stringify(workspace)}).id);`,
   ].join("\n");
   const launcher = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";

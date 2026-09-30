@@ -9,6 +9,7 @@ import { resolveWorkspacePath } from "./workspace-path.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_LIMITS = { maxFiles: 2_000, maxFileBytes: 256 * 1024, maxTotalBytes: 8 * 1024 * 1024 };
+const MAX_PREVIEW_BYTES = 16 * 1024;
 const EXCLUDED_DIRECTORIES = new Set([".git", ".xiu", "node_modules"]);
 
 export interface TaskChangeOptions {
@@ -288,10 +289,20 @@ function preview(before: TaskFileSnapshot | undefined, after: TaskFileSnapshot |
   let oldEnd = oldLines.length, newEnd = newLines.length;
   while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) { oldEnd--; newEnd--; }
   const clip = (line: string) => line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").slice(0, 180);
-  return [`@@ -${oldLines.length ? start + 1 : 0},${oldEnd - start} +${newLines.length ? start + 1 : 0},${newEnd - start} @@ (preview)`,
-    ...oldLines.slice(start, Math.min(start + 4, oldEnd)).map((line) => `- ${clip(line)}`),
-    ...newLines.slice(start, Math.min(start + 4, newEnd)).map((line) => `+ ${clip(line)}`),
-    ...(oldEnd - start > 4 || newEnd - start > 4 ? ["... (preview truncated)"] : [])].join("\n");
+  const candidates = [`@@ -${oldLines.length ? start + 1 : 0},${oldEnd - start} +${newLines.length ? start + 1 : 0},${newEnd - start} @@ (preview)`,
+    ...oldLines.slice(start, oldEnd).map((line) => `- ${clip(line)}`),
+    ...newLines.slice(start, newEnd).map((line) => `+ ${clip(line)}`)];
+  const output: string[] = [];
+  let bytes = 0;
+  let truncated = false;
+  for (const line of candidates) {
+    const next = Buffer.byteLength(`${line}\n`, "utf8");
+    if (bytes + next > MAX_PREVIEW_BYTES - 32) { truncated = true; break; }
+    output.push(line);
+    bytes += next;
+  }
+  if (truncated) output.push("... (preview truncated)");
+  return output.join("\n");
 }
 
 function changed(before: TaskFileSnapshot | undefined, after: TaskFileSnapshot | undefined): boolean {
