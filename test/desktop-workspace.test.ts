@@ -57,7 +57,7 @@ test("desktop task list groups follow-up runs by stable conversation identity", 
   ].join("\n") + "\n");
   const selected = await item.controller.selectWorkspace(item.workspace);
   await item.controller.trustCurrent({ workspaceId: selected.workspace!.id, acknowledged: true });
-  const journal = new TaskRunJournal(item.workspace, item.taskRunRoot);
+  const journal = new TaskRunJournal(await fs.realpath(item.workspace), item.taskRunRoot);
   await journal.begin({ sessionId: "session-one", task: "first conversation title", providerId: "p", model: "m" });
   await journal.complete("completed");
   await journal.begin({ sessionId: "session-one", task: "follow-up prompt", providerId: "p", model: "m" });
@@ -86,7 +86,7 @@ test("task-run locks are surfaced read-only without taking over the writer", asy
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
   const selected = await item.controller.selectWorkspace(item.workspace);
   await item.controller.trustCurrent({ workspaceId: selected.workspace!.id, acknowledged: true });
-  const journal = new TaskRunJournal(item.workspace, item.taskRunRoot);
+  const journal = new TaskRunJournal(await fs.realpath(item.workspace), item.taskRunRoot);
   const run = await journal.begin({ sessionId: "desktop-lock", task: "active task", providerId: "p", model: "m" });
   const snapshot = await item.controller.snapshot();
   assert.equal(snapshot.workspace?.lock, "active-elsewhere");

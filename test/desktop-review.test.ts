@@ -48,7 +48,7 @@ test("desktop review never follows a file link", async (t) => {
     if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("Windows policy does not permit creating a test symlink."); return; }
     throw error;
   }
-  await assert.rejects(() => previewReviewFile(root, "linked.txt"), /链接|Junction/i);
+  await assert.rejects(() => previewReviewFile(root, "linked.txt"), /链接|Junction|outside workspace/i);
   assert.equal((await listReviewFiles(root)).some((file) => file.path === "linked.txt"), false);
 });
 
