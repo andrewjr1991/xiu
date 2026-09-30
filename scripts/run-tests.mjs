@@ -13,7 +13,11 @@ if (testFiles.length === 0) {
   console.error("No test files were found in the test directory.");
   process.exitCode = 1;
 } else {
-  const child = spawn(process.execPath, ["--test", "--test-concurrency=4", "--import", "tsx", ...testFiles], {
+  // Windows process creation is materially heavier, and the background-task
+  // coverage itself launches additional PowerShell and Node children. Keep the
+  // suite parallel without starving those lifecycle checks on shared runners.
+  const concurrency = process.platform === "win32" ? 2 : 4;
+  const child = spawn(process.execPath, ["--test", `--test-concurrency=${concurrency}`, "--import", "tsx", ...testFiles], {
     stdio: "inherit",
     windowsHide: true,
     env: { ...process.env, FORCE_COLOR: "0" },

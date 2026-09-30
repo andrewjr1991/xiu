@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The current release is `0.20.0`. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI.
+The current release is `0.20.1`. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI. The patch release also persists capability-specific model selections, consistently bounds generated-media downloads, and fixes Windows background-process handoff.
 
 ## Install
 
@@ -143,7 +143,7 @@ npm run smoke:package
 npm run smoke:platform
 ```
 
-The v0.20.0 Windows desktop preview is packaged separately from the CLI npm package:
+The v0.20.1 Windows desktop preview is packaged separately from the CLI npm package:
 
 Desktop development and packaging require Node.js 22.12.0 or newer; the published CLI keeps its Node.js 20.18.1 baseline.
 

@@ -10,8 +10,8 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | --- | --- |
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
-| 当前公开版本 | `0.20.0`，跨平台 CLI 与 Windows x64 桌面预览 |
-| 当前开发版本 | `0.20.0` 发布维护阶段；下一版本尚未开启，优先补齐 Microsoft Store 身份、真实 Provider 与外部设备矩阵 |
+| 当前公开版本 | `0.20.1`，跨平台 CLI 与 Windows x64 桌面预览 |
+| 当前开发版本 | `0.20.1` 发布维护阶段；下一版本尚未开启，优先补齐 Microsoft Store 身份、真实 Provider 与外部设备矩阵 |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | CLI 与桌面自动化已通过 Windows、Ubuntu、macOS CI；桌面 Windows x64 NSIS 已完成本机安装/升级/中断重启/卸载，MSIX 已完成结构核验但仍待可信签名与企业设备安装验收，macOS/Linux 真实用户桌面仍待验收 |
@@ -63,7 +63,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 
 ### 设计与验收
 
-当前设计见 `V0.20.0_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
+当前设计见 `V0.20.1_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
 
 ## 4. 后续工程化
 

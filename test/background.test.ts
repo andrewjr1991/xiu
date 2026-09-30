@@ -29,7 +29,7 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
   const started = startBackgroundProcess(command, process.cwd());
   // Parallel test workers can delay a new PowerShell + Node process well past
   // two seconds on loaded Windows hosts. Poll with a bounded wall-clock budget.
-  for (let attempt = 0; attempt < 100 && !backgroundProcessOutput(started.id).includes("ready"); attempt++) {
+  for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(started.id).includes("ready"); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const record = listBackgroundProcesses().find((item) => item.id === started.id);
@@ -46,14 +46,14 @@ test("background state and output cursors survive a new foreground manager", asy
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
   const started = startBackgroundProcess("node -e \"console.log('first'); setTimeout(() => console.log('second'), 500); setTimeout(() => {}, 5000)\"", process.cwd());
-  for (let attempt = 0; attempt < 100 && !backgroundProcessOutput(started.id).includes("first"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(started.id).includes("first"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const first = readBackgroundProcessOutput(started.id, 0);
   assert.match(first.text, /first/);
 
   // Reconfiguration simulates a fresh Xiu process discovering the same workspace store.
   configureBackgroundWorkspace(process.cwd(), root);
   assert.equal(listBackgroundProcesses().some((item) => item.id === started.id && item.running), true);
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 300; attempt++) {
     const next = readBackgroundProcessOutput(started.id, first.nextCursor);
     if (next.text.includes("second")) { assert.equal(next.cursor, first.nextCursor); return; }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -66,7 +66,7 @@ test("completed detached commands retain exit evidence", async (t) => {
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
   const started = startBackgroundProcess("node -e \"console.log('done')\"", process.cwd());
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 300; attempt++) {
     const record = listBackgroundProcesses().find((item) => item.id === started.id);
     if (record && !record.running) {
       assert.equal(record.state, "completed");
@@ -83,7 +83,7 @@ test("rapid detached commands cannot have terminal evidence overwritten by the l
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
   const started = Array.from({ length: 8 }, (_, index) => startBackgroundProcess(`node -e "console.log(${index})"`, process.cwd()));
-  for (let attempt = 0; attempt < 150; attempt++) {
+  for (let attempt = 0; attempt < 450; attempt++) {
     const records = listBackgroundProcesses().filter((item) => started.some((entry) => entry.id === item.id));
     if (records.length === started.length && records.every((item) => !item.running)) {
       assert.deepEqual(records.map((item) => item.state), Array.from({ length: started.length }, () => "completed"));
@@ -120,7 +120,7 @@ test("a detached job survives the launcher process exiting and is discoverable b
   const id = stdout.trim();
   assert.match(id, /^[a-f0-9]{12}$/);
   configureBackgroundWorkspace(workspace, root);
-  for (let attempt = 0; attempt < 100 && !backgroundProcessOutput(id).includes("survived"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(id).includes("survived"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(listBackgroundProcesses().find((item) => item.id === id)?.running, true);
   assert.match(backgroundProcessOutput(id), /survived/);
 });
@@ -131,7 +131,7 @@ test("persisted background previews and output redact common credential values",
   t.after(() => removeBackgroundTestRoot(root));
   const secret = "background-secret-canary";
   const started = startBackgroundProcess(`node -e \"console.log('api_key=${secret}')\"`, process.cwd());
-  for (let attempt = 0; attempt < 100 && listBackgroundProcesses().find((item) => item.id === started.id)?.running; attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let attempt = 0; attempt < 300 && listBackgroundProcesses().find((item) => item.id === started.id)?.running; attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const serialized = JSON.stringify(listBackgroundProcesses()) + backgroundProcessOutput(started.id);
   assert.doesNotMatch(serialized, new RegExp(secret));
   assert.match(serialized, /REDACTED/);
