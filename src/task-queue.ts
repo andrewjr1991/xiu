@@ -149,7 +149,7 @@ export class RunningTaskView {
     const paths = change.paths.length ? change.paths.join(", ") : change.description;
     const action = change.tool === "write_file" ? localize(this.uiLanguage, "已写入", "Wrote")
       : change.tool === "replace_text" || change.tool === "apply_patch" ? localize(this.uiLanguage, "已修改", "Modified")
-      : /^generate_(?:image|video)$/.test(change.tool) ? localize(this.uiLanguage, "已创建", "Created")
+      : /^generate_(?:image|video|audio)$/.test(change.tool) ? localize(this.uiLanguage, "已创建", "Created")
       : localize(this.uiLanguage, "工作区操作", "Workspace operation");
     const text = `${action}: ${paths}`.replace(/\s+/g, " ").trim();
     if (!text || this.changes.at(-1)?.text === text) return;

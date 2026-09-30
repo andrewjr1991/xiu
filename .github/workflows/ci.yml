@@ -50,3 +50,52 @@ jobs:
         run: npm run smoke:platform
         env:
           XIU_EXPECTED_PLATFORM: ${{ matrix.platform }}
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm --prefix apps/desktop ci
+      - run: npm run desktop:typecheck
+      - run: npm run desktop:build
+      - run: npm run desktop:smoke
+      - name: Run desktop UI smoke
+        if: matrix.platform != 'linux'
+        run: npm run desktop:smoke:ui
+      - name: Run desktop UI smoke under Xvfb
+        if: matrix.platform == 'linux'
+        run: xvfb-run --auto-servernum npm run desktop:smoke:ui
+        env:
+          ELECTRON_DISABLE_SANDBOX: "1"
+      - name: Build and install Windows x64 candidate
+        if: matrix.platform == 'win32'
+        run: npm run desktop:installer:win
+      - name: Run Windows installer acceptance
+        if: matrix.platform == 'win32'
+        run: npm run desktop:smoke:installer:win
+      - name: Build Windows x64 MSIX candidate
+        if: matrix.platform == 'win32'
+        run: npm run desktop:installer:msix:win
+      - name: Validate Windows MSIX package
+        if: matrix.platform == 'win32'
+        run: npm run desktop:smoke:installer:msix:win

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type MediaOperationKind = "image" | "video";
+export type MediaOperationKind = "image" | "video" | "audio";
 export type MediaOperationStatus = "submitting" | "submitted" | "asset_ready" | "completed" | "ambiguous" | "failed";
 
 export interface MediaOperationRecord {

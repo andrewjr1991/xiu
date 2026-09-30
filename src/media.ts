@@ -28,6 +28,13 @@ export interface VideoGenerationRequest {
   seed?: number;
 }
 
+export interface AudioGenerationRequest {
+  text: string;
+  voice?: string;
+  format?: "mp3" | "wav" | "opus" | "aac" | "flac" | "pcm";
+  instructions?: string;
+}
+
 export interface VideoTask {
   id: string;
   status: string;
@@ -41,11 +48,22 @@ export interface MediaBackend {
   generateImage?(request: ImageGenerationRequest, signal?: AbortSignal): Promise<ImageGenerationResult>;
   createVideo?(request: VideoGenerationRequest, signal?: AbortSignal): Promise<VideoTask>;
   getVideo?(id: string, signal?: AbortSignal): Promise<VideoTask>;
+  generateAudio?(request: AudioGenerationRequest, signal?: AbortSignal): Promise<Buffer>;
   download?(url: string, signal?: AbortSignal): Promise<Buffer>;
 }
 
 function trimSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+const MAX_MEDIA_BYTES = 250 * 1024 * 1024;
+
+async function boundedMediaBytes(response: { headers: { get(name: string): string | null }; arrayBuffer(): Promise<ArrayBuffer> }): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > MAX_MEDIA_BYTES) throw new Error("Generated asset exceeds the 250 MB download limit");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > MAX_MEDIA_BYTES) throw new Error("Generated asset exceeds the 250 MB download limit");
+  return bytes;
 }
 
 export class MediaApiError extends Error {
@@ -176,6 +194,23 @@ export class AgnesMediaBackend implements MediaBackend {
     return task;
   }
 
+  async generateAudio(request: AudioGenerationRequest, signal?: AbortSignal): Promise<Buffer> {
+    const response = await fetch(`${this.baseURL}/audio/speech`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.config.capabilities?.audio,
+        input: request.text,
+        voice: request.voice ?? "alloy",
+        response_format: request.format ?? "mp3",
+        ...(request.instructions ? { instructions: request.instructions } : {}),
+      }),
+      signal, dispatcher: this.dispatcher,
+    });
+    if (!response.ok) throw apiError(response.status, await response.text(), response.headers.get("retry-after"));
+    return boundedMediaBytes(response);
+  }
+
   async getVideo(id: string, signal?: AbortSignal): Promise<VideoTask> {
     const root = this.baseURL.replace(/\/v1$/, "");
     const model = this.config.capabilities?.video ?? "agnes-video-v2.0";
@@ -196,22 +231,24 @@ export class AgnesMediaBackend implements MediaBackend {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Generated asset URL must use HTTP(S)");
     const response = await fetch(parsed, { signal, dispatcher: this.dispatcher });
     if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
-    const declared = Number(response.headers.get("content-length") ?? 0);
-    if (declared > 250 * 1024 * 1024) throw new Error("Generated asset exceeds the 250 MB download limit");
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > 250 * 1024 * 1024) throw new Error("Generated asset exceeds the 250 MB download limit");
-    return bytes;
+    return boundedMediaBytes(response);
   }
 }
 
 export class OpenAIVisionBackend implements MediaBackend {
   private readonly client: OpenAI;
+  private readonly apiKey: string;
+  private readonly baseURL: string;
+  private readonly dispatcher?: ProxyAgent;
 
   constructor(private readonly config: AgentConfig) {
+    this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
+    this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
+    this.dispatcher = config.proxy ? new ProxyAgent(config.proxy) : undefined;
     this.client = new OpenAI({
-      apiKey: (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local",
-      baseURL: config.baseURL,
-      fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
+      apiKey: this.apiKey,
+      baseURL: this.baseURL,
+      fetchOptions: this.dispatcher ? { dispatcher: this.dispatcher } : undefined,
     });
   }
 
@@ -229,6 +266,75 @@ export class OpenAIVisionBackend implements MediaBackend {
     const content = response.choices[0]?.message.content;
     if (!content) throw new Error("OpenAI vision model returned no text");
     return content;
+  }
+
+  async generateImage(request: ImageGenerationRequest, signal?: AbortSignal): Promise<ImageGenerationResult> {
+    if (request.images?.length) throw new Error("This OpenAI-compatible adapter does not support reference-image editing; remove reference_images or use a provider-specific adapter that supports it");
+    const landscape = ["3:2", "4:3", "16:9", "21:9"].includes(request.ratio ?? "");
+    const portrait = ["2:3", "3:4", "9:16"].includes(request.ratio ?? "");
+    const response = await this.client.images.generate({
+      model: this.config.capabilities?.image ?? "gpt-image-1",
+      prompt: request.prompt,
+      size: landscape ? "1536x1024" : portrait ? "1024x1536" : "1024x1024",
+      response_format: "b64_json",
+    } as never, { signal });
+    const image = response.data?.[0];
+    if (!image?.url && !image?.b64_json) throw new Error("Image model returned no image");
+    return { url: image.url, b64Json: image.b64_json };
+  }
+
+  async generateAudio(request: AudioGenerationRequest, signal?: AbortSignal): Promise<Buffer> {
+    const response = await this.client.audio.speech.create({
+      model: this.config.capabilities?.audio ?? "gpt-4o-mini-tts",
+      input: request.text,
+      voice: request.voice ?? "alloy",
+      response_format: request.format ?? "mp3",
+      ...(request.instructions ? { instructions: request.instructions } : {}),
+    } as never, { signal });
+    return boundedMediaBytes(response);
+  }
+
+  private async videoJson(pathname: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<unknown> {
+    const response = await fetch(`${this.baseURL}/${pathname.replace(/^\//, "")}`, {
+      method: init.method ?? "GET",
+      headers: { Authorization: `Bearer ${this.apiKey}`, ...(init.body === undefined ? {} : { "Content-Type": "application/json" }) },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body), signal: init.signal, dispatcher: this.dispatcher,
+    });
+    const text = await response.text();
+    if (!response.ok) throw apiError(response.status, text, response.headers.get("retry-after"));
+    return text ? JSON.parse(text) : {};
+  }
+
+  async createVideo(request: VideoGenerationRequest, signal?: AbortSignal): Promise<VideoTask> {
+    const task = parseTask(await this.videoJson("videos", { method: "POST", signal, body: {
+      model: this.config.capabilities?.video,
+      prompt: request.prompt,
+      ...(request.image ? { image: request.image } : {}),
+      ...(request.width ? { width: request.width } : {}), ...(request.height ? { height: request.height } : {}),
+      ...(request.numFrames ? { num_frames: request.numFrames } : {}), ...(request.frameRate ? { frame_rate: request.frameRate } : {}),
+      ...(request.negativePrompt ? { negative_prompt: request.negativePrompt } : {}), ...(request.seed !== undefined ? { seed: request.seed } : {}),
+      ...(request.keyframes?.length ? { keyframe_urls: request.keyframes } : {}),
+    } }));
+    if (!task.id && !task.url) throw new Error("Video API returned no task id or asset URL");
+    if (task.id && /completed|succeeded|success|done/i.test(task.status) && !task.url) task.url = `${this.baseURL}/videos/${encodeURIComponent(task.id)}/content`;
+    return task;
+  }
+
+  async getVideo(id: string, signal?: AbortSignal): Promise<VideoTask> {
+    const task = parseTask(await this.videoJson(`videos/${encodeURIComponent(id)}`, { signal }));
+    if (!task.id) task.id = id;
+    if (/completed|succeeded|success|done/i.test(task.status) && !task.url) task.url = `${this.baseURL}/videos/${encodeURIComponent(task.id)}/content`;
+    return task;
+  }
+
+  async download(url: string, signal?: AbortSignal): Promise<Buffer> {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Generated asset URL must use HTTP(S)");
+    const mediaRoot = new URL(`${this.baseURL}/`);
+    const authenticated = parsed.origin === mediaRoot.origin && parsed.pathname.startsWith(mediaRoot.pathname);
+    const response = await fetch(parsed, { signal, dispatcher: this.dispatcher, headers: authenticated ? { Authorization: `Bearer ${this.apiKey}` } : undefined });
+    if (!response.ok) throw new Error(`Asset download failed (${response.status})`);
+    return boundedMediaBytes(response);
   }
 }
 

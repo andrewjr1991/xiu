@@ -41,7 +41,12 @@
     "desktop:typecheck": "npm --prefix apps/desktop run typecheck",
     "desktop:build": "npm --prefix apps/desktop run build",
     "desktop:smoke": "npm --prefix apps/desktop run smoke",
-    "desktop:pack:win": "npm --prefix apps/desktop run pack:win"
+    "desktop:smoke:ui": "npm --prefix apps/desktop run smoke:ui",
+    "desktop:pack:win": "npm --prefix apps/desktop run pack:win",
+    "desktop:installer:win": "npm --prefix apps/desktop run installer:win",
+    "desktop:installer:msix:win": "npm --prefix apps/desktop run installer:msix:win",
+    "desktop:smoke:installer:win": "npm --prefix apps/desktop run smoke:installer:win",
+    "desktop:smoke:installer:msix:win": "npm --prefix apps/desktop run smoke:installer:msix:win"
   },
   "engines": {
     "node": ">=20.18.1"

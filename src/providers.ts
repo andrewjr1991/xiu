@@ -115,6 +115,24 @@ function discoveredContextWindow(model: object): number | undefined {
   return undefined;
 }
 
+function discoveredCapabilities(model: object): string[] | undefined {
+  const metadata = model as Record<string, unknown>;
+  const values = [metadata.capabilities, metadata.modalities, metadata.input_modalities, metadata.output_modalities]
+    .flatMap((value) => Array.isArray(value) ? value : value && typeof value === "object"
+      ? Object.entries(value as Record<string, unknown>).filter(([, enabled]) => enabled === true).map(([name]) => name)
+      : []);
+  const normalized = [...new Set(values.flatMap((value) => {
+    const item = String(value).toLowerCase();
+    if (/image/.test(item)) return ["image"];
+    if (/video/.test(item)) return ["video"];
+    if (/audio|speech|voice/.test(item)) return ["audio"];
+    if (/vision/.test(item)) return ["vision"];
+    if (/text|chat/.test(item)) return ["text"];
+    return [];
+  }))];
+  return normalized.length ? normalized : undefined;
+}
+
 function canRetryForcedToolProbeWithAuto(error: unknown): boolean {
   const status = typeof error === "object" && error !== null && "status" in error
     ? Number((error as { status?: unknown }).status)
@@ -168,7 +186,7 @@ class OpenAIProvider implements ModelProvider {
       const page = await this.client.models.list();
       const models: AvailableModel[] = [];
       for await (const model of page) {
-        models.push({ id: model.id, description: model.owned_by ? `Owned by ${model.owned_by}` : undefined, source: "api", contextWindow: discoveredContextWindow(model) });
+        models.push({ id: model.id, description: model.owned_by ? `Owned by ${model.owned_by}` : undefined, source: "api", capabilities: discoveredCapabilities(model), contextWindow: discoveredContextWindow(model) });
         if (models.length >= 200) break;
       }
       return models;
@@ -304,7 +322,7 @@ class AnthropicProvider implements ModelProvider {
       const page = await this.client.models.list({ limit: 100 });
       const models: AvailableModel[] = [];
       for await (const model of page) {
-        models.push({ id: model.id, name: model.display_name, description: model.created_at ? `Released ${model.created_at.slice(0, 10)}` : undefined, source: "api", contextWindow: discoveredContextWindow(model) });
+        models.push({ id: model.id, name: model.display_name, description: model.created_at ? `Released ${model.created_at.slice(0, 10)}` : undefined, source: "api", capabilities: discoveredCapabilities(model), contextWindow: discoveredContextWindow(model) });
         if (models.length >= 200) break;
       }
       return models;

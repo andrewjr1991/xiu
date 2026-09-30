@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { desktopTerminalVisuals } from "./terminal-visuals.js";
 import {
   applyRuntimeEvent,
   type DesktopAttachment,
@@ -6,6 +9,7 @@ import {
   type DesktopChangeView,
   type DesktopAttachmentResult,
   type DesktopProviderProfile,
+  type DesktopProviderCapability,
   type DesktopProviderKind,
   type DesktopProviderSnapshot,
   type DesktopProviderUpsertRequest,
@@ -13,6 +17,7 @@ import {
   type DesktopReviewTab,
   type DesktopRuntimeConnection,
   type DesktopTaskHistorySnapshot,
+  type DesktopTerminalSnapshot,
   type DesktopWorkspaceSnapshot,
   type ReviewFilePreview,
   type RuntimeEvent,
@@ -263,6 +268,124 @@ function DiffDialog({ change, onClose }: { change: ChangeEntry; onClose: () => v
   </div>;
 }
 
+function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled: boolean }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | undefined>(undefined);
+  const fitRef = useRef<FitAddon | undefined>(undefined);
+  const snapshotRef = useRef<DesktopTerminalSnapshot>({ state: "idle" });
+  const lastSequenceRef = useRef(0);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [snapshot, setSnapshot] = useState<DesktopTerminalSnapshot>({ state: "idle" });
+  const [error, setError] = useState<string>();
+
+  const applySnapshot = (next: DesktopTerminalSnapshot) => {
+    snapshotRef.current = next;
+    setSnapshot(next);
+  };
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const terminal = new Terminal({
+      ...desktopTerminalVisuals,
+      cursorBlink: true,
+      convertEol: false,
+      scrollback: 2_000,
+      fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.2,
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(hostRef.current);
+    terminalRef.current = terminal;
+    fitRef.current = fit;
+    const input = terminal.onData((data) => {
+      const current = snapshotRef.current;
+      if (current.state !== "running" || !current.sessionId) return;
+      const sessionId = current.sessionId;
+      writeQueueRef.current = writeQueueRef.current
+        .then(() => window.xiuDesktop.writeTerminal({ sessionId, data }))
+        .catch((reason) => { setError(reason instanceof Error ? reason.message : String(reason)); });
+    });
+    const resize = terminal.onResize(({ cols, rows }) => {
+      const current = snapshotRef.current;
+      if (current.state !== "running" || !current.sessionId) return;
+      void window.xiuDesktop.resizeTerminal({ sessionId: current.sessionId, cols, rows }).then(applySnapshot).catch(() => undefined);
+    });
+    const unsubscribe = window.xiuDesktop.onTerminalEvent((event) => {
+      if (event.sessionId !== snapshotRef.current.sessionId && event.kind === "state" && event.snapshot.state === "running") lastSequenceRef.current = 0;
+      if (event.sequence <= lastSequenceRef.current) return;
+      lastSequenceRef.current = event.sequence;
+      if (event.kind === "output") {
+        if (snapshotRef.current.sessionId === event.sessionId) terminal.write(event.data);
+        return;
+      }
+      if (event.kind === "state") {
+        applySnapshot(event.snapshot);
+        if (event.snapshot.state === "idle" && event.snapshot.message) terminal.writeln(`\r\n\x1b[90m${event.snapshot.message}\x1b[0m`);
+        return;
+      }
+      applySnapshot({ ...snapshotRef.current, state: "exited", exitCode: event.exitCode, ...(event.signal === undefined ? {} : { signal: event.signal }) });
+      terminal.writeln(`\r\n\x1b[90m[进程已退出，代码 ${event.exitCode}]\x1b[0m`);
+    });
+    void window.xiuDesktop.terminalSnapshot().then((current) => {
+      applySnapshot(current);
+      if (current.output) terminal.write(current.output);
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    return () => { unsubscribe(); input.dispose(); resize.dispose(); terminal.dispose(); terminalRef.current = undefined; fitRef.current = undefined; };
+  }, []);
+
+  useEffect(() => {
+    if (!visible || !hostRef.current) return;
+    const fit = () => {
+      try {
+        fitRef.current?.fit();
+        const terminal = terminalRef.current;
+        if (terminal) terminal.refresh(0, terminal.rows - 1);
+        if (snapshotRef.current.state === "running") terminalRef.current?.focus();
+      } catch { /* Hidden or closing terminal. */ }
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(hostRef.current);
+    requestAnimationFrame(fit);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  const start = async () => {
+    setError(undefined);
+    terminalRef.current?.reset();
+    try {
+      const terminal = terminalRef.current;
+      fitRef.current?.fit();
+      const next = await window.xiuDesktop.startTerminal({ cols: terminal?.cols, rows: terminal?.rows });
+      applySnapshot(next);
+      if (next.output) terminal?.write(next.output);
+      if (next.state === "running") requestAnimationFrame(() => {
+        try {
+          fitRef.current?.fit();
+          terminal?.refresh(0, terminal.rows - 1);
+          terminal?.focus();
+        } catch { /* Terminal may be closing. */ }
+      });
+      if (next.state === "error") setError(next.message ?? "终端启动失败。");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+  const stop = async () => {
+    if (!snapshot.sessionId) return;
+    setError(undefined);
+    try { applySnapshot(await window.xiuDesktop.stopTerminal({ sessionId: snapshot.sessionId })); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+
+  return <section className={`review-pane terminal-pane ${visible ? "visible" : "hidden"}`} aria-hidden={!visible}>
+    <div className="terminal-toolbar"><div><strong>交互终端</strong><small>{snapshot.state === "running" ? `${snapshot.shell ?? "Shell"} · ${snapshot.cols ?? "?"}×${snapshot.rows ?? "?"} · 运行中` : snapshot.state === "exited" ? `已退出${snapshot.exitCode === undefined ? "" : ` · ${snapshot.exitCode}`}` : snapshot.state === "error" ? "启动失败" : "未启动"}</small></div><div><button onClick={() => terminalRef.current?.clear()}>清屏</button>{snapshot.state === "running" ? <button className="terminal-stop" onClick={() => void stop()}>关闭</button> : <button className="terminal-start" disabled={disabled} onClick={() => void start()}>启动终端</button>}</div></div>
+    <p className="terminal-notice">点击下方终端后直接输入，按 Enter 执行。固定绑定当前可信工作区；输入不经过 Agent 审批，输出不会写入任务审计，也不会作为 Agent 完成证据。</p>
+    {disabled && snapshot.state !== "running" && <p className="terminal-disabled">Agent 任务运行期间不能启动终端。</p>}
+    {error && <p className="terminal-error">{error}</p>}
+    <div className="terminal-surface" ref={hostRef} onMouseDown={() => terminalRef.current?.focus()} />
+  </section>;
+}
+
 function ReviewInspector({ review, history, tab, changeView, preview, previewMode, active, onTab, onChangeView, onPreview, onDiff, onPreviewMode, onRefresh, onRestore, onRecover, onAbandon }: {
   review?: DesktopReviewSnapshot;
   history?: DesktopTaskHistorySnapshot;
@@ -281,7 +404,9 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
   onRecover: (runId: string) => void;
   onAbandon: (runId: string) => void;
 }) {
-  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "命令"], ["evidence", "证据"]];
+  const [terminalMounted, setTerminalMounted] = useState(tab === "terminal");
+  useEffect(() => { if (tab === "terminal") setTerminalMounted(true); }, [tab]);
+  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "终端"], ["evidence", "证据"]];
   const historicalTask = Boolean(history && changeView === "task");
   const displayedChanges = historicalTask ? history?.changes : review?.changes;
   return <aside className="inspector review-inspector">
@@ -298,11 +423,12 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
     </section>}
     {review && tab === "files" && <section className="review-pane file-pane">
       {!preview && <div className="file-list">{review.files.map((file) => <button key={file.path} onClick={() => onPreview(file.path)}><span>{file.kind === "image" ? "▧" : file.kind === "markdown" || file.kind === "html" ? "◫" : "◻"}</span><span>{file.path}</span><small>{Math.ceil(file.bytes / 1024)} KB</small></button>)}</div>}
-      {preview && <div className="file-preview"><header><button onClick={() => onPreview("")}>‹ 文件</button><strong>{preview.path}</strong>{preview.safeHtml && <div className="preview-toggle"><button className={previewMode === "source" ? "selected" : ""} onClick={() => onPreviewMode("source")}>源码</button><button className={previewMode === "preview" ? "selected" : ""} onClick={() => onPreviewMode("preview")}>预览</button></div>}</header>{preview.warning && <p className="review-warning">{preview.warning}</p>}{preview.kind === "image" && preview.dataUrl && <img src={preview.dataUrl} alt={preview.path} />}{previewMode === "preview" && preview.safeHtml ? <iframe title={`${preview.path} 安全预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.safeHtml} /> : preview.source !== undefined && <pre><SyntaxCode code={`${preview.source}${preview.truncated ? "\n…预览已截断" : ""}`} language={languageFromPath(preview.path)} /></pre>}</div>}
+      {preview && <div className="file-preview"><header><button onClick={() => onPreview("")}>‹ 文件</button><strong>{preview.path}</strong>{preview.safeHtml && <div className="preview-toggle"><button className={previewMode === "source" ? "selected" : ""} onClick={() => onPreviewMode("source")}>源码</button><button className={previewMode === "preview" ? "selected" : ""} onClick={() => onPreviewMode("preview")}>预览</button></div>}</header>{preview.warning && <p className="review-warning">{preview.warning}</p>}{preview.kind === "image" && preview.dataUrl && <img src={preview.dataUrl} alt={preview.path} />}{preview.kind === "audio" && preview.dataUrl && <audio controls src={preview.dataUrl} />}{preview.kind === "video" && preview.dataUrl && <video controls src={preview.dataUrl} />}{previewMode === "preview" && preview.safeHtml ? <iframe title={`${preview.path} 安全预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.safeHtml} /> : preview.source !== undefined && <pre><SyntaxCode code={`${preview.source}${preview.truncated ? "\n…预览已截断" : ""}`} language={languageFromPath(preview.path)} /></pre>}</div>}
     </section>}
-    {review && tab === "terminal" && <section className="review-pane"><p className="pane-intro">只读展示 Xiu 已执行命令的有界、脱敏证据；这里不能直接输入 Shell。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}</section>}
+    {review && terminalMounted && <InteractiveTerminal visible={tab === "terminal"} disabled={active} />}
     {review && tab === "evidence" && <section className="review-pane evidence-pane">
       {review.recovery && <article className="recovery-card"><span className="eyebrow">中断恢复</span><h3>{review.recovery.taskPreview}</h3><p>{review.recovery.recommendation}</p>{review.recovery.lastRecoveryPoint && <p>最后安全点：{review.recovery.lastRecoveryPoint.evidence}</p>}<strong>{review.recovery.unknownOperations.length} 项操作待核验</strong><div><button onClick={() => onAbandon(review.recovery!.runId)}>放弃旧任务</button><button className="primary-button compact" onClick={() => onRecover(review.recovery!.runId)}>确认恢复</button></div></article>}
+      <h3>命令证据</h3><p className="pane-intro">这里只展示 Agent 已执行命令的有界、脱敏记录；交互终端输出不会进入这里。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}
       <h3>验证账本</h3>{review.validations.length === 0 && <p className="empty-note">尚无验证证据。</p>}{review.validations.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "无结果摘要"}</p></article>)}
       <h3>检查点</h3>{review.checkpoints.length === 0 && <p className="empty-note">尚无检查点。</p>}{review.checkpoints.map((checkpoint) => <article className="checkpoint-card" key={checkpoint.id}><div><strong>{checkpoint.description}</strong><small>{new Date(checkpoint.createdAt).toLocaleString()}</small><p>{checkpoint.files.map((file) => file.path).join("、")}</p></div><button disabled={active} onClick={() => onRestore(checkpoint.id)}>恢复</button></article>)}
     </section>}
@@ -319,7 +445,7 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
   notice?: string;
   onChooseProvider: (id: string) => void;
   onDiscover: (id: string) => void;
-  onSelect: (providerId: string, model: string) => void;
+  onSelect: (providerId: string, model: string, capability?: DesktopProviderCapability) => void;
   onEditCredential: (id: string) => void;
   onApiKey: (value: string) => void;
   onSaveCredential: () => void;
@@ -329,13 +455,14 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
   onDelete: (profile: DesktopProviderProfile) => Promise<void>;
   onClose: () => void;
 }) {
-  const blankProvider = (): DesktopProviderUpsertRequest => ({ id: "", name: "", kind: "openai-compatible", model: "", baseURL: "https://", apiKeyEnv: "", apiKey: "", contextWindow: 128000, features: { tools: true, vision: false, image: false, video: false } });
+  const blankProvider = (): DesktopProviderUpsertRequest => ({ id: "", name: "", kind: "openai-compatible", model: "", baseURL: "https://", apiKeyEnv: "", apiKey: "", contextWindow: 128000, capabilityModels: {}, features: { tools: true, vision: false, image: false, video: false, audio: false } });
   const [editing, setEditing] = useState<DesktopProviderUpsertRequest>();
   const [deleting, setDeleting] = useState<DesktopProviderProfile>();
   const selected = settings?.profiles.find((profile) => profile.id === selectedProviderId) ?? settings?.profiles.find((profile) => profile.id === settings.activeProviderId);
   const credentialLabel = (profile: DesktopProviderProfile) => profile.credential.source === "system" ? "系统凭据" : profile.credential.source === "environment" ? "环境变量" : profile.credential.source === "legacy-file" ? "兼容凭据" : profile.credential.source === "not-required" ? "无需 Key" : "未配置";
-  const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, features: { ...profile.features } });
+  const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels }, features: { ...profile.features } });
   const updateEditing = <K extends keyof DesktopProviderUpsertRequest>(key: K, value: DesktopProviderUpsertRequest[K]) => setEditing((current) => current ? { ...current, [key]: value } : current);
+  const updateCapabilityModel = (capability: "vision" | "image" | "video" | "audio", value: string) => setEditing((current) => current ? { ...current, capabilityModels: { ...current.capabilityModels, [capability]: value } } : current);
   return <div className="provider-popover" role="dialog" aria-label="选择 Provider 和模型">
     <header><div><strong>Provider 与模型</strong><small>选择模型，或管理自定义渠道</small></div><div className="provider-header-actions"><button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button><button onClick={onClose} aria-label="关闭">×</button></div></header>
     {!settings && <p className="muted">正在读取 Provider 配置…</p>}
@@ -343,14 +470,20 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
       <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{!profile.builtin && <span><button title="编辑渠道" onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}</nav>
       {editing ? <section className="provider-editor"><header><div><strong>{editing.existingId ? "编辑渠道" : "新增渠道"}</strong><small>凭据只保存在系统凭据库，不写入项目文件</small></div><button onClick={() => setEditing(undefined)}>取消</button></header><div className="provider-form">
         <label>名称<input value={editing.name} onChange={(event) => updateEditing("name", event.target.value)} placeholder="例如：公司网关" /></label>
-        <label>标识<input value={editing.id} disabled={Boolean(editing.existingId)} onChange={(event) => updateEditing("id", event.target.value)} placeholder="company-gateway" /></label>
+        <label>{editing.existingId ? "标识（创建后不可修改）" : "标识"}<input value={editing.id} disabled={Boolean(editing.existingId)} title={editing.existingId ? "标识用于关联凭据，创建后不可修改" : undefined} onChange={(event) => updateEditing("id", event.target.value)} placeholder="company-gateway" /></label>
         <label>类型<select value={editing.kind} onChange={(event) => updateEditing("kind", event.target.value as DesktopProviderKind)}>{(["openai-compatible", "openai", "anthropic", "agnes", "ollama", "lmstudio", "vllm"] as DesktopProviderKind[]).map((kind) => <option key={kind}>{kind}</option>)}</select></label>
         <label>默认模型<input value={editing.model} onChange={(event) => updateEditing("model", event.target.value)} placeholder="model-id" /></label>
         <label className="wide">Base URL<input value={editing.baseURL ?? ""} onChange={(event) => updateEditing("baseURL", event.target.value)} placeholder="https://api.example.com/v1" /></label>
         <label>Key 环境变量<input value={editing.apiKeyEnv ?? ""} onChange={(event) => updateEditing("apiKeyEnv", event.target.value)} placeholder="OPTIONAL_API_KEY" /></label>
         <label>上下文窗口<input type="number" min="1024" value={editing.contextWindow ?? ""} onChange={(event) => updateEditing("contextWindow", event.target.value ? Number(event.target.value) : undefined)} /></label>
         <label className="wide">API Key（可选）<input type="password" autoComplete="off" value={editing.apiKey ?? ""} onChange={(event) => updateEditing("apiKey", event.target.value)} placeholder={editing.existingId ? "留空表示不更改现有凭据" : "保存到系统凭据库"} /></label>
-        <fieldset className="wide"><legend>能力</legend>{(["tools", "vision", "image", "video"] as const).map((feature) => <label key={feature}><input type="checkbox" checked={editing.features[feature]} onChange={(event) => updateEditing("features", { ...editing.features, [feature]: event.target.checked })} />{feature}</label>)}</fieldset>
+        <fieldset className="wide"><legend>能力</legend>{(["tools", "vision", "image", "video", "audio"] as const).map((feature) => <label key={feature}><input type="checkbox" checked={editing.features[feature]} onChange={(event) => updateEditing("features", { ...editing.features, [feature]: event.target.checked })} />{feature}</label>)}</fieldset>
+        {(["vision", "image", "video", "audio"] as const).filter((capability) => editing.features[capability]).map((capability) => {
+          const options = settings?.capabilityModelsByProvider?.[editing.existingId ?? editing.id]?.[capability] ?? [];
+          const labels = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
+          const listId = `provider-${capability}-models`;
+          return <label key={capability} className={capability === "vision" ? undefined : "wide"}>{labels[capability]}<input list={listId} value={editing.capabilityModels?.[capability] ?? (capability === "vision" ? editing.model : "")} onChange={(event) => updateCapabilityModel(capability, event.target.value)} placeholder="输入或选择模型 ID" /><datalist id={listId}>{options.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>;
+        })}
       </div><footer><button onClick={() => setEditing(undefined)}>取消</button><button className="primary-button compact" disabled={busy || disabled || !editing.id.trim() || !editing.name.trim() || !editing.model.trim()} onClick={() => void onUpsert(editing).then(() => setEditing(undefined))}>{busy ? "保存中…" : "保存渠道"}</button></footer></section>
       : deleting ? <section className="provider-editor provider-delete-confirm"><span className="confirmation-icon danger">⌫</span><h3>删除“{deleting.name}”？</h3><p>将删除此渠道配置和模型缓存。已保存的系统凭据不会在此操作中导出或显示。</p><div><button onClick={() => setDeleting(undefined)}>取消</button><button className="danger-button" disabled={busy || disabled} onClick={() => void onDelete(deleting).then(() => setDeleting(undefined))}>删除渠道</button></div></section>
       : selected && <section className="model-panel">
@@ -358,7 +491,15 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
         <div className="provider-actions"><button disabled={busy || disabled} onClick={() => onDiscover(selected.id)}>刷新模型</button><button disabled={busy || disabled} onClick={() => onTest(selected.id, selected.selectedModel)}>测试连接</button>{selected.credential.editable && <button disabled={busy || disabled} onClick={() => onEditCredential(selected.id)}>配置 Key</button>}{!selected.builtin && <button disabled={busy || disabled} onClick={() => editProfile(selected)}>编辑渠道</button>}</div>
         {settings.discoveryError && settings.modelProviderId === selected.id && <p className="provider-warning">在线发现失败：{settings.discoveryError}</p>}
         {credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
-        <div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div>
+        <div className="model-groups">
+          <section className="model-group"><h4>对话模型</h4><div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div></section>
+          {(["vision", "image", "video", "audio"] as const).filter((capability) => selected.features[capability]).map((capability) => {
+            const labels: Record<DesktopProviderCapability, string> = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
+            const models = settings.capabilityModelsByProvider[selected.id]?.[capability] ?? [];
+            const activeModel = selected.capabilityModels?.[capability];
+            return <section className="model-group capability-model-group" key={capability}><h4>{labels[capability]}<span>{models.length} 个</span></h4>{models.length ? <div className="model-list">{models.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">刷新模型后选择，或在自定义渠道中手动填写模型 ID。</p>}</section>;
+          })}
+        </div>
       </section>}
     </div>}
     {notice && <p className="provider-notice">{notice}</p>}
@@ -694,11 +835,12 @@ export function App() {
     runtimeRef.current = next.connection.runtime.snapshot; setEvents(next.connection.runtime.events.slice(-200));
   };
 
-  const selectProvider = async (providerId: string, model: string) => {
+  const selectProvider = async (providerId: string, model: string, capability?: DesktopProviderCapability) => {
     setBusy(true); setProviderNotice(undefined); setError(undefined);
     try {
-      applyProviderMutation(await window.xiuDesktop.selectProvider({ providerId, model }));
-      setProviderNotice(`已切换为 ${providerId} / ${model}`); setProviderOpen(false);
+      applyProviderMutation(await window.xiuDesktop.selectProvider({ providerId, model, ...(capability ? { capability } : {}) }));
+      setProviderNotice(capability ? `已将 ${providerId} 的${capability}模型切换为 ${model}` : `已切换为 ${providerId} / ${model}`);
+      if (!capability) setProviderOpen(false);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
@@ -760,7 +902,7 @@ export function App() {
   const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? "全部步骤完成" : "等待下一步");
   const timelineEvents = pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents;
   const activeConversationId = historyView?.taskId ?? connection?.conversationId;
-  const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || connection?.writer === "active-elsewhere"} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model) => void selectProvider(providerId, model)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
+  const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || connection?.writer === "active-elsewhere"} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <main className="app-shell">
     <header className="titlebar"><div className="brand"><Logo /><span>Xiu</span></div><div className="titlebar-context">{workspace.workspace?.name ?? "本地优先桌面工作台"}</div><div className="preview-badge">v0.20 · 预览</div></header>
@@ -777,7 +919,7 @@ export function App() {
         {(workspace.error || error) && <div className="error-banner">{error ?? workspace.error}</div>}
         {workspace.trust === "none" && <div className="empty-state"><Logo /><h2>打开你的第一个工作区</h2><p>项目内容保留在本机。Xiu 只会在获得信任后读取项目指令、任务历史或文件。</p><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.chooseWorkspace())}>选择文件夹</button></div>}
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
-        {workspace.trust === "trusted" && <div className="task-layout">
+        {workspace.trust === "trusted" && <div className={`task-layout ${reviewTab === "terminal" ? "terminal-expanded" : ""}`}>
           <section className="task-console">
             <div className="task-scroll" ref={taskScrollRef} onScroll={(event) => { const element = event.currentTarget; followOutputRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96; }}>{historyView && <HistoryTimeline history={historyView} onClose={() => setHistoryView(undefined)} onDiff={setSelectedDiff} />}{(!historyView || isActive || pendingMessage || draft || timelineEvents.length > 0) && <TaskTimeline events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={setSelectedDiff} />}

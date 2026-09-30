@@ -2,7 +2,7 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## 0.20.0 — Unreleased
+## 0.20.0 — 2026-09-30
 
 - Design a local-first desktop workbench with project/task navigation, a task conversation, a review inspector, explicit approvals, verification evidence, and safe recovery.
 - Select an isolated Electron renderer and a shared headless runtime so the CLI and desktop client keep one source of truth for trust, permissions, checkpoints, and completion.
@@ -30,6 +30,8 @@ This file summarizes released behavior and the next unreleased change. Detailed 
 - Group public model progress, commands, edits, failures, and verification into compact expandable process sections; keep completed objectives and per-step states expandable, and color added/removed Diff lines distinctly.
 - Persist a bounded, redacted workspace-local change report for completed desktop tasks, restore it into historical change summaries and the Changes / This task Diff view, clean it up with task deletion, and keep legacy tasks explicit when no snapshot exists.
 - Show the same Codex-style change-summary card when a live task finishes, include per-file additions/deletions, and open each saved bounded Diff from either the card or the review inspector.
+- Add the G5B controlled interactive terminal: the main process owns a trusted-workspace-bound PTY, while the sandboxed renderer receives only sessionized start/input/resize/stop events and renders them through xterm.
+- Keep terminal activity separate from Agent approvals and evidence, reject startup while an Agent or detected external writer is active, block same-desktop Agent startup while the terminal runs, bound input/output/replay with backpressure, and terminate the child on workspace switches, window close, and application exit.
 
 ## 0.19.0 — 2026-09-28
 

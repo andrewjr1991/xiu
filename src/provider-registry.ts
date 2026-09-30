@@ -13,6 +13,14 @@ export interface ProviderFeatures {
   vision: boolean;
   image: boolean;
   video: boolean;
+  audio?: boolean;
+}
+
+export interface ProviderCapabilityModels {
+  vision?: string;
+  image?: string;
+  video?: string;
+  audio?: string;
 }
 
 export interface ProviderProfile {
@@ -26,6 +34,7 @@ export interface ProviderProfile {
   apiKey?: string;
   proxy?: string;
   contextWindow?: number;
+  capabilityModels?: ProviderCapabilityModels;
   features: ProviderFeatures;
   builtin?: boolean;
 }
@@ -56,9 +65,10 @@ export interface ProviderCredentialInfo {
 }
 
 interface ProviderFile {
-  version: 3;
+  version: 4;
   active?: string;
   activeModels?: Record<string, string>;
+  activeCapabilityModels?: Record<string, ProviderCapabilityModels>;
   failoverChains?: Record<string, string[]>;
   routing?: ProviderRoutingPolicy;
   profiles: ProviderProfile[];
@@ -83,18 +93,20 @@ function probeFingerprint(profile: ProviderProfile, model: string): string {
   })).digest("hex").slice(0, 24);
 }
 
-const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false });
+const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false, audio: false });
 
 export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
   {
     id: "agnes", name: "Agnes", kind: "agnes", model: "agnes-2.5-flash",
     baseURL: "https://apihub.agnes-ai.com/v1", apiKeyEnv: "AGNES_API_KEY",
-    features: { text: true, tools: true, vision: true, image: true, video: true }, builtin: true,
+    capabilityModels: { vision: "agnes-2.5-flash", image: "agnes-image-2.1-flash", video: "agnes-video-v2.0" },
+    features: { text: true, tools: true, vision: true, image: true, video: true, audio: false }, builtin: true,
   },
   {
     id: "openai", name: "OpenAI", kind: "openai", model: "gpt-5",
     apiKeyEnv: "OPENAI_API_KEY",
-    features: { text: true, tools: true, vision: true, image: false, video: false }, builtin: true,
+    capabilityModels: { vision: "gpt-5", image: "gpt-image-1", video: "sora-2", audio: "gpt-4o-mini-tts" },
+    features: { text: true, tools: true, vision: true, image: true, video: true, audio: true }, builtin: true,
   },
   {
     id: "anthropic", name: "Anthropic", kind: "anthropic", model: "claude-sonnet-4-20250514",
@@ -173,19 +185,28 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
   for (const key of ["tools", "vision", "image", "video"] as const) {
     if (typeof profile.features[key] !== "boolean") throw new Error(`features.${key} must be boolean`);
   }
-  if (profile.kind !== "agnes" && (profile.features.image || profile.features.video)) {
-    throw new Error("Image and video generation are currently available only through the Agnes adapter");
+  if (profile.features.audio !== undefined && typeof profile.features.audio !== "boolean") throw new Error("features.audio must be boolean");
+  if (profile.kind === "anthropic" && (profile.features.image || profile.features.video || profile.features.audio)) {
+    throw new Error("The Anthropic adapter supports vision input but does not expose image, video, or audio generation endpoints");
+  }
+  const capabilityModels = profile.capabilityModels ? { ...profile.capabilityModels } : undefined;
+  for (const capability of ["vision", "image", "video", "audio"] as const) {
+    const value = capabilityModels?.[capability];
+    if (value !== undefined && (!value.trim() || value.length > 200 || /[\r\n\0]/.test(value))) {
+      throw new Error(`capabilityModels.${capability} must be 1-200 characters`);
+    }
+    if (value !== undefined) capabilityModels![capability] = value.trim();
   }
   return {
     ...profile,
     id: profile.id.trim(), name: profile.name.trim(), model: profile.model.trim(),
     baseURL: profile.baseURL?.replace(/\/$/, ""), apiKeyEnv: profile.apiKeyEnv?.trim(), builtin: Boolean(profile.builtin),
-    features: { ...profile.features },
+    ...(capabilityModels ? { capabilityModels } : {}), features: { ...profile.features, audio: profile.features.audio === true },
   };
 }
 
 export class ProviderRegistry {
-  private file: ProviderFile = { version: 3, profiles: [] };
+  private file: ProviderFile = { version: 4, profiles: [] };
   private pluginProfiles: ProviderProfile[] = [];
   private credentials: LegacyCredentialStore<string, "provider-api-key">;
   private saveOperation: Promise<void> = Promise.resolve();
@@ -201,7 +222,7 @@ export class ProviderRegistry {
   async load(): Promise<void> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as Partial<ProviderFile>;
-      if (![1, 2, 3].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
+      if (![1, 2, 3, 4].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
       const sourceVersion = Number(parsed.version);
       if (parsed.profiles.length > 100) throw new Error("provider configuration contains more than 100 profiles");
       const legacyCredentials: Record<string, string> = {};
@@ -268,6 +289,17 @@ export class ProviderRegistry {
         if (!isValidProviderId(id) || typeof model !== "string" || !model.trim() || model.length > 200) continue;
         activeModels[id] = model.trim();
       }
+      const rawActiveCapabilityModels = parsed.activeCapabilityModels && typeof parsed.activeCapabilityModels === "object" ? parsed.activeCapabilityModels : {};
+      const activeCapabilityModels: Record<string, ProviderCapabilityModels> = {};
+      for (const [id, rawModels] of Object.entries(rawActiveCapabilityModels)) {
+        if (!isValidProviderId(id) || !rawModels || typeof rawModels !== "object") continue;
+        const models: ProviderCapabilityModels = {};
+        for (const capability of ["vision", "image", "video", "audio"] as const) {
+          const model = (rawModels as ProviderCapabilityModels)[capability];
+          if (typeof model === "string" && model.trim() && model.length <= 200 && !/[\r\n\0]/.test(model)) models[capability] = model.trim();
+        }
+        if (Object.keys(models).length) activeCapabilityModels[id] = models;
+      }
       const failoverChains: Record<string, string[]> = {};
       if (parsed.failoverChains && typeof parsed.failoverChains === "object") {
         for (const [primaryId, rawChain] of Object.entries(parsed.failoverChains)) {
@@ -289,13 +321,13 @@ export class ProviderRegistry {
         kind: "provider-api-key", location: this.filename, values: credentials,
         revisions: parsed.credentialRevisions && typeof parsed.credentialRevisions === "object" ? parsed.credentialRevisions : undefined,
       });
-      this.file = { version: 3, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
+      this.file = { version: 4, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, activeCapabilityModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
       // Keep an unresolved active id in memory: an approved plugin may contribute
       // that provider after workspace trust is established later in startup.
-      if (sourceVersion < 3) await this.save();
+      if (sourceVersion < 4) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.file = { version: 3, profiles: [] };
+        this.file = { version: 4, profiles: [] };
         this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
         return;
       }
@@ -307,6 +339,7 @@ export class ProviderRegistry {
     return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles, ...this.pluginProfiles].map((profile) => ({
       ...profile,
       apiKey: this.resolveStoredCredential(profile.id),
+      ...((profile.capabilityModels || this.file.activeCapabilityModels?.[profile.id]) ? { capabilityModels: { ...profile.capabilityModels, ...this.file.activeCapabilityModels?.[profile.id] } } : {}),
       features: { ...profile.features },
     }));
   }
@@ -332,6 +365,10 @@ export class ProviderRegistry {
   activeModel(id: string): string | undefined {
     const models = this.file.activeModels;
     return models && Object.hasOwn(models, id) ? models[id] : undefined;
+  }
+
+  activeCapabilityModel(id: string, capability: keyof ProviderCapabilityModels): string | undefined {
+    return this.get(id)?.capabilityModels?.[capability];
   }
 
   credentialRevision(id: string): number { return this.file.credentialRefs?.[id]?.revision ?? this.credentials.ref(id).revision; }
@@ -569,6 +606,17 @@ export class ProviderRegistry {
     await this.save();
   }
 
+  async setCapabilityModel(id: string, capability: keyof ProviderCapabilityModels, model: string): Promise<void> {
+    const profile = this.get(id);
+    if (!profile) throw new Error(`Provider profile not found: ${id}`);
+    if (!profile.features[capability]) throw new Error(`Provider ${id} does not enable ${capability}`);
+    if (!model.trim() || model.length > 200 || /[\r\n\0]/.test(model)) throw new Error("Capability model must be 1-200 characters without line breaks");
+    this.file.active = id;
+    const models = (this.file.activeCapabilityModels ??= {});
+    (models[id] ??= {})[capability] = model.trim();
+    await this.save();
+  }
+
   async upsert(profile: ProviderProfile): Promise<void> {
     const normalized = validateProviderProfile({ ...profile, builtin: false });
     if (BUILTIN_PROVIDER_PROFILES.some((item) => item.id === normalized.id)) throw new Error(`Built-in provider id cannot be replaced: ${normalized.id}`);
@@ -630,6 +678,7 @@ export class ProviderRegistry {
     }
     this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
     if (this.file.active === id) this.file.active = undefined;
+    if (this.file.activeCapabilityModels) delete this.file.activeCapabilityModels[id];
     await this.save();
   }
 
@@ -638,9 +687,10 @@ export class ProviderRegistry {
       await fs.mkdir(path.dirname(this.filename), { recursive: true });
       const temporary = `${this.filename}.${process.pid}.${++this.saveSequence}.tmp`;
       const safeFile: ProviderFile = {
-        version: 3,
+        version: 4,
         active: this.file.active,
         activeModels: { ...this.file.activeModels },
+        activeCapabilityModels: Object.fromEntries(Object.entries(this.file.activeCapabilityModels ?? {}).map(([id, models]) => [id, { ...models }])),
         failoverChains: Object.fromEntries(Object.entries(this.file.failoverChains ?? {}).map(([id, chain]) => [id, [...chain]])),
         routing: { enabled: this.file.routing?.enabled === true, phases: { ...(this.file.routing?.phases ?? {}) } },
         profiles: this.file.profiles.map(({ apiKey: _secret, ...profile }) => ({ ...profile, builtin: false } as ProviderProfile)),

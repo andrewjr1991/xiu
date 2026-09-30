@@ -87,6 +87,19 @@ test("desktop Markdown preview treats embedded HTML as text", async (t) => {
   assert.match(preview.safeHtml ?? "", /&lt;script&gt;/);
 });
 
+test("desktop review provides bounded local audio and video previews", async (t) => {
+  const root = await fixture();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "speech.mp3"), Buffer.from("audio-bytes"));
+  await fs.writeFile(path.join(root, "clip.mp4"), Buffer.from("video-bytes"));
+  const audio = await previewReviewFile(root, "speech.mp3");
+  const video = await previewReviewFile(root, "clip.mp4");
+  assert.equal(audio.kind, "audio");
+  assert.match(audio.dataUrl ?? "", /^data:audio\/mpeg;base64,/);
+  assert.equal(video.kind, "video");
+  assert.match(video.dataUrl ?? "", /^data:video\/mp4;base64,/);
+});
+
 test("HTML sanitizer strips remote and executable surfaces from direct input", () => {
   const safe = sanitizeHtmlPreview('<iframe src="file:///secret"></iframe><object data="https://evil"></object><table style="background:url(https://evil)"><tr><td onmouseover="x()">ok</td></tr></table>');
   assert.doesNotMatch(safe, /<iframe|<object|file:\/\/|https:\/\/evil|onmouseover|background:url/i);

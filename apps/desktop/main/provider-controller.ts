@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { selectableModels } from "../../../src/model-catalog.js";
+import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
 import { ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
@@ -22,7 +22,7 @@ import type {
 } from "../shared/protocol.js";
 
 type ProviderRegistryLike = Pick<ProviderRegistry,
-  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
+  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
 >;
 
 interface ProviderControllerDependencies {
@@ -96,6 +96,12 @@ export class DesktopProviderController {
       const selected = this.registry.activeModel(profile.id) ?? profile.model;
       return [profile.id, this.modelOptions(profile, selected)];
     }));
+    const capabilityModelsByProvider = Object.fromEntries(profiles.map((profile) => [profile.id, {
+      vision: selectableCapabilityModels("vision", profile.capabilityModels?.vision, this.discovered.get(profile.id) ?? []),
+      image: selectableCapabilityModels("image", profile.capabilityModels?.image, this.discovered.get(profile.id) ?? []),
+      video: selectableCapabilityModels("video", profile.capabilityModels?.video, this.discovered.get(profile.id) ?? []),
+      audio: selectableCapabilityModels("audio", profile.capabilityModels?.audio, this.discovered.get(profile.id) ?? []),
+    }]));
     const models = modelsByProvider[modelProfile.id] ?? [];
     return {
       activeProviderId,
@@ -103,6 +109,7 @@ export class DesktopProviderController {
       modelProviderId: modelProfile.id,
       models,
       modelsByProvider,
+      capabilityModelsByProvider,
       profiles: profiles.map((profile) => {
         const info = credentials.get(profile.id);
         const keyOptional = KEY_OPTIONAL.has(profile.kind);
@@ -118,7 +125,8 @@ export class DesktopProviderController {
           ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
           ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
           credential: { source, configured, editable: source !== "environment" && !keyOptional },
-          features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video },
+          capabilityModels: { ...(profile.capabilityModels ?? {}) },
+          features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
         };
       }),
       ...(discoveryError ? { discoveryError } : {}),
@@ -140,7 +148,12 @@ export class DesktopProviderController {
   async select(request: DesktopProviderSelectRequest): Promise<DesktopProviderSnapshot> {
     const profile = this.profile(request?.providerId);
     const model = this.model(request?.model);
-    await this.registry.setActive(profile.id, model);
+    if (request?.capability) {
+      if (!["vision", "image", "video", "audio"].includes(request.capability)) throw new Error("模型能力类型无效。");
+      await this.registry.setCapabilityModel(profile.id, request.capability, model);
+    } else {
+      await this.registry.setActive(profile.id, model);
+    }
     return this.snapshot(profile.id);
   }
 
@@ -180,9 +193,12 @@ export class DesktopProviderController {
 
   async upsert(request: DesktopProviderUpsertRequest): Promise<DesktopProviderSnapshot> {
     const existingId = request?.existingId?.trim();
-    const id = this.providerId(request?.id);
-    if (existingId && existingId !== id) throw new Error("编辑渠道时不能修改 Provider ID。");
     const previous = existingId ? this.profile(existingId) : undefined;
+    const requestedId = request?.id?.trim();
+    if (existingId && existingId !== requestedId) throw new Error("编辑渠道时不能修改 Provider ID。");
+    // ProviderRegistry historically accepted mixed-case IDs. Keep an existing ID
+    // verbatim so those profiles remain editable without moving credential keys.
+    const id = previous ? previous.id : this.providerId(request?.id);
     if (previous?.builtin) throw new Error("内置渠道不能覆盖；请新增一个自定义渠道。");
     if (!previous && this.registry.get(id)) throw new Error("Provider ID 已存在。");
     const name = this.shortText(request?.name, "渠道名称", 100);
@@ -194,10 +210,17 @@ export class DesktopProviderController {
     if (apiKeyEnv && request.apiKey) throw new Error("环境变量凭据和直接输入 Key 不能同时配置。");
     const contextWindow = request?.contextWindow === undefined ? undefined : this.contextWindow(request.contextWindow);
     const features = request?.features;
-    if (!features || [features.tools, features.vision, features.image, features.video].some((value) => typeof value !== "boolean")) throw new Error("渠道能力配置无效。");
+    if (!features || [features.tools, features.vision, features.image, features.video].some((value) => typeof value !== "boolean") || (features.audio !== undefined && typeof features.audio !== "boolean")) throw new Error("渠道能力配置无效。");
+    const normalizedFeatures = { ...features, audio: features.audio === true };
+    const capabilityModelEntries = Object.entries(request.capabilityModels ?? {});
+    if (capabilityModelEntries.some(([capability, value]) => !["vision", "image", "video", "audio"].includes(capability) || typeof value !== "string")) throw new Error("能力模型配置无效。");
+    const capabilityModels = Object.fromEntries(capabilityModelEntries.map(([capability, value]) => [capability, this.model(value as string)])) as ProviderProfile["capabilityModels"];
+    for (const capability of ["vision", "image", "video", "audio"] as const) {
+      if (normalizedFeatures[capability] && !capabilityModels?.[capability] && capability !== "vision") throw new Error(`请为 ${capability} 能力选择模型。`);
+    }
     const profile: ProviderProfile = {
       id, name, kind, model, ...(baseURL ? { baseURL } : {}), ...(apiKeyEnv ? { apiKeyEnv } : {}),
-      ...(contextWindow ? { contextWindow } : {}), features: { text: true, ...features },
+      ...(contextWindow ? { contextWindow } : {}), ...(Object.keys(capabilityModels ?? {}).length ? { capabilityModels } : {}), features: { text: true, ...normalizedFeatures },
     };
     try {
       await this.registry.upsert(profile);
@@ -289,7 +312,10 @@ export class DesktopProviderController {
           if (!item || typeof item !== "object") return [];
           const model = item as Partial<AvailableModel>;
           if (typeof model.id !== "string" || !model.id || model.id.length > 200) return [];
-          return [{ id: model.id, ...(typeof model.name === "string" ? { name: model.name.slice(0, 200) } : {}), ...(typeof model.description === "string" ? { description: model.description.slice(0, 500) } : {}), source: "api", ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow! > 0 ? { contextWindow: model.contextWindow } : {}) }];
+          const capabilities = Array.isArray(model.capabilities)
+            ? [...new Set(model.capabilities.filter((item): item is string => typeof item === "string" && ["text", "vision", "image", "video", "audio"].includes(item)))].slice(0, 5)
+            : undefined;
+          return [{ id: model.id, ...(typeof model.name === "string" ? { name: model.name.slice(0, 200) } : {}), ...(typeof model.description === "string" ? { description: model.description.slice(0, 500) } : {}), source: "api", ...(capabilities?.length ? { capabilities } : {}), ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow! > 0 ? { contextWindow: model.contextWindow } : {}) }];
         });
         if (models.length) this.discovered.set(providerId, models);
       }

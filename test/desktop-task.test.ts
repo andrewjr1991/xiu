@@ -57,6 +57,7 @@ test("desktop task controller owns one workspace runtime and forwards versioned 
   assert.equal(started.provider.model, "test-model");
   assert.deepEqual(seen, ["task.started"]);
   await assert.rejects(() => controller.assertCanReconfigure(first), /任务运行期间/);
+  await assert.rejects(() => controller.assertCanUseTerminal(first), /任务运行期间/);
   assert.equal(await controller.steerTask(first, "add tests"), true);
   assert.throws(() => controller.detach(), /still running|仍在运行/);
   await assert.rejects(() => controller.connect(second, 0), /still running|仍在运行/);
@@ -85,6 +86,7 @@ test("desktop task controller blocks Provider reconfiguration while another writ
   }));
 
   await assert.rejects(() => controller.assertCanReconfigure(workspace), /另一个 Xiu 进程/);
+  await assert.rejects(() => controller.assertCanUseTerminal(workspace), /另一个 Xiu 进程/);
   await external.complete("cancelled");
   await controller.assertCanReconfigure(workspace);
 });

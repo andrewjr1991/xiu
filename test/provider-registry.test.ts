@@ -117,6 +117,27 @@ test("saved credentials also work for built-in providers", async () => {
   assert.equal(restored.get("agnes")?.apiKey, "agnes-local-key");
 });
 
+test("capability model selections persist for built-in providers without replacing their profiles", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-capability-model-"));
+  const filename = path.join(directory, "providers.json");
+  const registry = new ProviderRegistry(filename);
+  await registry.load();
+  await registry.setCapabilityModel("agnes", "image", "agnes-image-next");
+  await registry.setCapabilityModel("agnes", "video", "agnes-video-next");
+
+  const saved = JSON.parse(await fs.readFile(filename, "utf8")) as { version: number; activeCapabilityModels?: Record<string, Record<string, string>>; profiles: unknown[] };
+  assert.equal(saved.version, 4);
+  assert.equal(saved.activeCapabilityModels?.agnes?.image, "agnes-image-next");
+  assert.deepEqual(saved.profiles, []);
+
+  const restored = new ProviderRegistry(filename);
+  await restored.load();
+  assert.equal(restored.activeId(), "agnes");
+  assert.equal(restored.activeCapabilityModel("agnes", "image"), "agnes-image-next");
+  assert.equal(restored.get("agnes")?.capabilityModels?.video, "agnes-video-next");
+  await assert.rejects(restored.setCapabilityModel("agnes", "audio", "agnes-tts"), /does not enable audio/);
+});
+
 test("provider validation rejects unsafe ids, URLs, and secret-shaped fields", () => {
   const base = {
     id: "custom", name: "Custom", kind: "openai-compatible" as const, model: "coder",
@@ -125,7 +146,11 @@ test("provider validation rejects unsafe ids, URLs, and secret-shaped fields", (
   assert.throws(() => validateProviderProfile({ ...base, id: "__proto__" }), /Provider id/);
   assert.throws(() => validateProviderProfile({ ...base, baseURL: "file:///secret" }), /http:\/\//);
   assert.throws(() => validateProviderProfile({ ...base, apiKeyEnv: "actual secret" }), /environment variable/);
-  assert.throws(() => validateProviderProfile({ ...base, baseURL: "https://example.test/v1", features: { ...base.features, image: true } }), /only through the Agnes/);
+  const media = validateProviderProfile({ ...base, baseURL: "https://example.test/v1", capabilityModels: { image: "vendor-image-1" }, features: { ...base.features, image: true, audio: true } });
+  assert.equal(media.capabilityModels?.image, "vendor-image-1");
+  assert.equal(media.features.audio, true);
+  assert.throws(() => validateProviderProfile({ ...base, baseURL: "https://example.test/v1", capabilityModels: { audio: "bad\nmodel" } }), /capabilityModels.audio/);
+  assert.throws(() => validateProviderProfile({ ...base, kind: "anthropic", baseURL: undefined, features: { ...base.features, audio: true } }), /supports vision input.*does not expose.*audio/i);
   assert.throws(() => validateProviderProfile(base), /require a baseURL/);
   assert.ok(BUILTIN_PROVIDER_PROFILES.every((profile) => profile.builtin));
 });
@@ -177,7 +202,7 @@ test("provider registry migrates version 1 settings and discards untrusted legac
   await registry.load();
   assert.equal(registry.get("legacy")?.model, "coder");
   assert.equal(registry.capabilityProbe("legacy", "coder"), undefined);
-  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 3);
+  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 4);
 });
 
 test("versioned capability cache is fingerprinted and invalidated when credentials change", async () => {
@@ -191,7 +216,7 @@ test("versioned capability cache is fingerprinted and invalidated when credentia
   });
   await registry.setCapabilityProbe({ providerId: "fingerprint", model: "coder", checkedAt: "2026-08-11T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported" });
   const stored = JSON.parse(await fs.readFile(filename, "utf8")) as { version: number; probes: Array<{ profileFingerprint?: string }> };
-  assert.equal(stored.version, 3);
+  assert.equal(stored.version, 4);
   assert.match(stored.probes[0]?.profileFingerprint ?? "", /^[a-f0-9]{24}$/);
   assert.equal(registry.capabilityProbe("fingerprint", "coder")?.tools, "supported");
   await registry.setApiKey("fingerprint", "second-key");

@@ -7,15 +7,18 @@ import { resolveWorkspacePath } from "../workspace-path.js";
 
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 12 * 1024 * 1024;
 const MAX_FILES = 800;
 const EXCLUDED_DIRECTORIES = new Set([".git", ".xiu", "node_modules"]);
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
 };
+const AUDIO_TYPES: Record<string, string> = { ".mp3": "audio/mpeg", ".wav": "audio/wav", ".opus": "audio/ogg", ".aac": "audio/aac", ".flac": "audio/flac" };
+const VIDEO_TYPES: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
 
 export interface ReviewFileEntry {
   path: string;
-  kind: "text" | "markdown" | "html" | "image" | "binary";
+  kind: "text" | "markdown" | "html" | "image" | "audio" | "video" | "binary";
   bytes: number;
 }
 
@@ -60,6 +63,8 @@ async function safeRegularFile(workspace: string, relative: string): Promise<{ r
 function fileKind(relative: string, data?: Buffer): ReviewFileEntry["kind"] {
   const extension = path.extname(relative).toLowerCase();
   if (IMAGE_TYPES[extension]) return "image";
+  if (AUDIO_TYPES[extension]) return "audio";
+  if (VIDEO_TYPES[extension]) return "video";
   if ([".md", ".markdown"].includes(extension)) return "markdown";
   if ([".html", ".htm"].includes(extension)) return "html";
   if (data?.includes(0)) return "binary";
@@ -133,6 +138,9 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
   const { target, stat } = await safeRegularFile(workspace, relative);
   const extension = path.extname(relative).toLowerCase();
   if (IMAGE_TYPES[extension] && stat.size > MAX_IMAGE_BYTES) return { path: relative, kind: "image", bytes: stat.size, truncated: true, warning: "图片超过 2 MiB，未载入预览。" };
+  const mediaType = AUDIO_TYPES[extension] ?? VIDEO_TYPES[extension];
+  const mediaKind = AUDIO_TYPES[extension] ? "audio" as const : VIDEO_TYPES[extension] ? "video" as const : undefined;
+  if (mediaType && stat.size > MAX_MEDIA_BYTES) return { path: relative, kind: mediaKind!, bytes: stat.size, truncated: true, warning: "媒体文件超过 12 MiB，未载入内嵌预览。" };
   const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = await handle.stat();
@@ -140,7 +148,7 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
     if (!opened.isFile() || current.isSymbolicLink() || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs || opened.ino !== stat.ino || opened.dev !== stat.dev) {
       throw new Error("文件在打开预览时发生变化，请刷新后重试。");
     }
-    const maximum = IMAGE_TYPES[extension] ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
+    const maximum = IMAGE_TYPES[extension] ? MAX_IMAGE_BYTES : mediaType ? MAX_MEDIA_BYTES : MAX_TEXT_BYTES;
     const size = Math.min(stat.size, maximum);
     const data = Buffer.alloc(size);
     const { bytesRead } = await handle.read(data, 0, size, 0);
@@ -148,6 +156,7 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
     const after = await handle.stat();
     if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) throw new Error("文件在读取预览时发生变化，请刷新后重试。");
     if (IMAGE_TYPES[extension]) return { path: relative, kind: "image", bytes: stat.size, truncated: false, dataUrl: `data:${IMAGE_TYPES[extension]};base64,${exact.toString("base64")}` };
+    if (mediaType && mediaKind) return { path: relative, kind: mediaKind, bytes: stat.size, truncated: false, dataUrl: `data:${mediaType};base64,${exact.toString("base64")}` };
     const kind = fileKind(relative, exact);
     if (kind === "binary") return { path: relative, kind, bytes: stat.size, truncated: stat.size > size, warning: "二进制文件不提供文本预览。" };
     const source = redactSecrets(new TextDecoder("utf-8", { fatal: false }).decode(exact));

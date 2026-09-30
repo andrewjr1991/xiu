@@ -11,4 +11,5 @@ for (const file of required) await access(path.join(root, file));
 const html = await readFile(path.join(root, "dist/renderer/index.html"), "utf8");
 if (!/Content-Security-Policy/.test(html)) throw new Error("Renderer CSP is missing.");
 if (/https?:\/\//i.test(html)) throw new Error("Renderer HTML references remote content.");
+if (/script-src[^;]*(?:unsafe-inline|unsafe-eval)/i.test(html)) throw new Error("Renderer CSP permits unsafe scripts.");
 console.log("Desktop build smoke passed.");

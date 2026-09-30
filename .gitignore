@@ -3,6 +3,8 @@ dist/
 apps/desktop/dist/
 apps/desktop/release/
 apps/desktop/release-*/
+.desktop-build-cache/
+.desktop-build-temp/
 .forge/
 .xiu/*
 !.xiu/mcp.json

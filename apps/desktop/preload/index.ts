@@ -14,6 +14,11 @@ import {
   type DesktopProviderTestRequest,
   type DesktopProviderUpsertRequest,
   type DesktopTaskHistoryRequest,
+  type DesktopTerminalEvent,
+  type DesktopTerminalResizeRequest,
+  type DesktopTerminalSessionRequest,
+  type DesktopTerminalStartRequest,
+  type DesktopTerminalWriteRequest,
   type DesktopRecoveryAbandonRequest,
   type DesktopRecoveryRequest,
   type DesktopReviewRequest,
@@ -60,6 +65,11 @@ const bridge: XiuDesktopBridge = Object.freeze({
   testProvider: (request: DesktopProviderTestRequest) => ipcRenderer.invoke(desktopChannels.providerTest, request),
   upsertProvider: (request: DesktopProviderUpsertRequest) => ipcRenderer.invoke(desktopChannels.providerUpsert, request),
   deleteProvider: (request: DesktopProviderDeleteRequest) => ipcRenderer.invoke(desktopChannels.providerDelete, request),
+  terminalSnapshot: () => ipcRenderer.invoke(desktopChannels.terminalSnapshot),
+  startTerminal: (request?: DesktopTerminalStartRequest) => ipcRenderer.invoke(desktopChannels.terminalStart, request),
+  writeTerminal: (request: DesktopTerminalWriteRequest) => ipcRenderer.invoke(desktopChannels.terminalWrite, request),
+  resizeTerminal: (request: DesktopTerminalResizeRequest) => ipcRenderer.invoke(desktopChannels.terminalResize, request),
+  stopTerminal: (request: DesktopTerminalSessionRequest) => ipcRenderer.invoke(desktopChannels.terminalStop, request),
   onSnapshot: (listener: (snapshot: DesktopWorkspaceSnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: DesktopWorkspaceSnapshot) => listener(snapshot);
     ipcRenderer.on(desktopChannels.snapshotChanged, handler);
@@ -69,6 +79,11 @@ const bridge: XiuDesktopBridge = Object.freeze({
     const handler = (_event: Electron.IpcRendererEvent, runtimeEvent: RuntimeEvent) => listener(runtimeEvent);
     ipcRenderer.on(desktopChannels.runtimeEvent, handler);
     return () => ipcRenderer.removeListener(desktopChannels.runtimeEvent, handler);
+  },
+  onTerminalEvent: (listener: (event: DesktopTerminalEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, terminalEvent: DesktopTerminalEvent) => listener(terminalEvent);
+    ipcRenderer.on(desktopChannels.terminalEvent, handler);
+    return () => ipcRenderer.removeListener(desktopChannels.terminalEvent, handler);
   },
 });
 
