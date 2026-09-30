@@ -43,7 +43,8 @@ export function localizeToolDescription(name: string, description: string, langu
     case "load_skill": return `加载技能 ${rest(/^load skill\s*/i)}`;
     case "analyze_image": return description.replace(/^send\s+/i, "将 ").replace(/\s+to vision model\s+/i, " 发送到视觉模型 ");
     case "generate_image":
-    case "generate_video": return description.replace(/^generate\s+/i, "生成 ").replace(/\s+with\s+/i, "，使用模型 ");
+    case "generate_video":
+    case "generate_audio": return description.replace(/^generate\s+/i, "生成 ").replace(/\s+with\s+/i, "，使用模型 ");
     case "list_media_operations": return "查看媒体生成与恢复任务";
     case "resume_media_operation": return description.replace(/^resume media request\s+/i, "恢复媒体请求 ").replace(/\s+into\s+/i, "，保存到 ").replace(/\s+without creating a new generation$/i, "（不创建新生成任务）");
     case "ask_user": return localize(language, "等待用户回答", "Wait for the user's answer");
@@ -60,6 +61,7 @@ export function localizeToolProgress(message: string, language: UiLanguage): str
     .replace(/^Resuming download for image request\s+/i, "正在继续下载图片请求：")
     .replace(/^Resuming download for video request\s+/i, "正在继续下载视频请求：")
     .replace(/^Submitting potentially billable video request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的视频请求 $1，模型：")
+    .replace(/^Submitting potentially billable audio request\s+(.+?)\s+to\s+/i, "正在提交可能产生费用的音频请求 $1，模型：")
     .replace(/^Resuming video request\s+/i, "正在恢复视频请求：")
     .replace(/^Video\s+(.+?):\s+status service busy; retrying poll in\s+(\d+)s/i, "视频任务 $1：状态服务繁忙，$2 秒后重试查询")
     .replace(/^Video\s+(.+?):\s*/i, "视频任务 $1：")

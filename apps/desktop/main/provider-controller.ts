@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { selectableModels } from "../../../src/model-catalog.js";
+import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
 import { ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
@@ -96,6 +96,12 @@ export class DesktopProviderController {
       const selected = this.registry.activeModel(profile.id) ?? profile.model;
       return [profile.id, this.modelOptions(profile, selected)];
     }));
+    const capabilityModelsByProvider = Object.fromEntries(profiles.map((profile) => [profile.id, {
+      vision: selectableCapabilityModels("vision", profile.capabilityModels?.vision, this.discovered.get(profile.id) ?? []),
+      image: selectableCapabilityModels("image", profile.capabilityModels?.image, this.discovered.get(profile.id) ?? []),
+      video: selectableCapabilityModels("video", profile.capabilityModels?.video, this.discovered.get(profile.id) ?? []),
+      audio: selectableCapabilityModels("audio", profile.capabilityModels?.audio, this.discovered.get(profile.id) ?? []),
+    }]));
     const models = modelsByProvider[modelProfile.id] ?? [];
     return {
       activeProviderId,
@@ -103,6 +109,7 @@ export class DesktopProviderController {
       modelProviderId: modelProfile.id,
       models,
       modelsByProvider,
+      capabilityModelsByProvider,
       profiles: profiles.map((profile) => {
         const info = credentials.get(profile.id);
         const keyOptional = KEY_OPTIONAL.has(profile.kind);
@@ -118,7 +125,8 @@ export class DesktopProviderController {
           ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
           ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
           credential: { source, configured, editable: source !== "environment" && !keyOptional },
-          features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video },
+          capabilityModels: { ...(profile.capabilityModels ?? {}) },
+          features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
         };
       }),
       ...(discoveryError ? { discoveryError } : {}),
@@ -197,10 +205,17 @@ export class DesktopProviderController {
     if (apiKeyEnv && request.apiKey) throw new Error("环境变量凭据和直接输入 Key 不能同时配置。");
     const contextWindow = request?.contextWindow === undefined ? undefined : this.contextWindow(request.contextWindow);
     const features = request?.features;
-    if (!features || [features.tools, features.vision, features.image, features.video].some((value) => typeof value !== "boolean")) throw new Error("渠道能力配置无效。");
+    if (!features || [features.tools, features.vision, features.image, features.video].some((value) => typeof value !== "boolean") || (features.audio !== undefined && typeof features.audio !== "boolean")) throw new Error("渠道能力配置无效。");
+    const normalizedFeatures = { ...features, audio: features.audio === true };
+    const capabilityModelEntries = Object.entries(request.capabilityModels ?? {});
+    if (capabilityModelEntries.some(([capability, value]) => !["vision", "image", "video", "audio"].includes(capability) || typeof value !== "string")) throw new Error("能力模型配置无效。");
+    const capabilityModels = Object.fromEntries(capabilityModelEntries.map(([capability, value]) => [capability, this.model(value as string)])) as ProviderProfile["capabilityModels"];
+    for (const capability of ["vision", "image", "video", "audio"] as const) {
+      if (normalizedFeatures[capability] && !capabilityModels?.[capability] && capability !== "vision") throw new Error(`请为 ${capability} 能力选择模型。`);
+    }
     const profile: ProviderProfile = {
       id, name, kind, model, ...(baseURL ? { baseURL } : {}), ...(apiKeyEnv ? { apiKeyEnv } : {}),
-      ...(contextWindow ? { contextWindow } : {}), features: { text: true, ...features },
+      ...(contextWindow ? { contextWindow } : {}), ...(Object.keys(capabilityModels ?? {}).length ? { capabilityModels } : {}), features: { text: true, ...normalizedFeatures },
     };
     try {
       await this.registry.upsert(profile);
@@ -292,7 +307,10 @@ export class DesktopProviderController {
           if (!item || typeof item !== "object") return [];
           const model = item as Partial<AvailableModel>;
           if (typeof model.id !== "string" || !model.id || model.id.length > 200) return [];
-          return [{ id: model.id, ...(typeof model.name === "string" ? { name: model.name.slice(0, 200) } : {}), ...(typeof model.description === "string" ? { description: model.description.slice(0, 500) } : {}), source: "api", ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow! > 0 ? { contextWindow: model.contextWindow } : {}) }];
+          const capabilities = Array.isArray(model.capabilities)
+            ? [...new Set(model.capabilities.filter((item): item is string => typeof item === "string" && ["text", "vision", "image", "video", "audio"].includes(item)))].slice(0, 5)
+            : undefined;
+          return [{ id: model.id, ...(typeof model.name === "string" ? { name: model.name.slice(0, 200) } : {}), ...(typeof model.description === "string" ? { description: model.description.slice(0, 500) } : {}), source: "api", ...(capabilities?.length ? { capabilities } : {}), ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow! > 0 ? { contextWindow: model.contextWindow } : {}) }];
         });
         if (models.length) this.discovered.set(providerId, models);
       }

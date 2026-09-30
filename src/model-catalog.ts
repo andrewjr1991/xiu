@@ -13,6 +13,31 @@ const BUILTIN_MODELS: Record<ProviderName, AvailableModel[]> = {
 };
 
 const NON_CHAT_MODEL = /embedding|moderation|whisper|transcri|speech|tts|dall-e|image|video|sora|rerank/i;
+export type ModelCapability = "text" | "vision" | "image" | "video" | "audio";
+
+const CAPABILITY_PATTERNS: Record<Exclude<ModelCapability, "text">, RegExp> = {
+  vision: /vision|\bvl\b|multimodal|omni|gpt-4o|claude|gemini/i,
+  image: /dall-e|image|imagen|flux|stable[-_. ]?diffusion|midjourney/i,
+  video: /video|sora|veo|kling|hailuo|runway|\bwan(?:[._-]|$)/i,
+  audio: /audio|speech|tts|voice|music|whisper|transcri|cosyvoice|eleven/i,
+};
+
+export function modelSupportsCapability(model: AvailableModel, capability: ModelCapability): boolean {
+  const declared = model.capabilities?.map((item) => item.toLowerCase()) ?? [];
+  if (declared.includes(capability)) return true;
+  if (capability === "text") return !NON_CHAT_MODEL.test(model.id);
+  return CAPABILITY_PATTERNS[capability].test(`${model.id} ${model.name ?? ""} ${model.description ?? ""}`);
+}
+
+export function selectableCapabilityModels(capability: Exclude<ModelCapability, "text">, current: string | undefined, discovered: AvailableModel[] = []): AvailableModel[] {
+  const combined = [
+    ...(current ? [{ id: current, name: current, description: `Current ${capability} model`, source: "current" as const }] : []),
+    ...discovered.filter((model) => model.id && modelSupportsCapability(model, capability)),
+  ];
+  const unique = new Map<string, AvailableModel>();
+  for (const model of combined) if (!unique.has(model.id) || model.source === "current") unique.set(model.id, model);
+  return [...unique.values()].sort((a, b) => a.id === current ? -1 : b.id === current ? 1 : (a.name ?? a.id).localeCompare(b.name ?? b.id));
+}
 
 export function selectableModels(provider: ProviderName, current: string, discovered: AvailableModel[] = [], language: UiLanguage = "en-US"): AvailableModel[] {
   const candidates = discovered.filter((model) => model.id && !NON_CHAT_MODEL.test(model.id));

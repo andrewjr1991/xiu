@@ -9,8 +9,10 @@ import { resolveWorkspacePath } from "./workspace-path.js";
 import type { AgentTool, ToolContext } from "./types.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".opus", ".aac", ".flac", ".pcm"]);
 const RATIOS = new Set(["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]);
 const VIDEO_POLL_INTERVAL_MS = 30_000;
+const MAX_MEDIA_BYTES = 250 * 1024 * 1024;
 
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
@@ -125,7 +127,11 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
 
   const tools: AgentTool[] = [];
   const features = config.providerFeatures;
-  if (suppliedBackend?.analyzeImage || features?.vision || (!features && (config.provider === "agnes" || config.provider === "openai" || config.provider === "anthropic"))) tools.push({
+  const visionEnabled = features?.vision ?? (Boolean(config.capabilities?.vision) || config.provider === "agnes" || config.provider === "openai" || config.provider === "anthropic");
+  const imageEnabled = features?.image ?? (Boolean(config.capabilities?.image) || config.provider === "agnes");
+  const videoEnabled = features?.video ?? (Boolean(config.capabilities?.video) || config.provider === "agnes");
+  const audioEnabled = features?.audio ?? Boolean(config.capabilities?.audio);
+  if (visionEnabled && (!suppliedBackend || Boolean(suppliedBackend.analyzeImage))) tools.push({
       name: "analyze_image",
       description: "Analyze a workspace image or public image URL with the configured vision model. Use this when visual inspection is needed.",
       risk: "execute",
@@ -144,9 +150,9 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Vision model: ${models.vision}\n${result}`;
       },
     });
-  if ((suppliedBackend?.generateImage && suppliedBackend.download) || ((features?.image ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.image))) tools.push({
+  if (imageEnabled && Boolean(models.image) && (!suppliedBackend || Boolean(suppliedBackend.generateImage && suppliedBackend.download))) tools.push({
       name: "generate_image",
-      description: "Generate or edit an image with the configured image model and save it in the workspace. Reference images may be workspace paths, URLs, or data URIs.",
+      description: "Generate an image with the configured image model and save it in the workspace. When the provider adapter supports editing, reference images may be workspace paths, URLs, or data URIs.",
       risk: () => "dangerous",
       approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:image",
       changesWorkspace: true,
@@ -222,6 +228,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
           }
           if (result.b64Json) {
             bytes = Buffer.from(result.b64Json, "base64");
+            if (bytes.length > MAX_MEDIA_BYTES) throw new Error("Generated asset exceeds the 250 MB download limit");
             const cachedAsset = await operations.cacheAsset(operation.requestId, path.extname(outputPath).toLowerCase(), bytes);
             operation = await operations.update(key, { status: "asset_ready", cachedAsset });
           } else {
@@ -238,7 +245,68 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Generated image with ${models.image}\nRequest: ${operation.requestId}\nSaved: ${saved}\n${operation.url ? `Source URL: ${operation.url}` : "Source: cached base64 response"}`;
       },
     });
-  if ((suppliedBackend?.createVideo && suppliedBackend.getVideo && suppliedBackend.download) || ((features?.video ?? config.provider === "agnes") && config.provider === "agnes" && Boolean(models.video))) tools.push({
+  if (audioEnabled && Boolean(models.audio) && (!suppliedBackend || Boolean(suppliedBackend.generateAudio))) tools.push({
+      name: "generate_audio",
+      description: "Generate speech or audio with the configured audio model and save it in the workspace.",
+      risk: () => "dangerous",
+      approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:audio",
+      changesWorkspace: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Text or prompt to synthesize" },
+          output_path: { type: "string", description: "Workspace-relative .mp3, .wav, .opus, .aac, .flac, or .pcm path" },
+          voice: { type: "string", default: "alloy" },
+          instructions: { type: "string" },
+          force_new_generation: { type: "boolean", description: "Submit another potentially billable request after an ambiguous or failed prior attempt. Requires explicit approval." },
+        },
+        required: ["text", "output_path"], additionalProperties: false,
+      },
+      describe: (input) => `generate ${String(input.output_path)} with ${models.audio}`,
+      validate(input) {
+        if (!AUDIO_EXTENSIONS.has(path.extname(requiredString(input, "output_path")).toLowerCase())) throw new Error("audio output_path must use .mp3, .wav, .opus, .aac, .flac, or .pcm");
+      },
+      async execute(input, context) {
+        const outputPath = requiredString(input, "output_path");
+        const extension = path.extname(outputPath).toLowerCase();
+        const request = {
+          text: requiredString(input, "text"),
+          voice: typeof input.voice === "string" && input.voice.trim() ? input.voice.trim() : undefined,
+          format: extension.slice(1) as "mp3" | "wav" | "opus" | "aac" | "flac" | "pcm",
+          instructions: typeof input.instructions === "string" && input.instructions.trim() ? input.instructions.trim() : undefined,
+        };
+        const key = mediaOperationKey("audio", providerId, models.audio!, request);
+        const existing = await operations.get(key);
+        if (input.force_new_generation === true && !existing) throw new Error("force_new_generation is only valid for the exact matching request after a previous ambiguous or failed submission.");
+        let operation = existing && input.force_new_generation !== true
+          ? existing
+          : await operations.begin({ key, kind: "audio", providerId, model: models.audio! }, input.force_new_generation === true);
+        if (existing && input.force_new_generation !== true) {
+          const blocked = mediaRetryBlocked(operation);
+          if (blocked) throw new Error(blocked);
+        }
+        let bytes = await existingAsset(context.cwd, operation.savedPath) ?? await existingAsset(context.cwd, operation.cachedAsset);
+        if (!bytes) {
+          context.reportProgress?.(`Submitting potentially billable audio request ${operation.requestId} to ${models.audio}`);
+          try {
+            bytes = await getBackend().generateAudio!(request, context.signal);
+          } catch (error) {
+            const reason = safeProviderErrorMessage(error, [config.apiKey ?? ""]);
+            const status = mediaStatus(error);
+            await operations.update(key, { status: status === undefined ? "ambiguous" : "failed", error: reason });
+            throw new Error(status === undefined
+              ? `Audio request ${operation.requestId} failed with an unknown submission outcome and was not retried: ${reason}`
+              : `Audio request ${operation.requestId} was rejected before an asset was returned: ${reason}`);
+          }
+          const cachedAsset = await operations.cacheAsset(operation.requestId, extension, bytes);
+          operation = await operations.update(key, { status: "asset_ready", cachedAsset });
+        }
+        const saved = await saveAsset(context.cwd, outputPath, bytes);
+        await operations.update(key, { status: "completed", savedPath: saved });
+        return `Generated audio with ${models.audio}\nRequest: ${operation.requestId}\nSaved: ${saved}`;
+      },
+    });
+  if (videoEnabled && Boolean(models.video) && (!suppliedBackend || Boolean(suppliedBackend.createVideo && suppliedBackend.getVideo && suppliedBackend.download))) tools.push({
       name: "generate_video",
       description: "Create a video asynchronously with the configured video model, report progress, and save the completed MP4 in the workspace. image_url and keyframe_urls must be public HTTP(S) URLs.",
       risk: () => "dangerous",
@@ -382,9 +450,10 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
         return `Generated video with ${models.video}\nRequest: ${operation.requestId}\nTask: ${task.id}\nSaved: ${saved}\nSource URL: ${task.url}`;
       },
     });
-  if (suppliedBackend?.download || config.provider === "agnes") tools.push({
+  const mediaEnabled = imageEnabled || videoEnabled || audioEnabled;
+  if (mediaEnabled) tools.push({
     name: "list_media_operations",
-    description: "List recent persistent image and video generation operations for this workspace. Use request IDs to inspect recovery state without submitting paid work.",
+    description: "List recent persistent image, video, and audio generation operations for this workspace. Use request IDs to inspect recovery state without submitting paid work.",
     risk: "read",
     inputSchema: {
       type: "object",
@@ -411,7 +480,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       }, null, 2);
     },
   });
-  if (suppliedBackend?.download || config.provider === "agnes") tools.push({
+  if (mediaEnabled) tools.push({
     name: "resume_media_operation",
     description: "Resume an existing media request by stable request ID. This may reuse a cached asset, continue a video status poll, or retry an asset download, but it never submits a new paid generation request.",
     risk: "execute",
@@ -420,7 +489,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       type: "object",
       properties: {
         request_id: { type: "string", description: "Full request ID or an unambiguous prefix of at least 8 characters" },
-        output_path: { type: "string", description: "Workspace-relative destination path (.mp4 for video; image extension for image)" },
+        output_path: { type: "string", description: "Workspace-relative destination path with an extension matching the media kind" },
         timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 },
       },
       required: ["request_id", "output_path"],
@@ -430,7 +499,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
     validate(input) {
       const outputPath = requiredString(input, "output_path");
       const extension = path.extname(outputPath).toLowerCase();
-      if (extension !== ".mp4" && !IMAGE_EXTENSIONS.has(extension)) throw new Error("output_path must be .mp4, .png, .jpg, .jpeg, or .webp");
+      if (extension !== ".mp4" && !IMAGE_EXTENSIONS.has(extension) && !AUDIO_EXTENSIONS.has(extension)) throw new Error("output_path must use a supported image, video, or audio extension");
     },
     async execute(input, context) {
       const operation = await operations.resolve(requiredString(input, "request_id"));
@@ -441,6 +510,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       const extension = path.extname(outputPath).toLowerCase();
       if (operation.kind === "video" && extension !== ".mp4") throw new Error("video recovery output_path must end in .mp4");
       if (operation.kind === "image" && !IMAGE_EXTENSIONS.has(extension)) throw new Error("image recovery output_path must use a supported image extension");
+      if (operation.kind === "audio" && !AUDIO_EXTENSIONS.has(extension)) throw new Error("audio recovery output_path must use a supported audio extension");
 
       let bytes = await existingAsset(context.cwd, operation.savedPath) ?? await existingAsset(context.cwd, operation.cachedAsset);
       if (bytes) {

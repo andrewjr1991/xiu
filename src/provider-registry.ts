@@ -13,6 +13,14 @@ export interface ProviderFeatures {
   vision: boolean;
   image: boolean;
   video: boolean;
+  audio?: boolean;
+}
+
+export interface ProviderCapabilityModels {
+  vision?: string;
+  image?: string;
+  video?: string;
+  audio?: string;
 }
 
 export interface ProviderProfile {
@@ -26,6 +34,7 @@ export interface ProviderProfile {
   apiKey?: string;
   proxy?: string;
   contextWindow?: number;
+  capabilityModels?: ProviderCapabilityModels;
   features: ProviderFeatures;
   builtin?: boolean;
 }
@@ -83,18 +92,20 @@ function probeFingerprint(profile: ProviderProfile, model: string): string {
   })).digest("hex").slice(0, 24);
 }
 
-const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false });
+const textAndTools = (): ProviderFeatures => ({ text: true, tools: true, vision: false, image: false, video: false, audio: false });
 
 export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
   {
     id: "agnes", name: "Agnes", kind: "agnes", model: "agnes-2.5-flash",
     baseURL: "https://apihub.agnes-ai.com/v1", apiKeyEnv: "AGNES_API_KEY",
-    features: { text: true, tools: true, vision: true, image: true, video: true }, builtin: true,
+    capabilityModels: { vision: "agnes-2.5-flash", image: "agnes-image-2.1-flash", video: "agnes-video-v2.0" },
+    features: { text: true, tools: true, vision: true, image: true, video: true, audio: false }, builtin: true,
   },
   {
     id: "openai", name: "OpenAI", kind: "openai", model: "gpt-5",
     apiKeyEnv: "OPENAI_API_KEY",
-    features: { text: true, tools: true, vision: true, image: false, video: false }, builtin: true,
+    capabilityModels: { vision: "gpt-5", image: "gpt-image-1", video: "sora-2", audio: "gpt-4o-mini-tts" },
+    features: { text: true, tools: true, vision: true, image: true, video: true, audio: true }, builtin: true,
   },
   {
     id: "anthropic", name: "Anthropic", kind: "anthropic", model: "claude-sonnet-4-20250514",
@@ -173,14 +184,23 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
   for (const key of ["tools", "vision", "image", "video"] as const) {
     if (typeof profile.features[key] !== "boolean") throw new Error(`features.${key} must be boolean`);
   }
-  if (profile.kind !== "agnes" && (profile.features.image || profile.features.video)) {
-    throw new Error("Image and video generation are currently available only through the Agnes adapter");
+  if (profile.features.audio !== undefined && typeof profile.features.audio !== "boolean") throw new Error("features.audio must be boolean");
+  if (profile.kind === "anthropic" && (profile.features.image || profile.features.video || profile.features.audio)) {
+    throw new Error("The Anthropic adapter supports vision input but does not expose image, video, or audio generation endpoints");
+  }
+  const capabilityModels = profile.capabilityModels ? { ...profile.capabilityModels } : undefined;
+  for (const capability of ["vision", "image", "video", "audio"] as const) {
+    const value = capabilityModels?.[capability];
+    if (value !== undefined && (!value.trim() || value.length > 200 || /[\r\n\0]/.test(value))) {
+      throw new Error(`capabilityModels.${capability} must be 1-200 characters`);
+    }
+    if (value !== undefined) capabilityModels![capability] = value.trim();
   }
   return {
     ...profile,
     id: profile.id.trim(), name: profile.name.trim(), model: profile.model.trim(),
     baseURL: profile.baseURL?.replace(/\/$/, ""), apiKeyEnv: profile.apiKeyEnv?.trim(), builtin: Boolean(profile.builtin),
-    features: { ...profile.features },
+    ...(capabilityModels ? { capabilityModels } : {}), features: { ...profile.features, audio: profile.features.audio === true },
   };
 }
 
@@ -307,6 +327,7 @@ export class ProviderRegistry {
     return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles, ...this.pluginProfiles].map((profile) => ({
       ...profile,
       apiKey: this.resolveStoredCredential(profile.id),
+      ...(profile.capabilityModels ? { capabilityModels: { ...profile.capabilityModels } } : {}),
       features: { ...profile.features },
     }));
   }

@@ -125,7 +125,11 @@ test("provider validation rejects unsafe ids, URLs, and secret-shaped fields", (
   assert.throws(() => validateProviderProfile({ ...base, id: "__proto__" }), /Provider id/);
   assert.throws(() => validateProviderProfile({ ...base, baseURL: "file:///secret" }), /http:\/\//);
   assert.throws(() => validateProviderProfile({ ...base, apiKeyEnv: "actual secret" }), /environment variable/);
-  assert.throws(() => validateProviderProfile({ ...base, baseURL: "https://example.test/v1", features: { ...base.features, image: true } }), /only through the Agnes/);
+  const media = validateProviderProfile({ ...base, baseURL: "https://example.test/v1", capabilityModels: { image: "vendor-image-1" }, features: { ...base.features, image: true, audio: true } });
+  assert.equal(media.capabilityModels?.image, "vendor-image-1");
+  assert.equal(media.features.audio, true);
+  assert.throws(() => validateProviderProfile({ ...base, baseURL: "https://example.test/v1", capabilityModels: { audio: "bad\nmodel" } }), /capabilityModels.audio/);
+  assert.throws(() => validateProviderProfile({ ...base, kind: "anthropic", baseURL: undefined, features: { ...base.features, audio: true } }), /supports vision input.*does not expose.*audio/i);
   assert.throws(() => validateProviderProfile(base), /require a baseURL/);
   assert.ok(BUILTIN_PROVIDER_PROFILES.every((profile) => profile.builtin));
 });

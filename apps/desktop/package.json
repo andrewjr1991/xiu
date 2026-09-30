@@ -3,6 +3,7 @@
   "version": "0.20.0",
   "private": true,
   "description": "Xiu local-first desktop workbench.",
+  "author": "Xiu",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -18,9 +19,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pack:win": "npm run build && node scripts/package-windows.mjs dir",
     "installer:win": "npm run build && node scripts/package-windows.mjs nsis",
+    "installer:msix:win": "npm run build && node scripts/package-windows.mjs msix",
     "smoke": "node scripts/smoke.mjs",
     "smoke:ui": "npm run build && electron scripts/ui-smoke-harness.cjs",
-    "smoke:installer:win": "node scripts/windows-installer-smoke.mjs"
+    "smoke:installer:win": "node scripts/windows-installer-smoke.mjs",
+    "smoke:installer:msix:win": "node scripts/windows-msix-smoke.mjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -75,6 +78,20 @@
       "shortcutName": "Xiu",
       "uninstallDisplayName": "Xiu",
       "deleteAppDataOnUninstall": false
+    },
+    "appx": {
+      "artifactName": "Xiu-${version}-${arch}.msix",
+      "applicationId": "Xiu",
+      "identityName": "ai.xiu.desktop",
+      "publisherDisplayName": "Xiu",
+      "displayName": "Xiu",
+      "languages": [
+        "zh-CN",
+        "en-US"
+      ],
+      "capabilities": [
+        "runFullTrust"
+      ]
     }
   },
   "optionalDependencies": {

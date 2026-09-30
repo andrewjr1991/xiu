@@ -1055,7 +1055,7 @@ export class Agent {
     }
     const features = this.config.providerFeatures;
     const capabilities = features
-      ? ["text", features.tools && "tools", features.vision && "vision", features.image && "image", features.video && "video"].filter(Boolean) as string[]
+      ? ["text", features.tools && "tools", features.vision && "vision", features.image && "image", features.video && "video", features.audio && "audio"].filter(Boolean) as string[]
       : ["text", "tools"];
     return {
       models: selectableModels(this.config.provider, this.config.model, discovered, this.config.language).map((model) => ({
@@ -1122,7 +1122,7 @@ export class Agent {
     this.config.model = model;
     if (this.config.capabilities) {
       this.config.capabilities.text = model;
-      if (this.config.provider !== "agnes" || this.config.capabilities.vision === previous) this.config.capabilities.vision = model;
+      if (this.config.capabilities.vision === previous) this.config.capabilities.vision = model;
     }
   }
 

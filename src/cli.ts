@@ -197,7 +197,8 @@ const program = new Command()
   .option("--vision-model <model>", "model used to analyze images")
   .option("--image-model <model>", "model used to generate and edit images")
   .option("--video-model <model>", "model used to generate videos")
-  .option("--unified-model <model>", "use one model for text, vision, image, and video capabilities")
+  .option("--audio-model <model>", "model used to generate speech or audio")
+  .option("--unified-model <model>", "use one model for every declared text and media capability")
   .option("-r, --resume [session]", "choose a workspace session to resume, or resume a specific session id")
   .option("--list-sessions", "list resumable sessions in this workspace")
   .option("--context-window <tokens>", "override the model context window when provider metadata is unavailable")
@@ -351,6 +352,10 @@ async function main(): Promise<void> {
       apiKey: effective.apiKey,
       credentialRevision: providerRegistry.credentialRevision(effective.id),
       providerFeatures: effective.features,
+      visionModel: options.visionModel ?? effective.capabilityModels?.vision,
+      imageModel: options.imageModel ?? effective.capabilityModels?.image,
+      videoModel: options.videoModel ?? effective.capabilityModels?.video,
+      audioModel: effective.capabilityModels?.audio,
       baseURL: options.baseURL ?? effective.baseURL,
       proxy: options.proxy ?? effective.proxy,
       contextWindow: options.contextWindow ?? (effective.contextWindow ? String(effective.contextWindow) : apiContextWindow ? String(apiContextWindow) : undefined),
@@ -451,7 +456,7 @@ async function main(): Promise<void> {
       config.model = restored.model;
       if (config.capabilities) {
         config.capabilities.text = restored.model;
-        if (config.provider !== "agnes" || config.capabilities.vision === previous) config.capabilities.vision = restored.model;
+        if (config.capabilities.vision === previous) config.capabilities.vision = restored.model;
       }
     }
     const initialTask = (program.args as string[]).join(" ").trim();
@@ -529,7 +534,7 @@ async function main(): Promise<void> {
       config.model = restored.model;
       if (config.capabilities) {
         config.capabilities.text = restored.model;
-        if (config.provider !== "agnes" || config.capabilities.vision === previous) config.capabilities.vision = restored.model;
+        if (config.capabilities.vision === previous) config.capabilities.vision = restored.model;
       }
     }
 
@@ -1172,6 +1177,7 @@ async function main(): Promise<void> {
       if (profile.features.vision) names.push(localize(language, "视觉", "vision"));
       if (profile.features.image) names.push(localize(language, "生图", "image"));
       if (profile.features.video) names.push(localize(language, "视频", "video"));
+      if (profile.features.audio) names.push(localize(language, "音频", "audio"));
       return names.join("/");
     };
     const capabilityStateName = (state: CapabilityProbeState): string => ({
@@ -2202,7 +2208,7 @@ async function main(): Promise<void> {
         console.log(chalk.cyan(localize(language, "媒体生成与恢复任务", "Media generation and recovery tasks")));
         for (const record of records) {
           const details = [
-            record.kind === "image" ? localize(language, "图片", "image") : localize(language, "视频", "video"),
+            record.kind === "image" ? localize(language, "图片", "image") : record.kind === "video" ? localize(language, "视频", "video") : localize(language, "音频", "audio"),
             statusLabel(record),
             `${record.providerId}/${record.model}`,
             record.taskId ? `task ${record.taskId}` : undefined,

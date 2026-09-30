@@ -21,7 +21,7 @@ export interface Checkpoint {
 
 function targetPaths(tool: string, input: Record<string, unknown>): string[] {
   if (["write_file", "replace_text", "apply_patch"].includes(tool) && typeof input.path === "string") return [input.path];
-  if (["generate_image", "generate_video"].includes(tool) && typeof input.output_path === "string") return [input.output_path];
+  if (["generate_image", "generate_video", "generate_audio"].includes(tool) && typeof input.output_path === "string") return [input.output_path];
   return [];
 }
 

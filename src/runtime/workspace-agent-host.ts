@@ -2,6 +2,7 @@ import { Agent } from "../agent.js";
 import { CheckpointManager } from "../checkpoint.js";
 import { resolveConfig } from "../config.js";
 import { defaultLanguage } from "../i18n.js";
+import { createMediaTools } from "../media-tools.js";
 import { TaskPlanManager, createPlanTools } from "../plan.js";
 import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "../provider-registry.js";
@@ -46,6 +47,10 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
     apiKey: profile.apiKey,
     credentialRevision,
     providerFeatures: profile.features,
+    visionModel: profile.capabilityModels?.vision,
+    imageModel: profile.capabilityModels?.image,
+    videoModel: profile.capabilityModels?.video,
+    audioModel: profile.capabilityModels?.audio,
     baseURL: profile.baseURL,
     proxy: profile.proxy,
     contextWindow: profile.contextWindow ? String(profile.contextWindow) : undefined,
@@ -105,6 +110,7 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
     ...createProjectIndexTools(projectIndex),
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
+    ...createMediaTools(config),
   ];
 
   let provider: ModelProvider;

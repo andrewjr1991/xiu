@@ -93,3 +93,9 @@ jobs:
       - name: Run Windows installer acceptance
         if: matrix.platform == 'win32'
         run: npm run desktop:smoke:installer:win
+      - name: Build Windows x64 MSIX candidate
+        if: matrix.platform == 'win32'
+        run: npm run desktop:installer:msix:win
+      - name: Validate Windows MSIX package
+        if: matrix.platform == 'win32'
+        run: npm run desktop:smoke:installer:msix:win

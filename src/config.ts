@@ -11,6 +11,7 @@ export interface ProviderFeatureFlags {
   vision: boolean;
   image: boolean;
   video: boolean;
+  audio?: boolean;
 }
 
 export interface CapabilityModels {
@@ -18,6 +19,7 @@ export interface CapabilityModels {
   vision: string;
   image?: string;
   video?: string;
+  audio?: string;
   unified?: string;
 }
 
@@ -67,6 +69,7 @@ export function resolveConfig(options: {
   visionModel?: string;
   imageModel?: string;
   videoModel?: string;
+  audioModel?: string;
   unifiedModel?: string;
   contextLimit?: string;
   contextWindow?: string;
@@ -119,19 +122,26 @@ export function resolveConfig(options: {
   const unified = options.unifiedModel ?? process.env.XIU_UNIFIED_MODEL;
   const supportsVision = options.providerFeatures?.vision ?? (provider === "agnes" || provider === "openai" || provider === "anthropic");
   const capabilities: CapabilityModels = unified
-    ? provider === "agnes"
-      ? { text: unified, vision: unified, image: unified, video: unified, unified }
-      : { text: unified, vision: supportsVision ? unified : "", unified }
+    ? {
+        text: unified,
+        vision: supportsVision ? unified : "",
+        ...(options.providerFeatures?.image || provider === "agnes" ? { image: unified } : {}),
+        ...(options.providerFeatures?.video || provider === "agnes" ? { video: unified } : {}),
+        ...(options.providerFeatures?.audio ? { audio: unified } : {}),
+        unified,
+      }
     : provider === "agnes" ? {
         text: model,
         vision: options.visionModel ?? process.env.XIU_VISION_MODEL ?? model,
         image: options.imageModel ?? process.env.XIU_IMAGE_MODEL ?? "agnes-image-2.1-flash",
         video: options.videoModel ?? process.env.XIU_VIDEO_MODEL ?? "agnes-video-v2.0",
+        ...(options.audioModel ?? process.env.XIU_AUDIO_MODEL ? { audio: options.audioModel ?? process.env.XIU_AUDIO_MODEL } : {}),
       } : {
         text: model,
-        vision: supportsVision ? model : "",
+        vision: options.visionModel ?? process.env.XIU_VISION_MODEL ?? (supportsVision ? model : ""),
         ...(options.imageModel ?? process.env.XIU_IMAGE_MODEL ? { image: options.imageModel ?? process.env.XIU_IMAGE_MODEL } : {}),
         ...(options.videoModel ?? process.env.XIU_VIDEO_MODEL ? { video: options.videoModel ?? process.env.XIU_VIDEO_MODEL } : {}),
+        ...(options.audioModel ?? process.env.XIU_AUDIO_MODEL ? { audio: options.audioModel ?? process.env.XIU_AUDIO_MODEL } : {}),
       };
   const context = resolveContextProfile({
     provider,
@@ -183,7 +193,7 @@ export function resolveConfig(options: {
     baseURL,
     mediaBaseURL: options.mediaBaseURL
       ?? process.env.XIU_MEDIA_BASE_URL
-      ?? (provider === "agnes" ? baseURL : process.env.AGNES_BASE_URL ?? "https://apihub.agnes-ai.com/v1"),
+      ?? baseURL,
     proxy,
     capabilities,
     ...context,

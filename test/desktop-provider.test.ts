@@ -37,7 +37,11 @@ async function fixture() {
   });
   const controller = await DesktopProviderController.create({
     registry, systemCredentialStore: system,
-    discover: async () => [{ id: "office-fast", name: "Office Fast", source: "api", contextWindow: 64_000 }],
+    discover: async () => [
+      { id: "office-fast", name: "Office Fast", source: "api", contextWindow: 64_000 },
+      { id: "office-image-pro", name: "Office Image Pro", source: "api", capabilities: ["image"] },
+      { id: "office-tts", name: "Office TTS", source: "api", capabilities: ["audio"] },
+    ],
     test: async () => 1, modelCacheFile,
   });
   return { root, registryFile, modelCacheFile, system, registry, controller };
@@ -67,6 +71,8 @@ test("desktop provider controller discovers models and persists an explicit sele
   assert.equal(discovered.modelProviderId, "office");
   assert.ok(discovered.models.some((model) => model.id === "office-fast" && model.source === "api"));
   assert.ok(discovered.modelsByProvider.office?.some((model) => model.id === "office-fast"));
+  assert.ok(discovered.capabilityModelsByProvider.office?.image.some((model) => model.id === "office-image-pro"));
+  assert.ok(discovered.capabilityModelsByProvider.office?.audio.some((model) => model.id === "office-tts"));
   assert.ok(discovered.modelsByProvider.openai?.length, "other provider catalogs remain available");
   const selected = await item.controller.select({ providerId: "office", model: "office-fast" });
   assert.equal(selected.activeProviderId, "office");
@@ -81,6 +87,7 @@ test("desktop provider controller discovers models and persists an explicit sele
     discover: async () => [], test: async () => 0,
   });
   assert.ok(reloaded.snapshot("office").modelsByProvider.office?.some((model) => model.id === "office-fast"), "discovered models survive controller restart");
+  assert.ok(reloaded.snapshot("office").capabilityModelsByProvider.office?.audio.some((model) => model.id === "office-tts"), "discovered capability metadata survives controller restart");
 });
 
 test("a keyless provider becomes visible only after successful model discovery", async (t) => {
@@ -173,6 +180,25 @@ test("desktop provider controller edits a legacy mixed-case channel without chan
     baseURL: "https://legacy-2.example.test/v1",
     features: { tools: true, vision: false, image: false, video: false },
   }), /Provider ID/);
+});
+
+test("desktop provider controller persists vendor-neutral media capability models", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const saved = await item.controller.upsert({
+    id: "media-gateway",
+    name: "Media Gateway",
+    kind: "openai-compatible",
+    model: "vendor-chat",
+    baseURL: "https://media.example.test/v1",
+    apiKey: "media-secret",
+    capabilityModels: { vision: "vendor-vision", image: "vendor-image", video: "vendor-video", audio: "vendor-tts" },
+    features: { tools: true, vision: true, image: true, video: true, audio: true },
+  });
+  const profile = saved.profiles.find((candidate) => candidate.id === "media-gateway");
+  assert.deepEqual(profile?.capabilityModels, { vision: "vendor-vision", image: "vendor-image", video: "vendor-video", audio: "vendor-tts" });
+  assert.deepEqual(profile?.features, { tools: true, vision: true, image: true, video: true, audio: true });
+  assert.doesNotMatch(JSON.stringify(saved), /media-secret/);
 });
 
 test("desktop provider mutations protect built-in and active channels", async (t) => {

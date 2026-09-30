@@ -68,7 +68,8 @@ export interface DesktopProviderProfile {
     configured: boolean;
     editable: boolean;
   };
-  features: { tools: boolean; vision: boolean; image: boolean; video: boolean };
+  capabilityModels: { vision?: string; image?: string; video?: string; audio?: string };
+  features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
 }
 
 export type DesktopProviderKind = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
@@ -82,7 +83,8 @@ export interface DesktopProviderUpsertRequest {
   apiKeyEnv?: string;
   apiKey?: string;
   contextWindow?: number;
-  features: { tools: boolean; vision: boolean; image: boolean; video: boolean };
+  capabilityModels?: { vision?: string; image?: string; video?: string; audio?: string };
+  features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
 }
 export interface DesktopProviderDeleteRequest { providerId: string; confirmed: true }
 
@@ -101,6 +103,12 @@ export interface DesktopProviderSnapshot {
   models: DesktopModelOption[];
   modelProviderId: string;
   modelsByProvider: Record<string, DesktopModelOption[]>;
+  capabilityModelsByProvider: Record<string, {
+    vision: DesktopModelOption[];
+    image: DesktopModelOption[];
+    video: DesktopModelOption[];
+    audio: DesktopModelOption[];
+  }>;
   discoveryError?: string;
 }
 

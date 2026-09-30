@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AgentConfig } from "../src/config.js";
 import { createMediaTools } from "../src/media-tools.js";
-import { MediaApiError, type ImageGenerationRequest, type MediaBackend, type VideoGenerationRequest, type VideoTask } from "../src/media.js";
+import { MediaApiError, type AudioGenerationRequest, type ImageGenerationRequest, type MediaBackend, type VideoGenerationRequest, type VideoTask } from "../src/media.js";
 import { mediaOperationKey, MediaOperationStore } from "../src/media-operations.js";
 import { executeTool } from "../src/tools.js";
 
@@ -16,6 +16,8 @@ class MockMediaBackend implements MediaBackend {
   imageCalls = 0;
   videoCalls = 0;
   downloadCalls = 0;
+  audioCalls = 0;
+  audioRequest?: AudioGenerationRequest;
 
   async analyzeImage(_prompt: string, image: string): Promise<string> {
     this.analyzedImage = image;
@@ -42,6 +44,12 @@ class MockMediaBackend implements MediaBackend {
     this.downloadCalls += 1;
     return Buffer.from(url.endsWith(".mp4") ? "video-bytes" : "image-bytes");
   }
+
+  async generateAudio(request: AudioGenerationRequest): Promise<Buffer> {
+    this.audioCalls += 1;
+    this.audioRequest = request;
+    return Buffer.from("audio-bytes");
+  }
 }
 
 function config(cwd: string): AgentConfig {
@@ -51,7 +59,7 @@ function config(cwd: string): AgentConfig {
     cwd,
     maxTurns: 5,
     autoApprove: true,
-    capabilities: { text: "text-model", vision: "vision-model", image: "image-model", video: "video-model" },
+    capabilities: { text: "text-model", vision: "vision-model", image: "image-model", video: "video-model", audio: "audio-model" },
   };
 }
 
@@ -170,6 +178,23 @@ test("video generation validates frames and writes the completed MP4", async () 
   assert.equal(await fs.readFile(path.join(cwd, "out.mp4"), "utf8"), "video-bytes");
   assert.equal(backend.videoRequest?.numFrames, 121);
   assert.match(result, /video-model/);
+});
+
+test("audio generation is billable, persisted, and reusable without a duplicate request", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-audio-"));
+  const backend = new MockMediaBackend();
+  const tool = createMediaTools(config(cwd), backend).find((item) => item.name === "generate_audio")!;
+  const scopes: Array<string | undefined> = [];
+  const context = { cwd, approve: async (request: { sessionScope?: string }) => { scopes.push(request.sessionScope); return true; } };
+  const first = await executeTool(tool, { text: "Hello", voice: "alloy", output_path: "speech.mp3" }, context);
+  const second = await executeTool(tool, { text: "Hello", voice: "alloy", output_path: "speech-copy.mp3" }, context);
+  assert.equal(backend.audioCalls, 1);
+  assert.equal(backend.audioRequest?.format, "mp3");
+  assert.equal(await fs.readFile(path.join(cwd, "speech.mp3"), "utf8"), "audio-bytes");
+  assert.equal(await fs.readFile(path.join(cwd, "speech-copy.mp3"), "utf8"), "audio-bytes");
+  assert.match(first, /audio-model/);
+  assert.match(second, /no new generation charge|Generated audio/);
+  assert.deepEqual(scopes, ["billable-media:audio", "billable-media:audio"]);
 });
 
 test("a completed video task resumes its download without creating a duplicate task", async () => {
@@ -335,7 +360,15 @@ test("provider capability profiles only expose supported media tools", () => {
   const agnes = createMediaTools(config(cwd));
   assert.deepEqual(openai.map((tool) => tool.name), ["analyze_image"]);
   assert.deepEqual(anthropic.map((tool) => tool.name), ["analyze_image"]);
-  assert.deepEqual(agnes.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_video", "list_media_operations", "resume_media_operation"]);
+  assert.deepEqual(agnes.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_audio", "generate_video", "list_media_operations", "resume_media_operation"]);
+});
+
+test("explicit compatible capability models enable only their declared media tools", () => {
+  const tools = createMediaTools({
+    provider: "openai-compatible", providerId: "vendor", model: "vendor-chat", cwd: process.cwd(), autoApprove: true,
+    capabilities: { text: "vendor-chat", vision: "vendor-chat", image: "vendor-image", audio: "vendor-tts" },
+  });
+  assert.deepEqual(tools.map((tool) => tool.name), ["analyze_image", "generate_image", "generate_audio", "list_media_operations", "resume_media_operation"]);
 });
 
 test("a compatible provider with vision disabled exposes no media tools", () => {

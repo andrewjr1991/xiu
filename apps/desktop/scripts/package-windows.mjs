@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 
 if (process.platform !== "win32") throw new Error("Windows desktop packaging must run on Windows.");
 const target = process.argv[2];
-if (target !== "dir" && target !== "nsis") throw new Error("Usage: node scripts/package-windows.mjs <dir|nsis>");
+if (target !== "dir" && target !== "nsis" && target !== "msix") throw new Error("Usage: node scripts/package-windows.mjs <dir|nsis|msix>");
 
 const desktopRoot = path.resolve(import.meta.dirname, "..");
 const workspaceRoot = path.resolve(desktopRoot, "..", "..");
@@ -13,7 +13,8 @@ const cache = path.join(workspaceRoot, ".desktop-build-cache");
 await Promise.all([mkdir(temp, { recursive: true }), mkdir(cache, { recursive: true })]);
 
 const cli = path.join(desktopRoot, "node_modules", "electron-builder", "cli.js");
-const args = [cli, "--win", target, "--x64", "--config.electronDist=node_modules/electron/dist"];
+const builderTarget = target === "msix" ? "appx" : target;
+const args = [cli, "--win", builderTarget, "--x64", "--config.electronDist=node_modules/electron/dist"];
 const code = await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, {
     cwd: desktopRoot,
