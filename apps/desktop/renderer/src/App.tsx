@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 import {
   applyRuntimeEvent,
   type DesktopAttachment,
@@ -13,6 +15,7 @@ import {
   type DesktopReviewTab,
   type DesktopRuntimeConnection,
   type DesktopTaskHistorySnapshot,
+  type DesktopTerminalSnapshot,
   type DesktopWorkspaceSnapshot,
   type ReviewFilePreview,
   type RuntimeEvent,
@@ -263,6 +266,106 @@ function DiffDialog({ change, onClose }: { change: ChangeEntry; onClose: () => v
   </div>;
 }
 
+function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled: boolean }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | undefined>(undefined);
+  const fitRef = useRef<FitAddon | undefined>(undefined);
+  const snapshotRef = useRef<DesktopTerminalSnapshot>({ state: "idle" });
+  const lastSequenceRef = useRef(0);
+  const [snapshot, setSnapshot] = useState<DesktopTerminalSnapshot>({ state: "idle" });
+  const [error, setError] = useState<string>();
+
+  const applySnapshot = (next: DesktopTerminalSnapshot) => {
+    snapshotRef.current = next;
+    setSnapshot(next);
+  };
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      scrollback: 2_000,
+      fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.2,
+      theme: { background: "#111827", foreground: "#d7e0ec", cursor: "#73b7ff", selectionBackground: "#27476d" },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(hostRef.current);
+    terminalRef.current = terminal;
+    fitRef.current = fit;
+    const input = terminal.onData((data) => {
+      const current = snapshotRef.current;
+      if (current.state !== "running" || !current.sessionId) return;
+      void window.xiuDesktop.writeTerminal({ sessionId: current.sessionId, data }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    });
+    const resize = terminal.onResize(({ cols, rows }) => {
+      const current = snapshotRef.current;
+      if (current.state !== "running" || !current.sessionId) return;
+      void window.xiuDesktop.resizeTerminal({ sessionId: current.sessionId, cols, rows }).then(applySnapshot).catch(() => undefined);
+    });
+    const unsubscribe = window.xiuDesktop.onTerminalEvent((event) => {
+      if (event.sessionId !== snapshotRef.current.sessionId && event.kind === "state" && event.snapshot.state === "running") lastSequenceRef.current = 0;
+      if (event.sequence <= lastSequenceRef.current) return;
+      lastSequenceRef.current = event.sequence;
+      if (event.kind === "output") {
+        if (snapshotRef.current.sessionId === event.sessionId) terminal.write(event.data);
+        return;
+      }
+      if (event.kind === "state") {
+        applySnapshot(event.snapshot);
+        if (event.snapshot.state === "idle" && event.snapshot.message) terminal.writeln(`\r\n\x1b[90m${event.snapshot.message}\x1b[0m`);
+        return;
+      }
+      applySnapshot({ ...snapshotRef.current, state: "exited", exitCode: event.exitCode, ...(event.signal === undefined ? {} : { signal: event.signal }) });
+      terminal.writeln(`\r\n\x1b[90m[进程已退出，代码 ${event.exitCode}]\x1b[0m`);
+    });
+    void window.xiuDesktop.terminalSnapshot().then((current) => {
+      applySnapshot(current);
+      if (current.output) terminal.write(current.output);
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+    return () => { unsubscribe(); input.dispose(); resize.dispose(); terminal.dispose(); terminalRef.current = undefined; fitRef.current = undefined; };
+  }, []);
+
+  useEffect(() => {
+    if (!visible || !hostRef.current) return;
+    const fit = () => { try { fitRef.current?.fit(); } catch { /* Hidden or closing terminal. */ } };
+    const observer = new ResizeObserver(fit);
+    observer.observe(hostRef.current);
+    requestAnimationFrame(fit);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  const start = async () => {
+    setError(undefined);
+    terminalRef.current?.reset();
+    try {
+      const terminal = terminalRef.current;
+      const next = await window.xiuDesktop.startTerminal({ cols: terminal?.cols, rows: terminal?.rows });
+      applySnapshot(next);
+      if (next.output) terminal?.write(next.output);
+      if (next.state === "running") terminal?.focus();
+      if (next.state === "error") setError(next.message ?? "终端启动失败。");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+  const stop = async () => {
+    if (!snapshot.sessionId) return;
+    setError(undefined);
+    try { applySnapshot(await window.xiuDesktop.stopTerminal({ sessionId: snapshot.sessionId })); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+
+  return <section className={`review-pane terminal-pane ${visible ? "visible" : "hidden"}`} aria-hidden={!visible}>
+    <div className="terminal-toolbar"><div><strong>交互终端</strong><small>{snapshot.state === "running" ? `${snapshot.shell ?? "Shell"} · 运行中` : snapshot.state === "exited" ? `已退出${snapshot.exitCode === undefined ? "" : ` · ${snapshot.exitCode}`}` : snapshot.state === "error" ? "启动失败" : "未启动"}</small></div><div><button onClick={() => terminalRef.current?.clear()}>清屏</button>{snapshot.state === "running" ? <button className="terminal-stop" onClick={() => void stop()}>关闭</button> : <button className="terminal-start" disabled={disabled} onClick={() => void start()}>启动终端</button>}</div></div>
+    <p className="terminal-notice">由你直接控制，固定绑定当前可信工作区。输入不经过 Agent 审批，输出不会写入任务审计，也不会作为 Agent 完成证据。</p>
+    {disabled && snapshot.state !== "running" && <p className="terminal-disabled">Agent 任务运行期间不能启动终端。</p>}
+    {error && <p className="terminal-error">{error}</p>}
+    <div className="terminal-surface" ref={hostRef} />
+  </section>;
+}
+
 function ReviewInspector({ review, history, tab, changeView, preview, previewMode, active, onTab, onChangeView, onPreview, onDiff, onPreviewMode, onRefresh, onRestore, onRecover, onAbandon }: {
   review?: DesktopReviewSnapshot;
   history?: DesktopTaskHistorySnapshot;
@@ -281,7 +384,7 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
   onRecover: (runId: string) => void;
   onAbandon: (runId: string) => void;
 }) {
-  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "命令"], ["evidence", "证据"]];
+  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "终端"], ["evidence", "证据"]];
   const historicalTask = Boolean(history && changeView === "task");
   const displayedChanges = historicalTask ? history?.changes : review?.changes;
   return <aside className="inspector review-inspector">
@@ -300,9 +403,10 @@ function ReviewInspector({ review, history, tab, changeView, preview, previewMod
       {!preview && <div className="file-list">{review.files.map((file) => <button key={file.path} onClick={() => onPreview(file.path)}><span>{file.kind === "image" ? "▧" : file.kind === "markdown" || file.kind === "html" ? "◫" : "◻"}</span><span>{file.path}</span><small>{Math.ceil(file.bytes / 1024)} KB</small></button>)}</div>}
       {preview && <div className="file-preview"><header><button onClick={() => onPreview("")}>‹ 文件</button><strong>{preview.path}</strong>{preview.safeHtml && <div className="preview-toggle"><button className={previewMode === "source" ? "selected" : ""} onClick={() => onPreviewMode("source")}>源码</button><button className={previewMode === "preview" ? "selected" : ""} onClick={() => onPreviewMode("preview")}>预览</button></div>}</header>{preview.warning && <p className="review-warning">{preview.warning}</p>}{preview.kind === "image" && preview.dataUrl && <img src={preview.dataUrl} alt={preview.path} />}{previewMode === "preview" && preview.safeHtml ? <iframe title={`${preview.path} 安全预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.safeHtml} /> : preview.source !== undefined && <pre><SyntaxCode code={`${preview.source}${preview.truncated ? "\n…预览已截断" : ""}`} language={languageFromPath(preview.path)} /></pre>}</div>}
     </section>}
-    {review && tab === "terminal" && <section className="review-pane"><p className="pane-intro">只读展示 Xiu 已执行命令的有界、脱敏证据；这里不能直接输入 Shell。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}</section>}
+    {review && <InteractiveTerminal visible={tab === "terminal"} disabled={active} />}
     {review && tab === "evidence" && <section className="review-pane evidence-pane">
       {review.recovery && <article className="recovery-card"><span className="eyebrow">中断恢复</span><h3>{review.recovery.taskPreview}</h3><p>{review.recovery.recommendation}</p>{review.recovery.lastRecoveryPoint && <p>最后安全点：{review.recovery.lastRecoveryPoint.evidence}</p>}<strong>{review.recovery.unknownOperations.length} 项操作待核验</strong><div><button onClick={() => onAbandon(review.recovery!.runId)}>放弃旧任务</button><button className="primary-button compact" onClick={() => onRecover(review.recovery!.runId)}>确认恢复</button></div></article>}
+      <h3>命令证据</h3><p className="pane-intro">这里只展示 Agent 已执行命令的有界、脱敏记录；交互终端输出不会进入这里。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}
       <h3>验证账本</h3>{review.validations.length === 0 && <p className="empty-note">尚无验证证据。</p>}{review.validations.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "无结果摘要"}</p></article>)}
       <h3>检查点</h3>{review.checkpoints.length === 0 && <p className="empty-note">尚无检查点。</p>}{review.checkpoints.map((checkpoint) => <article className="checkpoint-card" key={checkpoint.id}><div><strong>{checkpoint.description}</strong><small>{new Date(checkpoint.createdAt).toLocaleString()}</small><p>{checkpoint.files.map((file) => file.path).join("、")}</p></div><button disabled={active} onClick={() => onRestore(checkpoint.id)}>恢复</button></article>)}
     </section>}

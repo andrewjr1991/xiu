@@ -206,6 +206,28 @@ export interface DesktopCheckpointRestoreRequest { checkpointId: string }
 export interface DesktopRecoveryRequest { runId: string }
 export interface DesktopRecoveryAbandonRequest { runId: string }
 
+export type DesktopTerminalState = "idle" | "running" | "exited" | "error";
+export interface DesktopTerminalSnapshot {
+  state: DesktopTerminalState;
+  sessionId?: string;
+  shell?: string;
+  cols?: number;
+  rows?: number;
+  exitCode?: number;
+  signal?: number;
+  message?: string;
+  /** Bounded, in-memory replay for renderer recovery. Never persisted or audited. */
+  output?: string;
+}
+export interface DesktopTerminalStartRequest { cols?: number; rows?: number }
+export interface DesktopTerminalSessionRequest { sessionId: string }
+export interface DesktopTerminalWriteRequest extends DesktopTerminalSessionRequest { data: string }
+export interface DesktopTerminalResizeRequest extends DesktopTerminalSessionRequest { cols: number; rows: number }
+export type DesktopTerminalEvent =
+  | { sessionId: string; sequence: number; kind: "output"; data: string }
+  | { sessionId: string; sequence: number; kind: "state"; snapshot: DesktopTerminalSnapshot }
+  | { sessionId: string; sequence: number; kind: "exit"; exitCode: number; signal?: number };
+
 export interface OpenRecentWorkspaceRequest {
   workspaceId: string;
 }
@@ -247,8 +269,14 @@ export interface XiuDesktopBridge {
   testProvider(request: DesktopProviderTestRequest): Promise<DesktopProviderTestResult>;
   upsertProvider(request: DesktopProviderUpsertRequest): Promise<DesktopProviderMutationResult>;
   deleteProvider(request: DesktopProviderDeleteRequest): Promise<DesktopProviderMutationResult>;
+  terminalSnapshot(): Promise<DesktopTerminalSnapshot>;
+  startTerminal(request?: DesktopTerminalStartRequest): Promise<DesktopTerminalSnapshot>;
+  writeTerminal(request: DesktopTerminalWriteRequest): Promise<void>;
+  resizeTerminal(request: DesktopTerminalResizeRequest): Promise<DesktopTerminalSnapshot>;
+  stopTerminal(request: DesktopTerminalSessionRequest): Promise<DesktopTerminalSnapshot>;
   onSnapshot(listener: (snapshot: DesktopWorkspaceSnapshot) => void): () => void;
   onRuntimeEvent(listener: (event: RuntimeEvent) => void): () => void;
+  onTerminalEvent(listener: (event: DesktopTerminalEvent) => void): () => void;
 }
 
 export const desktopChannels = {
@@ -285,4 +313,10 @@ export const desktopChannels = {
   providerTest: "provider:test",
   providerUpsert: "provider:upsert",
   providerDelete: "provider:delete",
+  terminalSnapshot: "terminal:snapshot",
+  terminalStart: "terminal:start",
+  terminalWrite: "terminal:write",
+  terminalResize: "terminal:resize",
+  terminalStop: "terminal:stop",
+  terminalEvent: "terminal:event",
 } as const;

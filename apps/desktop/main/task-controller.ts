@@ -4,7 +4,7 @@ import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.
 import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
 import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
-import { recoveryContinuation, type TaskRunOperation } from "../../../src/task-run.js";
+import { recoveryContinuation, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
 import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
 
@@ -290,6 +290,14 @@ export class DesktopTaskController {
     if (this.active(host)) throw new Error("任务运行期间不能切换 Provider、模型或凭据。请先停止任务并等待结束。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程运行任务，暂不能更改 Provider 配置。");
+  }
+
+  async assertCanUseTerminal(workspace: string): Promise<void> {
+    if (this.workspace && this.workspace !== workspace && !this.canChangeWorkspace()) throw new Error("任务运行期间不能启动交互终端。请先停止任务并等待结束。");
+    const host = this.workspace === workspace ? this.host ?? await this.creating : undefined;
+    if (host && this.active(host)) throw new Error("任务运行期间不能启动交互终端。请先停止任务并等待结束。");
+    const lock = await (host?.journal ?? new TaskRunJournal(workspace)).lockStatus();
+    if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程运行任务，暂不能启动交互终端。");
   }
 
   async reload(workspace: string): Promise<DesktopRuntimeConnection> {

@@ -289,6 +289,24 @@ button { font: inherit; }
 .operation-card { margin: 10px 0; padding: 12px; border: 1px solid #e3e8ef; border-radius: 11px; background: #fbfcfe; }.operation-card header { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }.operation-card header span { color: #667085; }.operation-card header span.succeeded { color: #27825f; }.operation-card header span.failed, .operation-card header span.unknown { color: #c44e4e; }.operation-card p { margin: 8px 0; color: #586477; font: 11px/1.55 ui-monospace,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.operation-card footer { color: #909aaa; font-size: 10px; }
 .evidence-pane > h3 { margin: 22px 0 8px; font-size: 13px; }.checkpoint-card { display: flex; justify-content: space-between; gap: 10px; padding: 11px 0; border-top: 1px solid #edf0f4; }.checkpoint-card strong, .checkpoint-card small { display: block; font-size: 11px; }.checkpoint-card small { margin-top: 3px; color: #8d97a6; }.checkpoint-card p { margin: 5px 0 0; color: #667085; font-size: 10px; overflow-wrap: anywhere; }.checkpoint-card button, .recovery-card > div button { align-self: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: 8px; color: #3d4a5c; background: #edf1f6; cursor: pointer; }.checkpoint-card button:disabled { opacity: .45; cursor: default; }
 .recovery-card { padding: 16px; border: 1px solid #f0c778; border-radius: 13px; background: #fffaf0; }.recovery-card h3 { margin: 7px 0; font-size: 15px; }.recovery-card p { color: #74654b; font-size: 11px; line-height: 1.5; }.recovery-card > strong { color: #9a6512; font-size: 12px; }.recovery-card > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 13px; }
+.terminal-pane { display: flex; box-sizing: border-box; min-height: 520px; height: calc(100% - 59px); padding: 12px; flex-direction: column; background: #f4f7fb; }
+.terminal-pane.hidden { display: none; }
+.terminal-toolbar { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 8px; }
+.terminal-toolbar > div { display: flex; gap: 3px; flex-direction: column; }
+.terminal-toolbar > div:last-child { flex-direction: row; }
+.terminal-toolbar strong { color: #253044; font-size: 13px; }
+.terminal-toolbar small { color: #7f8b9e; font-size: 10px; }
+.terminal-toolbar button { min-height: 30px; padding: 0 10px; border: 0; border-radius: 8px; color: #536175; background: #e6ebf2; cursor: pointer; font-size: 11px; }
+.terminal-toolbar button:disabled { opacity: .5; cursor: default; }
+.terminal-toolbar .terminal-start { color: white; background: #187fe7; }
+.terminal-toolbar .terminal-stop { color: #b83f4e; background: #ffe9ec; }
+.terminal-notice, .terminal-disabled, .terminal-error { margin: 0 0 8px; padding: 8px 9px; border-radius: 8px; font-size: 10px; line-height: 1.45; }
+.terminal-notice { color: #68758a; background: #e9eef5; }
+.terminal-disabled { color: #8d611b; background: #fff3df; }
+.terminal-error { color: #b43d4b; background: #ffeaed; overflow-wrap: anywhere; }
+.terminal-surface { min-height: 390px; flex: 1; overflow: hidden; padding: 9px 4px 7px 9px; border: 1px solid #263247; border-radius: 11px; background: #111827; box-shadow: inset 0 0 0 1px rgba(255,255,255,.02), 0 10px 24px rgba(25,36,55,.13); }
+.terminal-surface .xterm { height: 100%; }
+.terminal-surface .xterm-viewport { scrollbar-color: #435168 #111827; }
 
 @media (max-width: 1050px) {
   .app-shell { grid-template-columns: 200px 1fr; }

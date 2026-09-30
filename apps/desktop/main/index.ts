@@ -6,8 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DesktopWorkspaceController } from "./workspace-controller.js";
 import { DesktopTaskController } from "./task-controller.js";
 import { DesktopProviderController } from "./provider-controller.js";
+import { DesktopTerminalController } from "./terminal-controller.js";
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 
 protocol.registerSchemesAsPrivileged([{
@@ -28,9 +29,19 @@ smokeMilestone("module-loaded");
 const taskController = new DesktopTaskController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.runtimeEvent, event);
 });
+const terminalController = new DesktopTerminalController((event) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.terminalEvent, event);
+});
 let providerController: Promise<DesktopProviderController> | undefined;
+let writerStartQueue: Promise<void> = Promise.resolve();
 function getProviderController(): Promise<DesktopProviderController> {
   return providerController ??= DesktopProviderController.create();
+}
+
+function serializeWriterStart<T>(operation: () => Promise<T>): Promise<T> {
+  const result = writerStartQueue.then(operation, operation);
+  writerStartQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent): void {
@@ -85,16 +96,19 @@ function registerIpc(): void {
       properties: ["openDirectory", "dontAddToRecent"],
     });
     if (result.canceled || result.filePaths.length !== 1) return controller.snapshot();
+    terminalController.stopAll("工作区已切换，终端会话已关闭。");
     taskController.detach();
     return emitSnapshot(await controller.selectWorkspace(result.filePaths[0]!));
   });
   ipcMain.handle(desktopChannels.closeWorkspace, async (event) => {
     assertTrustedSender(event);
+    terminalController.stopAll("工作区已关闭，终端会话已结束。");
     taskController.detach();
     return emitSnapshot(await controller.clearSelection());
   });
   ipcMain.handle(desktopChannels.openRecentWorkspace, async (event, request: OpenRecentWorkspaceRequest) => {
     assertTrustedSender(event);
+    terminalController.stopAll("工作区已切换，终端会话已关闭。");
     taskController.detach();
     return emitSnapshot(await controller.openRecent(request));
   });
@@ -107,6 +121,7 @@ function registerIpc(): void {
     const removingCurrent = snapshot.workspace?.id === request.workspaceId;
     if (removingCurrent) {
       if (!taskController.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
+      terminalController.stopAll("工作区已移除，终端会话已关闭。");
       taskController.detach();
     }
     return emitSnapshot(await controller.removeRecent(request, request.confirmed));
@@ -123,11 +138,19 @@ function registerIpc(): void {
   });
   ipcMain.handle(desktopChannels.taskCreate, async (event, request: RuntimeTaskRequest) => {
     assertTrustedSender(event);
-    return taskController.createTask(controller.trustedWorkspacePath(), request?.text);
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再启动 Agent 任务。");
+      return taskController.createTask(workspace, request?.text);
+    });
   });
   ipcMain.handle(desktopChannels.taskContinue, async (event, request: DesktopTaskContinueRequest) => {
     assertTrustedSender(event);
-    return taskController.continueTask(controller.trustedWorkspacePath(), request?.taskId, request?.text);
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再继续 Agent 任务。");
+      return taskController.continueTask(workspace, request?.taskId, request?.text);
+    });
   });
   ipcMain.handle(desktopChannels.conversationNew, async (event) => {
     assertTrustedSender(event);
@@ -203,15 +226,19 @@ function registerIpc(): void {
   });
   ipcMain.handle(desktopChannels.recoveryResume, async (event, request: DesktopRecoveryRequest) => {
     assertTrustedSender(event);
-    const review = await taskController.reviewSnapshot(controller.trustedWorkspacePath(), "workspace");
-    if (!review.recovery || review.recovery.runId !== request?.runId) throw new Error("恢复记录不存在或已经变化。");
-    const confirmation = await dialog.showMessageBox(mainWindow!, {
-      type: "warning", title: "恢复中断任务", message: "确认先核验未知副作用，再继续任务？",
-      detail: `待核验操作：${review.recovery.unknownOperations.length} 项。Xiu 不会自动重放这些操作。`,
-      buttons: ["取消", "确认恢复"], defaultId: 0, cancelId: 0, noLink: true,
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再恢复 Agent 任务。");
+      const review = await taskController.reviewSnapshot(workspace, "workspace");
+      if (!review.recovery || review.recovery.runId !== request?.runId) throw new Error("恢复记录不存在或已经变化。");
+      const confirmation = await dialog.showMessageBox(mainWindow!, {
+        type: "warning", title: "恢复中断任务", message: "确认先核验未知副作用，再继续任务？",
+        detail: `待核验操作：${review.recovery.unknownOperations.length} 项。Xiu 不会自动重放这些操作。`,
+        buttons: ["取消", "确认恢复"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (confirmation.response !== 1) throw new Error("已取消恢复。");
+      return taskController.recoverTask(workspace, request, true);
     });
-    if (confirmation.response !== 1) throw new Error("已取消恢复。");
-    return taskController.recoverTask(controller.trustedWorkspacePath(), request, true);
   });
   ipcMain.handle(desktopChannels.recoveryAbandon, async (event, request: DesktopRecoveryAbandonRequest) => {
     assertTrustedSender(event);
@@ -265,6 +292,30 @@ function registerIpc(): void {
     const settings = await (await getProviderController()).delete(request);
     return { settings, connection: await taskController.reload(workspace) };
   });
+  ipcMain.handle(desktopChannels.terminalSnapshot, async (event) => {
+    assertTrustedSender(event);
+    return terminalController.snapshot(controller.trustedWorkspacePath());
+  });
+  ipcMain.handle(desktopChannels.terminalStart, async (event, request?: DesktopTerminalStartRequest) => {
+    assertTrustedSender(event);
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      await taskController.assertCanUseTerminal(workspace);
+      return terminalController.start(workspace, request);
+    });
+  });
+  ipcMain.handle(desktopChannels.terminalWrite, async (event, request: DesktopTerminalWriteRequest) => {
+    assertTrustedSender(event);
+    terminalController.write(controller.trustedWorkspacePath(), request);
+  });
+  ipcMain.handle(desktopChannels.terminalResize, async (event, request: DesktopTerminalResizeRequest) => {
+    assertTrustedSender(event);
+    return terminalController.resize(controller.trustedWorkspacePath(), request);
+  });
+  ipcMain.handle(desktopChannels.terminalStop, async (event, request: DesktopTerminalSessionRequest) => {
+    assertTrustedSender(event);
+    return terminalController.stop(controller.trustedWorkspacePath(), request?.sessionId);
+  });
 }
 
 async function registerLocalProtocol(): Promise<void> {
@@ -309,6 +360,7 @@ function createWindow(): BrowserWindow {
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.on("render-process-gone", () => { /* Preserve main-process state; no automatic task replay. */ });
+  window.once("closed", () => terminalController.stopAll("窗口已关闭，终端会话已结束。"));
   window.webContents.once("did-fail-load", (_event, _code, description) => {
     smokeMilestone(`load-failed ${description}`);
     if (smokeTest) {
@@ -348,4 +400,5 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+app.on("before-quit", () => terminalController.stopAll("Xiu 正在退出，终端会话已结束。"));
 app.on("window-all-closed", () => app.quit());

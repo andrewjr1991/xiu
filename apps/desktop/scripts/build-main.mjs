@@ -16,7 +16,7 @@ await build({
   platform: "node",
   format: "esm",
   target: "node24",
-  external: ["electron", "@napi-rs/keyring", "typescript"],
+  external: ["electron", "@napi-rs/keyring", "node-pty", "typescript"],
   banner: { js: 'import { createRequire as __xiuCreateRequire } from "node:module"; const require = __xiuCreateRequire(import.meta.url);' },
   sourcemap: true,
 });
