@@ -112,7 +112,8 @@ export interface DesktopProviderSnapshot {
   discoveryError?: string;
 }
 
-export interface DesktopProviderSelectRequest { providerId: string; model: string }
+export type DesktopProviderCapability = "vision" | "image" | "video" | "audio";
+export interface DesktopProviderSelectRequest { providerId: string; model: string; capability?: DesktopProviderCapability }
 export interface DesktopProviderModelsRequest { providerId: string }
 export interface DesktopProviderCredentialRequest { providerId: string; apiKey: string }
 export interface DesktopProviderTestRequest { providerId: string; model?: string }

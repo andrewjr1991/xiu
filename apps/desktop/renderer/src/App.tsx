@@ -9,6 +9,7 @@ import {
   type DesktopChangeView,
   type DesktopAttachmentResult,
   type DesktopProviderProfile,
+  type DesktopProviderCapability,
   type DesktopProviderKind,
   type DesktopProviderSnapshot,
   type DesktopProviderUpsertRequest,
@@ -444,7 +445,7 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
   notice?: string;
   onChooseProvider: (id: string) => void;
   onDiscover: (id: string) => void;
-  onSelect: (providerId: string, model: string) => void;
+  onSelect: (providerId: string, model: string, capability?: DesktopProviderCapability) => void;
   onEditCredential: (id: string) => void;
   onApiKey: (value: string) => void;
   onSaveCredential: () => void;
@@ -487,11 +488,18 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
       : deleting ? <section className="provider-editor provider-delete-confirm"><span className="confirmation-icon danger">⌫</span><h3>删除“{deleting.name}”？</h3><p>将删除此渠道配置和模型缓存。已保存的系统凭据不会在此操作中导出或显示。</p><div><button onClick={() => setDeleting(undefined)}>取消</button><button className="danger-button" disabled={busy || disabled} onClick={() => void onDelete(deleting).then(() => setDeleting(undefined))}>删除渠道</button></div></section>
       : selected && <section className="model-panel">
         <div className="provider-summary"><div><strong>{selected.name}</strong><small>{selected.id} · {selected.kind}</small></div><span className={selected.credential.configured ? "configured" : "missing"}>{credentialLabel(selected)}</span></div>
-        {Object.entries(selected.capabilityModels ?? {}).some(([, model]) => Boolean(model)) && <p className="provider-capability-models">{Object.entries(selected.capabilityModels ?? {}).filter(([, model]) => Boolean(model)).map(([capability, model]) => `${capability}: ${model}`).join(" · ")}</p>}
         <div className="provider-actions"><button disabled={busy || disabled} onClick={() => onDiscover(selected.id)}>刷新模型</button><button disabled={busy || disabled} onClick={() => onTest(selected.id, selected.selectedModel)}>测试连接</button>{selected.credential.editable && <button disabled={busy || disabled} onClick={() => onEditCredential(selected.id)}>配置 Key</button>}{!selected.builtin && <button disabled={busy || disabled} onClick={() => editProfile(selected)}>编辑渠道</button>}</div>
         {settings.discoveryError && settings.modelProviderId === selected.id && <p className="provider-warning">在线发现失败：{settings.discoveryError}</p>}
         {credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
-        <div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div>
+        <div className="model-groups">
+          <section className="model-group"><h4>对话模型</h4><div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div></section>
+          {(["vision", "image", "video", "audio"] as const).filter((capability) => selected.features[capability]).map((capability) => {
+            const labels: Record<DesktopProviderCapability, string> = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
+            const models = settings.capabilityModelsByProvider[selected.id]?.[capability] ?? [];
+            const activeModel = selected.capabilityModels?.[capability];
+            return <section className="model-group capability-model-group" key={capability}><h4>{labels[capability]}<span>{models.length} 个</span></h4>{models.length ? <div className="model-list">{models.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">刷新模型后选择，或在自定义渠道中手动填写模型 ID。</p>}</section>;
+          })}
+        </div>
       </section>}
     </div>}
     {notice && <p className="provider-notice">{notice}</p>}
@@ -827,11 +835,12 @@ export function App() {
     runtimeRef.current = next.connection.runtime.snapshot; setEvents(next.connection.runtime.events.slice(-200));
   };
 
-  const selectProvider = async (providerId: string, model: string) => {
+  const selectProvider = async (providerId: string, model: string, capability?: DesktopProviderCapability) => {
     setBusy(true); setProviderNotice(undefined); setError(undefined);
     try {
-      applyProviderMutation(await window.xiuDesktop.selectProvider({ providerId, model }));
-      setProviderNotice(`已切换为 ${providerId} / ${model}`); setProviderOpen(false);
+      applyProviderMutation(await window.xiuDesktop.selectProvider({ providerId, model, ...(capability ? { capability } : {}) }));
+      setProviderNotice(capability ? `已将 ${providerId} 的${capability}模型切换为 ${model}` : `已切换为 ${providerId} / ${model}`);
+      if (!capability) setProviderOpen(false);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
@@ -893,7 +902,7 @@ export function App() {
   const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? "全部步骤完成" : "等待下一步");
   const timelineEvents = pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents;
   const activeConversationId = historyView?.taskId ?? connection?.conversationId;
-  const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || connection?.writer === "active-elsewhere"} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model) => void selectProvider(providerId, model)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
+  const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || connection?.writer === "active-elsewhere"} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <main className="app-shell">
     <header className="titlebar"><div className="brand"><Logo /><span>Xiu</span></div><div className="titlebar-context">{workspace.workspace?.name ?? "本地优先桌面工作台"}</div><div className="preview-badge">v0.20 · 预览</div></header>

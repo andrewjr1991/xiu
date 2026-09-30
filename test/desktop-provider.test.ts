@@ -33,7 +33,8 @@ async function fixture() {
   await registry.load();
   await registry.upsert({
     id: "office", name: "Office Gateway", kind: "openai-compatible", model: "office-default",
-    baseURL: "https://models.example.test/v1", features: { text: true, tools: true, vision: false, image: false, video: false },
+    baseURL: "https://models.example.test/v1", capabilityModels: { image: "office-image-default", audio: "office-tts-default" },
+    features: { text: true, tools: true, vision: false, image: true, video: false, audio: true },
   });
   const controller = await DesktopProviderController.create({
     registry, systemCredentialStore: system,
@@ -79,6 +80,9 @@ test("desktop provider controller discovers models and persists an explicit sele
   assert.equal(selected.activeModel, "office-fast");
   assert.equal(item.registry.activeId(), "office");
   assert.equal(item.registry.activeModel("office"), "office-fast");
+  const mediaSelected = await item.controller.select({ providerId: "office", model: "office-image-pro", capability: "image" });
+  assert.equal(mediaSelected.profiles.find((profile) => profile.id === "office")?.capabilityModels.image, "office-image-pro");
+  assert.equal(item.registry.activeCapabilityModel("office", "image"), "office-image-pro");
   assert.deepEqual(await item.controller.test(item.root, { providerId: "office", model: "office-fast" }), {
     ok: true, message: "Office Gateway / office-fast 连接成功。", modelsDiscovered: 1,
   });
@@ -88,6 +92,7 @@ test("desktop provider controller discovers models and persists an explicit sele
   });
   assert.ok(reloaded.snapshot("office").modelsByProvider.office?.some((model) => model.id === "office-fast"), "discovered models survive controller restart");
   assert.ok(reloaded.snapshot("office").capabilityModelsByProvider.office?.audio.some((model) => model.id === "office-tts"), "discovered capability metadata survives controller restart");
+  assert.equal(reloaded.snapshot("office").profiles.find((profile) => profile.id === "office")?.capabilityModels.image, "office-image-pro", "selected capability model survives controller restart");
 });
 
 test("a keyless provider becomes visible only after successful model discovery", async (t) => {

@@ -49,6 +49,9 @@ app.whenReady().then(async () => {
     await clickText(window, "OpenAI", ".model-selector");
     await waitFor(window, `document.querySelector('[aria-label="选择 Provider 和模型"]')`, "provider picker");
     await clickText(window, "Agnes", ".provider-nav-row > button");
+    await waitFor(window, `document.body.innerText.includes('生图模型') && document.body.innerText.includes('视频模型')`, "media model groups");
+    await clickText(window, "agnes-image-2.1-flash", ".capability-model-group .model-list button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('provider:agnes/image/agnes-image-2.1-flash')`, "image model selection");
     await clickText(window, "agnes-3.0-flash", ".model-list button");
     await waitFor(window, `window.xiuSmoke.calls().includes('provider:agnes/agnes-3.0-flash')`, "provider selection");
     console.log("UI smoke: provider ready");
@@ -84,7 +87,7 @@ app.whenReady().then(async () => {
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
     const calls = await evaluate(window, `window.xiuSmoke.calls()`);
-    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["keyboard-submit", "provider-model", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle"], calls }, null, 2));
+    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["keyboard-submit", "provider-model", "provider-media-model", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle"], calls }, null, 2));
     app.exit(0);
   } catch (error) {
     console.error(error?.stack ?? String(error));

@@ -45,7 +45,7 @@ Windows 系统凭证后端在既有外部矩阵完成前继续显式选择，不
 
 `0.19.0` 已发布到官方 npm Registry。v0.20.0 已完成共享无界面运行时 G1、Electron 安全壳/可信工作区 G2、任务与审批闭环 G3、审查/证据/恢复 G4、Provider/模型配置 G5A、受控交互终端 G5B 和 G5C Windows x64 候选包验收。历史续做、附件、模型目录、自定义渠道、权限模式、安全删除、运行事件回放、独立有界的历史变更报告及事实型模型进展均已落地；旧任务不伪造缺失过程或 Diff，源码 Diff 不进入通用审计。G5B 的 PTY 仍由主进程持有并与 Agent 单写者互斥。G5C 新增按用户安装的辅助 NSIS 包，以及含空格/中文路径的安装、覆盖升级、异常中断重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖两种窗口尺寸、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原和终端生命周期。提交 `28081a1` 的 GitHub Actions 运行 `36691490514` 已通过三平台 CLI 与 Desktop 共六个作业；下一步进入 Windows 外部设备和 macOS/Linux 真实用户桌面矩阵，不对现有 CLI 进行一次性重写。
 
-G5A 已扩展为 Provider 中立的能力模型配置：对话模型列表与视觉、生图、视频、音频模型分离，自定义 OpenAI-compatible 渠道使用自身 Base URL、凭据和能力模型；桌面 Agent 与 CLI 复用媒体危险审批、持久化账本和未知结果不重放边界。Agnes 走专用媒体适配，OpenAI/OpenAI-compatible 走兼容端点，Anthropic 当前只开放视觉理解。本轮类型检查、661 项全量测试、桌面构建/UI smoke、NSIS 安装器验收和 MSIX 结构 smoke 已通过；真实 Provider 计费请求、可信 MSIX 签名和外部设备安装仍须单独验收，不能由本地模拟替代。
+G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道都按对话、视觉、生图、视频、音频分组展示并持久化独立选择，自定义 OpenAI-compatible 渠道使用自身 Base URL、凭据和能力模型；桌面 Agent 与 CLI 复用媒体危险审批、持久化账本和未知结果不重放边界。Agnes 走专用媒体适配，OpenAI/OpenAI-compatible 走兼容端点，Anthropic 当前只开放视觉理解。本轮类型检查、662 项全量测试、桌面构建/UI smoke、NSIS 安装器验收和 MSIX 结构 smoke 已通过；真实 Provider 计费请求、可信 MSIX 签名和外部设备安装仍须单独验收，不能由本地模拟替代。
 
 ### 实施范围
 

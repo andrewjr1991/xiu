@@ -22,7 +22,7 @@ import type {
 } from "../shared/protocol.js";
 
 type ProviderRegistryLike = Pick<ProviderRegistry,
-  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
+  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
 >;
 
 interface ProviderControllerDependencies {
@@ -148,7 +148,12 @@ export class DesktopProviderController {
   async select(request: DesktopProviderSelectRequest): Promise<DesktopProviderSnapshot> {
     const profile = this.profile(request?.providerId);
     const model = this.model(request?.model);
-    await this.registry.setActive(profile.id, model);
+    if (request?.capability) {
+      if (!["vision", "image", "video", "audio"].includes(request.capability)) throw new Error("模型能力类型无效。");
+      await this.registry.setCapabilityModel(profile.id, request.capability, model);
+    } else {
+      await this.registry.setActive(profile.id, model);
+    }
     return this.snapshot(profile.id);
   }
 

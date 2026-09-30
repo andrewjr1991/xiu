@@ -13,6 +13,10 @@ let task;
 let approvalMode = "ask";
 let activeProviderId = "openai";
 let activeModel = "gpt-5";
+const activeCapabilityModels = {
+  openai: { vision: "gpt-5", image: "gpt-image-1", video: "sora-2", audio: "gpt-4o-mini-tts" },
+  agnes: { vision: "agnes-2.5-flash", image: "agnes-image-2.1-flash", video: "agnes-video-v2.0" },
+};
 let terminal = { state: "idle" };
 let recoveryActive = false;
 const runtimeListeners = new Set();
@@ -28,8 +32,8 @@ const emit = (type, payload) => {
 const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
 const review = () => ({ generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], validations: [], checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
 const providers = () => ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
-  { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { vision: "gpt-5", image: "gpt-image-1", video: "sora-2", audio: "gpt-4o-mini-tts" }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
-  { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { vision: "agnes-2.5-flash", image: "agnes-image-2.1-flash", video: "agnes-video-v2.0" }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
+  { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.openai }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
+  { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
 const bridge = {
@@ -73,7 +77,7 @@ const bridge = {
   abandonRecovery: async () => review(),
   providerSnapshot: async () => providers(),
   discoverProviderModels: async () => providers(),
-  selectProvider: async ({ providerId, model }) => { activeProviderId = providerId; activeModel = model; calls.push(`provider:${providerId}/${model}`); return { settings: providers(), connection: runtime() }; },
+  selectProvider: async ({ providerId, model, capability }) => { activeProviderId = providerId; if (capability) { activeCapabilityModels[providerId][capability] = model; calls.push(`provider:${providerId}/${capability}/${model}`); } else { activeModel = model; calls.push(`provider:${providerId}/${model}`); } return { settings: providers(), connection: runtime() }; },
   saveProviderCredential: async () => ({ settings: providers(), connection: runtime() }),
   testProvider: async () => ({ ok: true, message: "连接成功", modelsDiscovered: 1 }),
   upsertProvider: async () => ({ settings: providers(), connection: runtime() }),
