@@ -23,7 +23,9 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-"));
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(async () => { await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
-  const command = "node -e \"console.log('ready'); setInterval(() => {}, 1000)\"";
+  const command = process.platform === "win32"
+    ? "Write-Output 'ready'; while ($true) { Start-Sleep -Seconds 1 }"
+    : "node -e \"console.log('ready'); setInterval(() => {}, 1000)\"";
   const started = startBackgroundProcess(command, process.cwd());
   // Parallel test workers can delay a new PowerShell + Node process well past
   // two seconds on loaded Windows hosts. Poll with a bounded wall-clock budget.
