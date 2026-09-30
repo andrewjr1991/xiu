@@ -93,6 +93,7 @@ button { font: inherit; }
 .task-dot.failed, .task-dot.unverified { background: #e26767; }
 .task-dot.paused { background: #e9a23b; }
 .task-layout { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(330px, 390px); gap: 12px; height: 100%; min-height: 0; }
+.task-layout.terminal-expanded { grid-template-columns: minmax(360px, .8fr) minmax(520px, 1.2fr); }
 .task-console, .inspector { min-height: 0; overflow: hidden; border: 1px solid #dfe6ef; border-radius: 14px; background: rgba(255,255,255,.94); box-shadow: 0 10px 32px rgba(64,86,116,.05); }
 .task-console { display: grid; grid-template-rows: minmax(0,1fr) auto; }
 .task-scroll { overflow: auto; padding: 20px max(20px, calc((100% - 760px) / 2)) 12px; }
@@ -316,6 +317,8 @@ button { font: inherit; }
   .sidebar { padding-left: 12px; padding-right: 12px; }
   .content-area { padding: 12px; }
   .task-layout { grid-template-columns: minmax(300px,1fr) 310px; gap: 10px; }
+  .task-layout.terminal-expanded { grid-template-columns: minmax(0,1fr); }
+  .task-layout.terminal-expanded > .task-console { display: none; }
   .task-scroll { padding-left: 16px; padding-right: 16px; }
   .provider-popover { width: 100%; min-width: 0; }
 }
