@@ -144,6 +144,8 @@ npm run smoke:platform
 
 The unreleased v0.20.0 desktop preview is developed separately from the CLI package:
 
+Desktop development and packaging require Node.js 22.12.0 or newer; the published CLI keeps its Node.js 20.18.1 baseline.
+
 ```bash
 npm --prefix apps/desktop ci
 npm run desktop:typecheck

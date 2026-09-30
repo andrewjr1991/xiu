@@ -1757,7 +1757,7 @@ Windows 上使用支持系统证书读取的 Node.js 时，Xiu 会合并 Node �
 
 ## 二十七、桌面开发预览（v0.20.0 G5C）
 
-桌面端目前是独立开发预览，不随已发布的 `@xiu-ai/cli` 安装。开发运行：
+桌面端目前是独立开发预览，不随已发布的 `@xiu-ai/cli` 安装。桌面开发、构建和打包要求 Node.js 22.12.0 或更高版本；已发布 CLI 的运行基线仍为 Node.js 20.18.1，两套 CI 矩阵分别验证各自基线。开发运行：
 
 ```powershell
 npm --prefix apps/desktop ci
