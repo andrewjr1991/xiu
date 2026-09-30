@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawn as spawnPty, type IDisposable, type IPty } from "node-pty";
+import type { IDisposable, IPty } from "node-pty";
 import type {
   DesktopTerminalEvent,
   DesktopTerminalResizeRequest,
@@ -82,7 +82,7 @@ export class DesktopTerminalController {
 
   constructor(
     private readonly emit: (event: DesktopTerminalEvent) => void,
-    private readonly factory: TerminalPtyFactory = (file, args, options) => spawnPty(file, args, options),
+    private readonly factory: TerminalPtyFactory,
     private readonly shell = controlledShell,
   ) {}
 

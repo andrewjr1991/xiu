@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, session, type IpcMainInvokeEvent } from "electron";
+import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
@@ -31,7 +32,7 @@ const taskController = new DesktopTaskController((event) => {
 });
 const terminalController = new DesktopTerminalController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.terminalEvent, event);
-});
+}, (file, args, options) => spawnPty(file, args, options));
 let providerController: Promise<DesktopProviderController> | undefined;
 let writerStartQueue: Promise<void> = Promise.resolve();
 function getProviderController(): Promise<DesktopProviderController> {
