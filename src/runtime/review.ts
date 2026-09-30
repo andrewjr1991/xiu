@@ -114,7 +114,11 @@ export async function listReviewFiles(workspace: string): Promise<ReviewFileEntr
       if (files.length >= MAX_FILES) break;
       const next = relative ? `${relative}/${entry.name}` : entry.name;
       if (!validRelativePath(next)) continue;
-      const target = resolveWorkspacePath(root, next);
+      const target = (() => {
+        try { return resolveWorkspacePath(root, next); }
+        catch { return undefined; }
+      })();
+      if (!target) continue;
       const stat = await fs.lstat(target).catch(() => undefined);
       if (!stat || stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) await walk(next);
