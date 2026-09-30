@@ -139,6 +139,42 @@ test("desktop provider controller creates, edits, and deletes custom channels", 
   assert.equal(item.system.has(credentialRef("system", "provider-api-key", "provider:team-gateway:api-key", 1)), false);
 });
 
+test("desktop provider controller edits a legacy mixed-case channel without changing its ID or credential", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  await item.registry.upsert({
+    id: "ChatGPT",
+    name: "Legacy Gateway",
+    kind: "openai-compatible",
+    model: "legacy-model",
+    baseURL: "https://legacy.example.test/v1",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  });
+  await item.controller.saveCredential({ providerId: "ChatGPT", apiKey: "legacy-secret" });
+
+  const edited = await item.controller.upsert({
+    existingId: "ChatGPT",
+    id: "ChatGPT",
+    name: "Legacy Gateway 2",
+    kind: "openai-compatible",
+    model: "legacy-model",
+    baseURL: "https://legacy-2.example.test/v1",
+    features: { tools: true, vision: false, image: false, video: false },
+  });
+
+  assert.equal(edited.profiles.find((candidate) => candidate.id === "ChatGPT")?.name, "Legacy Gateway 2");
+  assert.equal(item.system.get(credentialRef("system", "provider-api-key", "provider:ChatGPT:api-key", 1)), "legacy-secret");
+  await assert.rejects(() => item.controller.upsert({
+    existingId: "ChatGPT",
+    id: "chatgpt",
+    name: "Renamed Gateway",
+    kind: "openai-compatible",
+    model: "legacy-model",
+    baseURL: "https://legacy-2.example.test/v1",
+    features: { tools: true, vision: false, image: false, video: false },
+  }), /Provider ID/);
+});
+
 test("desktop provider mutations protect built-in and active channels", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));

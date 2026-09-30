@@ -180,9 +180,12 @@ export class DesktopProviderController {
 
   async upsert(request: DesktopProviderUpsertRequest): Promise<DesktopProviderSnapshot> {
     const existingId = request?.existingId?.trim();
-    const id = this.providerId(request?.id);
-    if (existingId && existingId !== id) throw new Error("编辑渠道时不能修改 Provider ID。");
     const previous = existingId ? this.profile(existingId) : undefined;
+    const requestedId = request?.id?.trim();
+    if (existingId && existingId !== requestedId) throw new Error("编辑渠道时不能修改 Provider ID。");
+    // ProviderRegistry historically accepted mixed-case IDs. Keep an existing ID
+    // verbatim so those profiles remain editable without moving credential keys.
+    const id = previous ? previous.id : this.providerId(request?.id);
     if (previous?.builtin) throw new Error("内置渠道不能覆盖；请新增一个自定义渠道。");
     if (!previous && this.registry.get(id)) throw new Error("Provider ID 已存在。");
     const name = this.shortText(request?.name, "渠道名称", 100);
