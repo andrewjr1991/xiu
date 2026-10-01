@@ -65,7 +65,7 @@ export interface ProviderCredentialInfo {
 }
 
 interface ProviderFile {
-  version: 4;
+  version: 5;
   active?: string;
   activeModels?: Record<string, string>;
   activeCapabilityModels?: Record<string, ProviderCapabilityModels>;
@@ -127,6 +127,22 @@ export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
   },
 ];
 
+/** Templates are suggestions only; they do not register providers or reserve IDs. */
+export function providerTemplate(kind: ProviderName): ProviderProfile | undefined {
+  const template = BUILTIN_PROVIDER_PROFILES.find((profile) => profile.kind === kind);
+  return template ? structuredClone({ ...template, builtin: false }) : undefined;
+}
+
+/** Inert host identity for configuration screens. Never sent to a provider. */
+export const UNCONFIGURED_PROVIDER_PROFILE: ProviderProfile = {
+  id: "__xiu_unconfigured__", name: "未配置渠道", kind: "openai", model: "unconfigured",
+  features: { text: true, tools: false, vision: false, image: false, video: false, audio: false },
+};
+
+export function startupProviderProfile(registry: ProviderRegistry, requestedId: string): ProviderProfile | undefined {
+  return requestedId ? registry.get(requestedId) : registry.list()[0];
+}
+
 const ALLOWED_KINDS = new Set<ProviderName>(["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"]);
 const RESERVED_IDS = new Set(["__proto__", "prototype", "constructor"]);
 const PROBE_STATES = new Set<CapabilityProbeState>(["supported", "unsupported", "unknown", "not-tested"]);
@@ -136,7 +152,7 @@ function isValidProviderId(id: string): boolean {
 }
 
 export function resolveStartupProviderId(cliProvider?: string, savedProvider?: string, environmentProvider?: string): string {
-  return cliProvider ?? savedProvider ?? environmentProvider ?? "openai";
+  return cliProvider ?? savedProvider ?? environmentProvider ?? "";
 }
 
 export function resolveStartupModel(cliModel: string | undefined, savedModel: string | undefined, environmentModel: string | undefined, profileModel: string): string {
@@ -206,7 +222,7 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
 }
 
 export class ProviderRegistry {
-  private file: ProviderFile = { version: 4, profiles: [] };
+  private file: ProviderFile = { version: 5, profiles: [] };
   private pluginProfiles: ProviderProfile[] = [];
   private credentials: LegacyCredentialStore<string, "provider-api-key">;
   private saveOperation: Promise<void> = Promise.resolve();
@@ -222,9 +238,9 @@ export class ProviderRegistry {
   async load(): Promise<void> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as Partial<ProviderFile>;
-      if (![1, 2, 3, 4].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
+      if (![1, 2, 3, 4, 5].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
       const sourceVersion = Number(parsed.version);
-      if (parsed.profiles.length > 100) throw new Error("provider configuration contains more than 100 profiles");
+      if (parsed.profiles.length > 106) throw new Error("provider configuration contains more than 106 profiles");
       const legacyCredentials: Record<string, string> = {};
       const profiles = parsed.profiles.map((profile) => {
         const normalized = validateProviderProfile({ ...profile, builtin: false } as ProviderProfile);
@@ -234,17 +250,37 @@ export class ProviderRegistry {
       });
       const ids = new Set<string>();
       for (const profile of profiles) {
-        if (ids.has(profile.id) || BUILTIN_PROVIDER_PROFILES.some((builtin) => builtin.id === profile.id)) throw new Error(`duplicate or reserved provider id: ${profile.id}`);
+        if (ids.has(profile.id)) throw new Error(`duplicate provider id: ${profile.id}`);
         ids.add(profile.id);
+      }
+      // Older files stored built-in choices outside profiles. Materialize only
+      // explicitly referenced channels once; never infer registration from env.
+      if (sourceVersion < 5) {
+        const referenced = new Set<string>(typeof parsed.active === "string" ? [parsed.active] : []);
+        for (const field of [parsed.activeModels, parsed.activeCapabilityModels, parsed.credentials, parsed.credentialRefs, parsed.credentialMigrations, parsed.credentialMigrationIntents, parsed.credentialRevisions]) {
+          if (field && typeof field === "object") for (const id of Object.keys(field)) referenced.add(id);
+        }
+        for (const [id, chain] of Object.entries(parsed.failoverChains ?? {})) {
+          referenced.add(id);
+          if (Array.isArray(chain)) for (const target of chain) if (typeof target === "string") referenced.add(target);
+        }
+        for (const id of Object.values(parsed.routing?.phases ?? {})) if (typeof id === "string") referenced.add(id);
+        for (const probe of parsed.probes ?? []) if (typeof probe?.providerId === "string") referenced.add(probe.providerId);
+        for (const template of BUILTIN_PROVIDER_PROFILES) {
+          if (referenced.has(template.id) && !ids.has(template.id)) {
+            profiles.push(validateProviderProfile({ ...structuredClone(template), builtin: false }));
+            ids.add(template.id);
+          }
+        }
       }
       const rawCredentials = parsed.credentials && typeof parsed.credentials === "object" ? parsed.credentials : {};
       const credentials: Record<string, string> = { ...legacyCredentials };
       for (const [id, value] of Object.entries(rawCredentials)) {
         if (typeof value !== "string" || !value || value.length > 4096 || /[\r\n\0]/.test(value)) throw new Error(`invalid saved credential for ${id}`);
-        if (!BUILTIN_PROVIDER_PROFILES.some((profile) => profile.id === id) && !profiles.some((profile) => profile.id === id)) throw new Error(`credential references unknown provider: ${id}`);
+        if (!profiles.some((profile) => profile.id === id)) throw new Error(`credential references unknown provider: ${id}`);
         credentials[id] = value;
       }
-      const knownIds = new Set([...BUILTIN_PROVIDER_PROFILES.map((profile) => profile.id), ...profiles.map((profile) => profile.id)]);
+      const knownIds = new Set(profiles.map((profile) => profile.id));
       const credentialRefs: Record<string, CredentialRef<"provider-api-key">> = {};
       if (sourceVersion >= 3 && parsed.credentialRefs && typeof parsed.credentialRefs === "object") {
         for (const [id, rawRef] of Object.entries(parsed.credentialRefs)) {
@@ -277,7 +313,7 @@ export class ProviderRegistry {
       const uniqueProbes = new Map<string, ModelCapabilityProbe>();
       for (const rawProbe of rawProbes) {
         const probe = validateProbe(rawProbe as ModelCapabilityProbe, knownIds);
-        const profile = [...BUILTIN_PROVIDER_PROFILES, ...profiles].find((item) => item.id === probe.providerId);
+        const profile = profiles.find((item) => item.id === probe.providerId);
         if (profile && probe.profileFingerprint === probeFingerprint(profile, probe.model)) uniqueProbes.set(`${probe.providerId}\0${probe.model}`, probe);
       }
       const rawActiveModels = parsed.activeModels && typeof parsed.activeModels === "object" ? parsed.activeModels : {};
@@ -321,13 +357,13 @@ export class ProviderRegistry {
         kind: "provider-api-key", location: this.filename, values: credentials,
         revisions: parsed.credentialRevisions && typeof parsed.credentialRevisions === "object" ? parsed.credentialRevisions : undefined,
       });
-      this.file = { version: 4, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, activeCapabilityModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
+      this.file = { version: 5, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, activeCapabilityModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
       // Keep an unresolved active id in memory: an approved plugin may contribute
       // that provider after workspace trust is established later in startup.
-      if (sourceVersion < 4) await this.save();
+      if (sourceVersion < 5) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.file = { version: 4, profiles: [] };
+        this.file = { version: 5, profiles: [] };
         this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
         return;
       }
@@ -336,7 +372,7 @@ export class ProviderRegistry {
   }
 
   list(): ProviderProfile[] {
-    return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles, ...this.pluginProfiles].map((profile) => ({
+    return [...this.file.profiles, ...this.pluginProfiles].map((profile) => ({
       ...profile,
       apiKey: this.resolveStoredCredential(profile.id),
       ...((profile.capabilityModels || this.file.activeCapabilityModels?.[profile.id]) ? { capabilityModels: { ...profile.capabilityModels, ...this.file.activeCapabilityModels?.[profile.id] } } : {}),
@@ -346,7 +382,7 @@ export class ProviderRegistry {
 
   /** Install validated, in-memory profiles contributed by approved plugins. */
   setPluginProfiles(profiles: ProviderProfile[]): void {
-    const reserved = new Set([...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles].map((profile) => profile.id));
+    const reserved = new Set(this.file.profiles.map((profile) => profile.id));
     const seen = new Set<string>();
     this.pluginProfiles = profiles.map((profile) => {
       const normalized = validateProviderProfile({ ...profile, apiKey: undefined, builtin: false });
@@ -378,7 +414,7 @@ export class ProviderRegistry {
   attachSystemCredentialStore(store: CredentialStore<string, "provider-api-key">): void { this.systemCredentials = store; }
 
   credentialInfo(): ProviderCredentialInfo[] {
-    return [...BUILTIN_PROVIDER_PROFILES, ...this.file.profiles].map((profile) => {
+    return this.file.profiles.map((profile) => {
       const ref = this.file.credentialRefs?.[profile.id];
       const legacyCopyPresent = this.credentials.has(this.credentials.ref(profile.id));
       let systemCopyPresent = false;
@@ -619,7 +655,7 @@ export class ProviderRegistry {
 
   async upsert(profile: ProviderProfile): Promise<void> {
     const normalized = validateProviderProfile({ ...profile, builtin: false });
-    if (BUILTIN_PROVIDER_PROFILES.some((item) => item.id === normalized.id)) throw new Error(`Built-in provider id cannot be replaced: ${normalized.id}`);
+    if (this.pluginProfiles.some((item) => item.id === normalized.id)) throw new Error(`Plugin provider id cannot be replaced: ${normalized.id}`);
     const { apiKey, ...storedProfile } = normalized;
     const existing = this.file.profiles.findIndex((item) => item.id === normalized.id);
     const previous = existing >= 0 ? this.file.profiles[existing] : undefined;
@@ -656,13 +692,15 @@ export class ProviderRegistry {
   }
 
   async remove(id: string): Promise<void> {
-    if (BUILTIN_PROVIDER_PROFILES.some((item) => item.id === id)) throw new Error("Built-in providers cannot be removed");
     const next = this.file.profiles.filter((profile) => profile.id !== id);
     if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
+    const systemRef = this.file.credentialRefs?.[id];
+    if (systemRef) {
+      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the provider was not removed");
+      this.systemCredentials.delete(systemRef);
+    }
     this.file.profiles = next;
     this.credentials.delete(this.credentials.ref(id));
-    const systemRef = this.file.credentialRefs?.[id];
-    if (systemRef && this.systemCredentials) this.systemCredentials.delete(systemRef);
     delete this.file.credentialRefs?.[id];
     delete this.file.credentialMigrations?.[id];
     delete this.file.credentialMigrationIntents?.[id];
@@ -687,7 +725,7 @@ export class ProviderRegistry {
       await fs.mkdir(path.dirname(this.filename), { recursive: true });
       const temporary = `${this.filename}.${process.pid}.${++this.saveSequence}.tmp`;
       const safeFile: ProviderFile = {
-        version: 4,
+        version: 5,
         active: this.file.active,
         activeModels: { ...this.file.activeModels },
         activeCapabilityModels: Object.fromEntries(Object.entries(this.file.activeCapabilityModels ?? {}).map(([id, models]) => [id, { ...models }])),

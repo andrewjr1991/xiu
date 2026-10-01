@@ -97,6 +97,7 @@ export interface DesktopModelOption {
 }
 
 export interface DesktopProviderSnapshot {
+  templates?: DesktopProviderUpsertRequest[];
   activeProviderId: string;
   activeModel: string;
   profiles: DesktopProviderProfile[];

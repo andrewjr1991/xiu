@@ -53,6 +53,7 @@ export class DesktopTaskController {
   async createTask(workspace: string, text: string): Promise<DesktopRuntimeConnection> {
     const normalized = this.taskText(text);
     const host = await this.ensure(workspace);
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live && !this.active(host)) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
     this.completedTaskChanges = undefined;
@@ -65,6 +66,7 @@ export class DesktopTaskController {
     const normalized = this.taskText(text);
     if (!/^[A-Za-z0-9-]{1,160}$/.test(taskId)) throw new Error("Invalid task history request.");
     const host = await this.ensure(workspace);
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     if (this.active(host)) throw new Error("已有任务正在运行。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
@@ -255,6 +257,7 @@ export class DesktopTaskController {
   async recoverTask(workspace: string, request: DesktopRecoveryRequest, unknownSideEffectsConfirmed: boolean): Promise<DesktopRuntimeConnection> {
     if (!request || typeof request.runId !== "string" || request.runId.length > 100) throw new Error("Invalid recovery request.");
     const host = await this.ensure(workspace);
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     if (this.active(host)) throw new Error("已有任务正在运行。");
     const interrupted = await host.journal.interrupted();
     if (!interrupted || interrupted.runId !== request.runId) throw new Error("恢复记录不存在、仍由其他进程持有或已经变化。");

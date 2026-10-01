@@ -66,6 +66,8 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 
 ## Core capabilities
 
+This is the full CLI capability list, not a desktop parity claim. The desktop preview exposes core coding, approvals, indexing, media, historical changes, and recovery, but does not yet wire MCP, native web research, plugins, background jobs, multi-agent coordination, or Provider failover/stage routing into desktop tasks. See the [capability inventory and synchronization plan](./ROADMAP.zh-CN.md#4-后续工程化).
+
 - Autonomous inspect/edit/verify task loop
 - OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible profiles
 - Capability-aware Provider failover and per-stage routing
@@ -166,6 +168,9 @@ The preview runs the real shared Agent, provides the G4 review/recovery inspecto
 
 ## Current limitations
 
+The unreleased `0.20.2` candidate fixes preset-ID collisions: fresh CLI/desktop installations start with zero channels, vendor templates require explicit addition, and referenced legacy settings migrate without clearing user data. All user-added channels remain visible; confirmed removal of the last channel returns to setup mode. Published `0.20.1` still has the behavior described below.
+
+- In 0.20.1, preset Providers are registered even when hidden in the desktop picker, so adding an Agnes or other preset ID can fail as already present. The next priority is explicit user-added channels and zero channels on a fresh ordinary installation, including local models. This change is planned, not shipped; existing user settings must be preserved.
 - Command execution is constrained by policy and OS account permissions, not by a container sandbox.
 - Checkpoint restore covers Xiu file tools; arbitrary command and remote side effects need Git or system-specific recovery.
 - macOS Keychain and Linux Secret Service are not implemented.

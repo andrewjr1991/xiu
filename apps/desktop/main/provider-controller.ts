@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
-import { ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWindowsSystemCredentialStore } from "../../../src/system-credential-store.js";
@@ -74,24 +74,22 @@ export class DesktopProviderController {
   }
 
   snapshot(providerId?: string, discoveryError?: string): DesktopProviderSnapshot {
+    const templates: DesktopProviderUpsertRequest[] = BUILTIN_PROVIDER_PROFILES.map((profile) => ({
+      id: profile.id, name: profile.name, kind: profile.kind, model: profile.model,
+      baseURL: profile.baseURL, capabilityModels: { ...profile.capabilityModels },
+      features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
+    }));
     const allProfiles = this.registry.list();
     const activeProviderId = this.registry.activeId() && this.registry.get(this.registry.activeId()!)
       ? this.registry.activeId()!
-      : "openai";
-    const activeProfile = this.registry.get(activeProviderId) ?? allProfiles[0]!;
+      : allProfiles[0]?.id ?? "";
+    const activeProfile = this.registry.get(activeProviderId);
+    if (!activeProfile) return { templates, activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {} };
     const activeModel = this.registry.activeModel(activeProfile.id) ?? activeProfile.model;
     const modelProfile = this.registry.get(providerId ?? activeProviderId) ?? activeProfile;
     const model = this.registry.activeModel(modelProfile.id) ?? modelProfile.model;
     const credentials = new Map(this.registry.credentialInfo().map((item) => [item.providerId, item]));
-    const profiles = allProfiles.filter((profile) => {
-      const source = credentials.get(profile.id)?.source ?? "missing";
-      const hasCredential = source !== "missing";
-      const hasDiscoveredModels = (this.discovered.get(profile.id)?.length ?? 0) > 0;
-      return profile.id === activeProviderId
-        || hasCredential
-        || hasDiscoveredModels
-        || (!profile.builtin && KEY_OPTIONAL.has(profile.kind));
-    }).sort((left, right) => left.id === activeProviderId ? -1 : right.id === activeProviderId ? 1 : left.name.localeCompare(right.name, "zh-CN"));
+    const profiles = allProfiles.sort((left, right) => left.id === activeProviderId ? -1 : right.id === activeProviderId ? 1 : left.name.localeCompare(right.name, "zh-CN"));
     const modelsByProvider = Object.fromEntries(profiles.map((profile) => {
       const selected = this.registry.activeModel(profile.id) ?? profile.model;
       return [profile.id, this.modelOptions(profile, selected)];
@@ -104,6 +102,7 @@ export class DesktopProviderController {
     }]));
     const models = modelsByProvider[modelProfile.id] ?? [];
     return {
+      templates,
       activeProviderId,
       activeModel,
       modelProviderId: modelProfile.id,
@@ -225,6 +224,7 @@ export class DesktopProviderController {
     try {
       await this.registry.upsert(profile);
       if (request.apiKey) await this.saveCredential({ providerId: id, apiKey: request.apiKey });
+      if (!this.registry.activeId()) await this.registry.setActive(id, model);
     } catch (error) {
       try { if (previous) await this.registry.upsert(previous); else await this.registry.remove(id); } catch { /* Keep the original safe failure. */ }
       throw new Error(this.safeError(error, previous ?? profile));
@@ -236,8 +236,9 @@ export class DesktopProviderController {
     if (request?.confirmed !== true) throw new Error("删除渠道需要明确确认。");
     const profile = this.profile(request?.providerId);
     if (profile.builtin) throw new Error("内置渠道不能删除。");
-    if (this.registry.activeId() === profile.id) throw new Error("请先切换到其他渠道，再删除当前渠道。");
     await this.registry.remove(profile.id);
+    const remaining = this.registry.list()[0];
+    if (!this.registry.activeId() && remaining) await this.registry.setActive(remaining.id, this.registry.activeModel(remaining.id) ?? remaining.model);
     this.discovered.delete(profile.id);
     await this.saveModelCache();
     return this.snapshot();

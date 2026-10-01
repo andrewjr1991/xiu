@@ -2,6 +2,13 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.2 — Unreleased
+
+- Start ordinary fresh installations with zero Providers in both CLI and desktop, even when environment keys exist. Vendor templates no longer register or reserve channel IDs.
+- Migrate explicitly referenced legacy presets into editable user profiles, retaining credential references, model selections and routing; do not seed unused presets or clear existing user settings.
+- Keep all user-added channels visible, add multi-vendor templates to both setup flows, support confirmed removal of the last channel, and block tasks until a channel is selected.
+- Document actual CLI/desktop capability differences and prioritize shared services and paired entrypoint regressions.
+
 ## 0.20.1 — 2026-09-30
 
 - Persist independently selected vision, image, video, and audio models for every built-in and custom Provider, and expose those selections to the desktop runtime.

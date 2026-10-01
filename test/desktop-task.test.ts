@@ -35,6 +35,20 @@ function historicalReport(file: string, line: string): TaskChangeReport {
   }] };
 }
 
+test("desktop empty-provider runtime opens but cannot create, continue or recover tasks", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-no-provider-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runtime = new XiuRuntime();
+  const controller = new DesktopTaskController(() => {}, async () => ({ runtime, providerConfigured: false,
+    provider: { id: "unconfigured", label: "未配置渠道", model: "unconfigured" }, journal: new TaskRunJournal(root, path.join(root, "journals")),
+  }));
+  assert.equal((await controller.connect(root, 0)).runtime.snapshot.task, undefined);
+  await assert.rejects(controller.createTask(root, "must not start"), /尚未配置渠道/);
+  await assert.rejects(controller.continueTask(root, "old-task", "must not restore"), /尚未配置渠道/);
+  await assert.rejects(controller.recoverTask(root, { runId: "old-run" }, true), /尚未配置渠道/);
+  assert.equal((await controller.connect(root, 0)).runtime.snapshot.task, undefined);
+});
+
 test("desktop task controller owns one workspace runtime and forwards versioned events", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-task-"));
   const first = path.join(root, "first");

@@ -22,7 +22,7 @@ import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, 
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
-import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
+import { ProviderRegistry, providerTemplate, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
 import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
@@ -106,7 +106,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/routing set", "为规划、实现或验证阶段指定 Provider", "Assign a provider to a planning, implementation, or verification stage"),
     item("/routing clear", "清除某个阶段的 Provider", "Clear the provider assigned to a stage"),
     item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
-    item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
+    item("/provider add", "选择模板并添加 Provider", "Choose a template and add a provider"),
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
     item("/provider remove", "删除自定义 Provider", "Remove a custom provider"),
     item("/language", "设置界面与会话语言", "Set interface and conversation language"),
@@ -367,8 +367,8 @@ async function main(): Promise<void> {
   };
   const savedProviderId = providerRegistry.activeId();
   const requestedProviderId = resolveStartupProviderId(options.provider, savedProviderId, process.env.XIU_PROVIDER);
-  const requestedStartupProfile = providerRegistry.get(requestedProviderId);
-  const startupProfile = requestedStartupProfile ?? providerRegistry.get("openai")!;
+  const requestedStartupProfile = startupProviderProfile(providerRegistry, requestedProviderId);
+  const startupProfile = requestedStartupProfile ?? UNCONFIGURED_PROVIDER_PROFILE;
   const startupModel = resolveStartupModel(
     options.model,
     requestedStartupProfile && requestedProviderId === savedProviderId ? providerRegistry.activeModel(requestedProviderId) : undefined,
@@ -919,6 +919,7 @@ async function main(): Promise<void> {
     let startupProviderError: Error | undefined;
     let provider: ModelProvider;
     try {
+      if (!requestedStartupProfile) throw new Error(localize(language, "尚未添加渠道。请使用 /provider add 添加。", "No Provider selected. Use /provider add to add one."));
       provider = createProvider(config);
     } catch (error) {
       startupProviderError = error instanceof Error ? error : new Error(String(error));
@@ -1326,6 +1327,10 @@ async function main(): Promise<void> {
 
     const configureStartupProvider = async (): Promise<void> => {
       if (!startupProviderError) return;
+      if (!providerRegistry.list().length) {
+        console.log(chalk.yellow(localize(language, "尚未添加任何渠道。请输入 /provider add，选择 Agnes、OpenAI、本地模型或兼容服务；无需先设置环境变量。\n", "No Providers added. Enter /provider add to choose Agnes, OpenAI, a local model, or a compatible service. Environment variables are optional.\n")));
+        return;
+      }
       console.log(chalk.yellow(localize(language,
         `当前 Provider ${config.providerLabel ?? config.providerId} 尚未配置（${startupProviderError.message}）。Xiu 已进入配置模式，不会退出。`,
         `The current provider ${config.providerLabel ?? config.providerId} is not configured (${startupProviderError.message}). Xiu is staying open in setup mode.`)));
@@ -1381,6 +1386,7 @@ async function main(): Promise<void> {
     };
 
     const runWithTaskBaseline = async (task: string, onStarted?: () => void): Promise<string> => {
+      if (!providerRegistry.get(config.providerId)) throw new Error(localize(language, "尚未配置渠道，请先使用 /provider add 或 /providers。", "No Provider configured. Use /provider add or /providers first."));
       const preparation = new AbortController();
       activeTaskPreparationController = preparation;
       latestTaskBaseline = undefined;
@@ -2366,22 +2372,28 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/provider add") {
-        console.log(chalk.cyan(localize(language, "添加 OpenAI-compatible Provider（Key 可保存在本机配置，也可使用环境变量）", "Add an OpenAI-compatible provider (save the key locally or use an environment variable)")));
+        console.log(chalk.cyan(localize(language, "添加 Provider（Key 可保存在本机配置，也可使用环境变量）", "Add a provider (save the key locally or use an environment variable)")));
         try {
+          const kind = await selectTerminalOption(localize(language, "渠道类型", "Provider type"), (["agnes", "openai", "anthropic", "ollama", "lmstudio", "vllm", "openai-compatible"] as const).map((value) => ({ label: value, value })), language);
+          if (!kind) continue;
+          const template = providerTemplate(kind);
           const id = (await askQuestion(localize(language, "Provider ID：", "Provider ID: "))).trim();
+          if (providerRegistry.get(id)) throw new Error(localize(language, "Provider ID 已存在。", "Provider ID already exists."));
           const name = (await askQuestion(localize(language, "显示名称：", "Display name: "))).trim() || id;
-          const baseURL = (await askQuestion(localize(language, "API Base URL（需包含 /v1）：", "API base URL (include /v1): "))).trim();
-          const model = (await askQuestion(localize(language, "默认模型 ID：", "Default model ID: "))).trim();
+          const baseURL = (await askQuestion(localize(language, `API Base URL [${template?.baseURL ?? "默认"}]：`, `API base URL [${template?.baseURL ?? "default"}]: `))).trim() || template?.baseURL;
+          const model = (await askQuestion(localize(language, `默认模型 ID [${template?.model ?? ""}]：`, `Default model ID [${template?.model ?? ""}]: `))).trim() || template?.model || "";
           const apiKeyEnv = (await askQuestion(localize(language, "密钥环境变量名（本地无认证可留空）：", "API-key environment variable (blank for unauthenticated local servers): "))).trim() || undefined;
           const apiKey = await askSecret(localize(language, "本地保存的 API Key（可留空，输入内容不会显示）：", "Locally saved API key (optional; input is hidden): ")) || undefined;
           const contextText = (await askQuestion(localize(language, "上下文窗口 Token 数（留空使用 128K）：", "Context-window tokens (blank for 128K): "))).trim();
           const visionText = (await askQuestion(localize(language, "该端点和模型确认支持视觉？[y/N]：", "Does this endpoint and model definitely support vision? [y/N]: "))).trim();
           const profile: ProviderProfile = {
-            id, name, kind: "openai-compatible", model, baseURL, apiKeyEnv, apiKey,
+            id, name, kind, model, baseURL, apiKeyEnv, apiKey,
             contextWindow: contextText ? Number(contextText) : undefined,
-            features: { text: true, tools: true, vision: /^(y|yes)$/i.test(visionText), image: false, video: false },
+            capabilityModels: template?.capabilityModels,
+            features: { ...(template?.features ?? { text: true, tools: true, image: false, video: false }), vision: /^(y|yes)$/i.test(visionText) },
           };
           await providerRegistry.upsert(profile);
+          if (!providerRegistry.activeId()) await providerRegistry.setActive(id, model);
           console.log(chalk.green(localize(language, `已保存 Provider ${id}。正在进行连接测试……`, `Saved provider ${id}. Testing the connection...`)));
           await switchProviderProfile(providerRegistry.get(id)!);
         } catch (error) {
@@ -2455,11 +2467,15 @@ async function main(): Promise<void> {
           console.log(chalk.dim(localize(language, "已取消删除。\n", "Removal cancelled.\n")));
           continue;
         }
-        if (selected === config.providerId) {
-          console.log(chalk.yellow(localize(language, "不能删除当前 Provider；请先切换到其他 Provider。\n", "The active provider cannot be removed; switch providers first.\n")));
-          continue;
-        }
+        const confirmed = await askQuestion(localize(language, `确认删除 ${selected} 的渠道配置和本机凭据？[y/N]：`, `Remove ${selected} and its local credential? [y/N]: `));
+        if (!/^(y|yes)$/i.test(confirmed.trim())) continue;
         await providerRegistry.remove(selected);
+        if (selected === config.providerId) {
+          const nextConfig = profileConfig(UNCONFIGURED_PROVIDER_PROFILE);
+          await agent.replaceProvider(nextConfig, { async complete(): Promise<never> { throw new Error(localize(language, "请使用 /provider add 或 /providers 配置渠道。", "Use /provider add or /providers to configure a Provider.")); } });
+          baseTools = buildBaseTools();
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+        }
         console.log(chalk.green(localize(language, `已删除 Provider ${selected}。\n`, `Removed provider ${selected}.\n`)));
         continue;
       }

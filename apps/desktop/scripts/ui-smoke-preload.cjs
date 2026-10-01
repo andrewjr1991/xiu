@@ -22,6 +22,7 @@ let recoveryActive = false;
 const runtimeListeners = new Set();
 const terminalListeners = new Set();
 const calls = [];
+let onboardingSnapshot;
 
 const runtime = () => ({ runtime: { snapshot: { schemaVersion: 1, sequence, generatedAt: now(), ...(task ? { task } : {}) }, events: [], resyncRequired: false }, conversationId: task?.id, provider: { id: activeProviderId, label: activeProviderId === "openai" ? "OpenAI" : "Agnes", model: activeModel }, writer: "available", approvalMode });
 const emit = (type, payload) => {
@@ -31,7 +32,7 @@ const emit = (type, payload) => {
 };
 const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
 const review = () => ({ generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], validations: [], checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
-const providers = () => ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
+const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
   { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.openai }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
   { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
@@ -80,8 +81,19 @@ const bridge = {
   selectProvider: async ({ providerId, model, capability }) => { activeProviderId = providerId; if (capability) { activeCapabilityModels[providerId][capability] = model; calls.push(`provider:${providerId}/${capability}/${model}`); } else { activeModel = model; calls.push(`provider:${providerId}/${model}`); } return { settings: providers(), connection: runtime() }; },
   saveProviderCredential: async () => ({ settings: providers(), connection: runtime() }),
   testProvider: async () => ({ ok: true, message: "连接成功", modelsDiscovered: 1 }),
-  upsertProvider: async () => ({ settings: providers(), connection: runtime() }),
-  deleteProvider: async () => ({ settings: providers(), connection: runtime() }),
+  upsertProvider: async (request) => {
+    if (onboardingSnapshot) {
+      activeProviderId = request.id; activeModel = request.model;
+      onboardingSnapshot = { ...onboardingSnapshot, activeProviderId, activeModel, modelProviderId: activeProviderId,
+        profiles: [{ ...request, defaultModel: request.model, selectedModel: request.model, builtin: false, credential: { source: "missing", configured: false, editable: true } }] };
+      calls.push(`onboarding:add:${request.id}`);
+    }
+    return { settings: providers(), connection: runtime() };
+  },
+  deleteProvider: async ({ providerId }) => {
+    if (onboardingSnapshot) { onboardingSnapshot = { ...onboardingSnapshot, profiles: [], activeProviderId: "", activeModel: "", modelProviderId: "" }; activeProviderId = ""; activeModel = ""; calls.push(`onboarding:delete:${providerId}`); }
+    return { settings: providers(), connection: runtime() };
+  },
   terminalSnapshot: async () => terminal,
   startTerminal: async ({ cols = 80, rows = 24 } = {}) => { terminal = { state: "running", sessionId: "terminal-1", shell: "PowerShell", cols, rows, output: "PS C:\\Xiu UI Smoke> " }; calls.push("terminal:start"); return terminal; },
   writeTerminal: async ({ data }) => { calls.push(`terminal:write:${data}`); },
@@ -93,4 +105,8 @@ const bridge = {
 };
 
 contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
-contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls] }));
+contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls], freshProviders: () => {
+  const templates = providers().profiles.map((profile) => ({ id: profile.id, name: profile.name, kind: profile.kind, model: profile.defaultModel, capabilityModels: profile.capabilityModels, features: profile.features }));
+  onboardingSnapshot = { activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {}, templates };
+  activeProviderId = ""; activeModel = "";
+} }));

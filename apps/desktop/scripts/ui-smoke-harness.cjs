@@ -86,8 +86,23 @@ app.whenReady().then(async () => {
     assert(narrow.consoleDisplay === "none", "Narrow terminal layout did not hide the task console.");
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
+    window.setContentSize(1366, 768);
+    await evaluate(window, `window.xiuSmoke.freshProviders()`);
+    await clickText(window, "设置与模型");
+    await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");
+    await clickText(window, "新增渠道", ".provider-add");
+    await evaluate(window, `(() => { const el=document.querySelector('.provider-form select'); const setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(el,'agnes'); el.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+    await waitFor(window, `document.querySelector('.provider-form input').value === 'Agnes'`, "Agnes template fields");
+    await clickText(window, "保存渠道", ".provider-editor footer button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('onboarding:add:agnes')`, "first channel save");
+    await waitFor(window, `document.querySelector('.provider-nav-row > button')`, "saved channel stays visible");
+    await evaluate(window, `document.querySelector('.provider-nav-row button[title="删除渠道"]').click()`);
+    await waitFor(window, `document.querySelector('.provider-delete-confirm')`, "last channel delete confirmation");
+    await clickText(window, "删除渠道", ".provider-delete-confirm button");
+    await waitFor(window, `document.body.innerText.includes('尚未添加渠道') && window.xiuSmoke.calls().includes('onboarding:delete:agnes')`, "return to zero-provider setup");
+
     const calls = await evaluate(window, `window.xiuSmoke.calls()`);
-    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["keyboard-submit", "provider-model", "provider-media-model", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle"], calls }, null, 2));
+    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["keyboard-submit", "provider-model", "provider-media-model", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle", "zero-provider-onboarding", "add-agnes-template", "delete-last-provider"], calls }, null, 2));
     app.exit(0);
   } catch (error) {
     console.error(error?.stack ?? String(error));

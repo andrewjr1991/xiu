@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { DesktopProviderController } from "../apps/desktop/main/provider-controller.js";
 import { credentialRef, type CredentialBackendStatus, type CredentialRef, type CredentialStore } from "../src/credential-store.js";
-import { ProviderRegistry } from "../src/provider-registry.js";
+import { ProviderRegistry, providerTemplate } from "../src/provider-registry.js";
 
 class MemorySystemCredentialStore implements CredentialStore<string, "provider-api-key"> {
   readonly backend = "system" as const;
@@ -48,11 +48,42 @@ async function fixture() {
   return { root, registryFile, modelCacheFile, system, registry, controller };
 }
 
+test("desktop fresh onboarding adds Agnes without an environment variable and can remove the last channel", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-empty-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const filename = path.join(root, "providers.json");
+  const system = new MemorySystemCredentialStore();
+  const registry = new ProviderRegistry(filename, system);
+  await registry.load();
+  const controller = await DesktopProviderController.create({ registry, systemCredentialStore: system, discover: async () => [], test: async () => 0 });
+  const empty = controller.snapshot();
+  assert.deepEqual(empty.profiles, []);
+  assert.equal(empty.activeProviderId, "");
+  const template = empty.templates!.find((profile) => profile.id === "agnes")!;
+  assert.equal(template.apiKeyEnv, undefined);
+  const saved = await controller.upsert({ ...template, apiKey: "fresh-key-canary" });
+  assert.equal(saved.activeProviderId, "agnes");
+  assert.equal(saved.profiles[0]?.credential.source, "system");
+  assert.doesNotMatch(JSON.stringify(saved), /fresh-key-canary/);
+  assert.doesNotMatch(await fs.readFile(filename, "utf8"), /fresh-key-canary/);
+  const restarted = new ProviderRegistry(filename, system);
+  await restarted.load();
+  assert.equal(restarted.get("agnes")?.apiKey, "fresh-key-canary");
+  await assert.rejects(controller.upsert(template), /已存在/);
+  await controller.upsert({ ...template, existingId: "agnes", name: "My Agnes" });
+  assert.equal(registry.get("agnes")?.name, "My Agnes");
+  const removed = await controller.delete({ providerId: "agnes", confirmed: true });
+  assert.deepEqual(removed.profiles, []);
+  assert.equal(system.list().length, 0);
+  await restarted.load();
+  assert.deepEqual(restarted.list(), []);
+});
+
 test("desktop provider snapshot exposes configuration state without credential material", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
   const initial = item.controller.snapshot();
-  assert.equal(initial.profiles.some((candidate) => candidate.id === "office"), false, "unconfigured cloud providers stay hidden");
+  assert.equal(initial.profiles.some((candidate) => candidate.id === "office"), true, "user-added channels stay visible even without a key");
   assert.equal(initial.profiles.some((candidate) => candidate.id === "ollama"), false, "unused keyless providers stay hidden");
   const secret = "xiu-canary-provider-secret-48291";
   const saved = await item.controller.saveCredential({ providerId: "office", apiKey: secret });
@@ -74,7 +105,7 @@ test("desktop provider controller discovers models and persists an explicit sele
   assert.ok(discovered.modelsByProvider.office?.some((model) => model.id === "office-fast"));
   assert.ok(discovered.capabilityModelsByProvider.office?.image.some((model) => model.id === "office-image-pro"));
   assert.ok(discovered.capabilityModelsByProvider.office?.audio.some((model) => model.id === "office-tts"));
-  assert.ok(discovered.modelsByProvider.openai?.length, "other provider catalogs remain available");
+  assert.equal(discovered.modelsByProvider.openai, undefined, "templates do not register channels");
   const selected = await item.controller.select({ providerId: "office", model: "office-fast" });
   assert.equal(selected.activeProviderId, "office");
   assert.equal(selected.activeModel, "office-fast");
@@ -95,10 +126,12 @@ test("desktop provider controller discovers models and persists an explicit sele
   assert.equal(reloaded.snapshot("office").profiles.find((profile) => profile.id === "office")?.capabilityModels.image, "office-image-pro", "selected capability model survives controller restart");
 });
 
-test("a keyless provider becomes visible only after successful model discovery", async (t) => {
+test("a local provider is added explicitly and remains visible before discovery", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
   assert.equal(item.controller.snapshot().profiles.some((candidate) => candidate.id === "ollama"), false);
+  await item.registry.upsert(providerTemplate("ollama")!);
+  assert.equal(item.controller.snapshot().profiles.some((candidate) => candidate.id === "ollama"), true);
   const discovered = await item.controller.discover(item.root, { providerId: "ollama" });
   const local = discovered.profiles.find((candidate) => candidate.id === "ollama");
   assert.equal(local?.credential.source, "not-required");
@@ -111,6 +144,7 @@ test("desktop credential save fails closed when a secure system backend is unava
   const registryFile = path.join(root, "providers.json");
   const registry = new ProviderRegistry(registryFile);
   await registry.load();
+  await registry.upsert(providerTemplate("openai")!);
   const controller = await DesktopProviderController.create({ registry, discover: async () => [], test: async () => 0 });
   await assert.rejects(() => controller.saveCredential({ providerId: "openai", apiKey: "must-not-persist" }), /拒绝把新凭据降级保存为明文文件/);
   const onDisk = await fs.readFile(registryFile, "utf8").catch(() => "");
@@ -206,16 +240,12 @@ test("desktop provider controller persists vendor-neutral media capability model
   assert.doesNotMatch(JSON.stringify(saved), /media-secret/);
 });
 
-test("desktop provider mutations protect built-in and active channels", async (t) => {
+test("desktop provider deletion requires confirmation even for the active channel", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
-  await assert.rejects(() => item.controller.upsert({
-    existingId: "openai",
-    id: "openai",
-    name: "Replaced",
-    kind: "openai-compatible",
-    model: "gpt-test",
-    features: { tools: true, vision: false, image: false, video: false },
-  }), /内置(?: Provider|渠道)/);
-  await assert.rejects(() => item.controller.delete({ providerId: "openai", confirmed: true }), /当前正在使用|内置(?: Provider|渠道)/);
+  await item.registry.setActive("office");
+  await assert.rejects(() => item.controller.delete({ providerId: "office", confirmed: false as unknown as true }), /明确确认/);
+  const empty = await item.controller.delete({ providerId: "office", confirmed: true });
+  assert.deepEqual(empty.profiles, []);
+  assert.equal(empty.activeProviderId, "");
 });

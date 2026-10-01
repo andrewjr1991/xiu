@@ -462,16 +462,25 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
   const credentialLabel = (profile: DesktopProviderProfile) => profile.credential.source === "system" ? "系统凭据" : profile.credential.source === "environment" ? "环境变量" : profile.credential.source === "legacy-file" ? "兼容凭据" : profile.credential.source === "not-required" ? "无需 Key" : "未配置";
   const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels }, features: { ...profile.features } });
   const updateEditing = <K extends keyof DesktopProviderUpsertRequest>(key: K, value: DesktopProviderUpsertRequest[K]) => setEditing((current) => current ? { ...current, [key]: value } : current);
+  const chooseKind = (kind: DesktopProviderKind) => setEditing((current) => {
+    if (!current) return current;
+    if (current.existingId) return { ...current, kind };
+    const template = settings?.templates?.find((item) => item.kind === kind);
+    return { ...blankProvider(), ...template, kind, apiKey: current.apiKey, apiKeyEnv: current.apiKeyEnv,
+      id: current.id && !settings?.templates?.some((item) => item.id === current.id) ? current.id : template?.id ?? "",
+      name: current.name && !settings?.templates?.some((item) => item.name === current.name) ? current.name : template?.name ?? "" };
+  });
   const updateCapabilityModel = (capability: "vision" | "image" | "video" | "audio", value: string) => setEditing((current) => current ? { ...current, capabilityModels: { ...current.capabilityModels, [capability]: value } } : current);
   return <div className="provider-popover" role="dialog" aria-label="选择 Provider 和模型">
     <header><div><strong>Provider 与模型</strong><small>选择模型，或管理自定义渠道</small></div><div className="provider-header-actions"><button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button><button onClick={onClose} aria-label="关闭">×</button></div></header>
     {!settings && <p className="muted">正在读取 Provider 配置…</p>}
+    {settings?.profiles.length === 0 && !editing && <p className="provider-notice">尚未添加渠道。点击“新增渠道”，选择 Agnes、OpenAI、本地模型或兼容服务。模板不会自动添加渠道，环境变量不是必需项。</p>}
     {settings && <div className="provider-grid">
       <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{!profile.builtin && <span><button title="编辑渠道" onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}</nav>
       {editing ? <section className="provider-editor"><header><div><strong>{editing.existingId ? "编辑渠道" : "新增渠道"}</strong><small>凭据只保存在系统凭据库，不写入项目文件</small></div><button onClick={() => setEditing(undefined)}>取消</button></header><div className="provider-form">
         <label>名称<input value={editing.name} onChange={(event) => updateEditing("name", event.target.value)} placeholder="例如：公司网关" /></label>
         <label>{editing.existingId ? "标识（创建后不可修改）" : "标识"}<input value={editing.id} disabled={Boolean(editing.existingId)} title={editing.existingId ? "标识用于关联凭据，创建后不可修改" : undefined} onChange={(event) => updateEditing("id", event.target.value)} placeholder="company-gateway" /></label>
-        <label>类型<select value={editing.kind} onChange={(event) => updateEditing("kind", event.target.value as DesktopProviderKind)}>{(["openai-compatible", "openai", "anthropic", "agnes", "ollama", "lmstudio", "vllm"] as DesktopProviderKind[]).map((kind) => <option key={kind}>{kind}</option>)}</select></label>
+        <label>类型<select value={editing.kind} onChange={(event) => chooseKind(event.target.value as DesktopProviderKind)}>{(["openai-compatible", "openai", "anthropic", "agnes", "ollama", "lmstudio", "vllm"] as DesktopProviderKind[]).map((kind) => <option key={kind}>{kind}</option>)}</select></label>
         <label>默认模型<input value={editing.model} onChange={(event) => updateEditing("model", event.target.value)} placeholder="model-id" /></label>
         <label className="wide">Base URL<input value={editing.baseURL ?? ""} onChange={(event) => updateEditing("baseURL", event.target.value)} placeholder="https://api.example.com/v1" /></label>
         <label>Key 环境变量<input value={editing.apiKeyEnv ?? ""} onChange={(event) => updateEditing("apiKeyEnv", event.target.value)} placeholder="OPTIONAL_API_KEY" /></label>

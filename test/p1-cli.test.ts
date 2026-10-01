@@ -75,6 +75,51 @@ async function launch(t: TestContext, cwd: string, userDirectory: string) {
   };
 }
 
+test("CLI fresh setup adds the Agnes template without reserved-ID collisions and removes the last channel", { timeout: 45_000 }, async (t) => {
+  const { cwd, userDirectory } = await fixture(t);
+  const app = await launch(t, cwd, userDirectory);
+  app.write("/provider add");
+  await app.readUntil("Provider ID: ");
+  app.write("agnes");
+  await app.readUntil("Display name: ");
+  app.write("My Agnes");
+  await app.readUntil("API base URL [https://apihub.agnes-ai.com/v1]: ");
+  app.write("");
+  await app.readUntil("Default model ID [agnes-2.5-flash]: ");
+  app.write("");
+  await app.readUntil("API-key environment variable (blank for unauthenticated local servers): ");
+  app.write("");
+  await app.readUntil("Locally saved API key (optional; input is hidden): ");
+  app.write("");
+  await app.readUntil("Context-window tokens (blank for 128K): ");
+  app.write("");
+  await app.readUntil("Does this endpoint and model definitely support vision? [y/N]: ");
+  app.write("n");
+  await app.readUntil("xiu> ");
+  const filename = path.join(userDirectory, ".xiu", "providers.json");
+  const saved = JSON.parse(await fs.readFile(filename, "utf8"));
+  assert.equal(saved.active, "agnes");
+  assert.equal(saved.profiles.length, 1);
+  assert.equal(saved.profiles[0].kind, "agnes");
+  assert.equal(saved.profiles[0].apiKeyEnv, undefined);
+  assert.equal(saved.profiles[0].capabilityModels.image, "agnes-image-2.1-flash");
+  // No key is supplied, so connection testing fails before any remote request.
+  app.write("/provider remove");
+  await app.readUntil("Remove agnes and its local credential? [y/N]: ");
+  app.write("n");
+  await app.readUntil("xiu> ");
+  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).profiles.length, 1);
+  app.write("/provider remove");
+  await app.readUntil("Remove agnes and its local credential? [y/N]: ");
+  app.write("y");
+  await app.readUntil("xiu> ");
+  assert.deepEqual(JSON.parse(await fs.readFile(filename, "utf8")).profiles, []);
+  await app.close();
+  const restarted = await launch(t, cwd, userDirectory);
+  assert.deepEqual(JSON.parse(await fs.readFile(filename, "utf8")).profiles, []);
+  await restarted.close();
+});
+
 test("CLI check commands discover and run real npm scripts, respect Plan mode and report historical results", { timeout: 45_000 }, async (t) => {
   const { cwd, userDirectory } = await fixture(t);
   await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { typecheck: "node good.js", test: "node bad.js" } }), "utf8");
@@ -123,6 +168,11 @@ test("CLI diff defaults to task scope and exposes explicit workspace and staged 
 
 test("CLI does not steer check commands into a running task and clear removes task baselines", { timeout: 45_000 }, async (t) => {
   const { cwd, userDirectory } = await fixture(t);
+  await fs.mkdir(path.join(userDirectory, ".xiu"), { recursive: true });
+  await fs.writeFile(path.join(userDirectory, ".xiu", "providers.json"), JSON.stringify({ version: 5, active: "openai", profiles: [{
+    id: "openai", name: "OpenAI", kind: "openai", model: "gpt-5", apiKeyEnv: "OPENAI_API_KEY",
+    features: { text: true, tools: true, vision: false, image: false, video: false },
+  }] }), "utf8");
   await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node check.js" } }), "utf8");
   await fs.writeFile(path.join(cwd, "check.js"), "require('node:fs').writeFileSync('unexpected.txt','bad');", "utf8");
   const app = await launch(t, cwd, userDirectory);

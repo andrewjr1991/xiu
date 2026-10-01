@@ -5,7 +5,7 @@ import { defaultLanguage } from "../i18n.js";
 import { createMediaTools } from "../media-tools.js";
 import { TaskPlanManager, createPlanTools } from "../plan.js";
 import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
-import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "../provider-registry.js";
+import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "../provider-registry.js";
 import { createProvider } from "../providers.js";
 import { redactSecrets } from "../secret-redaction.js";
 import { SettingsStore } from "../settings.js";
@@ -18,6 +18,7 @@ import { AgentRuntimeAdapter } from "./agent-adapter.js";
 import { XiuRuntime } from "./xiu-runtime.js";
 
 export interface WorkspaceAgentHost {
+  providerConfigured?: boolean;
   runtime: XiuRuntime;
   provider: { id: string; label: string; model: string };
   journal: TaskRunJournal;
@@ -75,8 +76,8 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
   await registry.load();
   const savedProviderId = registry.activeId();
   const requestedProviderId = resolveStartupProviderId(undefined, savedProviderId, process.env.XIU_PROVIDER);
-  const requestedProfile = registry.get(requestedProviderId);
-  const profile = requestedProfile ?? registry.get("openai")!;
+  const requestedProfile = startupProviderProfile(registry, requestedProviderId);
+  const profile = requestedProfile ?? UNCONFIGURED_PROVIDER_PROFILE;
   const model = resolveStartupModel(
     undefined,
     requestedProfile && requestedProviderId === savedProviderId ? registry.activeModel(requestedProviderId) : undefined,
@@ -114,14 +115,17 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
   ];
 
   let provider: ModelProvider;
-  try { provider = createProvider(config); }
+  try {
+    if (!requestedProfile) throw new Error("请先添加渠道 / Add a Provider first");
+    provider = createProvider(config);
+  }
   catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error), config.apiKey ? [config.apiKey] : []);
     provider = {
       async complete(): Promise<never> {
         throw new Error(language === "zh-CN"
-          ? `当前 Provider 尚未配置：${message}。请先在 CLI 中使用 /provider key 或 /providers 完成配置。`
-          : `The current provider is not configured: ${message}. Configure it in the CLI with /provider key or /providers.`);
+          ? `当前 Provider 尚未配置：${message}。请在设置与模型中新增或配置渠道。`
+          : `The current provider is not configured: ${message}. Add or configure a channel in Settings.`);
       },
     };
   }
@@ -153,7 +157,7 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
     });
   }
   return {
-    runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
+    providerConfigured: Boolean(requestedProfile), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
     setApprovalMode: (mode) => { approvalMode = mode; },
   };
 }
