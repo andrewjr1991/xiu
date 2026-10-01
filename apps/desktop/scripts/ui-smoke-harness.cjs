@@ -29,6 +29,7 @@ const clickText = (window, text, selector = "button") => evaluate(window, `(() =
 const chooseOption = async (window, selector, label) => {
   await evaluate(window, `document.querySelector(${JSON.stringify(selector)}).click()`);
   await waitFor(window, `Boolean(document.querySelector('.xiu-select-menu'))`, "custom menu");
+  await waitFor(window, `[...document.querySelectorAll('.xiu-select-menu [role="option"]')].some(el => el.textContent.includes(${JSON.stringify(label)}))`, "custom menu options ready");
   assert(await evaluate(window, `(() => { const r=document.querySelector('.xiu-select-menu').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; })()`), "Custom menu should remain inside the viewport.");
   if (label === '执行轮次 1') await fs.promises.writeFile(path.join(smokeRoot, "workbench-menu-1366.png"), (await window.webContents.capturePage()).toPNG());
   await clickText(window, label, '.xiu-select-menu [role="option"]');
@@ -54,6 +55,16 @@ app.whenReady().then(async () => {
       assert(await evaluate(window, `[...document.querySelectorAll('.inspector-tabs button')].every(el => getComputedStyle(el).whiteSpace === 'nowrap' && getComputedStyle(el).flexShrink === '0')`), "Inspector tabs can wrap or shrink into vertical text.");
       assert(await evaluate(window, `(() => { const el=document.querySelector('.task-console'); return el.scrollWidth <= el.clientWidth + 1; })()`), "Conversation overflows its grid column.");
       assert(await evaluate(window, `parseFloat(getComputedStyle(document.querySelector('[aria-label="搜索变更文件"]')).borderTopLeftRadius) >= 6 && parseFloat(getComputedStyle(document.querySelector('[aria-label="执行轮次"]')).borderTopLeftRadius) >= 6`), "Diff controls lost workbench styling.");
+    };
+    const checkStableTabs = async () => {
+      const width = await evaluate(window, `document.querySelector('.review-inspector').getBoundingClientRect().width`);
+      for (const label of ['文件', '终端', '子智能体', '数据', '证据', '变更']) {
+        await openTool(window, label);
+        assert(await evaluate(window, `Math.abs(document.querySelector('.review-inspector').getBoundingClientRect().width - ${width}) < 1`), "Switching tool tabs changed the pane width.");
+      }
+      assert(await evaluate(window, `(() => { const pane=document.querySelector('.review-inspector').getBoundingClientRect(); return [...document.querySelectorAll('.workbench-actions button')].every(el => { const r=el.getBoundingClientRect(); return r.left >= pane.left && r.right <= pane.right && r.width > 0; }); })()`), "Overflowing tabs hid fixed workbench controls.");
+      await evaluate(window, `document.querySelector('.workbench-tab-strip').scrollLeft=10000`);
+      assert(await evaluate(window, `document.querySelector('.workbench-actions').getBoundingClientRect().right <= document.querySelector('.review-inspector').getBoundingClientRect().right`), "Scrolling tabs moved the toolbar offscreen.");
     };
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-1366.png"), (await window.webContents.capturePage()).toPNG());
@@ -199,12 +210,16 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('terminal:start')`, "terminal start");
     await clickText(window, "关闭", ".terminal-stop");
     await waitFor(window, `window.xiuSmoke.calls().includes('terminal:stop')`, "terminal stop");
+    await checkStableTabs();
+    await openTool(window, "终端");
 
     window.setContentSize(900, 768);
     await waitFor(window, `innerWidth === 900 && innerHeight === 768`, "terminal narrow viewport resize");
+    await checkStableTabs();
+    await openTool(window, "终端");
     const narrow = await evaluate(window, `(() => ({ width: innerWidth, consoleDisplay: getComputedStyle(document.querySelector('.task-console')).display, terminalDisplay: getComputedStyle(document.querySelector('.terminal-pane')).display }))()`);
     assert(narrow.width === 900, `Expected 900px viewport, received ${narrow.width}.`);
-    assert(narrow.consoleDisplay === "none", "Narrow terminal layout did not hide the task console.");
+    assert(narrow.consoleDisplay !== "none", "Switching to terminal must preserve the split conversation.");
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
     window.setContentSize(1366, 768);
@@ -213,6 +228,8 @@ app.whenReady().then(async () => {
     await clickText(window, "设置与模型");
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");
     await clickText(window, "新增渠道", ".provider-add");
+    await waitFor(window, `Boolean(document.querySelector('.provider-form .xiu-select:not(:disabled)'))`, "provider form mounted");
+    await evaluate(window, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
     await chooseOption(window, '.provider-form .xiu-select', 'agnes');
     await waitFor(window, `document.querySelector('.provider-form input').value === 'Agnes'`, "Agnes template fields");
     await clickText(window, "保存渠道", ".provider-editor footer button");

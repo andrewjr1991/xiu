@@ -16,7 +16,8 @@ import { TaskRunJournal } from "../src/task-run.js";
 import type { AssistantTurn, ModelProvider, ToolContext } from "../src/types.js";
 
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-full-access-"));
+  // macOS aliases /var to /private/var; fixtures must use a link-free path.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "xiu-full-access-")));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const cwd = path.join(root, "workspace");
   await fs.mkdir(cwd);

@@ -2,11 +2,11 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## 0.20.2 — Unreleased
+## 0.20.2 — 2026-10-02
 
 - Replace fixed inspector buttons with selectively opened, closable tool tabs and split/full view. Share keyboard-accessible dropdown menus, align empty-state typography and show compact expandable process/tool/source/evidence rows. Add an isolated, human-operated ephemeral HTTPS web tab (no login submission/downloads/task bridge), plus real Electron offline browser-policy/lifecycle coverage.
 
-- Polish inspector tabs and Diff controls: keep labels horizontal, style round/search inputs, preserve conversation width on narrow layouts, localize review warnings, inset Diff empty-state text from the divider, and tighten categorized-data spacing. Add wide/narrow visual-layout regressions.
+- Polish inspector tabs and Diff controls: keep labels horizontal, keep split pane widths consistent across tool tabs, scroll only the tab list while add/refresh/full-view controls remain visible, style round/search inputs, preserve conversation width on narrow layouts, localize review warnings, inset Diff empty-state text from the divider, and tighten categorized-data spacing. Add wide/narrow visual-layout regressions.
 - Add an independent desktop Diff workbench with a searchable file tree, bounded insertion/deletion counts, line numbers, and saved execution-round selection; missing historical snapshots never substitute current workspace changes.
 - Wire the shared multi-agent coordinator into desktop tasks, with real child-task cards, elapsed time and bounded redacted results. Parent stop/exit cancels and drains children; Worktree integration retains independent confirmation and review evidence.
 - Separate background processes, tools, task artifacts, read sources and verification evidence. Enable the shared background tools using a separately unpacked Node worker, not the interactive PTY.

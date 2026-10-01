@@ -2,7 +2,7 @@
 
 # Xiu
 
-Unreleased 0.20.2 desktop candidate: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected. Published 0.20.1 behavior is unchanged.
+0.20.2 desktop preview: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected.
 
 **A terminal coding assistant for everyday development, with reviewable changes.**
 
@@ -16,7 +16,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-The current release is `0.20.1`. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI. The patch release also persists capability-specific model selections, consistently bounds generated-media downloads, and fixes Windows background-process handoff.
+This version is `0.20.2`. Fresh installations start with no preconfigured Providers. It adds desktop MCP management, a tabbed review workbench, child-task and categorized evidence views, and installed Node/npm compatibility. Upgrade CLI and desktop together because channel settings migrate to format 5. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI. The patch release also persists capability-specific model selections, consistently bounds generated-media downloads, and fixes Windows background-process handoff.
 
 ## Install
 
@@ -70,7 +70,7 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 
 The unreleased 0.20.2 candidate connects stdio / Streamable HTTP MCP servers to desktop tasks through the same manager as the CLI. Open **MCP 连接与权限** to add/edit basic user configurations, review the exact permission manifest, then explicitly connect/reload. OAuth shows authorization origins/scopes, browser fallback and cancellation; Resource/Prompt browsing is bounded, redacted and read-only. Project/advanced/secret-bearing configurations remain read-only in the desktop editor; use CLI/config files for them. Connections close on workspace changes and exit. These desktop MCP features are not part of the published 0.20.1 package.
 
-The unreleased 0.20.2 candidate adds MCP, an independent searchable Diff/file-tree panel with saved execution rounds and bounded line counts, real specialist-agent task/status/result cards, and categorized background processes, tools, artifacts, source reads and verification. Children remain workspace/Worktree scoped; integration always requires confirmation and Reviewer/Tester evidence. Managed background commands and npm-based MCP servers require local Node.js, never Xiu.exe as Node. Native web research, plugins, and Provider failover/stage routing remain pending. Published 0.20.1 behavior is unchanged. See the [capability inventory](./ROADMAP.zh-CN.md#4-后续工程化).
+The unreleased 0.20.2 candidate adds MCP, an independent searchable Diff/file-tree panel with saved execution rounds and bounded line counts, real specialist-agent task/status/result cards, and categorized background processes, tools, artifacts, source reads and verification. Children remain workspace/Worktree scoped; integration always requires confirmation and Reviewer/Tester evidence. Managed background commands and npm-based MCP servers require local Node.js, never Xiu.exe as Node. Native web research, plugins, and Provider failover/stage routing remain pending. See the [capability inventory](./ROADMAP.zh-CN.md#4-后续工程化).
 
 - Autonomous inspect/edit/verify task loop
 - OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible profiles
