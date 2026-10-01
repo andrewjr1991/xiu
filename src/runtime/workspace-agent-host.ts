@@ -16,6 +16,7 @@ import { builtinTools } from "../tools.js";
 import type { ApprovalRequest, ModelProvider } from "../types.js";
 import { AgentRuntimeAdapter } from "./agent-adapter.js";
 import { XiuRuntime } from "./xiu-runtime.js";
+import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
 
 export interface WorkspaceAgentHost {
   providerConfigured?: boolean;
@@ -26,6 +27,8 @@ export interface WorkspaceAgentHost {
   checkpointManager?: CheckpointManager;
   projectIndex?: ProjectIndex;
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
+  mcp?: WorkspaceMcpService;
+  close?: () => Promise<void>;
 }
 
 export type WorkspaceApprovalMode = "ask" | "workspace" | "full";
@@ -144,6 +147,11 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
     journal,
   );
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
+  let mcpCredentials;
+  try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
+  catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
+  const mcpManager = createMcpManager(workspace, mcpCredentials);
+  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools([...tools, ...mcpManager.tools()]));
   const interrupted = await journal.interrupted();
   const latest = interrupted ?? await journal.latest();
   if (latest) checkpointManager.setSession(latest.sessionId);
@@ -159,5 +167,6 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
   return {
     providerConfigured: Boolean(requestedProfile), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
     setApprovalMode: (mode) => { approvalMode = mode; },
+    mcp, close: () => mcp.close(),
   };
 }

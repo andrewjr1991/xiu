@@ -11,11 +11,15 @@ import { McpAuthStore, type McpAuthCredentialInfo, type McpAuthSecretRecord } fr
 import type { CredentialBackendStatus, CredentialStore } from "./credential-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
-import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
+import { addedPermissions, parseExtensionPermissions, permissionFingerprint, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
-const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
+// Desktop bundles this module into dist/main: inject metadata at build time,
+// rather than resolving the CLI's relative package path in an Electron bundle.
+declare const __XIU_MCP_CLIENT_VERSION__: string | undefined;
+const clientVersion = typeof __XIU_MCP_CLIENT_VERSION__ === "string"
+  ? __XIU_MCP_CLIENT_VERSION__ : (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 const MAX_OUTPUT = 60_000;
 const MAX_MCP_PAGES = 20;
 const MAX_MCP_ITEMS = 500;
@@ -492,7 +496,7 @@ class StdioMcpConnection implements McpConnectionLike {
     await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "xiu", version: packageJson.version },
+      clientInfo: { name: "xiu", version: clientVersion },
     });
     this.notify("notifications/initialized", {});
     return await this.listTools();
@@ -688,7 +692,7 @@ class HttpMcpConnection implements McpConnectionLike {
       requestInit: { headers },
       ...(transportAuth ? { authProvider: transportAuth, fetch: createSafeOAuthFetch(), onInsufficientScope: "throw" as const } : {}),
     });
-    const client = new Client({ name: "xiu", version: packageJson.version }, {
+    const client = new Client({ name: "xiu", version: clientVersion }, {
       versionNegotiation: { mode: "auto", probe: { timeoutMs: 5_000, maxRetries: 0 } },
     });
     this.client = client;
@@ -1008,11 +1012,14 @@ export class McpManager {
     }));
   }
 
-  async approvePermissions(name: string, includeProject = true): Promise<ExtensionPermissionManifest> {
+  async approvePermissions(name: string, includeProject = true, expectedFingerprint?: string): Promise<ExtensionPermissionManifest> {
     const servers = await this.configuredServers(includeProject);
     const config = servers[name];
     if (!config || config.enabled === false) throw new Error(`MCP server ${name} was not found or is disabled`);
     const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
+    if (expectedFingerprint !== undefined && expectedFingerprint !== permissionFingerprint(manifest)) {
+      throw new Error("MCP configuration changed since permission preview; review and confirm again.");
+    }
     await this.permissionStore.approve(manifest);
     return manifest;
   }

@@ -25,8 +25,10 @@ import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, providerTemplate, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
-import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
+import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
+import { createMcpManager } from "./runtime/mcp-service.js";
+import { permissionFingerprint } from "./extension-permissions.js";
 import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { persistentLiveOutput, readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
@@ -393,7 +395,7 @@ async function main(): Promise<void> {
 
   const status = new StatusLine();
   const activities = new ActivityLog();
-  const mcpManager = new McpManager(config.cwd, undefined, new McpAuthStore(undefined, mcpSystemCredentialStore));
+  const mcpManager = createMcpManager(config.cwd, mcpSystemCredentialStore);
   let mcpStartup: Promise<ReturnType<McpManager["status"]>> | undefined;
   const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
     const storage = backend.backend === "environment"
@@ -3042,7 +3044,7 @@ async function main(): Promise<void> {
               `MCP ${selected} permissions:\n${manifest.permissions.map((permission) => `  • ${permission}`).join("\n")}\nSource: ${manifest.origin}\nApproval records the manifest only and cannot bypass tool approvals.`)));
             const answer = await askQuestion(chalk.yellow(localize(language, "确认此权限清单？[y/N] ", "Approve this permission manifest? [y/N] ")));
             if (!/^(y|yes)$/i.test(answer.trim())) { console.log(chalk.dim(localize(language, "已取消权限确认。\n", "Permission approval cancelled.\n"))); continue; }
-            await mcpManager.approvePermissions(selected, projectMcpTrusted);
+            await mcpManager.approvePermissions(selected, projectMcpTrusted, permissionFingerprint(manifest));
             await mcpManager.start(projectMcpTrusted);
             agent.replaceTools([...baseTools, ...mcpManager.tools()]);
             console.log(chalk.green(localize(language, `已确认 MCP ${selected} 权限并重新加载。\n`, `Approved MCP ${selected} permissions and reloaded it.\n`)));

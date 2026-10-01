@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   desktopChannels,
+  type DesktopMcpApproveRequest,
   type DesktopApprovalModeRequest,
   type DesktopCheckpointRestoreRequest,
   type DesktopAttachmentUploadRequest,
@@ -34,6 +35,10 @@ import {
 } from "../shared/protocol.js";
 
 const bridge: XiuDesktopBridge = Object.freeze({
+  mcpSnapshot: () => ipcRenderer.invoke(desktopChannels.mcpSnapshot),
+  reloadMcp: () => ipcRenderer.invoke(desktopChannels.mcpReload),
+  disconnectMcp: () => ipcRenderer.invoke(desktopChannels.mcpDisconnect),
+  approveMcp: (request: DesktopMcpApproveRequest) => ipcRenderer.invoke(desktopChannels.mcpApprove, request),
   snapshot: () => ipcRenderer.invoke(desktopChannels.snapshot),
   chooseWorkspace: () => ipcRenderer.invoke(desktopChannels.chooseWorkspace),
   closeWorkspace: () => ipcRenderer.invoke(desktopChannels.closeWorkspace),

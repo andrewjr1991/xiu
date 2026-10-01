@@ -35,10 +35,28 @@ app.whenReady().then(async () => {
     await window.loadFile(path.join(__dirname, "..", "dist", "renderer", "index.html"));
     await waitFor(window, `document.body.innerText.includes('G5C 验收工作区')`, "trusted workspace");
     window.setContentSize(1366, 768);
-    await pause(100);
+    await waitFor(window, `innerWidth === 1366 && innerHeight === 768`, "desktop viewport resize");
     const desktopViewport = await evaluate(window, `({ width: innerWidth, height: innerHeight })`);
     assert(desktopViewport.width === 1366 && desktopViewport.height === 768, `1366x768 desktop viewport was not created: ${JSON.stringify(desktopViewport)}.`);
     console.log("UI smoke: viewport ready");
+
+    await clickText(window, "MCP 连接与权限", ".sidebar-mcp");
+    await waitFor(window, `document.querySelector('.mcp-panel') && document.body.innerText.includes('process:execute')`, "MCP permission view");
+    await clickText(window, "核对并授权", ".mcp-panel button");
+    await clickText(window, "确认此权限清单", ".mcp-panel button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('mcp:approve:smoke')`, "MCP exact manifest approval");
+    await clickText(window, "连接 / 重载", ".mcp-panel button");
+    await waitFor(window, `document.querySelector('.mcp-panel').innerText.includes('2 个工具')`, "MCP tool connection");
+    window.setContentSize(900, 768);
+    await waitFor(window, `innerWidth === 900 && innerHeight === 768`, "MCP narrow viewport resize");
+    const mcpFits = await evaluate(window, `(() => { const r=document.querySelector('.mcp-panel').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()`);
+    assert(mcpFits, "MCP panel escaped the narrow viewport.");
+    window.setContentSize(1366, 768);
+    await waitFor(window, `innerWidth === 1366`, "MCP desktop viewport restore");
+    await clickText(window, "断开全部", ".mcp-panel button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('mcp:disconnect')`, "MCP disconnect");
+    await evaluate(window, `document.querySelector('[aria-label="关闭 MCP"]').click()`);
+    console.log("UI smoke: MCP permission/connection lifecycle ready (including 900px viewport)");
 
     await clickText(window, "每次询问");
     await waitFor(window, `document.querySelector('[role="menu"]')`, "permission menu");
@@ -80,13 +98,14 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('terminal:stop')`, "terminal stop");
 
     window.setContentSize(900, 768);
-    await pause(100);
+    await waitFor(window, `innerWidth === 900 && innerHeight === 768`, "terminal narrow viewport resize");
     const narrow = await evaluate(window, `(() => ({ width: innerWidth, consoleDisplay: getComputedStyle(document.querySelector('.task-console')).display, terminalDisplay: getComputedStyle(document.querySelector('.terminal-pane')).display }))()`);
     assert(narrow.width === 900, `Expected 900px viewport, received ${narrow.width}.`);
     assert(narrow.consoleDisplay === "none", "Narrow terminal layout did not hide the task console.");
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
     window.setContentSize(1366, 768);
+    await waitFor(window, `innerWidth === 1366`, "onboarding desktop viewport restore");
     await evaluate(window, `window.xiuSmoke.freshProviders()`);
     await clickText(window, "设置与模型");
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");

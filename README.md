@@ -66,6 +66,8 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 
 ## Core capabilities
 
+The unreleased 0.20.2 candidate also connects configured stdio / Streamable HTTP MCP servers to desktop tasks through the same manager as the CLI. Open **MCP 连接与权限**, review the exact permission manifest, then explicitly connect/reload. Connections close on workspace changes and exit. Desktop MCP editing, OAuth login, and Resource/Prompt browsing remain CLI-only; this is not part of the published 0.20.1 package.
+
 This is the full CLI capability list, not a desktop parity claim. The desktop preview exposes core coding, approvals, indexing, media, historical changes, and recovery, but does not yet wire MCP, native web research, plugins, background jobs, multi-agent coordination, or Provider failover/stage routing into desktop tasks. See the [capability inventory and synchronization plan](./ROADMAP.zh-CN.md#4-后续工程化).
 
 - Autonomous inspect/edit/verify task loop

@@ -85,11 +85,25 @@ function emitSnapshot(snapshot: DesktopWorkspaceSnapshot): DesktopWorkspaceSnaps
 }
 
 function registerIpc(): void {
+  ipcMain.handle(desktopChannels.mcpSnapshot, async (event) => {
+    assertTrustedSender(event);
+    return taskController.mcpSnapshot(controller.trustedWorkspacePath());
+  });
+  for (const [channel, action] of [[desktopChannels.mcpReload, "reload"], [desktopChannels.mcpDisconnect, "disconnect"], [desktopChannels.mcpApprove, "approve"]] as const) {
+    ipcMain.handle(channel, async (event, request?: import("../shared/protocol.js").DesktopMcpApproveRequest) => {
+      assertTrustedSender(event);
+      return serializeWriterStart(async () => {
+        const workspace = controller.trustedWorkspacePath();
+        if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改 MCP 连接。");
+        return taskController.changeMcp(workspace, action, request);
+      });
+    });
+  }
   ipcMain.handle(desktopChannels.snapshot, async (event) => {
     assertTrustedSender(event);
     return controller.snapshot();
   });
-  ipcMain.handle(desktopChannels.chooseWorkspace, async (event) => {
+  ipcMain.handle(desktopChannels.chooseWorkspace, async (event) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     if (!taskController.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -100,20 +114,20 @@ function registerIpc(): void {
     terminalController.stopAll("工作区已切换，终端会话已关闭。");
     taskController.detach();
     return emitSnapshot(await controller.selectWorkspace(result.filePaths[0]!));
-  });
-  ipcMain.handle(desktopChannels.closeWorkspace, async (event) => {
+  }));
+  ipcMain.handle(desktopChannels.closeWorkspace, async (event) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     terminalController.stopAll("工作区已关闭，终端会话已结束。");
     taskController.detach();
     return emitSnapshot(await controller.clearSelection());
-  });
-  ipcMain.handle(desktopChannels.openRecentWorkspace, async (event, request: OpenRecentWorkspaceRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.openRecentWorkspace, async (event, request: OpenRecentWorkspaceRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     terminalController.stopAll("工作区已切换，终端会话已关闭。");
     taskController.detach();
     return emitSnapshot(await controller.openRecent(request));
-  });
-  ipcMain.handle(desktopChannels.removeRecentWorkspace, async (event, request: RemoveRecentWorkspaceRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.removeRecentWorkspace, async (event, request: RemoveRecentWorkspaceRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const snapshot = await controller.snapshot();
     const selected = snapshot.recent.find((item) => item.id === request?.workspaceId);
@@ -126,7 +140,7 @@ function registerIpc(): void {
       taskController.detach();
     }
     return emitSnapshot(await controller.removeRecent(request, request.confirmed));
-  });
+  }));
   ipcMain.handle(desktopChannels.trustWorkspace, async (event, request: TrustWorkspaceRequest) => {
     assertTrustedSender(event);
     return emitSnapshot(await controller.trustCurrent(request));
@@ -259,40 +273,40 @@ function registerIpc(): void {
     const workspace = controller.trustedWorkspacePath();
     return (await getProviderController()).discover(workspace, request);
   });
-  ipcMain.handle(desktopChannels.providerSelect, async (event, request: DesktopProviderSelectRequest) => {
+  ipcMain.handle(desktopChannels.providerSelect, async (event, request: DesktopProviderSelectRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     const settings = await (await getProviderController()).select(request);
     return { settings, connection: await taskController.reload(workspace) };
-  });
-  ipcMain.handle(desktopChannels.providerCredentialSave, async (event, request: DesktopProviderCredentialRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.providerCredentialSave, async (event, request: DesktopProviderCredentialRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     const settings = await (await getProviderController()).saveCredential(request);
     return { settings, connection: await taskController.reload(workspace) };
-  });
-  ipcMain.handle(desktopChannels.providerTest, async (event, request: DesktopProviderTestRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.providerTest, async (event, request: DesktopProviderTestRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     return (await getProviderController()).test(workspace, request);
-  });
-  ipcMain.handle(desktopChannels.providerUpsert, async (event, request: DesktopProviderUpsertRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.providerUpsert, async (event, request: DesktopProviderUpsertRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     const settings = await (await getProviderController()).upsert(request);
     return { settings, connection: await taskController.reload(workspace) };
-  });
-  ipcMain.handle(desktopChannels.providerDelete, async (event, request: DesktopProviderDeleteRequest) => {
+  }));
+  ipcMain.handle(desktopChannels.providerDelete, async (event, request: DesktopProviderDeleteRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     const settings = await (await getProviderController()).delete(request);
     return { settings, connection: await taskController.reload(workspace) };
-  });
+  }));
   ipcMain.handle(desktopChannels.terminalSnapshot, async (event) => {
     assertTrustedSender(event);
     return terminalController.snapshot(controller.trustedWorkspacePath());
@@ -402,5 +416,15 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.on("before-quit", () => terminalController.stopAll("Xiu 正在退出，终端会话已结束。"));
+let shutdownComplete = false;
+let shutdownStarted = false;
+app.on("before-quit", (event) => {
+  terminalController.stopAll("Xiu 正在退出，终端会话已结束。");
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  // Await stdio children / HTTP sessions before leaving the main process.
+  void taskController.shutdown().catch(() => undefined).finally(() => { shutdownComplete = true; app.quit(); });
+});
 app.on("window-all-closed", () => app.quit());

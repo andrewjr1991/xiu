@@ -5,6 +5,9 @@ export type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/re
 import type { RuntimeConnection, RuntimeEvent } from "../../../src/runtime/protocol.js";
 import type { TaskChangeReport } from "../../../src/task-changes.js";
 import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
+export type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
+import type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
+export interface DesktopMcpApproveRequest { name: string; fingerprint: string; confirmed: true }
 
 export type WorkspaceTrustState = "none" | "required" | "trusted";
 
@@ -248,6 +251,10 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  mcpSnapshot(): Promise<WorkspaceMcpSnapshot>;
+  reloadMcp(): Promise<WorkspaceMcpSnapshot>;
+  disconnectMcp(): Promise<WorkspaceMcpSnapshot>;
+  approveMcp(request: DesktopMcpApproveRequest): Promise<WorkspaceMcpSnapshot>;
   snapshot(): Promise<DesktopWorkspaceSnapshot>;
   chooseWorkspace(): Promise<DesktopWorkspaceSnapshot>;
   closeWorkspace(): Promise<DesktopWorkspaceSnapshot>;
@@ -290,6 +297,10 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  mcpSnapshot: "mcp:snapshot",
+  mcpReload: "mcp:reload",
+  mcpDisconnect: "mcp:disconnect",
+  mcpApprove: "mcp:approve",
   snapshot: "desktop:snapshot",
   chooseWorkspace: "workspace:choose",
   closeWorkspace: "workspace:close",

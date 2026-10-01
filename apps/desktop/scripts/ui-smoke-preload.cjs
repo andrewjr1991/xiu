@@ -38,6 +38,10 @@ const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, 
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
 const bridge = {
+  mcpSnapshot: async () => ({ servers: [{ name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64) }] }),
+  approveMcp: async ({ name, fingerprint, confirmed }) => { if (!confirmed || fingerprint !== "a".repeat(64)) throw new Error("bad confirmation"); calls.push(`mcp:approve:${name}`); return { servers: [{ name, origin: "user:smoke", transport: "stdio", state: "disconnected", tools: 0, approved: true, permissions: ["process:execute", "external:write"], added: [], fingerprint }] }; },
+  reloadMcp: async () => { calls.push("mcp:reload"); return { servers: [{ name: "smoke", origin: "user:smoke", transport: "stdio", state: "connected", tools: 2, approved: true, permissions: ["process:execute", "external:write"], added: [], fingerprint: "a".repeat(64) }] }; },
+  disconnectMcp: async () => { calls.push("mcp:disconnect"); return { servers: [] }; },
   snapshot: async () => workspace,
   chooseWorkspace: async () => workspace,
   closeWorkspace: async () => workspace,

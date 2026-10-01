@@ -338,3 +338,11 @@ button { font: inherit; }
 .settings-provider-dialog { position: relative; width: min(760px, calc(100vw - 48px)); }
 .settings-provider-dialog .provider-popover { position: relative; left: auto; bottom: auto; width: 100%; }
 .settings-provider-dialog .provider-grid { height: min(430px, calc(100vh - 190px)); }
+.sidebar-mcp { margin-top: auto; padding: 12px; text-align: left; color: var(--muted); }
+.sidebar-mcp + .sidebar-footer { margin-top: 0; }
+.mcp-panel { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; background: white; border-radius: 20px; padding: 24px; }
+.mcp-panel header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.mcp-panel p, .mcp-panel small { color: #65758b; overflow-wrap: anywhere; }
+.mcp-panel article { border: 1px solid #dce5f2; border-radius: 12px; padding: 16px; margin-top: 16px; }
+.mcp-panel button { padding: 10px 14px; margin-right: 8px; border-radius: 10px; background: #edf4ff; color: #147bea; }
+.mcp-fingerprint { display: block; margin-top: 8px; font-family: monospace; }

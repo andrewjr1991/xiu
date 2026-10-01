@@ -11,6 +11,8 @@ import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
 export type WorkspaceAgentHostFactory = (workspace: string) => Promise<WorkspaceAgentHost>;
 
 export class DesktopTaskController {
+  private disposing: Promise<void> = Promise.resolve();
+  private mcpBusy = false;
   private workspace?: string;
   private host?: WorkspaceAgentHost;
   private creating?: Promise<WorkspaceAgentHost>;
@@ -41,6 +43,31 @@ export class DesktopTaskController {
     };
   }
 
+  async mcpSnapshot(workspace: string) {
+    const host = await this.ensure(workspace);
+    if (!host.mcp) throw new Error("当前运行时不支持 MCP。");
+    try { return await host.mcp.snapshot(); }
+    catch { throw new Error("MCP 配置无法读取，请检查用户或项目 .xiu/mcp.json（错误详情不含凭据）。"); }
+  }
+
+  async changeMcp(workspace: string, action: "reload" | "disconnect" | "approve", request?: import("../shared/protocol.js").DesktopMcpApproveRequest) {
+    await this.assertCanReconfigure(workspace);
+    const host = await this.ensure(workspace);
+    if (!host.mcp) throw new Error("当前运行时不支持 MCP。");
+    this.mcpBusy = true;
+    try {
+      if (action === "approve") {
+        if (request?.confirmed !== true) throw new Error("confirmation required");
+        return await host.mcp.approve(request.name, request.fingerprint);
+      }
+      if (action === "reload") return await host.mcp.reload();
+      await host.mcp.close();
+      return await host.mcp.snapshot();
+    } catch {
+      throw new Error("MCP 操作未完成。请刷新并重新核对权限和配置；OAuth 登录暂请使用 CLI。未自动重试，工具权限没有降级。");
+    } finally { this.mcpBusy = false; }
+  }
+
   async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection> {
     if (!request || !["ask", "workspace", "full"].includes(request.mode)) throw new Error("Invalid approval mode.");
     const host = await this.ensure(workspace);
@@ -51,6 +78,7 @@ export class DesktopTaskController {
   }
 
   async createTask(workspace: string, text: string): Promise<DesktopRuntimeConnection> {
+    if (this.mcpBusy) throw new Error("MCP 正在重配，请等待完成后再启动任务。");
     const normalized = this.taskText(text);
     const host = await this.ensure(workspace);
     if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
@@ -285,7 +313,7 @@ export class DesktopTaskController {
   }
 
   canChangeWorkspace(): boolean {
-    return !this.host || !this.active(this.host);
+    return !this.creating && !this.mcpBusy && (!this.host || !this.active(this.host));
   }
 
   async assertCanReconfigure(workspace: string): Promise<void> {
@@ -311,6 +339,9 @@ export class DesktopTaskController {
 
   detach(): void {
     if (!this.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
+    const previous = this.host;
+    this.disposing = this.disposing.then(async () => { await previous?.close?.(); });
+    void this.disposing.catch(() => undefined); // Preserve failure for ensure(), avoid unhandled rejection on close.
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.workspace = undefined;
@@ -323,6 +354,7 @@ export class DesktopTaskController {
 
   private async ensure(workspace: string): Promise<WorkspaceAgentHost> {
     if (this.workspace && this.workspace !== workspace) this.detach();
+    await this.disposing;
     if (this.host) return this.host;
     if (!this.creating) {
       this.workspace = workspace;
@@ -340,7 +372,13 @@ export class DesktopTaskController {
   }
 
   private active(host: WorkspaceAgentHost): boolean {
-    return ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
+    return this.mcpBusy || ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
+  }
+
+  async shutdown(): Promise<void> {
+    const host = this.host ?? await this.creating;
+    await host?.close?.();
+    await this.disposing;
   }
 
   private taskText(text: string): string {

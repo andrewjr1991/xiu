@@ -8,6 +8,8 @@ This file summarizes released behavior and the next unreleased change. Detailed 
 - Migrate explicitly referenced legacy presets into editable user profiles, retaining credential references, model selections and routing; do not seed unused presets or clear existing user settings.
 - Keep all user-added channels visible, add multi-vendor templates to both setup flows, support confirmed removal of the last channel, and block tasks until a channel is selected.
 - Document actual CLI/desktop capability differences and prioritize shared services and paired entrypoint regressions.
+- Share MCP manager composition between CLI and desktop. Add desktop configured-server connection, exact manifest confirmation, reconnect/disconnect and lifecycle cleanup; keep editing, OAuth login and Resource/Prompt management CLI-only for this slice.
+- Bind MCP permission confirmation to the previewed configuration fingerprint in both frontends, remove stale tools after failed reload, and inject MCP client metadata into the Electron bundle.
 
 ## 0.20.1 — 2026-09-30
 

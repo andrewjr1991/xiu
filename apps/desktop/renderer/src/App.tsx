@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { desktopTerminalVisuals } from "./terminal-visuals.js";
+import { McpPanel } from "./McpPanel.js";
+import type { WorkspaceMcpSnapshot } from "../../shared/protocol.js";
 import {
   applyRuntimeEvent,
   type DesktopAttachment,
@@ -517,6 +519,8 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
 }
 
 export function App() {
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [mcpSnapshot, setMcpSnapshot] = useState<WorkspaceMcpSnapshot>();
   const [workspace, setWorkspace] = useState(emptyWorkspace);
   const [connection, setConnection] = useState<DesktopRuntimeConnection>();
   const [runtime, setRuntime] = useState<XiuRuntimeSnapshot>();
@@ -826,6 +830,21 @@ export function App() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
+  const refreshMcp = async () => {
+    setError(undefined); setMcpSnapshot(undefined);
+    try { setMcpSnapshot(await window.xiuDesktop.mcpSnapshot()); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+  const changeMcp = async (action: "reload" | "disconnect" | "approve", name?: string, fingerprint?: string) => {
+    setBusy(true); setError(undefined);
+    try {
+      setMcpSnapshot(action === "reload" ? await window.xiuDesktop.reloadMcp() : action === "disconnect" ? await window.xiuDesktop.disconnectMcp() : await window.xiuDesktop.approveMcp({ name: name!, fingerprint: fingerprint!, confirmed: true }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setMcpSnapshot(undefined);
+    } finally { setBusy(false); }
+  };
+
   const closeProviderPicker = () => {
     setProviderOpen(false);
     setCredentialEditing(undefined);
@@ -920,6 +939,7 @@ export function App() {
       <button className="workspace-picker" disabled={busy || isActive} onClick={() => void runWorkspace(() => window.xiuDesktop.chooseWorkspace())}>⌁ 打开工作区</button>
       <section><h2>最近项目</h2>{workspace.recent.length === 0 ? <p className="muted">尚无可信工作区</p> : workspace.recent.map((item) => <div className="sidebar-item" key={item.id}><button className={`workspace-row ${workspace.workspace?.id === item.id ? "selected" : ""}`} disabled={busy || isActive} onClick={() => void runWorkspace(() => window.xiuDesktop.openRecentWorkspace({ workspaceId: item.id }))}><span className="folder-icon">⌁</span><span>{item.name}</span><small>{item.trusted ? "可信" : "需确认"}</small></button><button className="sidebar-delete" disabled={busy || isActive} title={`从最近项目移除 ${item.name}`} aria-label={`从最近项目移除 ${item.name}`} onClick={() => setConfirmation({ kind: "workspace", id: item.id, name: item.name })}>×</button></div>)}</section>
       {workspace.trust === "trusted" && <section className="history"><h2>最近任务</h2>{workspace.tasks.slice(0, 7).map((task) => <div className="sidebar-item" key={task.id}><button className={`history-row ${activeConversationId === task.id ? "selected" : ""}`} disabled={busy || isActive} title={task.title} onClick={() => void openTaskHistory(task.id)}><span className={`task-dot ${task.status}`} /><span>{task.title}</span></button><button className="sidebar-delete" disabled={busy || isActive} title={`删除任务 ${task.title}`} aria-label={`删除任务 ${task.title}`} onClick={() => setConfirmation({ kind: "task", id: task.id, name: task.title })}>×</button></div>)}</section>}
+      <button className="sidebar-mcp" disabled={busy || workspace.trust !== "trusted"} onClick={() => { setMcpOpen(true); void refreshMcp(); }}>MCP 连接与权限</button>
       <button className="sidebar-footer" disabled={busy || workspace.trust !== "trusted"} onClick={() => void openProviderPicker("settings")}>⚙ 设置与模型</button>
     </aside>
     <section className="workspace-main">
@@ -942,6 +962,7 @@ export function App() {
     </section>
     {confirmation && <ConfirmationDialog kind={confirmation.kind} name={confirmation.name} busy={busy} onCancel={() => setConfirmation(undefined)} onConfirm={() => void confirmDestructiveAction()} />}
     {selectedDiff && <DiffDialog change={selectedDiff} onClose={() => setSelectedDiff(undefined)} />}
+    {mcpOpen && <McpPanel snapshot={mcpSnapshot} busy={busy} error={error} disabled={isActive || connection?.writer === "active-elsewhere"} onRefresh={() => void refreshMcp()} onReload={() => void changeMcp("reload")} onDisconnect={() => void changeMcp("disconnect")} onApprove={(name, fingerprint) => void changeMcp("approve", name, fingerprint)} onClose={() => setMcpOpen(false)} />}
     {providerOpen && providerPlacement === "settings" && <div className="dialog-backdrop settings-provider-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProviderPicker(); }}><div className="settings-provider-dialog" onMouseDown={(event) => event.stopPropagation()}>{providerPicker}</div></div>}
   </main>;
 }
