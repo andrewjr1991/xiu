@@ -46,6 +46,9 @@ interface BackgroundRequest {
 
 let workspace = process.cwd();
 let storageRoot = path.join(os.homedir(), ".xiu", "background");
+let workerProgram: string | undefined;
+let workerSource: string | undefined;
+export function configureBackgroundRuntime(program?: string, source?: string): void { workerProgram = program; workerSource = source; }
 
 function workspaceIdentity(value: string): string {
   return createHash("sha256").update(path.resolve(value).replace(/\\/g, "/").toLowerCase()).digest("hex").slice(0, 24);
@@ -144,10 +147,11 @@ function outputSize(id: string): number {
 }
 
 function workerInvocation(requestFile: string): { program: string; args: string[] } {
-  const source = fileURLToPath(new URL("./background-worker.js", import.meta.url));
-  if (fs.existsSync(source)) return { program: process.execPath, args: [source, requestFile] };
+  if (process.versions.electron && !workerProgram) throw new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime.");
+  const source = (workerSource ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+  if (fs.existsSync(source)) return { program: workerProgram ?? process.execPath, args: [source, requestFile] };
   const development = fileURLToPath(new URL("./background-worker.ts", import.meta.url));
-  return { program: process.execPath, args: ["--import", "tsx", development, requestFile] };
+  return { program: workerProgram ?? process.execPath, args: ["--import", "tsx", development, requestFile] };
 }
 
 export function configureBackgroundWorkspace(cwd: string, root = path.join(os.homedir(), ".xiu", "background")): void {
@@ -181,9 +185,9 @@ export function startBackgroundProcess(command: string, cwd = workspace): { id: 
     outputBytes: 0,
   };
   const request: BackgroundRequest = { version: BACKGROUND_SCHEMA_VERSION, recordFile: recordFile(id), outputFile: outputFile(id), cwd: workspace, command };
+  const invocation = workerInvocation(requestFile);
   atomicWrite(recordFile(id), record);
   fs.writeFileSync(requestFile, `${JSON.stringify(request)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  const invocation = workerInvocation(requestFile);
   try {
     const child = spawn(invocation.program, invocation.args, { detached: true, windowsHide: true, stdio: "ignore" });
     child.unref();

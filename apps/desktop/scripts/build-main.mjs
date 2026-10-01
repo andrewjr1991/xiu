@@ -33,3 +33,9 @@ await build({
   external: ["electron"],
   sourcemap: true,
 });
+
+await build({
+  entryPoints: [localPath("../../../src/background-worker.ts")],
+  outfile: localPath("../dist/main/background-worker.mjs"),
+  bundle: true, platform: "node", format: "esm", target: "node22",
+});

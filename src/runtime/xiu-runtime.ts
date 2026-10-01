@@ -71,6 +71,12 @@ function boundedToolResult(result: ToolResult, clean: (value: string, maximum: n
 }
 
 export class XiuRuntime {
+  recordSubagent(agent: import("./protocol.js").RuntimeSubagentCard): void {
+    if (!this.task) return;
+    const safe = sanitizeSecrets({ ...agent, title: this.clean(agent.title, 240), progress: agent.progress ? this.clean(agent.progress, 2_000) : undefined, result: agent.result ? this.clean(agent.result, 16_000) : undefined, error: agent.error ? this.clean(agent.error, 2_000) : undefined });
+    this.task.subagents = [...(this.task.subagents ?? []).filter((item) => item.id !== safe.id), safe].slice(-80);
+    this.emit("subagent.updated", { agent: safe });
+  }
   private driver?: RuntimeTaskDriver;
   private sequence = 0;
   private task?: RuntimeTaskSnapshot;

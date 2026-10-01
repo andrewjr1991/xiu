@@ -5,9 +5,17 @@ export type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/re
 import type { RuntimeConnection, RuntimeEvent } from "../../../src/runtime/protocol.js";
 import type { TaskChangeReport } from "../../../src/task-changes.js";
 import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
-export type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
+export type { WorkspaceMcpSnapshot, WorkspaceMcpDraft, WorkspaceMcpOAuthFlow } from "../../../src/runtime/mcp-service.js";
 import type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
+import type { WorkspaceMcpDraft } from "../../../src/runtime/mcp-service.js";
 export interface DesktopMcpApproveRequest { name: string; fingerprint: string; confirmed: true }
+export type DesktopMcpManageRequest =
+  | { action: "save"; draft: WorkspaceMcpDraft }
+  | { action: "delete" | "logout"; name: string; fingerprint: string; confirmed: true }
+  | { action: "login"; name: string; fingerprint: string }
+  | { action: "oauth-decision"; flowId: string; allowed: boolean }
+  | { action: "oauth-cancel"; flowId: string };
+export interface DesktopMcpBrowseRequest { name: string; action: "resources" | "read" | "prompts" | "prompt"; value?: string; args?: Record<string, string> }
 
 export type WorkspaceTrustState = "none" | "required" | "trusted";
 
@@ -166,9 +174,16 @@ export interface DesktopTaskHistorySnapshot {
   events: RuntimeEvent[];
   fidelity: "exact" | "reconstructed";
   changes?: TaskChangeReport;
+  changeRounds?: DesktopChangeRound[];
+  tools?: DesktopReviewOperation[];
+  validations?: DesktopReviewOperation[];
 }
 
-export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence";
+export interface DesktopChangeRound { id: string; startedAt: string; report?: TaskChangeReport }
+
+export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence" | "agents" | "data" | "home" | "web";
+export interface DesktopBrowserState { url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
+export type DesktopBrowserRequest = { action: "navigate"; url: string } | { action: "back" | "forward" | "reload" | "close" | "snapshot" } | { action: "layout"; bounds: { x: number; y: number; width: number; height: number }; visible: boolean };
 export type DesktopChangeView = "task" | "workspace" | "staged";
 
 export interface DesktopReviewOperation {
@@ -202,6 +217,10 @@ export interface DesktopRecoveryEvidence {
 }
 
 export interface DesktopReviewSnapshot {
+  artifacts?: Array<{ path: string; kind: string }>;
+  background?: Array<{ id: string; command: string; state: string; running: boolean; elapsedMs: number; outputBytes: number }>;
+  tools?: DesktopReviewOperation[];
+  changeRounds?: DesktopChangeRound[];
   generatedAt: string;
   changeView: DesktopChangeView;
   changes: TaskChangeReport;
@@ -251,6 +270,10 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  browser(request: DesktopBrowserRequest): Promise<DesktopBrowserState>;
+  onBrowserState(listener: (state: DesktopBrowserState) => void): () => void;
+  manageMcp(request: DesktopMcpManageRequest): Promise<WorkspaceMcpSnapshot>;
+  browseMcp(request: DesktopMcpBrowseRequest): Promise<unknown>;
   mcpSnapshot(): Promise<WorkspaceMcpSnapshot>;
   reloadMcp(): Promise<WorkspaceMcpSnapshot>;
   disconnectMcp(): Promise<WorkspaceMcpSnapshot>;
@@ -297,6 +320,10 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  browser: "browser:control",
+  browserState: "browser:state",
+  mcpManage: "mcp:manage",
+  mcpBrowse: "mcp:browse",
   mcpSnapshot: "mcp:snapshot",
   mcpReload: "mcp:reload",
   mcpDisconnect: "mcp:disconnect",

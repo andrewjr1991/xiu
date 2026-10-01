@@ -1,5 +1,13 @@
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
+import type { ToolContext } from "./types.js";
+
+/** Full access is an explicit, ephemeral host grant; ordinary callers stay confined. */
+export function resolveToolPath(context: Pick<ToolContext, "cwd" | "accessMode">, requested: string): string {
+  if (context.accessMode !== "full") return resolveWorkspacePath(context.cwd, requested);
+  if (!requested || requested.includes("\0")) throw new Error("Path must be non-empty and contain no NUL");
+  return path.resolve(context.cwd, requested);
+}
 
 function outside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);

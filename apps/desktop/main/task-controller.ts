@@ -23,6 +23,8 @@ export class DesktopTaskController {
   private readonly runtimeEventBuffers = new Map<string, RuntimeEvent[]>();
   private eventPersistence: Promise<void> = Promise.resolve();
   private approvalMode: DesktopApprovalMode = "ask";
+  private fullAccessWorkspace?: string;
+  private permissionBusy = false;
 
   constructor(
     private readonly emit: (event: RuntimeEvent) => void,
@@ -64,23 +66,65 @@ export class DesktopTaskController {
       await host.mcp.close();
       return await host.mcp.snapshot();
     } catch {
-      throw new Error("MCP 操作未完成。请刷新并重新核对权限和配置；OAuth 登录暂请使用 CLI。未自动重试，工具权限没有降级。");
+      throw new Error("MCP 操作未完成。请刷新并重新核对权限和配置。未自动重试，工具权限没有降级。");
     } finally { this.mcpBusy = false; }
   }
 
-  async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection> {
+  async manageMcp(workspace: string, request: import("../shared/protocol.js").DesktopMcpManageRequest) {
+    const host = await this.ensure(workspace);
+    if (!host.mcp || !request || !["save", "delete", "login", "logout", "oauth-decision", "oauth-cancel"].includes(request.action)) throw new Error("无效的 MCP 管理请求。");
+    try {
+      if (request.action === "oauth-decision") { host.mcp.decideLogin(request.flowId, request.allowed); return await host.mcp.snapshot(); }
+      if (request.action === "oauth-cancel") { host.mcp.cancelLogin(request.flowId); return await host.mcp.snapshot(); }
+      await this.assertCanReconfigure(workspace);
+      this.mcpBusy = true;
+      if (request.action === "save") return await host.mcp.save(request.draft);
+      if (request.action === "delete") return await host.mcp.remove(request.name, request.fingerprint, request.confirmed === true);
+      if (request.action === "logout") return await host.mcp.logout(request.name, request.fingerprint, request.confirmed === true);
+      if (request.action === "login") return await host.mcp.startLogin(request.name, request.fingerprint);
+      throw new Error("unknown action");
+    } catch {
+      throw new Error("MCP 管理未完成：请刷新配置，核对字段、权限清单及当前授权状态。含明文凭据或高级配置不可在此编辑；不会覆盖变化的配置或自动重试。");
+    } finally { this.mcpBusy = false; }
+  }
+
+  async browseMcp(workspace: string, request: import("../shared/protocol.js").DesktopMcpBrowseRequest) {
+    await this.assertCanReconfigure(workspace);
+    const host = await this.ensure(workspace);
+    if (!host.mcp || !request || !/^[A-Za-z0-9_-]{1,64}$/.test(request.name) || !["resources", "read", "prompts", "prompt"].includes(request.action)) throw new Error("无效的 MCP 浏览请求。");
+    this.mcpBusy = true;
+    try { return await host.mcp.browse(request.name, request.action, request.value, request.args); }
+    catch { throw new Error("MCP 内容未读取。请检查连接、权限与输入；不会自动重试或将外部内容执行为指令。"); }
+    finally { this.mcpBusy = false; }
+  }
+
+  async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest, confirmFullAccess?: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
     if (!request || !["ask", "workspace", "full"].includes(request.mode)) throw new Error("Invalid approval mode.");
     const host = await this.ensure(workspace);
     if (this.active(host)) throw new Error("任务运行期间不能切换权限模式。请先停止任务并等待结束。");
-    this.approvalMode = request.mode;
+    let newlyConfirmed = false;
+    if (request.mode === "full" && this.fullAccessWorkspace !== workspace) {
+      if (!confirmFullAccess) throw new Error("完全访问需要主进程首次确认。");
+      this.permissionBusy = true;
+      let confirmed = false;
+      try { confirmed = await confirmFullAccess(); }
+      finally { this.permissionBusy = false; }
+      if (this.host !== host || this.workspace !== workspace || this.active(host)) throw new Error("权限上下文已经变化，请重新选择。");
+      if (!confirmed) return this.connect(workspace, 0);
+      newlyConfirmed = true;
+    }
+    if (request.mode === "full" && !host.setApprovalMode) throw new Error("当前运行时不支持完全访问。");
     host.setApprovalMode?.(request.mode);
+    this.approvalMode = request.mode;
+    if (newlyConfirmed) this.fullAccessWorkspace = workspace;
     return this.connect(workspace, 0);
   }
 
   async createTask(workspace: string, text: string): Promise<DesktopRuntimeConnection> {
-    if (this.mcpBusy) throw new Error("MCP 正在重配，请等待完成后再启动任务。");
+    if (this.mcpBusy || this.permissionBusy) throw new Error("配置或权限正在确认，请等待完成后再启动任务。");
     const normalized = this.taskText(text);
     const host = await this.ensure(workspace);
+    if (host.mcp?.busy) throw new Error("请先完成或取消 MCP 登录，再启动任务。");
     if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live && !this.active(host)) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
@@ -176,6 +220,7 @@ export class DesktopTaskController {
     const exactEvents = completeEventHistory ? this.combineHistoryEvents(runs) : [];
     const reconstructed = exactEvents.length ? [] : runs.flatMap((item, index) => this.reconstructHistoryEvents(item, index === runs.length - 1 ? entries : []));
     let changes;
+    const changeRounds = await Promise.all(runs.slice(-80).map(async (candidate) => ({ id: candidate.runId, startedAt: candidate.startedAt, report: await loadTaskChangeHistory(workspace, candidate.runId) })));
     for (const candidate of [...runs].reverse()) {
       changes = await loadTaskChangeHistory(workspace, candidate.runId);
       if (changes) break;
@@ -190,7 +235,10 @@ export class DesktopTaskController {
       entries: entries.slice(-200),
       events: exactEvents.length ? exactEvents.slice(-1_000) : reconstructed,
       fidelity: exactEvents.length ? "exact" : "reconstructed",
+      changeRounds,
       ...(changes ? { changes } : {}),
+      tools: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "tool").map((operation) => this.operation(operation, "command"))).slice(-80),
+      validations: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "verification").map((operation) => this.operation(operation, "verification"))).slice(-80),
     };
   }
 
@@ -242,10 +290,17 @@ export class DesktopTaskController {
     ]);
     if (changeView === "task" && !this.baseline && this.completedTaskChanges?.taskId !== currentTaskId) changes.warnings = ["no-task-baseline: no in-memory baseline is available; showing current workspace changes.", ...changes.warnings];
     const operations = latest?.operations ?? [];
+    const taskReport = changeView === "task" && (this.baseline || completedReport) ? changes : this.baseline ? await inspectTaskChanges(workspace, this.baseline) : completedReport;
     const commands = operations.filter((operation) => operation.kind === "tool" && ["run_command", "run_process"].includes(operation.name)).map((operation) => this.operation(operation, "command"));
     const validations = operations.filter((operation) => operation.kind === "verification").map((operation) => this.operation(operation, "verification"));
+    const related = latest ? (await host.journal.recent(500)).filter((run) => run.sessionId === latest.sessionId).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).slice(-80) : [];
+    const changeRounds = await Promise.all(related.map(async (run) => ({ id: run.runId, startedAt: run.startedAt, report: await loadTaskChangeHistory(workspace, run.runId) })));
     return {
+      changeRounds,
       generatedAt: new Date().toISOString(), changeView, changes, files,
+      artifacts: (taskReport?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })),
+      background: host.background?.().map((item) => ({ ...item, command: redactSecrets(item.command).slice(0, 240) })) ?? [],
+      tools: operations.filter((operation) => operation.kind === "tool").slice(-80).reverse().map((operation) => this.operation(operation, "command")),
       commands: commands.slice(-80).reverse(), validations: validations.slice(-80).reverse(),
       checkpoints: checkpoints.slice(0, 80).map((checkpoint) => structuredClone(checkpoint)),
       ...(latest ? { run: { id: latest.runId, status: latest.status, startedAt: latest.startedAt, updatedAt: latest.updatedAt, ...(latest.finishedAt ? { finishedAt: latest.finishedAt } : {}) } } : {}),
@@ -313,7 +368,7 @@ export class DesktopTaskController {
   }
 
   canChangeWorkspace(): boolean {
-    return !this.creating && !this.mcpBusy && (!this.host || !this.active(this.host));
+    return !this.creating && !this.mcpBusy && !this.permissionBusy && (!this.host || !this.active(this.host));
   }
 
   async assertCanReconfigure(workspace: string): Promise<void> {
@@ -346,6 +401,8 @@ export class DesktopTaskController {
     this.unsubscribe = undefined;
     this.workspace = undefined;
     this.host = undefined;
+    this.approvalMode = "ask";
+    this.fullAccessWorkspace = undefined;
     this.creating = undefined;
     this.baseline = undefined;
     this.completedTaskChanges = undefined;
@@ -372,7 +429,7 @@ export class DesktopTaskController {
   }
 
   private active(host: WorkspaceAgentHost): boolean {
-    return this.mcpBusy || ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
+    return this.mcpBusy || this.permissionBusy || Boolean(host.mcp?.busy) || ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
   }
 
   async shutdown(): Promise<void> {

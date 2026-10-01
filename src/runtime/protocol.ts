@@ -37,6 +37,7 @@ export interface RuntimeRecoverySnapshot {
 }
 
 export interface RuntimeTaskSnapshot {
+  subagents?: RuntimeSubagentCard[];
   id: string;
   state: RuntimeTaskState;
   taskPreview: string;
@@ -57,6 +58,7 @@ export interface XiuRuntimeSnapshot {
 }
 
 export interface RuntimeEventPayloads {
+  "subagent.updated": { agent: RuntimeSubagentCard };
   "task.started": { taskPreview: string; resumedFrom?: string };
   "task.state": { state: RuntimeTaskState; reason?: string };
   "task.steered": { text: string };
@@ -78,6 +80,12 @@ export interface RuntimeEventPayloads {
 }
 
 export type RuntimeEventType = keyof RuntimeEventPayloads;
+
+export interface RuntimeSubagentCard {
+  id: string; runId: string; title: string; role: string; status: string;
+  startedAt?: string; completedAt?: string; durationMs?: number;
+  progress?: string; result?: string; error?: string;
+}
 
 export type RuntimeEvent<K extends RuntimeEventType = RuntimeEventType> = {
   [P in K]: {
@@ -157,6 +165,9 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
 
   next.task.updatedAt = event.timestamp;
   switch (event.type) {
+    case "subagent.updated":
+      next.task.subagents = [...(next.task.subagents ?? []).filter((agent) => agent.id !== event.payload.agent.id), event.payload.agent].slice(-80);
+      break;
     case "task.started":
       next.task.state = "running";
       next.task.taskPreview = event.payload.taskPreview;

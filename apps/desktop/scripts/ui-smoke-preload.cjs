@@ -21,8 +21,14 @@ let terminal = { state: "idle" };
 let recoveryActive = false;
 const runtimeListeners = new Set();
 const terminalListeners = new Set();
+const browserListeners = new Set();
 const calls = [];
 let onboardingSnapshot;
+let mcp = { servers: [
+  { name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" } },
+  { name: "secure", origin: "user:secure", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true },
+] };
+const mcpView = () => JSON.parse(JSON.stringify(mcp));
 
 const runtime = () => ({ runtime: { snapshot: { schemaVersion: 1, sequence, generatedAt: now(), ...(task ? { task } : {}) }, events: [], resyncRequired: false }, conversationId: task?.id, provider: { id: activeProviderId, label: activeProviderId === "openai" ? "OpenAI" : "Agnes", model: activeModel }, writer: "available", approvalMode });
 const emit = (type, payload) => {
@@ -31,17 +37,30 @@ const emit = (type, payload) => {
   for (const listener of runtimeListeners) listener(event);
 };
 const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
-const review = () => ({ generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], validations: [], checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
+const compactReview = { tools: [{ id: "data-tool-1", name: "read_file", status: "succeeded", durationMs: 31, evidence: "compact-detail-canary\n" + "saved detail\n".repeat(50) }], validations: [{ id: "data-verify-1", name: "verify_output", status: "succeeded", evidence: "verification-canary" }], background: [{ id: "data-process-1", command: "node dev-server.mjs", state: "running", elapsedMs: 1200, outputBytes: 40 }], artifacts: [{ path: "src/example.ts", kind: "modified" }] };
+const review = () => ({ generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], ...compactReview, checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
 const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
   { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.openai }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
   { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
 const bridge = {
-  mcpSnapshot: async () => ({ servers: [{ name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64) }] }),
-  approveMcp: async ({ name, fingerprint, confirmed }) => { if (!confirmed || fingerprint !== "a".repeat(64)) throw new Error("bad confirmation"); calls.push(`mcp:approve:${name}`); return { servers: [{ name, origin: "user:smoke", transport: "stdio", state: "disconnected", tools: 0, approved: true, permissions: ["process:execute", "external:write"], added: [], fingerprint }] }; },
-  reloadMcp: async () => { calls.push("mcp:reload"); return { servers: [{ name: "smoke", origin: "user:smoke", transport: "stdio", state: "connected", tools: 2, approved: true, permissions: ["process:execute", "external:write"], added: [], fingerprint: "a".repeat(64) }] }; },
-  disconnectMcp: async () => { calls.push("mcp:disconnect"); return { servers: [] }; },
+  browser: async (request) => { calls.push(`browser:${request.action}`); if (request.action === "layout") calls.push(`browser:visible:${request.visible}`); return { url: request.action === "navigate" ? request.url : "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; },
+  onBrowserState: (listener) => { browserListeners.add(listener); return () => browserListeners.delete(listener); },
+  mcpSnapshot: async () => mcpView(),
+  approveMcp: async ({ name, fingerprint, confirmed }) => { const server=mcp.servers.find(s=>s.name===name); if (!confirmed || fingerprint !== server?.fingerprint) throw new Error("bad confirmation"); calls.push(`mcp:approve:${name}`); server.approved=true; server.added=[]; server.state="disconnected"; return mcpView(); },
+  reloadMcp: async () => { calls.push("mcp:reload"); for (const server of mcp.servers) if(server.approved && !server.oauth) { server.state="connected"; server.tools=2; } return mcpView(); },
+  disconnectMcp: async () => { calls.push("mcp:disconnect"); for (const server of mcp.servers) {server.state="disconnected"; server.tools=0;} return mcpView(); },
+  manageMcp: async (request) => {
+    calls.push(`mcp:${request.action}:${request.draft?.name ?? request.name ?? request.flowId}`);
+    if(request.action==="save") { const draft=request.draft; const server={ name:draft.name, origin:`user:${draft.name}`, transport:draft.transport, state:"permission-required", tools:0, approved:false, permissions:["process:execute"], added:["process:execute"], fingerprint:"c".repeat(64), editable:{...draft,fingerprint:"c".repeat(64)},removable:true }; mcp.servers=mcp.servers.filter(s=>s.name!==draft.name).concat(server); }
+    if(request.action==="delete") mcp.servers=mcp.servers.filter(s=>s.name!==request.name);
+    if(request.action==="login") mcp.oauthFlow={id:"ui-oauth",name:request.name,state:"confirmation",issuer:"https://auth.test",resource:"https://mcp.test",scopes:["read"],callback:"http://127.0.0.1:53122"};
+    if(request.action==="oauth-decision") mcp.oauthFlow={...mcp.oauthFlow,state:request.allowed?"waiting":"cancelled",browserOpened:false,authorizationUrl:"https://auth.test/authorize?state=ui-test"};
+    if(request.action==="oauth-cancel") mcp.oauthFlow={...mcp.oauthFlow,state:"cancelled"};
+    return mcpView();
+  },
+  browseMcp: async ({name,action}) => { calls.push(`mcp:browse:${action}`); return {server:name, content:"external-resource-canary", warning:"untrusted"}; },
   snapshot: async () => workspace,
   chooseWorkspace: async () => workspace,
   closeWorkspace: async () => workspace,
@@ -68,14 +87,15 @@ const bridge = {
       emit("model.started", { turn });
       emit("assistant.message", { text: `第 ${turn} 轮公开进展`, hasToolCalls: turn < 30 });
     }
-    calls.push("long-task:30-turns");
+    calls.push("long-task:30-turns"); emit("tool.started", { name: "read_file", operationId: "source-1", description: "source-detail-canary\n" + "saved source\n".repeat(50) });
+    emit("subagent.updated", { agent: { id: "run:child", runId: "run", title: "调查任务验收", role: "explorer", status: "completed", startedAt: now(), completedAt: now(), durationMs: 1200, result: "child-result-canary" } });
   },
   openTaskHistory: async () => { throw new Error("not used"); },
   deleteTask: async () => workspace,
   chooseAttachments: async () => ({ insertText: "", attachments: [] }),
   pasteAttachments: async () => ({ insertText: "", attachments: [] }),
   importAttachments: async () => ({ insertText: "", attachments: [] }),
-  reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView } }),
+  reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
   restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
   recoverTask: async () => runtime(),
@@ -109,7 +129,7 @@ const bridge = {
 };
 
 contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
-contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls], freshProviders: () => {
+contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls], emitBrowser: (state) => { for (const listener of browserListeners) listener(state); }, freshProviders: () => {
   const templates = providers().profiles.map((profile) => ({ id: profile.id, name: profile.name, kind: profile.kind, model: profile.defaultModel, capabilityModels: profile.capabilityModels, features: profile.features }));
   onboardingSnapshot = { activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {}, templates };
   activeProviderId = ""; activeModel = "";

@@ -48,7 +48,8 @@ try {
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Unsafe background output directory");
   fs.closeSync(fs.openSync(request.outputFile, "ax", 0o600));
   const windows = process.platform === "win32";
-  child = spawn(windows ? "powershell.exe" : "/bin/sh", windows ? ["-NoProfile", "-NonInteractive", "-Command", request.command] : ["-lc", request.command], {
+  const shell = windows ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/sh";
+  child = spawn(shell, windows ? ["-NoProfile", "-NonInteractive", "-Command", request.command] : ["-lc", request.command], {
     cwd: request.cwd,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],

@@ -7,6 +7,10 @@ import test from "node:test";
 import { McpAuthStore } from "../src/mcp-auth-store.js";
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, waitForOAuthCallback, windowsBrowserOpenAttempts, XiuMcpOAuthProvider } from "../src/mcp-oauth.js";
 import { McpManager } from "../src/mcp.js";
+import { WorkspaceMcpService } from "../src/runtime/mcp-service.js";
+import { DesktopTaskController } from "../apps/desktop/main/task-controller.js";
+import { XiuRuntime } from "../src/runtime/xiu-runtime.js";
+import { TaskRunJournal } from "../src/task-run.js";
 
 // WHATWG Fetch rejects a small set of historically unsafe ports before a
 // request is sent. Some hosts allocate ephemeral ports from a wider range, so
@@ -30,6 +34,88 @@ async function availablePort(): Promise<number> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
 }
+
+test("desktop OAuth confirms origin, supports browser fallback/cancel, completes a real PKCE callback and blocks task mutations", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-oauth-"));
+  let origin = "";
+  let exchanges = 0;
+  let browserMode: "fallback" | "callback" = "fallback";
+  const server = http.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+    if (request.url === "/.well-known/oauth-protected-resource/mcp") return send(200, { resource: `${origin}/mcp`, authorization_servers: [origin], scopes_supported: ["read"] });
+    if (request.url === "/.well-known/oauth-authorization-server") return send(200, { issuer: origin, authorization_endpoint: `${origin}/authorize`, token_endpoint: `${origin}/token`, registration_endpoint: `${origin}/register`, response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"] });
+    if (request.url === "/register") return send(201, { ...JSON.parse(body), client_id: "desktop-test-client", token_endpoint_auth_method: "none" });
+    if (request.url === "/token") { exchanges++; return send(200, { access_token: "desktop-opaque-access-canary", refresh_token: "desktop-opaque-refresh-canary", token_type: "Bearer", expires_in: 3600 }); }
+    return send(404, {});
+  });
+  const port = await listen(server);
+  origin = `http://127.0.0.1:${port}`;
+  const callbackPort = await availablePort();
+  const config = path.join(directory, "mcp.json");
+  await fs.writeFile(config, JSON.stringify({ mcpServers: { secure: { url: `${origin}/mcp`, auth: { type: "oauth", callbackPort, scopes: ["read"] }, risk: "read" } } }));
+  const store = new McpAuthStore(path.join(directory, "auth.json"));
+  const manager = new McpManager(directory, config, store);
+  const service = new WorkspaceMcpService(manager, () => {}, async (url) => {
+    if (browserMode === "fallback") throw new Error("browser unavailable secret-canary-error");
+    assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+    const callback = new URL(`http://127.0.0.1:${callbackPort}/oauth/callback`);
+    callback.searchParams.set("code", "desktop-code"); callback.searchParams.set("state", url.searchParams.get("state")!); callback.searchParams.set("iss", origin);
+    assert.equal((await fetch(callback)).status, 200);
+  });
+  const controller = new DesktopTaskController(() => {}, async () => ({ runtime: new XiuRuntime(), mcp: service, journal: new TaskRunJournal(directory, path.join(directory, "journals")), provider: { id: "test", label: "test", model: "test" }, close: () => service.close() }));
+  const waitState = async (state: string) => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const snapshot = await service.snapshot();
+      if (snapshot.oauthFlow?.state === state) return snapshot.oauthFlow;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`OAuth did not reach ${state}`);
+  };
+  try {
+    const entry = (await service.snapshot()).servers[0]!;
+    await assert.rejects(service.startLogin(entry.name, entry.fingerprint), /Confirm/);
+    await service.approve(entry.name, entry.fingerprint);
+    await controller.manageMcp(directory, { action: "login", name: entry.name, fingerprint: entry.fingerprint });
+    const preview = await waitState("confirmation");
+    assert.equal(preview.issuer, origin); assert.equal(preview.resource, origin); assert.deepEqual(preview.scopes, ["read"]);
+    const sanitizer = manager.serverTextSanitizer.bind(manager);
+    manager.serverTextSanitizer = async () => { throw new Error("credential backend unavailable with secret-canary-error"); };
+    try {
+      const degraded = (await service.snapshot()).oauthFlow!;
+      assert.deepEqual(degraded, { id: preview.id, name: "secure", state: "confirmation" });
+      assert.doesNotMatch(JSON.stringify(degraded), /secret-canary-error/);
+    } finally { manager.serverTextSanitizer = sanitizer; }
+    await assert.rejects(controller.createTask(directory, "should not run"), /取消 MCP 登录/);
+    await assert.rejects(controller.assertCanReconfigure(directory));
+    assert.equal(await controller.canChangeWorkspace(), false);
+    assert.throws(() => service.decideLogin("wrong-flow", true), /expired/);
+    await controller.manageMcp(directory, { action: "oauth-decision", flowId: preview.id, allowed: false });
+    await waitState("cancelled"); assert.equal(exchanges, 0);
+    await service.startLogin(entry.name, entry.fingerprint);
+    const confirmation = await waitState("confirmation");
+    service.decideLogin(confirmation.id, true);
+    const waiting = await waitState("waiting");
+    assert.equal(waiting.browserOpened, false); assert.ok(waiting.authorizationUrl?.includes("state="));
+    assert.doesNotMatch(JSON.stringify(await service.snapshot()), /secret-canary-error/);
+    service.cancelLogin(waiting.id); await waitState("cancelled"); assert.equal(exchanges, 0);
+    browserMode = "callback";
+    await service.startLogin(entry.name, entry.fingerprint);
+    service.decideLogin((await waitState("confirmation")).id, true);
+    await waitState("completed"); assert.equal(exchanges, 1);
+    assert.doesNotMatch(JSON.stringify(await service.snapshot()), /desktop-opaque-access-canary|desktop-opaque-refresh-canary|code_verifier/);
+    assert.equal((await store.find(`${origin}/mcp`))[0]?.tokens?.access_token, "desktop-opaque-access-canary");
+    await service.logout(entry.name, entry.fingerprint, true);
+    assert.equal((await store.find(`${origin}/mcp`))[0]?.tokens, undefined);
+    await service.startLogin(entry.name, entry.fingerprint); await waitState("confirmation");
+    await controller.shutdown(); assert.equal(service.busy, false); await waitState("cancelled");
+    const probe = http.createServer(); await listen(probe, callbackPort); await new Promise<void>((resolve) => probe.close(() => resolve()));
+  } finally {
+    await service.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("MCP OAuth completes discovery, DCR, PKCE callback, and token persistence", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-oauth-"));

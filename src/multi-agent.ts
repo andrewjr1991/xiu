@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentTool, ApprovalRequest } from "./types.js";
 import { WorktreeManager, type WorktreeInfo, type WorktreeMergeAnalysis } from "./worktree.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import { sanitizeSecrets } from "./secret-redaction.js";
 
 export type SubagentRole = "explorer" | "implementer" | "reviewer" | "tester";
 export type SubagentMode = "shared_readonly" | "worktree";
@@ -116,11 +117,14 @@ function safeId(value: string, label: string): string {
 
 export function validateTaskGraph(tasks: SubagentTaskInput[]): void {
   if (!tasks.length) throw new Error("At least one agent task is required.");
+  if (tasks.length > 80) throw new Error("At most 80 agent tasks are allowed in one run.");
   const ids = new Set<string>();
   for (const task of tasks) {
     const id = safeId(task.id, "task id");
     if (ids.has(id)) throw new Error(`Duplicate agent task id: ${id}`);
     if (!task.title.trim() || !task.instructions.trim()) throw new Error(`Agent task ${id} needs a title and instructions.`);
+    if (task.title.length > 240 || task.instructions.length > 16_000) throw new Error(`Agent task ${id} exceeds text limits.`);
+    if (!["explorer", "implementer", "reviewer", "tester"].includes(task.role) || task.mode !== undefined && !["shared_readonly", "worktree"].includes(task.mode)) throw new Error(`Agent task ${id} has an invalid role or mode.`);
     if (task.maxTurns !== undefined && (!Number.isInteger(task.maxTurns) || task.maxTurns < 1 || task.maxTurns > 100)) {
       throw new Error(`Agent task ${id} maxTurns must be an integer from 1 to 100.`);
     }
@@ -208,6 +212,7 @@ export class MultiAgentCoordinator {
     private readonly executor: SubagentExecutor,
     private readonly events: MultiAgentEvents = {},
     private readonly defaultConcurrency = 3,
+    private readonly secrets: readonly string[] = [],
   ) {
     this.worktrees = new WorktreeManager(cwd);
   }
@@ -269,6 +274,14 @@ export class MultiAgentCoordinator {
 
   list(): SubagentRun[] {
     return [...this.runs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(cloneRun);
+  }
+
+  /** No child may outlive a detached desktop host or its parent task. */
+  async shutdown(): Promise<void> {
+    for (const run of this.list()) for (const task of run.tasks) {
+      if (["pending", "running"].includes(task.status)) await this.cancel(run.id, task.id);
+    }
+    await Promise.allSettled([...this.drivers.values()]);
   }
 
   get(runId: string): SubagentRun {
@@ -478,7 +491,15 @@ export class MultiAgentCoordinator {
   }
 
   private async persist(run: SubagentRun): Promise<void> {
-    const snapshot = JSON.stringify(run, null, 2);
+    const safe = sanitizeSecrets(run, this.secrets);
+    safe.goal = safe.goal.slice(0, 4_000);
+    for (const task of safe.tasks) {
+      task.instructions = task.instructions.slice(0, 16_000);
+      if (task.result) task.result = task.result.slice(0, 16_000);
+      if (task.progress) task.progress = task.progress.slice(0, 2_000);
+      if (task.error) task.error = task.error.slice(0, 2_000);
+    }
+    const snapshot = JSON.stringify(safe, null, 2);
     const file = this.file(run.id);
     const temporary = `${file}.tmp`;
     this.persistQueue = this.persistQueue.then(async () => {

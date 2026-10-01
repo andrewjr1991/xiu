@@ -8,6 +8,7 @@ import { DesktopWorkspaceController } from "./workspace-controller.js";
 import { DesktopTaskController } from "./task-controller.js";
 import { DesktopProviderController } from "./provider-controller.js";
 import { DesktopTerminalController } from "./terminal-controller.js";
+import { DesktopBrowserController } from "./browser-controller.js";
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
 import { desktopChannels, type DesktopApprovalModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
@@ -21,6 +22,7 @@ const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const rendererRoot = path.join(appRoot, "renderer");
 const controller = new DesktopWorkspaceController();
 let mainWindow: BrowserWindow | undefined;
+let browserController: DesktopBrowserController | undefined;
 const smokeLog = process.env.XIU_DESKTOP_SMOKE_LOG;
 function smokeMilestone(value: string): void {
   if (!smokeLog) return;
@@ -85,6 +87,25 @@ function emitSnapshot(snapshot: DesktopWorkspaceSnapshot): DesktopWorkspaceSnaps
 }
 
 function registerIpc(): void {
+  ipcMain.handle(desktopChannels.browser, async (event, request) => { assertTrustedSender(event); if (!browserController) throw new Error("网页工作台尚未就绪。"); return browserController.control(request); });
+  ipcMain.handle(desktopChannels.mcpManage, async (event, request: import("../shared/protocol.js").DesktopMcpManageRequest) => {
+    assertTrustedSender(event);
+    // Confirmation/cancel must not wait behind a long connection operation.
+    if (request?.action === "oauth-decision" || request?.action === "oauth-cancel") return taskController.manageMcp(controller.trustedWorkspacePath(), request);
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (terminalController.isRunning(workspace)) throw new Error("请先关闭终端，再管理 MCP。");
+      return taskController.manageMcp(workspace, request);
+    });
+  });
+  ipcMain.handle(desktopChannels.mcpBrowse, async (event, request: import("../shared/protocol.js").DesktopMcpBrowseRequest) => {
+    assertTrustedSender(event);
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (terminalController.isRunning(workspace)) throw new Error("请先关闭终端，再读取 MCP 内容。");
+      return taskController.browseMcp(workspace, request);
+    });
+  });
   ipcMain.handle(desktopChannels.mcpSnapshot, async (event) => {
     assertTrustedSender(event);
     return taskController.mcpSnapshot(controller.trustedWorkspacePath());
@@ -181,7 +202,16 @@ function registerIpc(): void {
   });
   ipcMain.handle(desktopChannels.approvalModeSet, async (event, request: DesktopApprovalModeRequest) => {
     assertTrustedSender(event);
-    return taskController.setApprovalMode(controller.trustedWorkspacePath(), request);
+    return taskController.setApprovalMode(controller.trustedWorkspacePath(), request, async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      const result = await dialog.showMessageBox(mainWindow, {
+        type: "warning", title: "开启完全访问权限？", defaultId: 0, cancelId: 0,
+        buttons: ["取消", "开启完全访问"],
+        message: "Xiu 将自动执行所有任务操作，包括危险操作，不再逐项请求批准。",
+        detail: "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。权限不超过当前 Windows 用户。工作区内文件检查点继续保留；工作区外修改不保存源码快照，也不能保证撤销。仅在当前工作区本次打开期间有效，重新打开或重启后需要重新确认。Plan 只读、MCP 连接授权和凭证保护仍独立生效。",
+      });
+      return result.response === 1;
+    });
   });
   ipcMain.handle(desktopChannels.approvalDecide, async (event, request: RuntimeApprovalDecisionRequest) => {
     assertTrustedSender(event);
@@ -363,7 +393,7 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     ...(process.platform === "darwin" ? {} : {
-      titleBarOverlay: { color: "#fbfcfe", symbolColor: "#65758b", height: 68 },
+      titleBarOverlay: { color: "#fbfcfe", symbolColor: "#65758b", height: 56 },
     }),
     icon: path.join(appRoot, "assets", "icon.png"),
     webPreferences: {
@@ -376,6 +406,8 @@ function createWindow(): BrowserWindow {
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.on("render-process-gone", () => { /* Preserve main-process state; no automatic task replay. */ });
+  browserController = new DesktopBrowserController(window, (state) => { if (!window.isDestroyed()) window.webContents.send(desktopChannels.browserState, state); });
+  window.once("close", () => browserController?.close());
   window.once("closed", () => terminalController.stopAll("窗口已关闭，终端会话已结束。"));
   window.webContents.once("did-fail-load", (_event, _code, description) => {
     smokeMilestone(`load-failed ${description}`);

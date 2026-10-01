@@ -22,6 +22,7 @@
     "installer:msix:win": "npm run build && node scripts/package-windows.mjs msix",
     "smoke": "node scripts/smoke.mjs",
     "smoke:ui": "npm run build && electron scripts/ui-smoke-harness.cjs",
+    "smoke:browser": "node scripts/browser-smoke.mjs",
     "smoke:installer:win": "node scripts/windows-installer-smoke.mjs",
     "smoke:installer:msix:win": "node scripts/windows-msix-smoke.mjs"
   },
@@ -49,6 +50,7 @@
     "productName": "Xiu",
     "asar": true,
     "asarUnpack": [
+      "dist/main/background-worker.mjs",
       "node_modules/node-pty/**"
     ],
     "npmRebuild": false,

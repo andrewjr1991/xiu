@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
 import { refreshModelContext } from "./context.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { resolveWorkspacePath } from "./workspace-path.js";
 import { canonicalXiuIdentity, isXiuIdentityQuestion } from "./identity.js";
 import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlan, TaskPlanManager } from "./plan.js";
@@ -275,6 +276,14 @@ export class Agent {
     }
   }
 
+  private accessMode: "workspace" | "full" = "workspace";
+
+  setAccessMode(mode: "workspace" | "full"): void {
+    if (this.activeController) throw new Error("Cannot change access mode during a task");
+    this.accessMode = mode;
+    this.system = undefined;
+  }
+
   async run(task: string): Promise<string> {
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -426,7 +435,7 @@ export class Agent {
     const prepared = [automaticContext ? `Automatically prepared project context:\n${automaticContext}` : "", planModeContext].filter(Boolean).join("\n\n");
     const contextualTask = prepared ? `${task}\n\n${prepared}` : task;
     this.messages.push({ role: "user", content: contextualTask });
-    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US", this.config.projectConfigurationTrusted === true);
+    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US", this.config.projectConfigurationTrusted === true, this.accessMode);
     this.ensureSession();
     const sessionPath = this.sessionPath!;
     this.checkpointManager?.setSession(this.sessionId!);
@@ -658,7 +667,7 @@ export class Agent {
           auditedSteeringCount = this.steeringHistory.length;
           continue;
         }
-        if (verificationStamp && verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths])) {
+        if (verificationStamp && verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode)) {
           verification.invalidate();
           verifiedAfterChange = false;
           verificationStamp = undefined;
@@ -745,10 +754,10 @@ export class Agent {
           } else {
             taskOperationKind = this.isVerificationAttempt(call.name, call.input) ? "verification" : "tool";
             if (taskOperationKind === "verification" || tool.isVerification) {
-              beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+              beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
               if (verificationStamp && verificationStamp !== beforeVerificationStamp) verification.invalidate();
               if (call.name === "verify_output" && typeof call.input.path === "string" && !verificationPaths.has(call.input.path)) {
-                beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths, call.input.path]);
+                beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths, call.input.path], this.accessMode);
                 verificationPaths.add(call.input.path);
               }
             }
@@ -765,6 +774,7 @@ export class Agent {
             }
             structured = await executeToolResult(tool, call.input, {
               cwd: this.config.cwd,
+              accessMode: this.accessMode,
               approve: async (request) => {
                 this.taskDiagnostics?.beginApproval(request.description);
                 let approved: boolean | undefined;
@@ -774,7 +784,12 @@ export class Agent {
                   const checkpointOperation = await this.taskRunJournal?.beginOperation({ kind: "checkpoint", name: `before ${call.name}`, sideEffect: "none" });
                   let checkpoint: Awaited<ReturnType<CheckpointManager["capture"]>>;
                   try {
-                    checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
+                    const outsideWorkspace = this.accessMode === "full" && this.rawWorkspacePaths(call.input).some((value) => {
+                      try { resolveWorkspacePath(this.config.cwd, value); return false; } catch { return true; }
+                    });
+                    if (outsideWorkspace) {
+                      this.events.onToolProgress?.(call.name, "工作区外操作不会保存文件快照或显示在本任务 Diff 中，无法保证撤销。");
+                    } else checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
                     if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "succeeded", checkpoint ? `checkpoint ${checkpoint.id}` : "checkpoint not required");
                   } catch (error) {
                     if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "failed", error instanceof Error ? error.message : String(error));
@@ -820,7 +835,7 @@ export class Agent {
               let observedChange = true;
               if (verificationStamp) {
                 try {
-                  observedChange = verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+                  observedChange = verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
                 } catch { observedChange = true; }
               }
               if (observedChange) {
@@ -842,7 +857,7 @@ export class Agent {
           checkPassed = structured.status === "success" && Boolean(tool.isVerification?.(call.input, result));
           if (verificationCandidate || checkPassed) {
             verificationAttempted = true;
-            const currentStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+            const currentStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
             if (beforeVerificationStamp !== currentStamp) {
               verification.invalidate();
               checkPassed = false;
@@ -1160,6 +1175,13 @@ export class Agent {
   }
 
   private workspacePaths(input: Record<string, unknown>): string[] {
+    const values = this.rawWorkspacePaths(input);
+    if (this.accessMode !== "full") return values;
+    // Never copy external source or credentials into workspace change reports.
+    return values.filter((value) => { try { resolveWorkspacePath(this.config.cwd, value); return true; } catch { return false; } });
+  }
+
+  private rawWorkspacePaths(input: Record<string, unknown>): string[] {
     const values = [input.path, input.output_path, input.destination, input.file];
     if (Array.isArray(input.paths)) values.push(...input.paths);
     return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))].slice(0, 6);

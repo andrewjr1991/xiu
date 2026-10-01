@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { captureTaskBaseline } from "./task-changes.js";
 import { toolCallSignature } from "./loop-guard.js";
-import { resolveWorkspacePath } from "./workspace-path.js";
+import { resolveToolPath } from "./workspace-path.js";
 
 export function isVerificationCommand(command: string): boolean {
   // Do not infer evidence from text printed by shell snippets or informational modes.
@@ -113,10 +113,10 @@ export class VerificationLedger {
 const MAX_EXPLICIT_PATHS = 64;
 const MAX_EXPLICIT_BYTES = 256 * 1024;
 
-async function explicitFileStamp(root: string, requested: string): Promise<unknown[]> {
+async function explicitFileStamp(root: string, requested: string, accessMode?: "workspace" | "full"): Promise<unknown[]> {
   // Unlike the general coding diff, an explicitly verified artifact may be Git
   // ignored. Read only its digest; never retain text or bypass real-path checks.
-  const target = resolveWorkspacePath(root, requested);
+  const target = resolveToolPath({ cwd: root, accessMode }, requested);
   const relative = path.relative(root, target).replace(/\\/g, "/");
   if (!relative) throw new Error("Explicit verification target must be a file.");
   try {
@@ -129,7 +129,7 @@ async function explicitFileStamp(root: string, requested: string): Promise<unkno
     if (!before.isFile()) throw new Error("Explicit verification target is not a regular file.");
     const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
-      resolveWorkspacePath(root, requested);
+      resolveToolPath({ cwd: root, accessMode }, requested);
       const opened = await handle.stat();
       if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) throw new Error("Explicit verification target changed while opening.");
       const data = Buffer.alloc(Math.min(before.size, MAX_EXPLICIT_BYTES));
@@ -157,13 +157,13 @@ async function explicitFileStamp(root: string, requested: string): Promise<unkno
 /** Bounded freshness evidence, not an exhaustive repository proof. Explicit
  * artifacts include ignored files; large artifacts use a 256 KiB prefix plus
  * size/mtime/ctime. Unsafe/unreadable explicit paths fail closed. */
-export async function captureVerificationStamp(cwd: string, explicitPaths: readonly string[] = []): Promise<string> {
+export async function captureVerificationStamp(cwd: string, explicitPaths: readonly string[] = [], accessMode?: "workspace" | "full"): Promise<string> {
   const snapshot = await captureTaskBaseline(cwd);
   const files = [...snapshot.files].sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) =>
     [name, file.state, file.digest, file.bytes, file.digest ? undefined : file.modifiedAt, file.mode, file.omitted]);
   const paths = [...new Set(explicitPaths)].sort();
   if (paths.length > MAX_EXPLICIT_PATHS) throw new Error("Explicit verification target limit exceeded.");
   const explicit = [];
-  for (const target of paths) explicit.push(await explicitFileStamp(snapshot.root, target));
+  for (const target of paths) explicit.push(await explicitFileStamp(snapshot.root, target, accessMode));
   return createHash("sha256").update(JSON.stringify([snapshot.head, snapshot.complete, files, explicit])).digest("hex");
 }

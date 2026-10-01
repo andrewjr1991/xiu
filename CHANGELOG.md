@@ -4,11 +4,22 @@ This file summarizes released behavior and the next unreleased change. Detailed 
 
 ## 0.20.2 — Unreleased
 
+- Replace fixed inspector buttons with selectively opened, closable tool tabs and split/full view. Share keyboard-accessible dropdown menus, align empty-state typography and show compact expandable process/tool/source/evidence rows. Add an isolated, human-operated ephemeral HTTPS web tab (no login submission/downloads/task bridge), plus real Electron offline browser-policy/lifecycle coverage.
+
+- Polish inspector tabs and Diff controls: keep labels horizontal, style round/search inputs, preserve conversation width on narrow layouts, localize review warnings, inset Diff empty-state text from the divider, and tighten categorized-data spacing. Add wide/narrow visual-layout regressions.
+- Add an independent desktop Diff workbench with a searchable file tree, bounded insertion/deletion counts, line numbers, and saved execution-round selection; missing historical snapshots never substitute current workspace changes.
+- Wire the shared multi-agent coordinator into desktop tasks, with real child-task cards, elapsed time and bounded redacted results. Parent stop/exit cancels and drains children; Worktree integration retains independent confirmation and review evidence.
+- Separate background processes, tools, task artifacts, read sources and verification evidence. Enable the shared background tools using a separately unpacked Node worker, not the interactive PTY.
+- Resolve installed Node/npm for Electron MCP and background workers instead of launching Electron as Node. Add a backup-first user-PATH repair helper without modifying system PATH or user MCP configuration/grants.
+
+- Fix native MCP button borders and modal/titlebar alignment; simplify desktop MCP copy. Add explicitly confirmed, ephemeral desktop Full Access (including dangerous task-tool approval, external files and local diagnostics), preserving Plan/trust/credentials/MCP grants/recovery guards and keeping external source out of workspace checkpoints and task Diff. Approve for me uses risk classification, not a reviewer model or OS sandbox.
+
 - Start ordinary fresh installations with zero Providers in both CLI and desktop, even when environment keys exist. Vendor templates no longer register or reserve channel IDs.
 - Migrate explicitly referenced legacy presets into editable user profiles, retaining credential references, model selections and routing; do not seed unused presets or clear existing user settings.
 - Keep all user-added channels visible, add multi-vendor templates to both setup flows, support confirmed removal of the last channel, and block tasks until a channel is selected.
 - Document actual CLI/desktop capability differences and prioritize shared services and paired entrypoint regressions.
-- Share MCP manager composition between CLI and desktop. Add desktop configured-server connection, exact manifest confirmation, reconnect/disconnect and lifecycle cleanup; keep editing, OAuth login and Resource/Prompt management CLI-only for this slice.
+- Share MCP manager composition between CLI and desktop. Add desktop configured-server connection, exact manifest confirmation, reconnect/disconnect and lifecycle cleanup.
+- Add desktop basic user MCP configuration creation/editing/confirmed deletion, OAuth origin/scope confirmation, browser fallback/cancellation/logout, and bounded redacted read-only Resource/Prompt browsing. Keep project/advanced/explicit-permission configurations read-only, separate saving from grants/connections, and keep external content out of task instructions and audit records.
 - Bind MCP permission confirmation to the previewed configuration fingerprint in both frontends, remove stale tools after failed reload, and inject MCP client metadata into the Electron bundle.
 
 ## 0.20.1 — 2026-09-30

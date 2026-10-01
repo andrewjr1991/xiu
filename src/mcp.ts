@@ -13,6 +13,8 @@ import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider,
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import { addedPermissions, parseExtensionPermissions, permissionFingerprint, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
+import { redactSecrets } from "./secret-redaction.js";
+import { resolveNodeRuntime } from "./node-runtime.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
 // Desktop bundles this module into dist/main: inject metadata at build time,
@@ -147,19 +149,22 @@ interface StdioLaunch {
   args: string[];
 }
 
-export async function resolveStdioLaunch(command: string, args: string[]): Promise<StdioLaunch> {
+export async function resolveStdioLaunch(command: string, args: string[], environment: NodeJS.ProcessEnv = process.env): Promise<StdioLaunch> {
   if (process.platform !== "win32") return { command, args };
   const executable = path.basename(command).toLowerCase().replace(/\.(?:cmd|bat|exe|com)$/i, "");
+  if (executable === "node" && !path.isAbsolute(command)) return { command: await resolveNodeRuntime(environment), args };
   if (executable !== "npm" && executable !== "npx") return { command, args };
   const script = executable === "npm" ? "npm-cli.js" : "npx-cli.js";
+  const node = await resolveNodeRuntime(environment);
   const candidates = [
-    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", script),
+    ...(path.isAbsolute(command) ? [path.join(path.dirname(command), "node_modules", "npm", "bin", script)] : []),
+    path.join(path.dirname(node), "node_modules", "npm", "bin", script),
     ...(process.env.APPDATA ? [path.join(process.env.APPDATA, "npm", "node_modules", "npm", "bin", script)] : []),
   ];
   for (const candidate of candidates) {
     try {
       await fs.access(candidate);
-      return { command: process.execPath, args: [candidate, ...args] };
+      return { command: node, args: [candidate, ...args] };
     } catch { /* try the next standard Node/npm layout */ }
   }
   return { command, args };
@@ -471,13 +476,15 @@ class StdioMcpConnection implements McpConnectionLike {
     const configuredCwd = this.config.cwd
       ? path.resolve(this.workspace, this.config.cwd)
       : this.workspace;
-    const launch = await resolveStdioLaunch(this.config.command!, this.config.args ?? []);
+    const environment = { ...process.env, ...Object.fromEntries(Object.entries(this.config.env ?? {}).map(([key, value]) => [key, expandEnvironment(value)])) };
+    const launch = await resolveStdioLaunch(this.config.command!, this.config.args ?? [], environment);
+    if (path.basename(launch.command).toLowerCase() === "node.exe") {
+      environment.PATH = `${path.dirname(launch.command)}${path.delimiter}${environment.PATH ?? environment.Path ?? ""}`;
+      delete environment.Path;
+    }
     this.child = spawn(launch.command, launch.args, {
       cwd: configuredCwd,
-      env: {
-        ...process.env,
-        ...Object.fromEntries(Object.entries(this.config.env ?? {}).map(([key, value]) => [key, expandEnvironment(value)])),
-      },
+      env: environment,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -1068,6 +1075,55 @@ export class McpManager {
     return Object.keys(await readConfig(this.globalConfig)).sort((left, right) => left.localeCompare(right));
   }
 
+  /** Node-side configuration access; frontends must use a non-secret projection. */
+  async configurationEntries(includeProject = true) {
+    const servers = await this.configuredServers(includeProject);
+    return Object.entries(servers).map(([name, config]) => ({ name, origin: this.serverOrigins.get(name) ?? "user", config: structuredClone(config), manifest: mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config) }));
+  }
+
+  async saveUserServer(name: string, config: McpServerConfig, expectedFingerprint?: string): Promise<void> {
+    if (this.pluginServers.has(name)) throw new Error("Plugin MCP configuration is read-only here.");
+    const servers = await readConfig(this.globalConfig);
+    const revision = JSON.stringify(servers);
+    const effective = (await this.configurationEntries(true)).find((entry) => entry.name === name);
+    if (effective && effective.origin !== "user") throw new Error("Project MCP configuration is read-only here.");
+    const previous = servers[name];
+    if (expectedFingerprint === undefined ? Boolean(previous) : !previous || permissionFingerprint(mcpManifest(name, `user:${name}`, previous)) !== expectedFingerprint) {
+      throw new Error("MCP configuration changed; refresh before saving.");
+    }
+    const next = validateMcpServerConfig(name, structuredClone(config));
+    mcpManifest(name, `user:${name}`, next); // Reject understated permissions, even before connecting.
+    servers[name] = next;
+    await this.writeUserConfig(servers, revision);
+    // Saving a config never grants its permission manifest.
+  }
+
+  async deleteUserServer(name: string, expectedFingerprint: string): Promise<void> {
+    if (this.pluginServers.has(name)) throw new Error("Plugin MCP configuration is read-only here.");
+    const servers = await readConfig(this.globalConfig);
+    const revision = JSON.stringify(servers);
+    const effective = (await this.configurationEntries(true)).find((entry) => entry.name === name);
+    if (!effective || effective.origin !== "user" || !servers[name]
+      || permissionFingerprint(mcpManifest(name, `user:${name}`, servers[name]!)) !== expectedFingerprint) throw new Error("MCP configuration changed; refresh before deleting.");
+    delete servers[name];
+    await this.writeUserConfig(servers, revision);
+  }
+
+  async serverTextSanitizer(name: string): Promise<(text: string) => string> {
+    const entry = (await this.configurationEntries(true)).find((item) => item.name === name);
+    const config = this.activeConfigs.get(name) ?? entry?.config;
+    const values = config?.url && config.auth ? await this.authStore.redactionValues(config.url) : [];
+    for (const value of [...Object.values(config?.env ?? {}), ...Object.values(config?.headers ?? {})]) {
+      try { const expanded = expandEnvironment(value); values.push(expanded, expanded.replace(/^Bearer\s+/i, "")); } catch { /* An unset env reference is not a secret. */ }
+    }
+    for (const [key, value] of Object.entries(process.env)) if (value && value.length >= 4 && /key|token|secret|password|authorization/i.test(key)) values.push(value);
+    return (text) => redactSecrets(text, values.filter(Boolean));
+  }
+
+  async sanitizeServerText(name: string, text: string): Promise<string> {
+    return (await this.serverTextSanitizer(name))(text);
+  }
+
   async oauthServerNames(includeProject = true): Promise<string[]> {
     const servers = await this.configuredServers(includeProject);
     return Object.entries(servers)
@@ -1076,10 +1132,14 @@ export class McpManager {
       .sort((left, right) => left.localeCompare(right));
   }
 
-  async login(name: string, interaction: McpOAuthInteraction = {}, includeProject = true): Promise<void> {
+  async login(name: string, interaction: McpOAuthInteraction = {}, includeProject = true, expectedFingerprint?: string): Promise<void> {
     const config = (await this.configuredServers(includeProject))[name];
     if (!config) throw new Error(`MCP server ${name} was not found`);
     if (!config.url || config.auth?.type !== "oauth") throw new Error(`MCP server ${name} is not configured for OAuth`);
+    if (expectedFingerprint !== undefined) {
+      const manifest = mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config);
+      if (permissionFingerprint(manifest) !== expectedFingerprint || !await this.permissionStore.isApproved(manifest)) throw new Error("OAuth configuration changed or is not approved.");
+    }
     const existing = this.serverStatuses.find((server) => server.name === name);
     if (existing) existing.state = "authorizing";
     try {
@@ -1150,11 +1210,14 @@ export class McpManager {
     return true;
   }
 
-  private async writeUserConfig(servers: Record<string, McpServerConfig>): Promise<void> {
+  private async writeUserConfig(servers: Record<string, McpServerConfig>, expectedRevision?: string): Promise<void> {
     await fs.mkdir(path.dirname(this.globalConfig), { recursive: true });
     const temporary = `${this.globalConfig}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    try { await fs.rename(temporary, this.globalConfig); }
+    try {
+      if (expectedRevision !== undefined && JSON.stringify(await readConfig(this.globalConfig)) !== expectedRevision) throw new Error("MCP user configuration changed while saving; refresh first.");
+      await fs.rename(temporary, this.globalConfig);
+    }
     catch (error) {
       await fs.rm(temporary, { force: true }).catch(() => undefined);
       throw error;

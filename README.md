@@ -2,6 +2,8 @@
 
 # Xiu
 
+Unreleased 0.20.2 desktop candidate: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected. Published 0.20.1 behavior is unchanged.
+
 **A terminal coding assistant for everyday development, with reviewable changes.**
 
 Give Xiu an outcome. It inspects the repository, edits files, runs commands, verifies the result, and leaves bounded evidence you can review.
@@ -66,9 +68,9 @@ Xiu does not upload project code, sessions, audit records, or diagnostics by def
 
 ## Core capabilities
 
-The unreleased 0.20.2 candidate also connects configured stdio / Streamable HTTP MCP servers to desktop tasks through the same manager as the CLI. Open **MCP 连接与权限**, review the exact permission manifest, then explicitly connect/reload. Connections close on workspace changes and exit. Desktop MCP editing, OAuth login, and Resource/Prompt browsing remain CLI-only; this is not part of the published 0.20.1 package.
+The unreleased 0.20.2 candidate connects stdio / Streamable HTTP MCP servers to desktop tasks through the same manager as the CLI. Open **MCP 连接与权限** to add/edit basic user configurations, review the exact permission manifest, then explicitly connect/reload. OAuth shows authorization origins/scopes, browser fallback and cancellation; Resource/Prompt browsing is bounded, redacted and read-only. Project/advanced/secret-bearing configurations remain read-only in the desktop editor; use CLI/config files for them. Connections close on workspace changes and exit. These desktop MCP features are not part of the published 0.20.1 package.
 
-This is the full CLI capability list, not a desktop parity claim. The desktop preview exposes core coding, approvals, indexing, media, historical changes, and recovery, but does not yet wire MCP, native web research, plugins, background jobs, multi-agent coordination, or Provider failover/stage routing into desktop tasks. See the [capability inventory and synchronization plan](./ROADMAP.zh-CN.md#4-后续工程化).
+The unreleased 0.20.2 candidate adds MCP, an independent searchable Diff/file-tree panel with saved execution rounds and bounded line counts, real specialist-agent task/status/result cards, and categorized background processes, tools, artifacts, source reads and verification. Children remain workspace/Worktree scoped; integration always requires confirmation and Reviewer/Tester evidence. Managed background commands and npm-based MCP servers require local Node.js, never Xiu.exe as Node. Native web research, plugins, and Provider failover/stage routing remain pending. Published 0.20.1 behavior is unchanged. See the [capability inventory](./ROADMAP.zh-CN.md#4-后续工程化).
 
 - Autonomous inspect/edit/verify task loop
 - OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible profiles
@@ -183,3 +185,5 @@ The unreleased `0.20.2` candidate fixes preset-ID collisions: fresh CLI/desktop 
 ## License
 
 MIT © [静然](https://github.com/andrewjr1991)
+
+Desktop workbench (unreleased 0.20.2): use **＋** to open/close Changes, Files, Terminal, Agents, Data, Evidence and a Web tab; toggle split/full view. Dropdowns use a shared keyboard-accessible menu. Data rows show concise names/status/duration, with saved details on demand. The Web tab is a separate, human-operated, ephemeral public-HTTPS reader: no task bridge, shared credentials, login submission or downloads; it is not agent web search.

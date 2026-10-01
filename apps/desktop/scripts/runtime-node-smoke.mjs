@@ -1,0 +1,13 @@
+import { build } from "esbuild";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const repo = path.resolve(import.meta.dirname, "../../..");
+const directory = path.join(repo, ".desktop-build-temp");
+await mkdir(directory, { recursive: true });
+const output = path.join(directory, "runtime-node-harness.cjs");
+await build({ entryPoints: [path.join(import.meta.dirname, "runtime-node-harness.ts")], outfile: output, bundle: true, platform: "node", format: "cjs", target: "node22", external: ["electron"], define: { "import.meta.url": JSON.stringify(pathToFileURL(output).href) } });
+const electron = path.join(repo, "apps", "desktop", "node_modules", "electron", "dist", "electron.exe");
+const exit = await new Promise((resolve, reject) => { const child = spawn(electron, [path.join(import.meta.dirname, "runtime-node-entry.cjs")], { cwd: repo, windowsHide: true, stdio: "inherit" }); child.once("error", reject); child.once("exit", resolve); });
+process.exitCode = exit ?? 1;

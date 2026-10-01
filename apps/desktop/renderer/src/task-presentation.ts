@@ -9,6 +9,7 @@ const timelineTypes = new Set<RuntimeEvent["type"]>([
   "workspace.changed",
   "runtime.notice",
   "task.finished",
+  "subagent.updated",
 ]);
 
 export interface RuntimeActivity {

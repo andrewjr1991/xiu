@@ -133,3 +133,62 @@ test("desktop MCP changes fail closed under external writer lock and malformed c
   await journal.complete("completed");
   await controller.shutdown();
 });
+
+test("desktop MCP user editor saves without granting, preserves other entries and rejects stale/project/advanced edits", async (t) => {
+  const { root, file, service } = await setup(t);
+  const draft = { name: "editable", transport: "stdio" as const, command: process.execPath, args: [fixture], risk: "read" as const };
+  const first = await service.save(draft);
+  const entry = first.servers.find((item) => item.name === draft.name)!;
+  assert.equal(entry.approved, false);
+  assert.equal(entry.state, "permission-required");
+  assert.ok(entry.editable);
+  assert.equal(first.servers.find((item) => item.name === "test")?.editable, undefined);
+  await assert.rejects(service.save(draft), /changed/);
+  await service.approve(entry.name, entry.fingerprint);
+  await service.reload();
+  const changed = await service.save({ ...entry.editable!, risk: "execute" });
+  assert.equal(changed.servers.find((item) => item.name === draft.name)?.approved, false);
+  assert.deepEqual(service.manager.connectedServerNames(), []);
+  await assert.rejects(service.save(entry.editable!), /changed/);
+  await assert.rejects(service.save({ ...draft, name: "test", fingerprint: first.servers[0]!.fingerprint }), /read-only/);
+  await fs.mkdir(path.join(root, ".xiu"), { recursive: true });
+  await fs.writeFile(path.join(root, ".xiu", "mcp.json"), JSON.stringify({ mcpServers: { project: { command: process.execPath, args: [fixture] } } }));
+  await assert.rejects(service.save({ ...draft, name: "project" }), /read-only/);
+  const final = (await service.snapshot()).servers.find((item) => item.name === draft.name)!;
+  await assert.rejects(service.remove(final.name, final.fingerprint, false), /confirmation/);
+  await service.remove(final.name, final.fingerprint, true);
+  assert.ok(JSON.parse(await fs.readFile(file, "utf8")).mcpServers.test);
+  assert.equal((await service.snapshot()).servers.some((item) => item.name === draft.name), false);
+});
+
+test("desktop MCP editor rejects inline credentials and does not export secret-bearing or advanced configurations", async (t) => {
+  const { file, service } = await setup(t);
+  const draft = { name: "remote", transport: "streamable-http" as const, risk: "read" as const };
+  for (const url of ["https://user:pass@service.example/mcp", "https://service.example/mcp?api_key=canary"]) await assert.rejects(service.save({ ...draft, url }));
+  await assert.rejects(service.save({ name: "local", transport: "stdio", risk: "read", command: "node", args: ["--api-key", "opaque-canary-value"] }));
+  await assert.rejects(service.save({ name: "local", transport: "stdio", risk: "read", command: "node", args: {} as never }));
+  await fs.writeFile(file, JSON.stringify({ mcpServers: { private: { url: "https://service.example/mcp", headers: { Authorization: "Bearer opaque-canary-value" } } } }));
+  const snapshot = await service.snapshot();
+  assert.equal(snapshot.servers[0]?.editable, undefined);
+  assert.doesNotMatch(JSON.stringify(snapshot), /opaque-canary-value|service.example/);
+  const saved = await service.save({ ...draft, url: "https://safe.example/mcp", bearerTokenEnvironment: "XIU_TEST_BEARER" });
+  assert.equal(saved.servers.find((item) => item.name === "remote")?.editable?.bearerTokenEnvironment, "XIU_TEST_BEARER");
+});
+
+test("desktop MCP Resource and Prompt browsing is bounded, redacted and requires a current approved connection", async (t) => {
+  const { service } = await setup(t);
+  await assert.rejects(service.browse("test", "resources"), /Connect/);
+  await service.approve("test", (await service.snapshot()).servers[0]!.fingerprint);
+  await service.reload();
+  assert.match(JSON.stringify(await service.browse("test", "resources")), /Greeting|Second/);
+  assert.match(JSON.stringify(await service.browse("test", "prompts")), /review/);
+  const old = process.env.XIU_TEST_SECRET;
+  process.env.XIU_TEST_SECRET = "opaque-desktop-mcp-canary";
+  try {
+    assert.doesNotMatch(JSON.stringify(await service.browse("test", "prompt", "review", { target: process.env.XIU_TEST_SECRET })), /opaque-desktop-mcp-canary/);
+    assert.ok(JSON.stringify(await service.browse("test", "read", "test://large")).length < 35_000);
+    await assert.rejects(service.browse("test", "read", "x".repeat(9000)));
+  } finally { if (old === undefined) delete process.env.XIU_TEST_SECRET; else process.env.XIU_TEST_SECRET = old; }
+  await service.close();
+  await assert.rejects(service.browse("test", "resources"), /Connect/);
+});

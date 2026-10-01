@@ -1,7 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   desktopChannels,
+  type DesktopBrowserRequest,
+  type DesktopBrowserState,
   type DesktopMcpApproveRequest,
+  type DesktopMcpManageRequest,
+  type DesktopMcpBrowseRequest,
   type DesktopApprovalModeRequest,
   type DesktopCheckpointRestoreRequest,
   type DesktopAttachmentUploadRequest,
@@ -35,6 +39,10 @@ import {
 } from "../shared/protocol.js";
 
 const bridge: XiuDesktopBridge = Object.freeze({
+  browser: (request: DesktopBrowserRequest) => ipcRenderer.invoke(desktopChannels.browser, request),
+  onBrowserState: (listener: (state: DesktopBrowserState) => void) => { const handler = (_event: Electron.IpcRendererEvent, state: DesktopBrowserState) => listener(state); ipcRenderer.on(desktopChannels.browserState, handler); return () => { ipcRenderer.removeListener(desktopChannels.browserState, handler); }; },
+  manageMcp: (request: DesktopMcpManageRequest) => ipcRenderer.invoke(desktopChannels.mcpManage, request),
+  browseMcp: (request: DesktopMcpBrowseRequest) => ipcRenderer.invoke(desktopChannels.mcpBrowse, request),
   mcpSnapshot: () => ipcRenderer.invoke(desktopChannels.mcpSnapshot),
   reloadMcp: () => ipcRenderer.invoke(desktopChannels.mcpReload),
   disconnectMcp: () => ipcRenderer.invoke(desktopChannels.mcpDisconnect),

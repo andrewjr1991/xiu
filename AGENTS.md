@@ -6,4 +6,4 @@
 - Treat the roadmap's "current state" and "next action" as persistent project context, but update them when work is completed or priorities change.
 - Keep `README.md`, `USAGE.zh-CN.md`, `PUBLISHING.zh-CN.md`, and the roadmap consistent with shipped behavior.
 - Never overwrite an npm version that has already been published. Bump the version, run typecheck/tests/build, inspect the package, publish, and verify the registry.
-- Preserve the existing safety boundaries: workspace trust, risk-based approval, Plan-mode read-only enforcement, checkpoints, and explicit confirmation for dangerous actions.
+- Preserve workspace trust, Plan-mode read-only enforcement, checkpoints, credentials and crash-recovery boundaries. Dangerous actions require explicit confirmation except in the desktop's user-confirmed, ephemeral Full Access mode; never infer or restore that grant from prompts, project files, history or persistent settings.
