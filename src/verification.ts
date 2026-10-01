@@ -69,6 +69,7 @@ function normalizedVerificationPath(value: unknown): string | undefined {
 export function verifyOutputSupersedes(current: Record<string, unknown>, previous: Record<string, unknown>): boolean {
   const currentPath = normalizedVerificationPath(current.path);
   if (!currentPath || currentPath !== normalizedVerificationPath(previous.path)) return false;
+  if (current.exists === false || previous.exists === false) return current.exists === false && previous.exists === false;
   const currentRequired = stringExpectations(current, "required_substrings");
   const currentForbidden = stringExpectations(current, "forbidden_substrings");
   // Requiring a longer string also proves every substring within it exists.
@@ -84,6 +85,16 @@ export function verifyOutputSupersedes(current: Record<string, unknown>, previou
   const currentMaximum = typeof current.max_bytes === "number" ? current.max_bytes : Number.POSITIVE_INFINITY;
   const previousMaximum = typeof previous.max_bytes === "number" ? previous.max_bytes : Number.POSITIVE_INFINITY;
   return currentMaximum <= previousMaximum;
+}
+
+/** Program-observed checks only. No model text, command arguments, or artifact contents. */
+export interface VerificationEvidence {
+  version: 1;
+  cwd: string;
+  observedAt: string;
+  workspaceStamp: string;
+  explicitPaths: string[];
+  checks: Array<{ toolName: string; path?: string }>;
 }
 
 export class VerificationLedger {
@@ -105,6 +116,12 @@ export class VerificationLedger {
   }
   get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every((value) => value.passed); }
   get failed(): boolean { return [...this.checks.values()].some((value) => !value.passed); }
+  evidenceChecks(): VerificationEvidence["checks"] {
+    if (!this.passed || this.checks.size > 64) return [];
+    return [...this.checks.values()].flatMap(({ name, input }) => name
+      ? [{ toolName: name, ...(name === "verify_output" && typeof input?.path === "string" ? { path: input.path } : {}) }]
+      : []);
+  }
   snapshot(): { revision: number; checks: Array<{ check: string; passed: boolean }> } {
     return { revision: this.revision, checks: [...this.checks].map(([check, value]) => ({ check, passed: value.passed })) };
   }

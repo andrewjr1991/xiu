@@ -17,6 +17,7 @@ apps/desktop/release-*/
 *.tgz
 coverage/
 .validation-*/
+.validation-ci/
 .release-smoke-*/
 evals/results/
 .DS_Store

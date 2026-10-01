@@ -30,7 +30,7 @@ import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, ty
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
-import { VerificationLedger, captureVerificationStamp } from "./verification.js";
+import { VerificationLedger, captureVerificationStamp, type VerificationEvidence } from "./verification.js";
 import { SafeDraftPreview } from "./stream-preview.js";
 
 export interface AgentEvents {
@@ -61,7 +61,7 @@ export interface AgentEvents {
 }
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
-export type AgentFailureReason = "model_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
+export type AgentFailureReason = "model_incomplete" | "plan_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
 
 export class BackgroundApprovalRequiredError extends Error {
   override readonly name = "BackgroundApprovalRequiredError";
@@ -238,6 +238,7 @@ export class Agent {
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private lastRunFailureReason?: AgentFailureReason;
+  private verificationEvidence?: VerificationEvidence;
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
   private failoverController?: ProviderFailoverController;
@@ -290,6 +291,7 @@ export class Agent {
     this.activeController = controller;
     this.lastRunOutcome = "running";
     this.lastRunFailureReason = undefined;
+    this.verificationEvidence = undefined;
     this.currentTurn = 0;
     this.repeatedFailures.clear();
     this.primaryTask = task.trim();
@@ -423,6 +425,7 @@ export class Agent {
   private async runWithSignal(task: string, signal: AbortSignal): Promise<string> {
     const startedAt = Date.now();
     const identityQuestion = isXiuIdentityQuestion(task);
+    await this.projectIndex?.refreshForTask();
     const relevant = this.projectIndex ? await this.projectIndex.search(task, 6) : "No relevant files found.";
     const profile = this.projectIndex?.profile();
     const automaticContext = [
@@ -650,8 +653,10 @@ export class Agent {
           webEvidenceAuditSent = true;
           continue;
         }
-        const unfinishedPlan = this.planManager?.snapshot()?.steps.some((step) => step.status === "pending" || step.status === "in_progress");
-        if (unfinishedPlan && !this.planManager?.mode() && !planReminderSent) {
+        const planSteps = this.planManager?.snapshot()?.steps ?? [];
+        const unfinishedPlan = !this.planManager?.mode() && planSteps.some((step) => step.status !== "completed");
+        const actionablePlan = planSteps.some((step) => step.status === "pending" || step.status === "in_progress");
+        if (unfinishedPlan && actionablePlan && !planReminderSent) {
           const reminder = "Plan gate: the visible task plan still has pending or in-progress steps. Complete the work or update blocked steps with an explanation before finishing.";
           this.messages.push({ role: "user", content: reminder });
           await this.log(sessionPath, { type: "plan_gate", turn, message: reminder });
@@ -682,13 +687,21 @@ export class Agent {
         }
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
-          : verification.failed || (lastToolFailed && !webAnswerVerified) ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
+          : verification.failed || (lastToolFailed && !webAnswerVerified) || unfinishedPlan ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
         const failureReason: AgentFailureReason | undefined = outcome !== "failed" ? undefined
           : webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0) ? "web_evidence"
           : verification.failed ? "verification_failed"
-          : "tool_failed";
+          : lastToolFailed && !webAnswerVerified ? "tool_failed"
+          : "plan_incomplete";
         this.lastRunOutcome = outcome;
         this.lastRunFailureReason = failureReason;
+        const checks = verification.evidenceChecks();
+        if (outcome === "completed" && verifiedAfterChange && verificationStamp && checks.length) {
+          this.verificationEvidence = {
+            version: 1, cwd: await fs.realpath(this.config.cwd), observedAt: new Date().toISOString(),
+            workspaceStamp: verificationStamp, explicitPaths: [...verificationPaths], checks,
+          };
+        }
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({
@@ -1029,6 +1042,16 @@ export class Agent {
       pendingSteering: this.pendingSteering.length,
       diagnostics: this.taskDiagnostics?.snapshot(),
     };
+  }
+
+  /** Never rebuild this receipt from model prose or restored session history. */
+  async getVerificationEvidence(): Promise<VerificationEvidence | undefined> {
+    const evidence = this.verificationEvidence;
+    if (this.activeController || this.lastRunOutcome !== "completed" || !evidence) return undefined;
+    try {
+      if (evidence.workspaceStamp !== await captureVerificationStamp(evidence.cwd, evidence.explicitPaths, this.accessMode)) return undefined;
+      return structuredClone(evidence);
+    } catch { return undefined; }
   }
 
   async markWaitingForUser(question: string): Promise<void> {

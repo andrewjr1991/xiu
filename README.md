@@ -1,5 +1,7 @@
 <div align="center">
 
+> Development candidate: **0.20.3-preview.1**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
+
 # Xiu
 
 0.20.2 desktop preview: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected.

@@ -29,7 +29,7 @@ import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
 import { createMcpManager } from "./runtime/mcp-service.js";
 import { permissionFingerprint } from "./extension-permissions.js";
-import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
+import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, requireCompletedSubagent, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { persistentLiveOutput, readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
@@ -864,13 +864,14 @@ async function main(): Promise<void> {
             : task.role === "reviewer"
               ? "Review the inherited implementation Worktree critically. Find correctness, safety, regression, and test gaps. Do not modify files. End with exactly VERDICT: PASS only when no blocking issue remains; otherwise end with VERDICT: FAIL."
               : task.role === "tester"
-                ? "Test the inherited implementation Worktree using only the tools available under your safety mode. Report exact commands, results, and limitations. End with exactly VERDICT: PASS only when required verification passed; otherwise end with VERDICT: FAIL."
+                ? "Inspect the inherited implementation Worktree using only available read-only tools. Use verify_output with meaningful deterministic expectations for every changed text artifact. This is bounded artifact validation, not executed project tests; command execution is unavailable in shared_readonly mode. If these checks cannot verify the requested change, report that limitation and VERDICT: FAIL. End with exactly VERDICT: PASS only after concrete checks passed. Prose-only PASS cannot authorize integration."
                 : "Implement the scoped change only inside your isolated Worktree. Run relevant verification and summarize every changed file.";
           const result = await childAgent.run(`You are the ${task.role} specialist for a parent Xiu agent.\nGoal: ${task.title}\n\n${task.instructions}\n\nRole requirements: ${roleGuidance}${dependencyContext}`);
           const childStatus = childAgent.status();
-          if (childStatus.outcome === "unverified") throw new Error(`Agent ${task.id} changed files but no verification passed.`);
+          requireCompletedSubagent(childStatus);
           return {
             result,
+            verification: await childAgent.getVerificationEvidence(),
             stats: {
               modelCalls: childStatus.stats.modelCalls,
               toolCalls: childStatus.stats.toolCalls,
@@ -2074,6 +2075,8 @@ async function main(): Promise<void> {
           const reason = agent.status().failureReason;
           const message = reason === "verification_failed"
             ? localize(language, "仍有失败或已过期的必要验证，目标尚未完成。", "A required verification is still failed or stale, so the goal is incomplete.")
+            : reason === "plan_incomplete"
+              ? localize(language, "任务计划仍有未完成或受阻步骤，目标尚未完成。", "The task plan still has unfinished or blocked steps, so the goal is incomplete.")
             : reason === "web_evidence"
               ? localize(language, "联网证据不足或获取失败，目标尚未完成。", "Required web evidence was unavailable or insufficient, so the goal is incomplete.")
               : reason === "model_incomplete"

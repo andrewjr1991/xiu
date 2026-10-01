@@ -17,7 +17,7 @@ import type { ApprovalRequest, ModelProvider } from "../types.js";
 import { AgentRuntimeAdapter } from "./agent-adapter.js";
 import { XiuRuntime } from "./xiu-runtime.js";
 import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
-import { MultiAgentCoordinator, createMultiAgentTools, selectSubagentTools } from "../multi-agent.js";
+import { MultiAgentCoordinator, createMultiAgentTools, requireCompletedSubagent, selectSubagentTools } from "../multi-agent.js";
 import { configureBackgroundRuntime, configureBackgroundWorkspace, listBackgroundProcesses } from "../background.js";
 import { resolveNodeRuntime } from "../node-runtime.js";
 
@@ -157,11 +157,13 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     context.signal.addEventListener("abort", cancel, { once: true });
     try {
       if (context.signal.aborted) throw new Error("Subagent cancelled before execution.");
-      const guidance = task.role === "implementer" ? "Modify only your isolated Worktree and verify changes." : "Do not modify files. Investigate the inherited workspace with available read-only tools. Reviewers/testers must end with VERDICT: PASS only with concrete passing evidence, otherwise VERDICT: FAIL.";
+      const guidance = task.role === "implementer" ? "Modify only your isolated Worktree and verify changes."
+        : task.role === "tester" ? "Do not modify files or execute commands. Use verify_output with meaningful deterministic expectations for every changed text artifact in the inherited Worktree. This is bounded artifact validation, not executed project tests. If it cannot verify the requested change, report the limitation and VERDICT: FAIL. Only end with VERDICT: PASS after concrete checks passed; prose-only PASS cannot authorize integration."
+        : "Do not modify files. Investigate the inherited workspace with available read-only tools. Reviewers must end with VERDICT: PASS only with concrete passing evidence, otherwise VERDICT: FAIL.";
       const result = await child.run(`${task.title}\n${task.instructions}\n${guidance}\nReturn a concise result summary without raw diffs, credentials, or private reasoning.\nDependency results:\n${context.dependencyResults.map((item) => `[${item.id}] ${redactSecrets(item.result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000)}`).join("\n")}`);
       const status = child.status();
-      if (status.outcome !== "completed") throw new Error(`Subagent outcome: ${status.outcome}`);
-      return { result: redactSecrets(result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000), stats: status.stats };
+      requireCompletedSubagent(status);
+      return { result: redactSecrets(result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000), stats: status.stats, verification: await child.getVerificationEvidence() };
     } finally { context.signal.removeEventListener("abort", cancel); }
   }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
   await coordinator.initialize();

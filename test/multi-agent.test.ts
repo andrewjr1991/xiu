@@ -5,11 +5,26 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { collectIntegrationEvidence, createMultiAgentTools, MultiAgentCoordinator, selectSubagentTools, validateTaskGraph, type SubagentExecutor, type SubagentRun } from "../src/multi-agent.js";
+import { collectIntegrationEvidence, createMultiAgentTools, MultiAgentCoordinator, requireCompletedSubagent, selectSubagentTools, validateTaskGraph, type SubagentExecutor, type SubagentRun } from "../src/multi-agent.js";
 import type { AgentTool } from "../src/types.js";
+import { Agent } from "../src/agent.js";
+import { builtinTools } from "../src/tools.js";
+import { createWorkspaceAgentHost } from "../src/runtime/workspace-agent-host.js";
 
 const stats = { modelCalls: 1, toolCalls: 0, inputTokens: 10, outputTokens: 5, activeMs: 10 };
 const execFileAsync = promisify(execFile);
+
+test("a tester's prose-only PASS is never executed verification evidence", async () => {
+  const createdAt = new Date().toISOString();
+  const run = {
+    id: "unverified", goal: "unverified", status: "completed", createdAt, updatedAt: createdAt, concurrency: 1,
+    tasks: [
+      { id: "impl", title: "impl", instructions: "impl", role: "implementer", mode: "worktree", dependencies: [], status: "completed", createdAt },
+      { id: "test", title: "test", instructions: "test", role: "tester", mode: "shared_readonly", dependencies: ["impl"], status: "completed", createdAt, result: "No tools were run.\nVERDICT: PASS" },
+    ],
+  } as SubagentRun;
+  assert.deepEqual((await collectIntegrationEvidence(run, "impl")).testers, []);
+});
 
 async function gitRepository(): Promise<string> {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-integration-"));
@@ -99,30 +114,41 @@ test("dependencies start only after their prerequisites complete", async () => {
   assert.ok(events.indexOf("end:first") < events.indexOf("start:second"));
 });
 
-test("integration evidence requires passing reviewer and tester descendants", () => {
+test("legacy text verdicts lack patch-bound inspection receipts", async () => {
   const createdAt = new Date().toISOString();
   const run = {
     id: "evidence", goal: "evidence", status: "completed", createdAt, updatedAt: createdAt, concurrency: 3,
     tasks: [
       { id: "impl", title: "impl", instructions: "impl", role: "implementer", mode: "worktree", dependencies: [], status: "completed", createdAt },
-      { id: "review", title: "review", instructions: "review", role: "reviewer", mode: "shared_readonly", dependencies: ["impl"], status: "completed", createdAt, result: "No blockers.\nVERDICT: PASS" },
-      { id: "test", title: "test", instructions: "test", role: "tester", mode: "shared_readonly", dependencies: ["review"], status: "completed", createdAt, result: "Tests failed.\nVERDICT: FAIL" },
+      { id: "review", title: "review", instructions: "review", role: "reviewer", mode: "shared_readonly", dependencies: ["impl"], status: "completed", createdAt, result: "VERDICT: PASS" },
+      { id: "test", title: "test", instructions: "test", role: "tester", mode: "shared_readonly", dependencies: ["review"], status: "completed", createdAt, result: "VERDICT: PASS" },
     ],
   } as SubagentRun;
-  const blocked = collectIntegrationEvidence(run, "impl");
-  assert.deepEqual(blocked.reviewers, ["review"]);
+  const blocked = await collectIntegrationEvidence(run, "impl");
+  assert.deepEqual(blocked.reviewers, []);
   assert.deepEqual(blocked.testers, []);
-  assert.match(blocked.blockers.join(" "), /tester/);
-  run.tasks[1]!.mode = "worktree";
-  assert.deepEqual(collectIntegrationEvidence(run, "impl").reviewers, []);
-  run.tasks[1]!.mode = "shared_readonly";
-  run.tasks[2]!.result = "VERDICT: PASS\nVERDICT: FAIL";
-  assert.deepEqual(collectIntegrationEvidence(run, "impl").testers, []);
-  run.tasks[2]!.result = "All required tests passed.\nVERDICT: PASS";
-  const ready = collectIntegrationEvidence(run, "impl");
-  assert.deepEqual(ready.testers, ["test"]);
-  assert.deepEqual(ready.blockers, []);
+  assert.equal(blocked.blockers.length, 2);
 });
+
+async function verifyArtifacts(cwd: string, inputs: Record<string, unknown>[]) {
+  let calls = 0;
+  const agent = new Agent({ provider: "openai", providerId: "fixture", model: "fixture", cwd, maxTurns: 4, autoApprove: false }, {
+    async complete(_system, _messages, tools) {
+      assert.ok(!tools.some((tool) => ["write_file", "run_process", "run_command", "validate_project"].includes(tool.name)));
+      return ++calls === 1
+        ? { text: "Checking artifacts", toolCalls: inputs.map((input, index) => ({ id: `check-${index}`, name: "verify_output", input })), raw: {} }
+        : { text: "Bounded artifact checks complete.\nVERDICT: PASS", toolCalls: [], raw: {} };
+    },
+  }, selectSubagentTools(builtinTools, "shared_readonly"), async () => { throw new Error("Read-only checks must not request execution approval"); });
+  const result = await agent.run("Verify explicitly scoped artifacts without modifying them");
+  return { result, stats, verification: await agent.getVerificationEvidence(), outcome: agent.status().outcome };
+}
+
+const integrationTasks = [
+  { id: "impl", title: "implement", instructions: "implement", role: "implementer" as const },
+  { id: "review", title: "review", instructions: "review", role: "reviewer" as const, dependencies: ["impl"] },
+  { id: "test", title: "test", instructions: "test", role: "tester" as const, dependencies: ["impl"] },
+];
 
 test("reviewer and tester inspect the implementation Worktree before gated integration", async () => {
   const cwd = await gitRepository();
@@ -135,6 +161,7 @@ test("reviewer and tester inspect the implementation Worktree before gated integ
     }
     assert.equal(context.cwd, implementationCwd);
     assert.equal(await fs.readFile(path.join(context.cwd, "feature.txt"), "utf8"), "implemented\n");
+    if (task.role === "tester") return verifyArtifacts(context.cwd, [{ path: "feature.txt", required_substrings: ["implemented"], forbidden_substrings: ["unfinished"] }]);
     return { result: `${task.role} evidence\nVERDICT: PASS`, stats };
   });
   const run = await coordinator.start("safe merge", [
@@ -189,4 +216,199 @@ test("persisted running agents recover as interrupted and can retry", async () =
   const completed = await coordinator.wait("saved", 2_000);
   assert.equal(completed.status, "completed");
   assert.equal(completed.tasks[0]?.result, "retried");
+});
+
+
+test("integration rejects changed patches, stale receipts, and unrelated artifact checks", async () => {
+  const cwd = await gitRepository();
+  let implementationCwd = "";
+  let target = "base.txt";
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") {
+      implementationCwd = context.cwd;
+      await fs.writeFile(path.join(context.cwd, "feature.txt"), "implemented\n");
+      return { result: "implemented", stats };
+    }
+    if (task.role === "tester") return verifyArtifacts(context.cwd, [{ path: target, required_substrings: [target === "base.txt" ? "base" : "implemented"] }]);
+    return { result: "VERDICT: PASS", stats };
+  });
+  const run = await coordinator.start("fresh evidence", integrationTasks);
+  await coordinator.wait(run.id, 10_000);
+  assert.equal((await coordinator.analyzeIntegration(run.id, "impl")).canIntegrate, false, "unrelated artifact must not verify patch");
+  target = "feature.txt";
+  await coordinator.retry(run.id, "test");
+  await coordinator.wait(run.id, 10_000);
+  assert.equal((await coordinator.analyzeIntegration(run.id, "impl")).canIntegrate, true);
+  await fs.writeFile(path.join(implementationCwd, "feature.txt"), "changed after check\n");
+  const changed = await coordinator.analyzeIntegration(run.id, "impl");
+  assert.equal(changed.canIntegrate, false);
+  assert.deepEqual(changed.evidence.reviewers, []);
+  assert.deepEqual(changed.evidence.testers, []);
+  await assert.rejects(coordinator.integrate(run.id, "impl"), /not applied/);
+  await assert.rejects(fs.access(path.join(cwd, "feature.txt")));
+});
+
+test("deterministic absence checks permit deletion and fail if the file reappears", async () => {
+  const cwd = await gitRepository();
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") await fs.unlink(path.join(context.cwd, "base.txt"));
+    if (task.role === "tester") return verifyArtifacts(context.cwd, [{ path: "base.txt", exists: false }]);
+    return { result: "VERDICT: PASS", stats };
+  });
+  const run = await coordinator.start("remove obsolete artifact", integrationTasks);
+  await coordinator.wait(run.id, 10_000);
+  assert.equal((await coordinator.analyzeIntegration(run.id, "impl")).canIntegrate, true);
+  await coordinator.integrate(run.id, "impl");
+  await assert.rejects(fs.access(path.join(cwd, "base.txt")));
+  const worktree = coordinator.get(run.id).tasks[0]!.worktree!.path;
+  const validation = await verifyArtifacts(worktree, [{ path: "base.txt", exists: false }]);
+  assert.ok(validation.verification);
+  await fs.writeFile(path.join(worktree, "base.txt"), "reappeared");
+  const reappeared = await verifyArtifacts(worktree, [{ path: "base.txt", exists: false }]);
+  assert.equal(reappeared.verification, undefined);
+  assert.equal(reappeared.outcome, "failed");
+});
+
+test("restored inspection JSON must be re-established by an explicit readonly retry", async () => {
+  const cwd = await gitRepository();
+  const executor: SubagentExecutor = async (task, context) => {
+    if (task.role === "implementer") await fs.writeFile(path.join(context.cwd, "feature.txt"), "implemented");
+    if (task.role === "tester") return verifyArtifacts(context.cwd, [{ path: "feature.txt", required_substrings: ["implemented"] }]);
+    return { result: "VERDICT: PASS", stats };
+  };
+  const original = new MultiAgentCoordinator(cwd, executor);
+  const run = await original.start("fresh session evidence", integrationTasks);
+  await original.wait(run.id, 10_000);
+  assert.equal((await original.analyzeIntegration(run.id, "impl")).canIntegrate, true);
+  const restored = new MultiAgentCoordinator(cwd, executor);
+  await restored.initialize();
+  assert.equal((await restored.analyzeIntegration(run.id, "impl")).canIntegrate, false);
+  for (const id of ["review", "test"]) { await restored.retry(run.id, id); await restored.wait(run.id, 10_000); }
+  assert.equal((await restored.analyzeIntegration(run.id, "impl")).canIntegrate, true);
+});
+
+
+test("UTF-8, whitespace and newline filenames retain patch evidence identity", async () => {
+  const cwd = await gitRepository();
+  const names = ["中文.txt", " leading and spaced.txt", ...(process.platform === "win32" ? [] : ["trailing.txt ", "line\nbreak.txt"])];
+  for (const name of names) await fs.writeFile(path.join(cwd, name), "before");
+  await execFileAsync("git", ["add", "--", ...names], { cwd });
+  await execFileAsync("git", ["commit", "-m", "path fixtures"], { cwd });
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") for (const name of [...names, "新增.txt"]) await fs.writeFile(path.join(context.cwd, name), "after");
+    if (task.role === "tester") return verifyArtifacts(context.cwd, [...names, "新增.txt"].map((name) => ({ path: name, required_substrings: ["after"] })));
+    return { result: "VERDICT: PASS", stats };
+  });
+  const run = await coordinator.start("unicode artifact paths", integrationTasks);
+  await coordinator.wait(run.id, 10_000);
+  const plan = await coordinator.analyzeIntegration(run.id, "impl");
+  assert.deepEqual([...plan.analysis.changedFiles].sort(), [...names, "新增.txt"].sort());
+  assert.equal(plan.canIntegrate, true, plan.blockers.join("\n"));
+});
+
+test("both hosts reject every non-completed child outcome and block its dependents", async () => {
+  for (const outcome of ["failed", "unverified", "paused", "cancelled", "running", "idle"]) assert.throws(() => requireCompletedSubagent({ outcome, failureReason: "plan_incomplete" }), /Subagent outcome/);
+  assert.doesNotThrow(() => requireCompletedSubagent({ outcome: "completed" }));
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-child-outcome-"));
+  let descendants = 0;
+  const coordinator = new MultiAgentCoordinator(cwd, async (task) => {
+    if (task.id === "parent") requireCompletedSubagent({ outcome: "failed", failureReason: "plan_incomplete" });
+    descendants++;
+    return { result: "done", stats };
+  });
+  const run = await coordinator.start("incomplete plan", [
+    { id: "parent", title: "Parent", instructions: "inspect", role: "explorer" },
+    { id: "dependent", title: "Dependent", instructions: "inspect", role: "reviewer", dependencies: ["parent"] },
+  ]);
+  const done = await coordinator.wait(run.id, 2000);
+  assert.deepEqual(done.tasks.map((task) => task.status), ["failed", "blocked"]);
+  assert.equal(descendants, 0);
+});
+
+test("fresh patch identity cannot hide a stale ignored-artifact receipt", async () => {
+  const cwd = await gitRepository();
+  await fs.appendFile(path.join(cwd, ".gitignore"), "ignored.txt\n");
+  await execFileAsync("git", ["add", ".gitignore"], { cwd });
+  await execFileAsync("git", ["commit", "-m", "ignored artifact fixture"], { cwd });
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") {
+      await fs.writeFile(path.join(context.cwd, "feature.txt"), "implemented");
+      await fs.writeFile(path.join(context.cwd, "ignored.txt"), "initial");
+    }
+    if (task.role === "tester") {
+      const checked = await verifyArtifacts(context.cwd, [{ path: "feature.txt", required_substrings: ["implemented"] }, { path: "ignored.txt", required_substrings: ["initial"] }]);
+      assert.ok(checked.verification);
+      await fs.writeFile(path.join(context.cwd, "ignored.txt"), "changed after evidence");
+      return checked;
+    }
+    return { result: "VERDICT: PASS", stats };
+  });
+  const run = await coordinator.start("fresh ignored evidence", integrationTasks);
+  await coordinator.wait(run.id, 10_000);
+  const plan = await coordinator.analyzeIntegration(run.id, "impl");
+  assert.deepEqual(plan.evidence.reviewers, ["review"]);
+  assert.deepEqual(plan.evidence.testers, []);
+  assert.equal(plan.canIntegrate, false);
+});
+
+
+test("desktop child executor passes real verification receipts without expanding tester tools", async (t) => {
+  const cwd = await gitRepository();
+  const host = await createWorkspaceAgentHost(cwd, {
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
+    provider: { async complete(_system, messages, tools) {
+      const context = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
+      const completedTools = messages.filter((message) => message.role === "tool").length;
+      if (context.includes("Fixture implement")) {
+        if (completedTools === 0) return { text: "Writing", toolCalls: [{ id: "write", name: "write_file", input: { path: "feature.txt", content: "implemented" } }], raw: {} };
+        if (completedTools === 1) return { text: "Verifying", toolCalls: [{ id: "check", name: "verify_output", input: { path: "feature.txt", required_substrings: ["implemented"] } }], raw: {} };
+      } else {
+        assert.ok(!tools.some((tool) => ["write_file", "run_process", "run_command", "validate_project"].includes(tool.name)));
+        if (context.includes("Fixture test") && completedTools === 0) return { text: "Checking artifact", toolCalls: [{ id: "check", name: "verify_output", input: { path: "feature.txt", required_substrings: ["implemented"] } }], raw: {} };
+      }
+      return { text: "VERDICT: PASS", toolCalls: [], raw: {} };
+    } },
+  });
+  t.after(() => host.close());
+  host.setApprovalMode!("full");
+  const run = await host.coordinator!.start("desktop evidence", integrationTasks.map((task) => ({ ...task, title: `Fixture ${task.id === "impl" ? "implement" : task.id}`, maxTurns: 5 })));
+  const done = await host.coordinator!.wait(run.id, 10_000);
+  assert.equal(done.status, "completed", JSON.stringify(done.tasks.map((task) => ({ id: task.id, error: task.error }))));
+  const plan = await host.coordinator!.analyzeIntegration(run.id, "impl");
+  assert.equal(plan.canIntegrate, true, plan.blockers.join("\n"));
+  assert.ok(done.tasks.find((task) => task.id === "test")?.inspection?.verification);
+  await assert.rejects(fs.access(path.join(cwd, "feature.txt")), "a passing analysis must not integrate automatically");
+  assert.equal(createMultiAgentTools(host.coordinator!).find((tool) => tool.name === "integrate_agent")!.risk, "dangerous");
+});
+
+test("desktop child with an unfinished plan fails and blocks dependent specialists", async (t) => {
+  const cwd = await gitRepository();
+  const host = await createWorkspaceAgentHost(cwd, {
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
+    provider: { async complete(_system, messages) {
+      if (!messages.some((message) => message.role === "tool")) return { text: "Plan", toolCalls: [{ id: "plan", name: "update_task_plan", input: { goal: "unfinished", steps: [{ id: "one", title: "Unfinished", status: "pending" }] } }], raw: {} };
+      return { text: "VERDICT: PASS", toolCalls: [], raw: {} };
+    } },
+  });
+  t.after(() => host.close());
+  host.setApprovalMode!("full");
+  const run = await host.coordinator!.start("incomplete child", integrationTasks);
+  const done = await host.coordinator!.wait(run.id, 10_000);
+  assert.deepEqual(done.tasks.map((task) => task.status), ["failed", "blocked", "blocked"]);
+  assert.match(done.tasks[0]!.error!, /plan_incomplete/);
+});
+
+test("artifact evidence limit is explicit for patches over 64 files", async () => {
+  const cwd = await gitRepository();
+  const coordinator = new MultiAgentCoordinator(cwd, async (task, context) => {
+    if (task.role === "implementer") for (let index = 0; index < 65; index++) await fs.writeFile(path.join(context.cwd, `artifact-${index}.txt`), "content");
+    return { result: "VERDICT: PASS", stats };
+  });
+  const run = await coordinator.start("bounded scope", integrationTasks);
+  await coordinator.wait(run.id, 10_000);
+  const plan = await coordinator.analyzeIntegration(run.id, "impl");
+  assert.equal(plan.canIntegrate, false);
+  assert.match(plan.blockers.join(" "), /at most 64 changed files/);
 });

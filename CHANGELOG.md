@@ -2,6 +2,16 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.1 — Unreleased candidate
+
+Implementation and integrated verification are in progress. This entry describes the phase scope, not a passed release gate or an npm publication. Per-check status and the eventual exact commit/CI evidence are tracked in `docs/development-progress.md`.
+
+- Reject completion with an unfinished executable plan using `failed / plan_incomplete`; preserve planning-only completion in read-only Plan mode.
+- Refresh the shared project index at task boundaries and bound external-change rechecks to a five-second interval, including ctime changes while reusing unchanged ASTs.
+- Require structured program-generated artifact verification for multi-agent integration; plain-text PASS is insufficient. The current read-only Tester checks `verify_output` assertions over the patch, not an executable test-suite result.
+- Add Python migration and Electron browser-policy CI gates, with exact-commit CLI tarball and unsigned Windows x64 NSIS candidates, SHA-256 manifests, and per-job verification records. Failed or missing checks remain visible; later pushes do not cancel earlier runs.
+- Keep workspace trust, explicit ephemeral Full Access consent, Plan read-only enforcement, independent integration confirmation, and unknown-side-effect recovery guards unchanged.
+
 ## 0.20.2 — 2026-10-02
 
 - Replace fixed inspector buttons with selectively opened, closable tool tabs and split/full view. Share keyboard-accessible dropdown menus, align empty-state typography and show compact expandable process/tool/source/evidence rows. Add an isolated, human-operated ephemeral HTTPS web tab (no login submission/downloads/task bridge), plus real Electron offline browser-policy/lifecycle coverage.

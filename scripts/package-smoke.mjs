@@ -18,16 +18,16 @@ function runNpm(args, options = {}) {
 }
 
 try {
-  const packOutput = runNpm(["pack", "--json", "--pack-destination", temporaryRoot], {
-    cwd: workspace,
-    encoding: "utf8",
-  });
-  const packed = JSON.parse(packOutput);
-  if (!Array.isArray(packed) || packed.length !== 1 || typeof packed[0]?.filename !== "string") {
-    throw new Error("npm pack did not return exactly one package artifact");
+  const sourceManifest = JSON.parse(readFileSync(path.join(workspace, "package.json"), "utf8"));
+  let archive = process.env.XIU_PACKAGE_ARCHIVE ? path.resolve(process.env.XIU_PACKAGE_ARCHIVE) : undefined;
+  if (!archive) {
+    const packed = JSON.parse(runNpm(["pack", "--json", "--pack-destination", temporaryRoot], { cwd: workspace, encoding: "utf8" }));
+    if (!Array.isArray(packed) || packed.length !== 1 || typeof packed[0]?.filename !== "string") {
+      throw new Error("npm pack did not return exactly one package artifact");
+    }
+    archive = path.join(temporaryRoot, packed[0].filename);
   }
 
-  const archive = path.join(temporaryRoot, packed[0].filename);
   const installRoot = path.join(temporaryRoot, "install");
   mkdirSync(installRoot);
   runNpm(["init", "-y"], { cwd: installRoot, stdio: "ignore" });
@@ -47,8 +47,8 @@ try {
 
   const manifestPath = path.join(installRoot, "node_modules", "@xiu-ai", "cli", "package.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (manifest.name !== "@xiu-ai/cli" || manifest.version !== packed[0].version) {
-    throw new Error("installed package identity does not match npm pack output");
+  if (manifest.name !== "@xiu-ai/cli" || manifest.version !== sourceManifest.version) {
+    throw new Error("installed package identity does not match the source version");
   }
 
   const cliPath = path.join(installRoot, "node_modules", "@xiu-ai", "cli", "dist", "cli.js");

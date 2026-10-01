@@ -23,6 +23,7 @@ const MAX_FILES = 8_000;
 const MAX_INDEXED_FILE_BYTES = 512 * 1024;
 const MAX_TERMS_PER_FILE = 300;
 const MAX_TERM_CHARACTERS = 160;
+const EXTERNAL_REFRESH_INTERVAL_MS = 5_000;
 const IGNORES = [
   "**/.git/**", "**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**", "**/coverage/**", "**/.xiu/**", "**/vendor/**",
   "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*credentials*", "**/*secrets*",
@@ -37,6 +38,7 @@ interface IndexedFile {
   path: string;
   size: number;
   modifiedMs: number;
+  changedMs?: number;
   terms: string[];
   language: string;
   analyzed: boolean;
@@ -85,6 +87,7 @@ interface FileMetadata {
   path: string;
   size: number;
   modifiedMs: number;
+  changedMs: number;
 }
 
 function tokenize(value: string, maximum = MAX_TERMS_PER_FILE): string[] {
@@ -175,6 +178,7 @@ function validateStoredIndex(cwd: string, value: unknown): StoredIndex | undefin
     const cachedPath = safeCachedPath(cwd, raw.path);
     if (!cachedPath || seen.has(cachedPath) || typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size < 0) return undefined;
     if (typeof raw.modifiedMs !== "number" || !Number.isFinite(raw.modifiedMs) || raw.modifiedMs < 0) return undefined;
+    if (raw.changedMs !== undefined && (typeof raw.changedMs !== "number" || !Number.isFinite(raw.changedMs) || raw.changedMs < 0)) return undefined;
     if (!Array.isArray(raw.terms) || raw.terms.length > MAX_TERMS_PER_FILE || !raw.terms.every((term) => typeof term === "string" && term.length <= MAX_TERM_CHARACTERS)) return undefined;
     if (!boundedString(raw.language, 100) || typeof raw.analyzed !== "boolean") return undefined;
     if (!Array.isArray(raw.symbols) || raw.symbols.length > MAX_SYMBOLS_PER_FILE || !Array.isArray(raw.imports) || raw.imports.length > MAX_IMPORTS_PER_FILE || !Array.isArray(raw.references) || raw.references.length > MAX_REFERENCES_PER_FILE) return undefined;
@@ -183,7 +187,7 @@ function validateStoredIndex(cwd: string, value: unknown): StoredIndex | undefin
     const references = raw.references.map(validateReference);
     if (symbols.some((item) => !item) || imports.some((item) => !item) || references.some((item) => !item)) return undefined;
     seen.add(cachedPath);
-    files.push({ path: cachedPath, size: raw.size, modifiedMs: raw.modifiedMs, terms: [...raw.terms], language: raw.language, analyzed: raw.analyzed, symbols: symbols as IndexedSymbol[], imports: imports as IndexedImport[], references: references as IndexedReference[] });
+    files.push({ path: cachedPath, size: raw.size, modifiedMs: raw.modifiedMs, changedMs: raw.changedMs as number | undefined, terms: [...raw.terms], language: raw.language, analyzed: raw.analyzed, symbols: symbols as IndexedSymbol[], imports: imports as IndexedImport[], references: references as IndexedReference[] });
   }
   return {
     version: INDEX_VERSION,
@@ -267,6 +271,8 @@ async function detectProfile(cwd: string, files: string[]): Promise<ProjectProfi
 export class ProjectIndex {
   private data?: StoredIndex;
   private dirty = false;
+  private invalidationRevision = 0;
+  private lastCheckedAt?: number;
   private refreshPromise?: Promise<void>;
   private refreshStatus: ProjectIndexStatus = {
     files: 0,
@@ -287,15 +293,29 @@ export class ProjectIndex {
     dependencies: 0,
   };
 
-  constructor(private readonly cwd: string) {}
+  constructor(private readonly cwd: string, private readonly now: () => number = Date.now) {}
 
   async initialize(force = false): Promise<void> {
-    if (!force && this.data && !this.dirty) return;
-    if (this.refreshPromise) return await this.refreshPromise;
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      // Re-enter through the same gate so concurrent waiters also coalesce if
+      // an invalidation arrived during the refresh they were waiting for.
+      return await this.initialize();
+    }
+    const now = this.now();
+    // Index tools share a short freshness window. Task boundaries and known
+    // workspace writes bypass it, but ordinary reads do not repeatedly scan.
+    if (!force && this.data && !this.dirty && this.lastCheckedAt !== undefined
+      && now >= this.lastCheckedAt && now - this.lastCheckedAt < EXTERNAL_REFRESH_INTERVAL_MS) return;
     const refresh = this.refresh(force);
     this.refreshPromise = refresh;
     try { await refresh; }
     finally { if (this.refreshPromise === refresh) this.refreshPromise = undefined; }
+  }
+
+  async refreshForTask(): Promise<void> {
+    this.invalidate();
+    await this.initialize();
   }
 
   private async loadCache(indexFile: string): Promise<StoredIndex | undefined> {
@@ -313,7 +333,7 @@ export class ProjectIndex {
         try {
           const stat = await fs.lstat(path.join(this.cwd, relative));
           if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
-          return { path: relative, size: stat.size, modifiedMs: stat.mtimeMs };
+          return { path: relative, size: stat.size, modifiedMs: stat.mtimeMs, changedMs: stat.ctimeMs };
         } catch { return undefined; }
       }));
       metadata.push(...batch.filter((item): item is FileMetadata => Boolean(item)));
@@ -352,6 +372,7 @@ export class ProjectIndex {
 
   private async refresh(force: boolean): Promise<void> {
     const startedAt = Date.now();
+    const revision = this.invalidationRevision;
     const indexFile = path.join(this.cwd, ".xiu", "index.json");
     const previousWasInMemory = Boolean(this.data);
     const previous = force ? undefined : this.data ?? await this.loadCache(indexFile);
@@ -364,7 +385,7 @@ export class ProjectIndex {
     for (let offset = 0; offset < discovery.metadata.length; offset += 64) {
       const batch = await Promise.all(discovery.metadata.slice(offset, offset + 64).map(async (metadata): Promise<IndexedFile> => {
         const cached = previousByPath.get(metadata.path);
-        if (cached && cached.size === metadata.size && cached.modifiedMs === metadata.modifiedMs) {
+        if (cached && cached.size === metadata.size && cached.modifiedMs === metadata.modifiedMs && cached.changedMs === metadata.changedMs) {
           reused++;
           return cached;
         }
@@ -389,12 +410,15 @@ export class ProjectIndex {
     };
     const cachePersisted = mode === "cache" ? (previousWasInMemory ? this.refreshStatus.cachePersisted : true) : await this.persist(indexFile, data);
     this.data = data;
-    this.dirty = false;
+    // An invalidation during discovery must survive this refresh, otherwise a
+    // concurrent edit could be hidden until the next external freshness check.
+    this.dirty = revision !== this.invalidationRevision;
+    this.lastCheckedAt = this.now();
     this.refreshStatus = {
       files: files.length,
       generatedAt: data.generatedAt,
       truncated: data.truncated,
-      dirty: false,
+      dirty: this.dirty,
       mode,
       durationMs: Date.now() - startedAt,
       discovered: discovery.discovered,
@@ -411,6 +435,7 @@ export class ProjectIndex {
   }
 
   invalidate(): void {
+    this.invalidationRevision++;
     this.dirty = true;
     this.refreshStatus = { ...this.refreshStatus, dirty: true };
   }
@@ -574,7 +599,7 @@ export class ProjectIndex {
   }
 
   async search(query: string, limit = 8): Promise<string> {
-    if (!this.data || this.dirty) await this.initialize();
+    await this.initialize();
     const terms = tokenize(query, 64).filter((term) => term.length >= 2);
     if (!terms.length) return "No relevant files found.";
     const scored = this.data!.files.map((file) => {

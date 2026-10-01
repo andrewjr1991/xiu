@@ -378,11 +378,12 @@ export const builtinTools: AgentTool[] = [
   {
     name: "verify_output",
     risk: "read",
-    description: "Deterministically verify a generated UTF-8 text artifact. Declare required and forbidden substrings and optional byte-size bounds. Any unmet condition returns Verification failed, so use this for HTML, JSON, Markdown, CSV, and other deliverables without a project test suite.",
+    description: "Deterministically verify a generated UTF-8 text artifact with substring and byte-size expectations, or explicitly assert a removed artifact is absent with exists:false. Any unmet condition returns Verification failed. This is bounded artifact validation, not a project test suite.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
+        exists: { type: "boolean", description: "Set false to verify absence; cannot combine false with content or size expectations." },
         required_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
         forbidden_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
         min_bytes: { type: "integer", minimum: 0 },
@@ -397,6 +398,11 @@ export const builtinTools: AgentTool[] = [
       const forbidden = optionalStringArray(input, "forbidden_substrings");
       const hasMinimum = typeof input.min_bytes === "number";
       const hasMaximum = typeof input.max_bytes === "number";
+      if (input.exists !== undefined && typeof input.exists !== "boolean") throw new Error("exists must be a boolean");
+      if (input.exists === false) {
+        if (required.length || forbidden.length || hasMinimum || hasMaximum) throw new Error("exists:false cannot be combined with content or size expectations");
+        return;
+      }
       if (!required.length && !forbidden.length && !hasMinimum && !hasMaximum) {
         throw new Error("verify_output requires at least one substring or byte-size expectation");
       }
@@ -408,8 +414,17 @@ export const builtinTools: AgentTool[] = [
     async execute(input, context) {
       const requested = stringArg(input, "path");
       const target = resolveToolPath(context, requested);
-      const content = await fs.readFile(target, "utf8");
-      const bytes = Buffer.byteLength(content, "utf8");
+      if (input.exists === false) {
+        try { await fs.lstat(target); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return `Verification passed: ${requested}\n- absent`;
+          throw error;
+        }
+        return `Verification failed: ${requested}\n- expected path to be absent`;
+      }
+      const data = await fs.readFile(target);
+      const content = new TextDecoder("utf-8", { fatal: true }).decode(data);
+      const bytes = data.byteLength;
       const required = optionalStringArray(input, "required_substrings");
       const forbidden = optionalStringArray(input, "forbidden_substrings");
       const missing = required.filter((value) => !content.includes(value));
