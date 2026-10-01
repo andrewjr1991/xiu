@@ -1,12 +1,21 @@
 # Xiu 开发阶段记录
 
+## 阶段一后续修正：0.20.3-preview.2
+
+- 状态：本地 736 项测试中 726 通过、10 项 Windows 专属跳过、0 失败；类型检查、构建、模拟评测、桌面编译/静态 smoke 与 CLI 精确包安装/Linux 平台 smoke 通过。等待精确提交的远端 UI 和 Windows 安装验收，尚未接受或发布 npm
+- 修复范围：UI smoke 在窗口尺寸变化后等待两次渲染帧，并复核最终宽高；避免在排队的 resize/scroll 事件发送前打开下拉菜单。保留断言、原超时和单次点击，不用重试掩盖失败
+- 新增四项确定性辅助测试；失败时记录有界布局/焦点/菜单诊断与截图
+- 上一提交：9334a0ff10cc58687bb7f55b5b62a43dc906fc47；其 CI 及候选文件见下文。新精确提交与摘要以本次 Actions manifest 为准
+- 本轮不改变生产 UI、权限或依赖，不把测试夹具修正称为已证明的用户界面故障修复；必须由 Windows/Linux/macOS 的 Electron 实际运行验证
+- 新安装包与 CLI 包将在本次推送的 Actions Artifacts 中保留，结果如实区分失败、跳过与通过
+
 ## 阶段一：0.20.3-preview.1
 
-- 状态：本地代码与包验证已通过；等待本次精确提交的远端 CI 和 Windows 安装验收，尚未整体接受候选
+- 状态：整体未接受。三平台 CLI 与 macOS 桌面通过，Windows/Linux UI smoke 失败；Windows 安装器构建与安装验收通过，保留未接受候选供复测
 - 开发基线：公开 npm 0.20.2 已核验；本候选未发布到 npm，不创建正式 Release 或 Store 发布
 - 工作分支：`codex/jingran-phase-1-reliability`
-- 精确提交：待完成验证并提交后填写，不预填提交号
-- 远端推送 / CI 运行：待推送后回读精确提交和六作业结果
+- 精确提交：[9334a0ff10cc58687bb7f55b5b62a43dc906fc47](https://github.com/andrewjr1991/xiu/commit/9334a0ff10cc58687bb7f55b5b62a43dc906fc47)
+- 远端推送 / CI：[36934949911](https://github.com/andrewjr1991/xiu/actions/runs/36934949911)，三平台 CLI 和 macOS 桌面通过；Windows/Linux 桌面 UI smoke 失败，整体未接受
 - 开发方式：云端工作区；不连接用户电脑，Windows 安装验收使用 CI 或用户自行测试
 
 ### 目标
@@ -47,8 +56,8 @@
 
 ### 完成后回填
 
-- 提交 / 远端 SHA：待填
-- 精确 CI 运行与六作业结果：待填
-- CLI / Windows 候选文件与 SHA-256：待填
+- 提交 / 远端 SHA：9334a0ff10cc58687bb7f55b5b62a43dc906fc47
+- 精确 CI：36934949911，4 作业通过、2 桌面 UI 失败，整体未接受
+- CLI / Windows 候选：本次 CI 的 Artifacts 已保留；每份 ZIP 内含文件 SHA256SUMS 与精确提交 manifest。Windows 安装验收通过但整体仍未接受
 - 本地检查结果：Linux x64 / Node 24.19.0，732 项中 722 通过、10 Windows 专属跳过、0 失败；Python 9/9、模拟评测 10/10、CLI/桌面类型检查、CLI 构建、桌面主进程/Renderer 编译、静态 smoke、精确 tarball 安装和 Linux Unicode/后台进程 smoke、dry-pack、文档与 diff 检查通过。图形界面、Windows 安装和实际 Provider 尚未在本地执行。
 - 下一阶段：桌面只读 Plan、中文输入法/重复提交，以及首次配置/迁移恢复；在第一阶段候选验收后继续，不把未验收事项写成已完成。

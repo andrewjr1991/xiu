@@ -184,6 +184,15 @@ jobs:
           $signature = Get-AuthenticodeSignature "apps/desktop/release/Xiu-$version-x64.exe"
           if ($signature.Status -ne 'NotSigned') { throw "Expected an unsigned NSIS candidate, got $($signature.Status)" }
           node scripts/ci-artifacts.mjs prepare desktop
+      - name: Preserve synthetic UI failure diagnostics
+        id: ui_diagnostics
+        if: ${{ always() && steps.ui.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xiu-ui-diagnostics-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
+          path: .desktop-build-temp/ui-smoke-failure.*
+          if-no-files-found: warn
+          retention-days: 30
       - name: Record desktop progress and checksums
         id: report
         if: ${{ always() && steps.checkout.outcome == 'success' }}

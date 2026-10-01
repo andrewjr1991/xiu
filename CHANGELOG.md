@@ -2,6 +2,12 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.2 — Unreleased candidate
+
+- Make desktop UI smoke wait through rendering frames after viewport changes, preserving every assertion and timeout. Add deterministic ordering/late-size regressions and bounded layout/menu failure diagnostics.
+- Preview.1 passed all three CLI jobs and macOS desktop, but Windows/Linux UI smoke failed. Its Windows installer checks passed; it remains an unaccepted candidate. Preview.2 requires a fresh exact-commit CI run and packages.
+- No production UI behavior, permission policy, or dependency versions changed in this follow-up.
+
 ## 0.20.3-preview.1 — Unreleased candidate
 
 Implementation and integrated verification are in progress. This entry describes the phase scope, not a passed release gate or an npm publication. Per-check status and the eventual exact commit/CI evidence are tracked in `docs/development-progress.md`.

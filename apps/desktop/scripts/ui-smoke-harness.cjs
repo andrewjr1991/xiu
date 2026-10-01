@@ -1,6 +1,7 @@
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+const { evaluate, waitFor, settleLayout, resizeViewport } = require("./ui-smoke-helpers.cjs");
 
 const smokeRoot = path.resolve(__dirname, "../../..", ".desktop-build-temp");
 fs.mkdirSync(smokeRoot, { recursive: true });
@@ -15,21 +16,12 @@ app.on("will-quit", () => {
   }
 });
 
-const pause = (ms = 35) => new Promise((resolve) => setTimeout(resolve, ms));
-const evaluate = (window, source) => window.webContents.executeJavaScript(source, true);
-const waitFor = async (window, source, label, timeout = 5000) => {
-  const started = Date.now();
-  while (Date.now() - started < timeout) {
-    if (await evaluate(window, source)) return;
-    await pause();
-  }
-  throw new Error(`Timed out waiting for ${label}.`);
-};
 const clickText = (window, text, selector = "button") => evaluate(window, `(() => { const el=[...document.querySelectorAll(${JSON.stringify(selector)})].find((item)=>item.textContent.trim().includes(${JSON.stringify(text)})); if(!el) throw new Error('Missing ${text}'); el.click(); return true; })()`);
 const chooseOption = async (window, selector, label) => {
+  await settleLayout(window);
   await evaluate(window, `document.querySelector(${JSON.stringify(selector)}).click()`);
-  await waitFor(window, `Boolean(document.querySelector('.xiu-select-menu'))`, "custom menu");
-  await waitFor(window, `[...document.querySelectorAll('.xiu-select-menu [role="option"]')].some(el => el.textContent.includes(${JSON.stringify(label)}))`, "custom menu options ready");
+  await waitFor(window, `Boolean(document.querySelector('.xiu-select-menu'))`, `custom menu for ${label}`);
+  await waitFor(window, `[...document.querySelectorAll('.xiu-select-menu [role="option"]')].some(el => el.textContent.includes(${JSON.stringify(label)}))`, `custom menu option ${label}`);
   assert(await evaluate(window, `(() => { const r=document.querySelector('.xiu-select-menu').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; })()`), "Custom menu should remain inside the viewport.");
   if (label === '执行轮次 1') await fs.promises.writeFile(path.join(smokeRoot, "workbench-menu-1366.png"), (await window.webContents.capturePage()).toPNG());
   await clickText(window, label, '.xiu-select-menu [role="option"]');
@@ -45,9 +37,18 @@ app.whenReady().then(async () => {
   window.webContents.on("console-message", (event) => console.error(`[renderer] ${event.message}`));
   try {
     await window.loadFile(path.join(__dirname, "..", "dist", "renderer", "index.html"));
+    await evaluate(window, `(() => {
+      window.xiuSmokeLayoutEvents = [];
+      for (const type of ['resize', 'scroll', 'focusin']) window.addEventListener(type, (event) => {
+        window.xiuSmokeLayoutEvents.push({ type, at: performance.now(), target: event.target?.nodeName,
+          className: typeof event.target?.className === 'string' ? event.target.className : undefined,
+          width: innerWidth, height: innerHeight, menuOpen: Boolean(document.querySelector('.xiu-select-menu')) });
+        window.xiuSmokeLayoutEvents = window.xiuSmokeLayoutEvents.slice(-40);
+      }, true);
+      return true;
+    })()`);
     await waitFor(window, `document.body.innerText.includes('G5C 验收工作区')`, "trusted workspace");
-    window.setContentSize(1366, 768);
-    await waitFor(window, `innerWidth === 1366 && innerHeight === 768`, "desktop viewport resize");
+    await resizeViewport(window, 1366, 768, "desktop viewport resize");
     const desktopViewport = await evaluate(window, `({ width: innerWidth, height: innerHeight })`);
     assert(desktopViewport.width === 1366 && desktopViewport.height === 768, `1366x768 desktop viewport was not created: ${JSON.stringify(desktopViewport)}.`);
     console.log("UI smoke: viewport ready");
@@ -68,12 +69,10 @@ app.whenReady().then(async () => {
     };
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-1366.png"), (await window.webContents.capturePage()).toPNG());
-    window.setContentSize(900, 768);
-    await waitFor(window, `innerWidth === 900`, "inspector narrow resize");
+    await resizeViewport(window, 900, 768, "inspector narrow resize");
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-900.png"), (await window.webContents.capturePage()).toPNG());
-    window.setContentSize(1366, 768);
-    await waitFor(window, `innerWidth === 1366`, "inspector wide restore");
+    await resizeViewport(window, 1366, 768, "inspector wide restore");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="独立 Diff 面板"]'))`, "independent Diff panel");
     await evaluate(window, `document.querySelector('[aria-label="执行轮次"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))`);
     await waitFor(window, `Boolean(document.querySelector('.xiu-select-menu'))`, "keyboard opens menu");
@@ -132,12 +131,10 @@ app.whenReady().then(async () => {
     await clickText(window, "删除 ui-added", ".mcp-panel button");
     await clickText(window, "确认删除", ".mcp-panel button");
     await waitFor(window, `window.xiuSmoke.calls().includes('mcp:delete:ui-added') && !document.querySelector('.mcp-panel').innerText.includes('ui-added')`, "MCP confirmed deletion");
-    window.setContentSize(900, 768);
-    await waitFor(window, `innerWidth === 900 && innerHeight === 768`, "MCP narrow viewport resize");
+    await resizeViewport(window, 900, 768, "MCP narrow viewport resize");
     const mcpFits = await evaluate(window, `(() => { const r=document.querySelector('.mcp-panel').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()`);
     assert(mcpFits, "MCP panel escaped the narrow viewport.");
-    window.setContentSize(1366, 768);
-    await waitFor(window, `innerWidth === 1366`, "MCP desktop viewport restore");
+    await resizeViewport(window, 1366, 768, "MCP desktop viewport restore");
     await clickText(window, "断开全部", ".mcp-panel button");
     await waitFor(window, `window.xiuSmoke.calls().includes('mcp:disconnect')`, "MCP disconnect");
     await evaluate(window, `document.querySelector('[aria-label="关闭 MCP"]').click()`);
@@ -213,8 +210,7 @@ app.whenReady().then(async () => {
     await checkStableTabs();
     await openTool(window, "终端");
 
-    window.setContentSize(900, 768);
-    await waitFor(window, `innerWidth === 900 && innerHeight === 768`, "terminal narrow viewport resize");
+    await resizeViewport(window, 900, 768, "terminal narrow viewport resize");
     await checkStableTabs();
     await openTool(window, "终端");
     const narrow = await evaluate(window, `(() => ({ width: innerWidth, consoleDisplay: getComputedStyle(document.querySelector('.task-console')).display, terminalDisplay: getComputedStyle(document.querySelector('.terminal-pane')).display }))()`);
@@ -222,14 +218,12 @@ app.whenReady().then(async () => {
     assert(narrow.consoleDisplay !== "none", "Switching to terminal must preserve the split conversation.");
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
-    window.setContentSize(1366, 768);
-    await waitFor(window, `innerWidth === 1366`, "onboarding desktop viewport restore");
+    await resizeViewport(window, 1366, 768, "onboarding desktop viewport restore");
     await evaluate(window, `window.xiuSmoke.freshProviders()`);
     await clickText(window, "设置与模型");
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");
     await clickText(window, "新增渠道", ".provider-add");
     await waitFor(window, `Boolean(document.querySelector('.provider-form .xiu-select:not(:disabled)'))`, "provider form mounted");
-    await evaluate(window, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
     await chooseOption(window, '.provider-form .xiu-select', 'agnes');
     await waitFor(window, `document.querySelector('.provider-form input').value === 'Agnes'`, "Agnes template fields");
     await clickText(window, "保存渠道", ".provider-editor footer button");
@@ -245,6 +239,17 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(error?.stack ?? String(error));
+    try {
+      const diagnostics = await evaluate(window, `({ platform: navigator.platform, width: innerWidth, height: innerHeight,
+        focused: document.activeElement?.outerHTML?.slice(0, 1000),
+        options: [...document.querySelectorAll('.xiu-select-menu [role="option"]')].map(el => el.textContent),
+        layoutEvents: window.xiuSmokeLayoutEvents, calls: window.xiuSmoke?.calls() })`);
+      console.error('UI smoke failure diagnostics:', JSON.stringify(diagnostics));
+      await fs.promises.writeFile(path.join(smokeRoot, 'ui-smoke-failure.json'), JSON.stringify(diagnostics, null, 2));
+      await fs.promises.writeFile(path.join(smokeRoot, 'ui-smoke-failure.png'), (await window.webContents.capturePage()).toPNG());
+    } catch (diagnosticError) {
+      console.error('Could not capture UI smoke diagnostics:', diagnosticError?.message ?? String(diagnosticError));
+    }
     app.exit(1);
   }
 });

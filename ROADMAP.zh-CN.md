@@ -11,12 +11,12 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
 | 当前公开 npm 版本 | `0.20.2`，已核验 Registry 与对应 tag；不据此推断 GitHub Release 桌面资产已发布 |
-| 当前开发版本 | `0.20.3-preview.1`；阶段一可靠性候选，正在集成验证；未发布到 npm |
+| 当前开发版本 | `0.20.3-preview.2`；阶段一可靠性候选，正在集成验证；未发布到 npm |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | CLI 与桌面自动化已通过 Windows、Ubuntu、macOS CI；桌面 Windows x64 NSIS 已完成本机安装/升级/中断重启/卸载，MSIX 已完成结构核验但仍待可信签名与企业设备安装验收，macOS/Linux 真实用户桌面仍待验收 |
 
-## 当前阶段：0.20.3-preview.1 可靠性候选
+## 当前阶段：0.20.3-preview.2 可靠性候选
 
 本阶段在云端开发、测试、提交与推送，不要求连接用户电脑。CLI 与桌面版本保持一致；每次推送由 CI 尝试构建精确提交的 CLI tarball 和 Windows x64 未签名 NSIS 安装器，并保留校验摘要与逐项状态。构建失败时明确记录缺失产物；生成安装器不等于所有门禁通过，也不等于 npm 或 GitHub Release 发布。
 
@@ -25,7 +25,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 - 多 Agent 证据：自然语言 PASS 不算程序验证；当前只读 Tester 使用 `verify_output` 工件断言覆盖补丁，不能称为执行测试套件通过。命令型 Tester 留待下一阶段。
 - 持续验证：补齐 Python 迁移与 Electron 浏览器隔离 CI；六个作业均须按同一提交核验，单个产物的状态只对应所在作业。
 
-目标、非目标、验收矩阵和提交/CI 待补项见 [阶段记录](./docs/development-progress.md)。当前设计见 [0.20.3-preview.1 设计](./V0.20.3-preview.1_DESIGN.zh-CN.md)。以下旧版本验收与日期为历史记录，不代表本候选已经完成回归。Windows 安装器未签名，预期可能显示“未知发布者”或信誉提示；真实设备安装由用户自行验收或由 Windows CI 执行，不声称已在用户本机验收。
+目标、非目标、验收矩阵和提交/CI 待补项见 [阶段记录](./docs/development-progress.md)。当前设计见 [0.20.3-preview.2 设计](./V0.20.3-preview.2_DESIGN.zh-CN.md)。以下旧版本验收与日期为历史记录，不代表本候选已经完成回归。Windows 安装器未签名，预期可能显示“未知发布者”或信誉提示；真实设备安装由用户自行验收或由 Windows CI 执行，不声称已在用户本机验收。
 
 ## 2. 当前产品基线
 
@@ -74,7 +74,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 
 ### 设计与验收
 
-当前设计见 `V0.20.3-preview.1_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
+当前设计见 `V0.20.3-preview.2_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
 
 ## 4. 后续工程化
 
