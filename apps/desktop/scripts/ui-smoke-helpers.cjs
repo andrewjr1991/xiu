@@ -1,6 +1,19 @@
 const pause = (ms = 35) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (window, source) => window.webContents.executeJavaScript(source, true);
 
+function createSmokeWindow(BrowserWindow, preload) {
+  return new BrowserWindow({
+    width: 1366, height: 768, useContentSize: true, show: false,
+    // macOS constrains visible windows to the display by default. The smoke
+    // window must retain its exact test viewport after real keyboard focus.
+    // https://www.electronjs.org/docs/latest/api/structures/base-window-options
+    enableLargerThanScreen: true,
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#fbfcfe", symbolColor: "#65758b", height: 56 },
+    webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+  });
+}
+
 async function waitFor(window, source, label, timeout = 5000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -60,4 +73,4 @@ async function focusForKeyboard(window, selector, label, timeout = 5000) {
   })`);
 }
 
-module.exports = { evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard };
+module.exports = { createSmokeWindow, evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard };

@@ -2,6 +2,13 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.6 — Unreleased candidate
+
+- Add a required Windows provider-privacy preflight and fixed, secret-free ACL failure stages/process categories. Preserve owner-only checks; typed PowerShell constructors/enums and suppressed progress output need exact Windows validation.
+- Bound disposable CLI test shutdown and stop children before deleting their working directory; do not hide failed prompts or cleanup.
+- Keep visible macOS smoke windows larger than the runner screen when needed, retaining exact viewport and native keyboard assertions.
+- Preview.4 Windows CLI timed out with nine earlier ACL-check failures; preview.5 inherited that code. These candidates remain unaccepted for real channel configuration.
+
 ## 0.20.3-preview.5 — Unreleased candidate
 
 - Give keyboard smoke a visible, focused BrowserWindow/WebContents and require an actual textarea focusin before exercising IME cleanup and native Shift+Enter. Preserve assertions and deadlines; production input logic is unchanged.

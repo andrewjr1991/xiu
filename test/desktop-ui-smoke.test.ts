@@ -5,20 +5,35 @@ import vm from "node:vm";
 import { createComposerEnterGuard } from "../apps/desktop/renderer/src/composer-enter-guard.js";
 
 const require = createRequire(import.meta.url);
-const { resizeViewport, settleLayout, waitFor, focusForKeyboard } = require("../apps/desktop/scripts/ui-smoke-helpers.cjs");
+const { createSmokeWindow, resizeViewport, settleLayout, waitFor, focusForKeyboard } = require("../apps/desktop/scripts/ui-smoke-helpers.cjs");
 
-function renderer() {
+interface SmokeWindowOptions {
+  width?: number;
+  height?: number;
+  enableLargerThanScreen?: boolean;
+}
+
+function renderer(options: SmokeWindowOptions = {}) {
   let frames: Array<() => void> = [];
   let resizePending = false;
+  let shown = false;
   const events: string[] = [];
   const context = vm.createContext({
-    innerWidth: 1366,
-    innerHeight: 768,
+    innerWidth: options.width ?? 1366,
+    innerHeight: options.height ?? 768,
     setTimeout,
     clearTimeout,
     requestAnimationFrame(callback: () => void) { frames.push(callback); },
     document: { querySelector: () => ({ nodeName: "BUTTON" }) },
   });
+  const setContentSize = (width: number, height: number) => {
+    // Reproduce the macOS CI work-area clamp: hidden windows have their desired
+    // size, then show() and later visible resizes constrain them to 1024x677.
+    const clamped = shown && !options.enableLargerThanScreen;
+    context.innerWidth = clamped ? Math.min(width, 1024) : width;
+    context.innerHeight = clamped ? Math.min(height, 677) : height;
+    resizePending = true;
+  };
   return {
     context,
     events,
@@ -31,11 +46,8 @@ function renderer() {
           return result;
         },
       },
-      setContentSize(width: number, height: number) {
-        context.innerWidth = width;
-        context.innerHeight = height;
-        resizePending = true;
-      },
+      show() { shown = true; setContentSize(context.innerWidth, context.innerHeight); },
+      setContentSize,
     },
     frame() {
       // Chromium updates resize/scroll events before animation-frame callbacks.
@@ -48,6 +60,34 @@ function renderer() {
 }
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("desktop smoke window preserves exact viewports after macOS show and screen-constrained resizing", async () => {
+  const ordinary = renderer();
+  assert.equal(ordinary.context.innerHeight, 768, "hidden layout checks alone miss the visible-window constraint");
+  ordinary.window.show();
+  assert.deepEqual([ordinary.context.innerWidth, ordinary.context.innerHeight], [1024, 677]);
+  ordinary.window.setContentSize(900, 768);
+  assert.deepEqual([ordinary.context.innerWidth, ordinary.context.innerHeight], [900, 677], "reproduce the remote terminal resize failure");
+
+  let target!: ReturnType<typeof renderer>;
+  const window = createSmokeWindow(class {
+    constructor(options: SmokeWindowOptions) {
+      target = renderer(options);
+      return target.window;
+    }
+  }, "/test/ui-smoke-preload.cjs");
+  window.show();
+  assert.deepEqual([target.context.innerWidth, target.context.innerHeight], [1366, 768]);
+  for (const width of [900, 1366]) {
+    const pending = resizeViewport(window, width, 768, "visible exact viewport");
+    await nextTurn();
+    target.frame();
+    await nextTurn();
+    target.frame();
+    await pending;
+    assert.deepEqual([target.context.innerWidth, target.context.innerHeight], [width, 768]);
+  }
+});
 
 test("desktop UI viewport waits for queued resize events and rendered layout", async () => {
   const target = renderer();

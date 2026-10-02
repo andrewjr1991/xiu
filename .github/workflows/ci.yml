@@ -53,9 +53,14 @@ jobs:
       - id: typecheck
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: npm run typecheck
+      - name: Verify Windows provider privacy before the full suite
+        id: provider_privacy
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: node --test --import tsx test/provider-windows-privacy.test.ts
       - name: Run tests
         id: tests
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || steps.provider_privacy.outcome == 'success') }}
         run: npm run test:ci
       - name: Run Python migration regressions
         id: migration

@@ -1,17 +1,28 @@
 # Xiu 开发阶段记录
 
+## 阶段二后续修正：0.20.3-preview.6
+
+- 状态：本地 838 项测试，825 通过、13 项平台专属跳过、0 失败；尚未提交/推送或完成目标平台验收
+- 范围：Windows ACL 固定诊断与类型化/无进度输出脚本、必需隐私预检、CLI 测试退出有界化、macOS 测试壳精确视口
+- Windows 旧失败根因仍须由新预检及固定阶段信息确认，不把推测或 Linux 跳过记为修复通过；不放宽权限、不缓存 ACL 验证、不绕过断言
+- 不含暂停中的原生联网认证改动。CLI/桌面类型检查、CLI 构建、桌面编译与静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装/Linux 平台 smoke 均通过
+- 新增 Windows 隐私预检为必需独立门禁，失败时全量测试不启动且清单记录失败/跳过；不把 Linux 平台跳过当作 Windows 通过
+- 既有恢复限制：首次 ACL 初始化失败可能留下不受保护的空恢复目录；后续客户端不静默修改已有目录权限。本候选不宣称自动修复所有旧安装，不能直接删除可能包含原始备份的目录
+- 独立复查未发现本轮新增阻断问题；Windows PowerShell/DACL 与 macOS 真实目标结果仍待 CI
+- 待回填精确提交/CI、测试安装候选
+
 ## 阶段二后续修正：0.20.3-preview.5
 
-- 状态：本地 826 项，814 通过、12 项平台专属跳过、0 失败；未推送、未接受，精确远端验收待完成
+- 状态：已推送 df22006f9da6cf7c5c6d2868e5e89e936871f3ff；整体未接受。Windows/Linux 桌面及 Linux/macOS CLI 通过，macOS 桌面在可见屏幕限制导致的视口检查失败，Windows CLI 尚在运行。本地 826 项，814 通过、12 跳过、0 失败
 - 范围：仅修复键盘 UI 验收的真实窗口/WebContents 焦点前提；保留生产 IME guard、所有清理/Shift+Enter 断言与原时限
 - 新增焦点就绪回归与分项诊断；修正严格合成诊断通配的隐藏路径上传
 - CLI/桌面类型检查、构建/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装及 Linux 平台 smoke 通过。初次包安装受环境网络限制，离线缓存不足；获准访问后的独立包/平台重跑通过，未冒充初次成功
 - preview.4 的 Windows CLI 仍在独立运行，结果不会由本轮覆盖或自动取消；两次提交都须单独核验
-- 待回填：精确提交/CI、Windows 安装候选
+- 精确 CI：[36954185355](https://github.com/andrewjr1991/xiu/actions/runs/36954185355)；[Windows EXE 候选](https://github.com/andrewjr1991/xiu/actions/runs/36954185355/artifacts/11205435972)，实际文件 SHA-256 f549e54bca0b79117dd110688e78f1b1fb3aa38fe08557a2e29879bd376ed40e 已核对。已提供下载并明确整体仍未接受
 
 ## 阶段二：0.20.3-preview.4
 
-- 状态：整体未接受。已推送 8f00c913e3cbd25acc13b2c6819d97febc1ba38f；三平台桌面 UI 均在新增 IME 清理断言失败。Linux/macOS CLI 通过，Windows CLI 尚在运行。本地 823 项中 811 通过、12 项平台跳过、0 失败
+- 状态：整体未接受。已推送 8f00c913e3cbd25acc13b2c6819d97febc1ba38f；三平台桌面 UI 均在新增 IME 清理断言失败。Linux/macOS CLI 通过；Windows CLI 在 35 分钟后取消，日志此前已出现九项 desktop-provider 权限检查失败，本地 823 项中 811 通过、12 项平台跳过、0 失败
 - 范围：桌面共享 Plan 模式、输入法/重复提交保护、Provider 受保护备份与两端显式恢复
 - 复查修正：最终任务日志失败释放活动标志，新对话/删除与模式切换互斥；只读恢复诊断不阻止停止/审批；凭据事务锁、Windows 私有 ACL、替换大小预检和不确定提交保护
 - 验证边界：本地合成单元测试不等于真实系统 IME；Windows DACL/安装和 Electron UI 留待目标 CI。未知恢复锁保留数据并失败关闭，不提供强制清锁
@@ -20,6 +31,7 @@
 - CLI 隔离包安装及 Linux Unicode/后台任务平台 smoke 通过；dry-pack 已核对新恢复和 bootstrap 模块、版本与排除 Electron/用户配置
 - 精确 CI：[36951952316](https://github.com/andrewjr1991/xiu/actions/runs/36951952316)；[Windows 未接受 EXE 候选](https://github.com/andrewjr1991/xiu/actions/runs/36951952316/artifacts/11204786027)，安装/升级/重启/卸载通过但不覆盖 UI 失败
 - 已核对实际 EXE 字节与摘要 03991de7695616be9bdac37033598bea105489615cb730303f8881eb50ed2d0a；已向用户提供链接并建议优先使用完整门禁通过的 preview.3
+- Windows CLI 制品 11205896056 仅有进度/摘要报告，没有安装包；取消不能记为全量通过。最后输出停在第 386 项，另有测试子进程清理无界等待风险，正在独立修复
 
 ## 阶段一后续修正：0.20.3-preview.3
 

@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { trustWorkspace } from "../src/trust.js";
+import { FixtureProcess, cleanupFixtureProcesses } from "./fixtures/fixture-process.js";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxLoader = import.meta.resolve("tsx");
@@ -16,35 +17,29 @@ async function fixture(t: TestContext) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-p1-cli-"));
   const cwd = path.join(base, "project");
   const userDirectory = path.join(base, "user");
+  const processes: FixtureProcess[] = [];
+  // Node runs after hooks in registration order. Stop children before removing
+  // their Windows working directory, including when a prompt/assertion fails.
+  t.after(() => cleanupFixtureProcesses(processes, () => fs.rm(base, { recursive: true, force: true })), { timeout: 10_000 });
   await fs.mkdir(cwd);
   await fs.mkdir(userDirectory);
-  t.after(() => fs.rm(base, { recursive: true, force: true }));
   await trustWorkspace(cwd, path.join(userDirectory, ".xiu", "trusted-workspaces.json"));
-  return { cwd, userDirectory };
+  return { cwd, userDirectory, processes };
 }
 
-async function launch(t: TestContext, cwd: string, userDirectory: string) {
+async function launch(processes: FixtureProcess[], cwd: string, userDirectory: string) {
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--provider", "openai", "--yes"], {
     cwd,
     env: { ...process.env, HOME: userDirectory, USERPROFILE: userDirectory, OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0" },
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  const owned = new FixtureProcess(child);
+  processes.push(owned);
   let output = "";
   let cursor = 0;
-  let exited = false;
-  let spawnError: Error | undefined;
-  const exit = new Promise<number | null>((resolve) => {
-    child.once("error", (error) => { spawnError = error; resolve(null); });
-    child.once("exit", (code) => { exited = true; resolve(code); });
-  });
   child.stdout.on("data", (chunk) => { output += String(chunk); });
   child.stderr.on("data", (chunk) => { output += String(chunk); });
-  t.after(async () => {
-    child.stdin.end();
-    if (!exited) child.kill();
-    await exit;
-  });
   const readUntil = async (marker: string): Promise<string> => {
     const start = cursor;
     const deadline = Date.now() + 30_000;
@@ -54,8 +49,8 @@ async function launch(t: TestContext, cwd: string, userDirectory: string) {
         cursor = index + marker.length;
         return output.slice(start, cursor);
       }
-      if (spawnError) throw spawnError;
-      if (exited) throw new Error(`CLI exited before ${marker}:\n${output}`);
+      if (owned.spawnError) throw owned.spawnError;
+      if (owned.exited) throw new Error(`CLI exited before ${marker}:\n${output}`);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error(`CLI did not reach ${marker}:\n${output}`);
@@ -70,14 +65,14 @@ async function launch(t: TestContext, cwd: string, userDirectory: string) {
     },
     async close() {
       child.stdin.write("/exit\n");
-      assert.equal(await exit, 0, output);
+      assert.equal(await owned.waitForExit(30_000), 0, output);
     },
   };
 }
 
 test("CLI fresh setup adds the Agnes template without reserved-ID collisions and removes the last channel", { timeout: 45_000 }, async (t) => {
-  const { cwd, userDirectory } = await fixture(t);
-  const app = await launch(t, cwd, userDirectory);
+  const { cwd, userDirectory, processes } = await fixture(t);
+  const app = await launch(processes, cwd, userDirectory);
   app.write("/provider add");
   await app.readUntil("Provider ID: ");
   app.write("agnes");
@@ -115,17 +110,17 @@ test("CLI fresh setup adds the Agnes template without reserved-ID collisions and
   await app.readUntil("xiu> ");
   assert.deepEqual(JSON.parse(await fs.readFile(filename, "utf8")).profiles, []);
   await app.close();
-  const restarted = await launch(t, cwd, userDirectory);
+  const restarted = await launch(processes, cwd, userDirectory);
   assert.deepEqual(JSON.parse(await fs.readFile(filename, "utf8")).profiles, []);
   await restarted.close();
 });
 
 test("CLI check commands discover and run real npm scripts, respect Plan mode and report historical results", { timeout: 45_000 }, async (t) => {
-  const { cwd, userDirectory } = await fixture(t);
+  const { cwd, userDirectory, processes } = await fixture(t);
   await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { typecheck: "node good.js", test: "node bad.js" } }), "utf8");
   await fs.writeFile(path.join(cwd, "good.js"), "require('node:fs').writeFileSync('checked.txt','done');", "utf8");
   await fs.writeFile(path.join(cwd, "bad.js"), "process.exit(1);", "utf8");
-  const app = await launch(t, cwd, userDirectory);
+  const app = await launch(processes, cwd, userDirectory);
   const discovered = await app.command("/check");
   assert.match(discovered, /node good\.js/);
   assert.match(discovered, /node bad\.js/);
@@ -149,12 +144,12 @@ test("CLI check commands discover and run real npm scripts, respect Plan mode an
 });
 
 test("CLI diff defaults to task scope and exposes explicit workspace and staged views", { timeout: 45_000 }, async (t) => {
-  const { cwd, userDirectory } = await fixture(t);
+  const { cwd, userDirectory, processes } = await fixture(t);
   await execFileAsync("git", ["init", "--quiet"], { cwd, windowsHide: true });
   await fs.writeFile(path.join(cwd, "staged.txt"), "staged content\n", "utf8");
   await execFileAsync("git", ["add", "staged.txt"], { cwd, windowsHide: true });
   await fs.writeFile(path.join(cwd, "untracked.txt"), "workspace content\n", "utf8");
-  const app = await launch(t, cwd, userDirectory);
+  const app = await launch(processes, cwd, userDirectory);
   assert.match(await app.command("/diff"), /No task baseline is available/);
   const workspace = await app.command("/diff workspace");
   assert.match(workspace, /staged\.txt/);
@@ -167,7 +162,7 @@ test("CLI diff defaults to task scope and exposes explicit workspace and staged 
 });
 
 test("CLI does not steer check commands into a running task and clear removes task baselines", { timeout: 45_000 }, async (t) => {
-  const { cwd, userDirectory } = await fixture(t);
+  const { cwd, userDirectory, processes } = await fixture(t);
   await fs.mkdir(path.join(userDirectory, ".xiu"), { recursive: true });
   await fs.writeFile(path.join(userDirectory, ".xiu", "providers.json"), JSON.stringify({ version: 5, active: "openai", profiles: [{
     id: "openai", name: "OpenAI", kind: "openai", model: "gpt-5", apiKeyEnv: "OPENAI_API_KEY",
@@ -175,7 +170,7 @@ test("CLI does not steer check commands into a running task and clear removes ta
   }] }), "utf8");
   await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node check.js" } }), "utf8");
   await fs.writeFile(path.join(cwd, "check.js"), "require('node:fs').writeFileSync('unexpected.txt','bad');", "utf8");
-  const app = await launch(t, cwd, userDirectory);
+  const app = await launch(processes, cwd, userDirectory);
   // Missing credentials guarantee this task cannot make a real model request.
   app.write("Inspect this project");
   await app.readUntil("steer> ");

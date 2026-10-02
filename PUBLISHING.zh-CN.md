@@ -1,4 +1,4 @@
-> 0.20.3-preview.5 开发候选：CLI/桌面配套升级，新增 Provider 备份与显式恢复。恢复后要求重启；旧客户端不遵守新锁，须先退出其他客户端。Windows 仅要求未签名 x64 EXE；不把 Windows ACL 跳过或真实 IME 未测写成通过。每次推送的精确提交、CI 与产物见 [开发阶段记录](./docs/development-progress.md)。
+> 0.20.3-preview.6 开发候选：CLI/桌面配套升级，新增 Provider 备份与显式恢复。恢复后要求重启；旧客户端不遵守新锁，须先退出其他客户端。Windows 仅要求未签名 x64 EXE；不把 Windows ACL 跳过或真实 IME 未测写成通过。每次推送的精确提交、CI 与产物见 [开发阶段记录](./docs/development-progress.md)。
 
 # Xiu 更新、发布与安装指南
 

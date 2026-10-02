@@ -1,7 +1,7 @@
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard } = require("./ui-smoke-helpers.cjs");
+const { createSmokeWindow, evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard } = require("./ui-smoke-helpers.cjs");
 
 const smokeRoot = path.resolve(__dirname, "../../..", ".desktop-build-temp");
 fs.mkdirSync(smokeRoot, { recursive: true });
@@ -43,6 +43,7 @@ const setComposerText = (window, text) => evaluate(window, `(() => {
 // the Windows/macOS/Linux native candidate-window acceptance matrix.
 const checkComposerIme = async (window, label) => {
   await focusForKeyboard(window, composerSelector, label);
+  await resizeViewport(window, 1366, 768, `${label} focused desktop viewport`);
   const text = `${label}中文候选词`;
   await setComposerText(window, text);
   const before = await evaluate(window, `window.xiuSmoke.calls().filter(call => call === 'task:create' || call === 'task:steer').length`);
@@ -93,7 +94,7 @@ const checkComposerIme = async (window, label) => {
 };
 
 app.whenReady().then(async () => {
-  const window = new BrowserWindow({ width: 1366, height: 768, useContentSize: true, show: false, titleBarStyle: "hidden", titleBarOverlay: { color: "#fbfcfe", symbolColor: "#65758b", height: 56 }, webPreferences: { preload: path.join(__dirname, "ui-smoke-preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } });
+  const window = createSmokeWindow(BrowserWindow, path.join(__dirname, "ui-smoke-preload.cjs"));
   window.webContents.on("console-message", (event) => console.error(`[renderer] ${event.message}`));
   try {
     await window.loadFile(path.join(__dirname, "..", "dist", "renderer", "index.html"));

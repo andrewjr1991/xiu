@@ -33,6 +33,22 @@ test("CI candidate acceptance uses original outcomes, never a masked conclusion"
   assert.equal(verificationContext("cli", "linux", steps).status, "incomplete");
 });
 
+test("Windows CLI requires the privacy preflight and cannot mask its failure", () => {
+  const steps: Record<string, { outcome: string; conclusion?: string }> = cliSteps();
+  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
+  steps.provider_privacy = { outcome: "failure", conclusion: "success" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "failed");
+  steps.tests = { outcome: "skipped" };
+  assert.equal(verificationContext("cli", "win32", steps).checks.tests, "skipped");
+  assert.equal(verificationContext("cli", "win32", steps).status, "failed");
+  steps.provider_privacy = { outcome: "success" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
+  steps.tests = { outcome: "success" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "passed");
+  delete steps.provider_privacy;
+  assert.equal(verificationContext("cli", "linux", steps).status, "passed");
+});
+
 test("desktop checks require browser isolation and Windows installer acceptance", () => {
   const steps = Object.fromEntries(["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "browser"].map((id) => [id, { outcome: "success" }]));
   assert.equal(verificationContext("desktop", "linux", steps).status, "passed");
@@ -117,6 +133,9 @@ test("CI keeps failed checks visible and uploads candidates without publishing",
   assert.match(workflow, /xvfb-run --auto-servernum npm --prefix apps\/desktop run smoke:browser/);
   assert.match(workflow, /XIU_PACKAGE_ARCHIVE: \$\{\{ steps\.candidate\.outputs\.archive \}\}/);
   assert.match(workflow, /retention-days: 30/);
+  assert.match(workflow, /id: provider_privacy/);
+  assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts/);
+  assert.match(workflow, /matrix\.platform != 'win32' \|\| steps\.provider_privacy\.outcome == 'success'/);
   const helper = await readFile(path.resolve("apps/desktop/scripts/package-windows.mjs"), "utf8");
   assert.match(helper, /"--publish", "never"/);
 });

@@ -36,8 +36,99 @@ export interface ProviderConfigurationRecoveryPreview {
   expiresAt: string;
   warnings: string[];
 }
+const WINDOWS_ACL_STAGES = [
+  "identity", "initialize-descriptor", "initialize-rule", "initialize-owner", "initialize-protection", "initialize-add-rule", "initialize-write",
+  "verify-read", "verify-protection", "verify-owner", "verify-rule-count", "verify-rule-identity", "verify-rule-type", "verify-rule-rights", "verify-rule-propagation", "verify-directory-inheritance",
+] as const;
+export type ProviderWindowsPrivacyFailure = "spawn" | "timeout" | "stdio-limit" | "nonzero-exit" | "process" | "protocol";
+export type ProviderWindowsPrivacyStage = typeof WINDOWS_ACL_STAGES[number] | "process-start" | "timeout" | "output-limit" | "process" | "protocol";
+
+export function providerWindowsPrivacyFailureKind(error: unknown): ProviderWindowsPrivacyFailure {
+  if (!error || typeof error !== "object") return "process";
+  const result = error as { code?: unknown; killed?: unknown };
+  if (typeof result.code === "string" && ["ENOENT", "EACCES", "EPERM", "EINVAL", "ENOEXEC"].includes(result.code)) return "spawn";
+  if (result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "stdio-limit";
+  if (result.killed === true) return "timeout";
+  return typeof result.code === "number" && Number.isInteger(result.code) && result.code !== 0 ? "nonzero-exit" : "process";
+}
+
+/** Only fixed stage identifiers can leave the subprocess boundary. Never expose stdout/stderr. */
+export function providerWindowsPrivacyFailureStage(error: unknown): ProviderWindowsPrivacyStage {
+  if (!error || typeof error !== "object") return "process";
+  const result = error as { code?: unknown; killed?: unknown; stdout?: unknown };
+  if (result.code === "ENOENT" || result.code === "EACCES") return "process-start";
+  if (result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "output-limit";
+  if (result.killed === true) return "timeout";
+  if (typeof result.stdout !== "string" || result.stdout.length > 100) return "process";
+  const match = /^XIU_ACL_V1:([a-z-]+)\r?\n?$/.exec(result.stdout);
+  return match && (WINDOWS_ACL_STAGES as readonly string[]).includes(match[1]!) ? match[1] as ProviderWindowsPrivacyStage : "process";
+}
+
+// Typed enums and constructors work in Windows PowerShell 5.1 as well as newer
+// PowerShell. One fixed stage code identifies each failed invariant without
+// returning an account name, path, ACL content, or raw PowerShell error.
+export const PROVIDER_WINDOWS_PRIVACY_SCRIPT = String.raw`
+# Suppress Windows PowerShell module-autoload progress/CLIXML before touching ACL cmdlets.
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+$stage = 'identity'
+try {
+  $p = $env:XIU_PROVIDER_PRIVATE_TARGET
+  $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
+  $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $full = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $none = [System.Security.AccessControl.PropagationFlags]::None
+  $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
+    $stage = 'initialize-descriptor'
+    if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new() }
+    else { $acl = [System.Security.AccessControl.FileSecurity]::new() }
+    $stage = 'initialize-rule'
+    if ($isDirectory) { $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inherit, $none, $allow) }
+    else { $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $allow) }
+    $stage = 'initialize-owner'
+    $acl.SetOwner($sid)
+    $stage = 'initialize-protection'
+    $acl.SetAccessRuleProtection($true, $false)
+    $stage = 'initialize-add-rule'
+    $acl.AddAccessRule($rule)
+    $stage = 'initialize-write'
+    Set-Acl -LiteralPath $p -AclObject $acl
+  }
+  $stage = 'verify-read'
+  $acl = Get-Acl -LiteralPath $p
+  $stage = 'verify-protection'
+  if ($isDirectory -and !$acl.AreAccessRulesProtected) { throw 'ACL check failed' }
+  $stage = 'verify-owner'
+  if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'ACL check failed' }
+  $stage = 'verify-rule-count'
+  $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+  if ($rules.Count -ne 1) { throw 'ACL check failed' }
+  $stage = 'verify-rule-identity'
+  if ($rules[0].IdentityReference.Value -ne $sid.Value) { throw 'ACL check failed' }
+  $stage = 'verify-rule-type'
+  if ($rules[0].AccessControlType -ne $allow) { throw 'ACL check failed' }
+  $stage = 'verify-rule-rights'
+  if ($rules[0].FileSystemRights -ne $full) { throw 'ACL check failed' }
+  $stage = 'verify-rule-propagation'
+  if ($rules[0].PropagationFlags -ne $none) { throw 'ACL check failed' }
+  $stage = 'verify-directory-inheritance'
+  if ($isDirectory -and $rules[0].InheritanceFlags -ne $inherit) { throw 'ACL check failed' }
+  [Console]::Out.WriteLine('XIU_ACL_V1:ok')
+  exit 0
+} catch {
+  [Console]::Out.WriteLine('XIU_ACL_V1:' + $stage)
+  exit 1
+}
+`;
+
 export class ProviderConfigurationError extends Error {
-  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false) { super(message); this.name = "ProviderConfigurationError"; }
+  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false, readonly privacyStage?: ProviderWindowsPrivacyStage, readonly privacyFailure?: ProviderWindowsPrivacyFailure) { super(message); this.name = "ProviderConfigurationError"; }
 }
 function failure(code: string): ProviderConfigurationError {
   const messages: Record<string, string> = {
@@ -54,6 +145,18 @@ function failure(code: string): ProviderConfigurationError {
   };
   return new ProviderConfigurationError(code, messages[code] ?? messages.io!);
 }
+export async function verifyProviderWindowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
+  try {
+    const result = await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" } });
+    if (!/^XIU_ACL_V1:ok\r?\n?$/.test(result.stdout)) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
+  } catch (error) {
+    if (error instanceof ProviderConfigurationError) throw error;
+    const stage = providerWindowsPrivacyFailureStage(error);
+    const kind = providerWindowsPrivacyFailureKind(error);
+    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: ${kind}; stage: ${stage}.`, false, stage, kind);
+  }
+}
+
 function digest(value: Buffer): string { return createHash("sha256").update(value).digest("hex"); }
 function revision(value: Buffer, stat: Stats): string { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${digest(value)}`; }
 function sameFile(a: Stats, b: Stats): boolean { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
@@ -99,10 +202,8 @@ export class ProviderConfigurationStorage {
     catch (error) { throw error instanceof ProviderConfigurationError ? error : failure("io"); }
   }
 
-  private async windowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
-    const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_PROVIDER_PRIVATE_TARGET; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; if ($env:XIU_PROVIDER_INITIALIZE -eq '1') { if ($env:XIU_PROVIDER_DIRECTORY -eq '1') { $acl=New-Object System.Security.AccessControl.DirectorySecurity; $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow') } else { $acl=New-Object System.Security.AccessControl.FileSecurity; $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow') }; $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl }; $acl=Get-Acl -LiteralPath $p; if (($env:XIU_PROVIDER_DIRECTORY -eq '1' -and !$acl.AreAccessRulesProtected) -or $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'Unsafe ACL' }; $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]); if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl' -or $rules[0].PropagationFlags -ne 'None') { throw 'Unsafe ACL' }; if ($env:XIU_PROVIDER_DIRECTORY -eq '1' -and $rules[0].InheritanceFlags -ne 'ContainerInherit, ObjectInherit') { throw 'Unsafe ACL' }`;
-    try { await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" } }); }
-    catch { throw failure("unsafe"); }
+  private windowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
+    return verifyProviderWindowsPrivacy(target, directory, initialize);
   }
 
   private async privateDirectory(create: boolean): Promise<boolean> {
