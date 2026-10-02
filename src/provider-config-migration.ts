@@ -42,7 +42,7 @@ const WINDOWS_ACL_STAGES = [
 ] as const;
 export type ProviderWindowsPrivacyFailure = "spawn" | "timeout" | "stdio-limit" | "nonzero-exit" | "process" | "protocol";
 export type ProviderWindowsPrivacyStage = typeof WINDOWS_ACL_STAGES[number] | "process-start" | "timeout" | "output-limit" | "process" | "protocol";
-const WINDOWS_ACL_CATEGORIES = ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "argument", "io", "unknown"] as const;
+const WINDOWS_ACL_CATEGORIES = ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "command-not-found", "argument", "io", "unknown"] as const;
 export type ProviderWindowsPrivacyCategory = typeof WINDOWS_ACL_CATEGORIES[number] | "unavailable";
 
 function windowsPrivacyResult(error: unknown): { stage: typeof WINDOWS_ACL_STAGES[number]; category: ProviderWindowsPrivacyCategory } | undefined {
@@ -93,6 +93,7 @@ function Get-XiuPrivacyFailureCategory([System.Exception] $exception) {
   $fallback = 'unknown'
   # Inspect at most eight wrappers; only fixed categories can leave this process.
   for ($depth = 0; $null -ne $exception -and $depth -lt 8; $depth++) {
+    if ($exception -is [System.Management.Automation.CommandNotFoundException]) { return 'command-not-found' }
     $code = 0
     if ($exception -is [System.ComponentModel.Win32Exception]) { $code = $exception.NativeErrorCode }
     elseif (($exception.HResult -band 0x7fff0000) -eq 0x00070000) { $code = $exception.HResult -band 0xffff }
@@ -202,10 +203,16 @@ export function providerWindowsPowerShellPath(systemRoot: string | undefined): s
   return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/** Let Windows PowerShell build its own module path, rather than inherit PS7 modules through Node. */
+export function providerWindowsPowerShellEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"));
+}
+
 export async function verifyProviderWindowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
   try {
     const executable = providerWindowsPowerShellPath(process.env.SystemRoot);
-    const result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" } });
+    const env = providerWindowsPowerShellEnvironment({ ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" });
+    const result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env });
     if (!/^XIU_ACL_V1:ok\r?\n?$/.test(result.stdout)) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
   } catch (error) {
     if (error instanceof ProviderConfigurationError) throw error;

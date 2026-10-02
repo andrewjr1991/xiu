@@ -2,15 +2,22 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.8 — Unreleased candidate
+
+- Limit this follow-up to the Windows privacy gate: remove inherited PSModulePath case-insensitively from the Windows PowerShell child environment, without mutating its parent. Preserve Get-Acl readback, direct .NET Owner/DACL persistence, owner-only rules and fail-closed behavior; do not simultaneously rewrite the production read API.
+- Follow Microsoft's documented intermediate-process module-loading guidance; exact Windows proof and the historical root cause remain unconfirmed. Add a fixed command-not-found category and correct the exception-wrapper fixture without changing outer-exception precedence.
+- Preview.8 local validation, exact-commit CI and artifacts remain pending. Preview.7's Windows failure is not covered by its five green jobs or verified binaries. New features are paused; screenshot capture corrections follow the privacy gate.
+- Preserve the known bootstrap claim/cancel race and unsafe existing-recovery-directory limitation. Managed-web authentication remains paused.
+
 ## 0.20.3-preview.7 — Unreleased candidate
 
-- Require validation/upload of six allowlisted synthetic UI PNGs after successful desktop runs on Windows, macOS and Linux, including wide/narrow recovery previews. Artifacts identify version/platform/full SHA/attempt and are retained 30 days; missing evidence cannot pass. Production UI is unchanged; downloaded CI screenshots still await cross-platform visual review.
+- Require validation/upload of six allowlisted synthetic UI PNGs after successful desktop runs on Windows, macOS and Linux, including wide/narrow recovery previews. Artifacts identify version/platform/full SHA/attempt and are retained 30 days; missing evidence cannot pass. Production UI is unchanged. Review of all 18 PNGs found Linux Chinese font gaps, a wrong macOS wide recovery capture, and menu captures without an open menu on all platforms; these are not a complete visual pass.
 
 - Persist only modified Windows Owner/DACL sections through direct .NET APIs instead of Set-Acl; preserve owner-only readback, repeated validation and fail-closed behavior. Add fixed exception categories and a validated absolute SystemRoot PowerShell path; no permissive fallback or raw exception disclosure.
 - Retry only background metadata replacement with bounded delays; never replay commands/output. Guard asynchronous output/state callbacks and retain write-once, fixed-code failure receipts when the main record is unavailable.
 - Keep terminal state behind confirmed shutdown/output closure. Use OS-helper paths for Windows cleanup; an unconfirmed foreground stop retains active/unknown evidence and returns an explicit error.
 - Preview.6 passed three desktop jobs and Linux/macOS CLI, but Windows privacy preflight failed with nonzero-exit at initialize-write (Set-Acl); full Windows CLI tests were skipped. Preview.5 Windows CLI was cancelled after 35 minutes with nine ACL failures and an outside-cwd background task interrupted after output. Neither candidate is accepted; the exact underlying historical errno/root cause is unproven.
-- Preview.7 validation, exact commit/CI and artifacts remain pending. Preview.3 is the last fully green candidate; real OS IME, paid Providers and external devices remain separate acceptance work. Paused managed-web authentication is outside this change.
+- Preview.7 CI 36983872073 passed five jobs but failed Windows privacy preflight after successful .NET directory persistence, at Get-Acl verify-read (unknown). Full Windows CLI tests were skipped; package/platform/eval checks passed. Verified binaries remain unaccepted. Preview.3 is the last fully green candidate; real OS IME, paid Providers and external devices remain separate acceptance work. Paused managed-web authentication is outside this change.
 
 ## 0.20.3-preview.6 — Unreleased candidate
 

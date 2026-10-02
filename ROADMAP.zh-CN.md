@@ -11,18 +11,20 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
 | 当前公开 npm 版本 | `0.20.2`，已核验 Registry 与对应 tag；不据此推断 GitHub Release 桌面资产已发布 |
-| 当前开发版本 | `0.20.3-preview.7`；阶段二 Plan、输入和配置恢复候选，正在集成验证；未发布到 npm |
+| 当前开发版本 | `0.20.3-preview.8`；Windows 子进程模块环境最小修正候选，待独立验证；未发布到 npm |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 基线 preview.3 已通过三平台 CLI/桌面共六作业，包括 Windows 后台进程与未签名 NSIS 安装生命周期；本候选独立验收仍待完成，真实用户/企业设备和真实模型仍待独立验证 |
 
-## 当前阶段：0.20.3-preview.7 Windows ACL 与后台失败处理候选
+## 当前阶段：0.20.3-preview.8 Windows 子进程模块环境最小修正候选
 
 本阶段在云端开发、测试、提交与推送，不要求连接用户电脑。CLI 与桌面版本保持一致；每次推送由 CI 尝试构建精确提交的 CLI tarball 和 Windows x64 未签名 NSIS 安装器，并保留校验摘要与逐项状态。构建失败时明确记录缺失产物；生成安装器不等于所有门禁通过，也不等于 npm 或 GitHub Release 发布。
 
-- 本轮：Windows 新对象使用 .NET Owner/DACL-only 持久化，保留 owner-only 回读，增加固定异常类别与经过校验的绝对 PowerShell 路径；后台元数据有界重试、固定失败证据、异步回调保护和确认终止后的终态，停止失败保留活动/未知状态。不重放命令，不放宽权限，真实 Windows 验收待完成。
-- 前轮 preview.6 精确提交 `17480422e1c58eaf18caedd34c193e2fc192c408` 的 CI `36956274234`：三平台桌面与 Linux/macOS CLI 通过；Windows CLI 在 initialize-write（Set-Acl）隐私预检 nonzero-exit，全量测试跳过、其他检查通过，整体未接受。preview.5 Windows CLI 也已在 35 分钟取消，含九项 ACL 失败及有输出后的后台 interrupted。具体旧系统错误/根因尚未证明；最后完整通过仍为 preview.3。
-- 本候选本地/精确提交 CI 验收与产物待回填，暂停中的原生联网认证不在本轮范围。
+- 本轮暂停新功能，只处理 Windows 隐私门禁。preview.8 仅在 Windows PowerShell 子进程环境中按大小写不敏感方式移除继承的 PSModulePath，父进程环境不变；保留 Get-Acl 回读、.NET Owner/DACL 持久化和 owner-only 失败关闭规则。新增固定 command-not-found 类别，并修正异常包装测试夹具；不同时改写生产读取 API。
+- 前轮：preview.7（2464823d9c6bd181bf4fe55d4e0d1b535a3ed7b4）的 CI 36983872073 已结束：三平台桌面与 Linux/macOS CLI 通过；Windows 隐私预检失败，全量 Windows CLI 跳过，包/平台/评测检查通过，整体未接受。目录 .NET 写入已通过，随后 Get-Acl 在 verify-read 阶段返回 unknown；比较探针首次 Get-Acl 也失败，不能把这一结果当作权限规则失效或旧根因已完全证明。 最后完整通过仍为 preview.3；preview.4/5/6 的旧失败记录保留在阶段记录中。
+- Microsoft 文档说明中间进程继承 PowerShell 7 模块路径会影响 Windows PowerShell 自动加载；这是本轮最小修正的依据，不是实际旧错误已证明的结论。本候选本地/精确提交 CI 与产物待回填。
+- preview.7 的三平台 18 张合成 PNG 已检查：Linux 中文缺字属于运行环境字体缺口，macOS 宽窗恢复图截取了错误状态，三平台菜单图均未显示展开菜单；来源详情中的 canary 是有意的活动预览，不是隐私泄漏证据。截图存在不等于视觉验收全部通过，截图修正排在 Windows 隐私门禁之后。
+- bootstrap 启动领取/无 PID 取消的跨进程竞态仍未修复；不在本轮扩大范围。原生联网认证继续暂停。
 - 新增桌面共享 Plan 切换及输入法确认 Enter/同轮重复发送保护，历史续做/恢复保持当前选择。
 - 新增 Provider 升级保护、revision/凭据事务锁，以及 CLI 和桌面启动前可用的显式诊断/预览/恢复入口；恢复后要求重启，未知所有权的恢复锁不强制清理。
 - 本轮须特别验证 Windows 备份 ACL、恢复取消/并发、日志失败后的会话恢复，以及实际 Electron 合成 UI；真实 OS 输入法尚未验收。
@@ -33,7 +35,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 - 运行时依赖：直接 undici 7.29.1、Cheerio 传递 undici 6.29.0，审计与完整回归独立核验。
 - 持续验证：补齐 Python 迁移与 Electron 浏览器隔离 CI；六个作业均须按同一提交核验，单个产物的状态只对应所在作业。
 
-目标、非目标、验收矩阵和提交/CI 待补项见 [阶段记录](./docs/development-progress.md)。当前设计见 [0.20.3-preview.7 设计](./V0.20.3-preview.7_DESIGN.zh-CN.md)。以下旧版本验收与日期为历史记录，不代表本候选已经完成回归。Windows 安装器未签名，预期可能显示“未知发布者”或信誉提示；真实设备安装由用户自行验收或由 Windows CI 执行，不声称已在用户本机验收。
+目标、非目标、验收矩阵和提交/CI 待补项见 [阶段记录](./docs/development-progress.md)。当前设计见 [0.20.3-preview.8 设计](./V0.20.3-preview.8_DESIGN.zh-CN.md)。以下旧版本验收与日期为历史记录，不代表本候选已经完成回归。Windows 安装器未签名，预期可能显示“未知发布者”或信誉提示；真实设备安装由用户自行验收或由 Windows CI 执行，不声称已在用户本机验收。
 
 ## 2. 当前产品基线
 
@@ -82,7 +84,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 
 ### 设计与验收
 
-当前设计见 `V0.20.3-preview.7_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
+当前设计见 `V0.20.3-preview.8_DESIGN.zh-CN.md`。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
 
 ## 4. 后续工程化
 
@@ -179,6 +181,8 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 - GUI 事件延迟、断流恢复率、CLI/GUI 状态一致率和误报完成率。
 
 ## 9. 下一步
+
+当前优先级（preview.8）：先以最小子进程环境修正和异常夹具完成 Windows 隐私预检，再核验同一提交的完整六作业与安装物。通过之前暂停新增功能；截图证据缺口随后处理，bootstrap 领取/取消竞态保留独立待办，原生联网认证继续暂停。以下日期记录与条目为此前阶段上下文，不覆盖此优先级。
 
 2026-10-02 用户已授权提交、推送并发布 0.20.2。此前“暂不发布”是历史阶段状态；CLI 与桌面需要配套升级，MSIX 仍未签名，不能正常部署。发布检查发现前一提交 macOS 测试夹具使用 /var 符号链接路径、Windows 菜单选项异步就绪；仅修正夹具规范路径和 UI 就绪等待，不放宽生产链接/审批边界。新提交需等待 CI，并核验 npm 和 GitHub Release；完成后下一项仍为共享检索服务。
 

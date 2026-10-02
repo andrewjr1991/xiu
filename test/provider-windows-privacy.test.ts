@@ -5,11 +5,22 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { ProviderConfigurationError, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureKind, providerWindowsPrivacyFailureCategory, providerWindowsPowerShellPath, verifyProviderWindowsPrivacy, PROVIDER_WINDOWS_PRIVACY_SCRIPT } from "../src/provider-config-migration.js";
+import { ProviderConfigurationError, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureKind, providerWindowsPrivacyFailureCategory, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, verifyProviderWindowsPrivacy, PROVIDER_WINDOWS_PRIVACY_SCRIPT } from "../src/provider-config-migration.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 
 const runFile = promisify(execFile);
 const canary = "fixture_privacy_Q7nP8_no_real_key";
+
+test("Windows Provider privacy child environment drops only case-insensitive PSModulePath keys", () => {
+  const parent = Object.freeze({ SystemRoot: "C:\\Windows", PATH: "fixture-path", PSModulePath: "fixture-ps7-modules", PSMODULEPATH: "fixture-uppercase", pSmOdUlEpAtH: "", XIU_PROVIDER_PRIVATE_TARGET: "fixture-target", XIU_PROVIDER_DIRECTORY: "1", XIU_PROVIDER_INITIALIZE: "0", fixtureUnset: undefined });
+  const before = { ...parent };
+  const child = providerWindowsPowerShellEnvironment(parent);
+  assert.deepEqual(child, { SystemRoot: "C:\\Windows", PATH: "fixture-path", XIU_PROVIDER_PRIVATE_TARGET: "fixture-target", XIU_PROVIDER_DIRECTORY: "1", XIU_PROVIDER_INITIALIZE: "0", fixtureUnset: undefined });
+  assert.deepEqual(parent, before);
+  assert.notEqual(child, parent);
+  assert.deepEqual(providerWindowsPowerShellEnvironment({}), {});
+  assert.deepEqual(providerWindowsPowerShellEnvironment({ PSModulePath: "" }), {});
+});
 
 test("Windows Provider privacy helper resolves only a validated absolute SystemRoot path", () => {
   for (const root of ["C:\\Windows", "D:\\Win NT", "C:\\Windows\\", "D:/Windows", "C:\\系统目录"]) {
@@ -33,6 +44,8 @@ test("Windows Provider privacy production invocation never searches PATH or the 
   const source = await fs.readFile(new URL("../src/provider-config-migration.ts", import.meta.url), "utf8");
   assert.match(source, /const executable = providerWindowsPowerShellPath\(process\.env\.SystemRoot\)/);
   assert.match(source, /await runFile\(executable, \["-NoLogo", "-NoProfile", "-NonInteractive"/);
+  assert.match(source, /const env = providerWindowsPowerShellEnvironment\(\{ \.\.\.process\.env, XIU_PROVIDER_PRIVATE_TARGET:/);
+  assert.match(source, /timeout: 15_000, maxBuffer: 1024, env \}/);
   assert.doesNotMatch(source, /runFile\(["']powershell(?:\.exe)?["']/);
   assert.match(source, /timeout: 15_000, maxBuffer: 1024/);
 });
@@ -69,7 +82,7 @@ test("Windows privacy preflight compares fresh and existing descriptors and requ
     if (directory) await fs.mkdir(target); else await fs.writeFile(target, "");
     let outcome = "ok";
     try {
-      const result = await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", variant.script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: target, XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: "1" } });
+      const result = await runFile(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", variant.script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, PSModulePath: "C:\\xiu-fixture-missing-ps7-modules", XIU_PROVIDER_PRIVATE_TARGET: target, XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: "1" }) });
       if (!/^XIU_ACL_V1:ok\r?\n?$/.test(result.stdout)) outcome = "protocol";
     } catch (error) {
       outcome = `${providerWindowsPrivacyFailureKind(error)}/${providerWindowsPrivacyFailureStage(error)}/${providerWindowsPrivacyFailureCategory(error)}`;
@@ -82,6 +95,12 @@ test("Windows privacy preflight compares fresh and existing descriptors and requ
 // This is an explicit Windows preflight. CI must run it as a required Windows
 // gate before broader suites; a skipped run on another OS is not validation.
 test("Windows Provider privacy preflight creates verifies and rejects changed owner-only ACLs", { skip: process.platform !== "win32", timeout: 90_000 }, async (t) => {
+  // Simulate pwsh -> Node -> powershell.exe with an unusable inherited module
+  // path. The production helper must reset only its child; restore this fixture
+  // process before cleanup, even when any assertion fails.
+  const modulePath = process.env.PSModulePath;
+  process.env.PSModulePath = "C:\\xiu-fixture-missing-ps7-modules";
+  t.after(() => { if (modulePath === undefined) delete process.env.PSModulePath; else process.env.PSModulePath = modulePath; });
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu privacy 中文 ' "));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const filename = path.join(root, "providers.json");
@@ -92,6 +111,7 @@ test("Windows Provider privacy preflight creates verifies and rejects changed ow
   await fs.writeFile(filename, bytes, { mode: 0o600 });
   const registry = new ProviderRegistry(filename);
   await registry.load();
+  assert.equal(process.env.PSModulePath, "C:\\xiu-fixture-missing-ps7-modules", "the helper must not mutate its parent's environment");
   const diagnostics = await registry.configurationDiagnostics();
   assert.equal(diagnostics.state, "current");
   assert.equal(diagnostics.backups.length, 1);
@@ -105,7 +125,7 @@ test("Windows Provider privacy preflight creates verifies and rejects changed ow
 
   const broaden = async (target: string) => {
     const script = `$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; try { $p=$env:XIU_TEST_PRIVATE_TARGET; $acl=Get-Acl -LiteralPath $p; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::Read,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }; exit 0 } catch { exit 1 }`;
-    try { await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_TEST_PRIVATE_TARGET: target } }); }
+    try { await runFile(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, XIU_TEST_PRIVATE_TARGET: target }) }); }
     catch { throw new Error("Windows privacy fixture modification failed"); }
   };
   const rejectedPrivately = (error: unknown) => {
@@ -135,7 +155,7 @@ test("Windows ACL subprocess failures expose only bounded allowlisted stage code
   assert.equal(providerWindowsPrivacyFailureKind({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: true, stderr: canary }), "stdio-limit");
   assert.equal(providerWindowsPrivacyFailureKind({ code: 1, stdout: "XIU_ACL_V1:verify-owner" }), "nonzero-exit");
   assert.equal(providerWindowsPrivacyFailureKind({ code: canary, stderr: canary }), "process");
-  for (const category of ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "argument", "io", "unknown"]) {
+  for (const category of ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "command-not-found", "argument", "io", "unknown"]) {
     const error = { code: 1, stdout: `XIU_ACL_V1:initialize-write:${category}\r\n`, stderr: canary, message: canary };
     assert.equal(providerWindowsPrivacyFailureCategory(error), category);
     assert.equal(providerWindowsPrivacyFailureStage(error), "initialize-write");
@@ -158,9 +178,13 @@ try {
   )
   foreach ($case in $cases) {
     $inner = [System.ComponentModel.Win32Exception]::new($case[0], $env:XIU_TEST_EXCEPTION_CANARY)
-    $wrapped = [System.ArgumentException]::new($env:XIU_TEST_EXCEPTION_CANARY, $inner)
+    $wrapped = [System.Exception]::new($env:XIU_TEST_EXCEPTION_CANARY, $inner)
     if ((Get-XiuPrivacyFailureCategory $wrapped) -ne $case[1]) { throw 'Fixture category mismatch' }
   }
+  $argument = [System.ArgumentException]::new($env:XIU_TEST_EXCEPTION_CANARY, [System.ComponentModel.Win32Exception]::new(5, $env:XIU_TEST_EXCEPTION_CANARY))
+  if ((Get-XiuPrivacyFailureCategory $argument) -ne 'invalid-parameter') { throw 'Fixture argument HRESULT mismatch' }
+  $missing = [System.Management.Automation.CommandNotFoundException]::new($env:XIU_TEST_EXCEPTION_CANARY)
+  if ((Get-XiuPrivacyFailureCategory $missing) -ne 'command-not-found') { throw 'Fixture command category mismatch' }
   $hresult = [System.Runtime.InteropServices.COMException]::new($env:XIU_TEST_EXCEPTION_CANARY, -2147023582)
   if ((Get-XiuPrivacyFailureCategory $hresult) -ne 'privilege-not-held') { throw 'Fixture HRESULT mismatch' }
   $unknown = [System.Exception]::new($env:XIU_TEST_EXCEPTION_CANARY)
@@ -170,7 +194,7 @@ try {
 } catch { [Console]::Out.WriteLine('XIU_ACL_V1:initialize-write:unknown'); exit 1 }
 `;
   try {
-    const result = await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_TEST_EXCEPTION_CANARY: canary } });
+    const result = await runFile(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, XIU_TEST_EXCEPTION_CANARY: canary }) });
     assert.match(result.stdout, /^XIU_ACL_V1:ok\r?\n?$/);
     assert.equal(result.stderr, "");
   } catch (error) {

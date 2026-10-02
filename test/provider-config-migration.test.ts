@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { providerWindowsPrivacyFailureKind } from "../src/provider-config-migration.js";
+import { providerWindowsPrivacyFailureKind, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment } from "../src/provider-config-migration.js";
 
 const canary = "fixture_Q7pR-not-a-real-key_38v!";
 async function fixture(t: TestContext, version: number | null = 4) {
@@ -29,7 +29,7 @@ async function upgraded(t: TestContext) {
 }
 async function runFixturePowerShell(stage: "owner" | "readback" | "modify", script: string, env: NodeJS.ProcessEnv): Promise<void> {
   try {
-    await promisify(execFile)("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", `$ProgressPreference='SilentlyContinue'; ${script}`], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env });
+    await promisify(execFile)(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", `$ProgressPreference='SilentlyContinue'; ${script}`], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment(env) });
   } catch (error) { throw new Error(`Windows ACL fixture ${stage} failed (${providerWindowsPrivacyFailureKind(error)})`); }
 }
 

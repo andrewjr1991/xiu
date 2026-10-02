@@ -1,16 +1,27 @@
 # Xiu 开发阶段记录
 
+## 阶段二最小修正：0.20.3-preview.8
+
+- 状态：本地 868 项测试，853 通过、15 项平台专属跳过、0 失败；两端类型检查、CLI 构建、桌面编译/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、preview.8 隔离包安装和 Linux 平台 smoke 均通过。窄范围独立复查无阻断问题；Windows 实际预检、精确提交/CI、CLI tarball 和 Windows 未签名 EXE 待回填。未发布 npm，暂停新功能，不能继承 preview.7 的五个通过作业
+- 基线：preview.7 / 2464823d9c6bd181bf4fe55d4e0d1b535a3ed7b4，整体未接受，详见下一节
+- 范围：preview.8 仅在 Windows PowerShell 子进程环境中按大小写不敏感方式移除继承的 PSModulePath，父进程环境不变；保留 Get-Acl 回读、.NET Owner/DACL 持久化和 owner-only 失败关闭规则。新增固定 command-not-found 类别，并修正异常包装测试夹具；不同时改写生产读取 API。
+- 依据：[Microsoft 中间进程启动 Windows PowerShell 的模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7)。pwsh → Node → Windows PowerShell 的继承路径与文档场景相符，但实际失败仍须由精确 Windows 运行证明，不能反推所有旧版本的唯一根因
+- 异常测试：旧包装夹具外层 ArgumentException 的 HRESULT 已对应 invalid-parameter，不能要求优先返回其内层类别；改用独立 .NET 夹具验证真正包装链，并保留外层类别优先规则
+- 验收要求：子环境混合大小写键清理及父环境不变回归；Windows 实际 Get-Acl、秘密写入前保护、已有对象逐次校验、失败关闭、完整 CLI 与全部桌面/安装门禁。生产 Get-Acl API 和 ACL 判定不变
+- 视觉证据：preview.7 的三平台 18 张合成 PNG 已检查：Linux 中文缺字属于运行环境字体缺口，macOS 宽窗恢复图截取了错误状态，三平台菜单图均未显示展开菜单；来源详情中的 canary 是有意的活动预览，不是隐私泄漏证据。截图存在不等于视觉验收全部通过，截图修正排在 Windows 隐私门禁之后。
+- 已知限制：bootstrap 启动领取与无 PID 取消竞态未修复；不自动修复/删除旧不安全恢复目录。原生联网认证继续暂停，真实 OS IME、付费 Provider 和外部设备验收仍独立
+
 ## 阶段二后续修正：0.20.3-preview.7
 
-- 状态：本地最终 867 项测试，852 通过、15 项平台专属跳过、0 失败；尚未提交/推送或完成目标平台验收，未发布 npm。最后完整六作业通过仍为 preview.3
+- 状态：已推送 2464823d9c6bd181bf4fe55d4e0d1b535a3ed7b4，整体未接受。preview.7（2464823d9c6bd181bf4fe55d4e0d1b535a3ed7b4）的 CI 36983872073 已结束：三平台桌面与 Linux/macOS CLI 通过；Windows 隐私预检失败，全量 Windows CLI 跳过，包/平台/评测检查通过，整体未接受。目录 .NET 写入已通过，随后 Get-Acl 在 verify-read 阶段返回 unknown；比较探针首次 Get-Acl 也失败，不能把这一结果当作权限规则失效或旧根因已完全证明。 本地最终 867 项测试，852 通过、15 项平台专属跳过、0 失败；未发布 npm，最后完整六作业通过仍为 preview.3
 - 基线：preview.6 / 17480422e1c58eaf18caedd34c193e2fc192c408，整体未接受；Windows 隐私预检 initialize-write（Set-Acl）失败，不据此推定原始系统错误或根因
 - Provider：新对象改用 .NET 直接持久化已修改的 Owner/DACL，保留 Group/SACL，保留写入前 owner-only 回读及已有对象逐次验证；固定异常类别与经过校验的绝对 SystemRoot PowerShell 路径，不暴露原始异常/路径/账户，不放宽保护或失败重试
 - 后台：仅本地元数据替换进行有界重试，固定阶段/代码的独立失败凭据、异步输出/状态回调保护；进程/管道关闭和终止确认后才报告终态。Windows 清理使用 OS-helper 路径；前台停止无法确认时保留活动/未知状态并返回明确错误，不重放命令或输出
-- 合成 UI 证据：Windows/macOS/Linux 桌面成功运行后均须验证并上传精确白名单中的六张 PNG，包含 1366×768 与 900×768 的恢复预览。制品名包含桌面版本、平台、完整提交 SHA 与 run attempt，保留 30 天；缺少图片或上传失败不能记为门禁通过。白名单不包含临时用户资料或配置，既有失败上传路径不变；不修改生产 UI。跨平台截图仍须下载本轮 CI 制品后逐张检查，目前视觉验收待完成
-- 本地通过：两端 typecheck、最终全量测试、CLI 构建/桌面编译及静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装/Linux 平台 smoke。默认 npm 缓存路径不可写导致初次 dry-pack 失败，使用可写隔离缓存重跑通过；依赖下载使用获准的官方 Registry 访问。精确提交六作业（尤其 Windows 隐私预检、完整 CLI 与安装生命周期）仍待执行
+- 合成 UI 证据：Windows/macOS/Linux 桌面成功运行后均须验证并上传精确白名单中的六张 PNG，包含 1366×768 与 900×768 的恢复预览。制品名包含桌面版本、平台、完整提交 SHA 与 run attempt，保留 30 天；缺少图片或上传失败不能记为门禁通过。白名单不包含临时用户资料或配置，既有失败上传路径不变；不修改生产 UI。preview.7 的三平台 18 张合成 PNG 已检查：Linux 中文缺字属于运行环境字体缺口，macOS 宽窗恢复图截取了错误状态，三平台菜单图均未显示展开菜单；来源详情中的 canary 是有意的活动预览，不是隐私泄漏证据。截图存在不等于视觉验收全部通过，截图修正排在 Windows 隐私门禁之后。
+- 本地通过：两端 typecheck、最终全量测试、CLI 构建/桌面编译及静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装/Linux 平台 smoke。默认 npm 缓存路径不可写导致初次 dry-pack 失败，使用可写隔离缓存重跑通过；依赖下载使用获准的官方 Registry 访问。精确提交六作业已经结束；上述 Windows 隐私预检失败及完整 CLI 跳过不由本地通过结果覆盖
 - 独立复查发现并修正失败收尾的 SIGTERM 处理器安装顺序、重定向后代进程提前解除强杀计时、并发取消误报及最后半行输出丢失；复查子集 12/12，Node 20 后台 34 项及最后半行新增项分别通过。本地结果不能替代 Windows
 - 已知既有缺口：bootstrap 启动领取与尚无 PID 时的取消没有跨进程串行协议，仍有旧快照覆盖取消的窄竞态；本轮未修改 bootstrap，下一步以共享领取/取消协议处理，不能以一次额外读取宣称消除竞态
-- 产物待回填：本轮 CLI tarball、Windows 未签名 EXE、完整提交 SHA、manifest/逐项状态及实际文件 SHA-256；不得复用旧版本产物作为本轮通过证据
+- 精确 CI：[36983872073](https://github.com/andrewjr1991/xiu/actions/runs/36983872073)。[Windows 未接受 EXE](https://github.com/andrewjr1991/xiu/actions/runs/36983872073/artifacts/11216548709)：123409154 字节，SHA-256 `62e581da1df5e467224601d67f4b4ea5133ed75b1bf06e1dc37aa5b5f9bd6ea8`；[Windows 未接受 CLI tarball](https://github.com/andrewjr1991/xiu/actions/runs/36983872073/artifacts/11216985500)：776234 字节，SHA-256 `49bf1961dd32cd50ffa08702af21df7b7f8afbfc95f795ddab2e0c5d64446562`。链接、manifest 和实际文件摘要已核验并提供下载；构建成功不代表候选通过
 - 不包含暂停中的原生联网认证，不宣称真实 OS IME、付费 Provider 或用户设备已验收。旧不安全恢复目录不会被静默修复，不应直接删除可能含原始备份的目录
 
 ## 阶段二后续修正：0.20.3-preview.6

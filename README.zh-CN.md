@@ -1,10 +1,10 @@
 <div align="center">
 
-> Windows 配置验收仍未完成：preview.4/5 出现权限检查失败；preview.6 在 initialize-write（Set-Acl）阶段未通过必需 Windows 隐私预检，因此跳过 Windows CLI 全量测试。preview.7 调整 ACL 持久化和后台失败处理，精确 Windows 验收仍待完成。新候选全部门禁通过前，真实渠道配置请继续使用完整验收通过的 preview.3。
+> Windows 配置验收仍未完成：preview.7 的五个 CI 作业通过，但 Windows 隐私预检在目录 .NET 写入成功后的 Get-Acl 回读失败，全量 Windows CLI 跳过。preview.8 仅隔离子 PowerShell 模块环境并修正异常夹具，真实 Windows 证明待完成；新候选全部门禁通过前，真实渠道配置继续使用完整通过的 preview.3。
 
 开发候选：桌面输入区新增空闲时可切换的“执行 / Plan · 只读”，由共享运行时实施。完全访问也不能绕过 Plan 的写入/执行工具限制；继续历史或恢复任务保留用户当前明确选择的模式。新对话及同一已打开工作区中的渠道/模型重配保留选择；关闭重开或切换工作区默认执行模式。完全访问仍在重配后重置。输入法候选确认 Enter 不再提交任务或追加要求，普通 Enter 发送、Shift+Enter 换行；合成事件自动化覆盖不代替真实系统输入法验收。
 
-> 当前开发候选：**0.20.3-preview.7**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
+> 当前开发候选：**0.20.3-preview.8**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
 
 # Xiu
 
@@ -26,7 +26,7 @@
 
 开发候选的 Provider 配置恢复：CLI 先运行 `xiu --provider-config-diagnostics` 查看不含密钥、渠道内容或路径的诊断与可验证备份，再用 `xiu --provider-config-preview <备份ID>` 预览。`xiu --provider-config-recover <备份ID>` 只接受交互式终端中明确输入 `RECOVER`；`-y`、管道、空输入和取消均不能恢复。桌面侧栏“Provider 配置诊断与恢复”在正常渠道启动失败时仍可进入，恢复需要独立系统确认。操作前关闭其他 Xiu 客户端，成功后必须重启。保留当前配置的 `current` 仅用于已验证退出进程的中断写锁，不是恢复备份；不允许降级未来格式，不恢复系统凭据。
 
-preview.7 保留 owner-only ACL 回读和失败关闭，改为 .NET 直接持久化 Owner/DACL、固定异常类别，并从经过校验的绝对 SystemRoot 定位 PowerShell。后台只对元数据进行有界重试，不重放命令或输出；无法确认进程已停止时保留活动/未知证据并返回明确错误。已有不安全恢复目录不会被静默修复或删除。本候选尚无已记录的构建产物或 CI 接受结果。
+preview.8 仅在 Windows PowerShell 子进程环境中按大小写不敏感方式移除继承的 PSModulePath，父进程环境不变；保留 Get-Acl 回读、.NET Owner/DACL 持久化和 owner-only 失败关闭规则。新增固定 command-not-found 类别，并修正异常包装测试夹具；不同时改写生产读取 API。此调整依据 [Microsoft 的中间进程模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7)，不声称旧失败根因已完全证明。preview.7 产物已核验但未接受，preview.8 验收与产物待回填。后台仅有界重试元数据，不重放命令/输出；未确认停止保留活动/未知状态。已有不安全恢复目录不会被静默修复或删除。
 
 ## 安装
 
