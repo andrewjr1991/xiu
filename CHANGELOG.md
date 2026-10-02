@@ -2,7 +2,15 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## 0.20.3-preview.9 — Unreleased candidate
+## 0.20.3-preview.10 — Pre-release candidate
+
+- Align sidebar utilities, Execute/Plan controls and model picker actions across wide and narrow windows.
+- Collapse MCP details by default and explain Provider configuration recovery without changing authorization or recovery behavior.
+- Add draggable/keyboard resizable split panes; fully hide the workbench on collapse and restore tabs, terminal state and pane ratio from a header control.
+- Use an isolated, main-process-owned Xiu-styled Full Access confirmation; Cancel, close and Escape never authorize.
+- Keep npm stable `latest` at 0.20.2; Windows x64 desktop installers remain unsigned previews.
+
+## 0.20.3-preview.9 — Prior candidate history
 
 - Require the focused Windows cleanup/current-recovery regressions after privacy preflight and before the full suite; preserve complete tests and record every gate in candidate metadata.
 

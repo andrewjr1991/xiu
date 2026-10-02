@@ -119,6 +119,15 @@ app.whenReady().then(async () => {
       assert(await evaluate(window, `parseFloat(getComputedStyle(document.querySelector('[aria-label="搜索变更文件"]')).borderTopLeftRadius) >= 6 && parseFloat(getComputedStyle(document.querySelector('[aria-label="执行轮次"]')).borderTopLeftRadius) >= 6`), "Diff controls lost workbench styling.");
     };
     const checkStableTabs = async () => {
+      const splitter = await evaluate(window, `(() => { const r=document.querySelector('.task-splitter').getBoundingClientRect(); return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+100)}; })()`);
+      const beforeDrag = await evaluate(window, `document.querySelector('.task-console').getBoundingClientRect().width`);
+      window.webContents.debugger.attach('1.3');
+      await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mousePressed',x:splitter.x,y:splitter.y,button:'left',buttons:1,clickCount:1});
+      await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:splitter.x+40,y:splitter.y,button:'left',buttons:1});
+      await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseReleased',x:splitter.x+40,y:splitter.y,button:'left',buttons:0,clickCount:1});
+      window.webContents.debugger.detach();
+      await settleLayout(window);
+      assert(await evaluate(window, `document.querySelector('.task-console').getBoundingClientRect().width > ${beforeDrag} + 20`), "Dragging divider did not resize the conversation.");
       const width = await evaluate(window, `document.querySelector('.review-inspector').getBoundingClientRect().width`);
       for (const label of ['文件', '终端', '子智能体', '数据', '证据', '变更']) {
         await openTool(window, label);
@@ -127,6 +136,17 @@ app.whenReady().then(async () => {
       assert(await evaluate(window, `(() => { const pane=document.querySelector('.review-inspector').getBoundingClientRect(); return [...document.querySelectorAll('.workbench-actions button')].every(el => { const r=el.getBoundingClientRect(); return r.left >= pane.left && r.right <= pane.right && r.width > 0; }); })()`), "Overflowing tabs hid fixed workbench controls.");
       await evaluate(window, `document.querySelector('.workbench-tab-strip').scrollLeft=10000`);
       assert(await evaluate(window, `document.querySelector('.workbench-actions').getBoundingClientRect().right <= document.querySelector('.review-inspector').getBoundingClientRect().right`), "Scrolling tabs moved the toolbar offscreen.");
+      await evaluate(window, `document.querySelector('[aria-label="收起侧栏"]').click()`);
+      await settleLayout(window);
+      assert(await evaluate(window, `getComputedStyle(document.querySelector('.review-inspector')).display === 'none' && document.querySelector('.review-inspector').getBoundingClientRect().width === 0`), "Sidebar must disappear entirely, not leave a rail.");
+      assert(await evaluate(window, `Boolean(document.querySelector('.workspace-header [aria-label="展开侧栏"]')) && Math.abs(document.querySelector('.task-console').getBoundingClientRect().width-document.querySelector('.task-layout').getBoundingClientRect().width) < 1`), "Collapsed workbench should return all width and move reopen to header.");
+      await fs.promises.writeFile(path.join(smokeRoot, 'workbench-collapsed-' + (await evaluate(window, 'innerWidth')) + '.png'), (await window.webContents.capturePage()).toPNG());
+      assert(await evaluate(window, `document.querySelector('.task-console').getBoundingClientRect().width > ${width}`), "Collapsed sidebar did not return space to conversation.");
+      await evaluate(window, `document.querySelector('.workspace-header [aria-label="展开侧栏"]').click()`);
+      await settleLayout(window);
+      assert(await evaluate(window, `Math.abs(document.querySelector('.review-inspector').getBoundingClientRect().width - ${width}) < 1`), "Sidebar expansion lost original width.");
+      await evaluate(window, `document.querySelector('.task-splitter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
+      await settleLayout(window);
     };
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-1366.png"), (await window.webContents.capturePage()).toPNG());
@@ -155,7 +175,10 @@ app.whenReady().then(async () => {
     await evaluate(window, `(() => { const input=document.querySelector('[aria-label="搜索变更文件"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,''); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
 
     await clickText(window, "MCP 连接与权限", ".sidebar-mcp");
-    await waitFor(window, `document.querySelector('.mcp-panel') && document.body.innerText.includes('process:execute')`, "MCP permission view");
+    await waitFor(window, `document.querySelector('.mcp-server-details')`, "MCP compact view");
+    assert(await evaluate(window, `!document.querySelector('.mcp-server-details').open`), "MCP details must start collapsed.");
+    await evaluate(window, `document.querySelector('.mcp-server-details summary').click()`);
+    await waitFor(window, `document.body.innerText.includes('process:execute')`, "MCP permission view");
     const mcpStyles = await evaluate(window, `(() => {
       const sidebar = getComputedStyle(document.querySelector('.sidebar-mcp'));
       const buttons = [...document.querySelectorAll('.mcp-panel button')];
@@ -185,6 +208,7 @@ app.whenReady().then(async () => {
     await evaluate(window, `(() => {const fields=document.querySelectorAll('.mcp-editor input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(fields[0],'ui-added');fields[0].dispatchEvent(new Event('input',{bubbles:true}));setter.call(fields[1],'node');fields[1].dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await clickText(window, "保存配置", ".mcp-editor button");
     await waitFor(window, `window.xiuSmoke.calls().includes('mcp:save:ui-added') && !document.querySelector('.mcp-editor')`, "MCP save without implicit connection");
+    await evaluate(window, `[...document.querySelectorAll('.mcp-server-details')].forEach(detail => detail.open = true)`);
     await clickText(window, "编辑 ui-added", ".mcp-panel button");
     await waitFor(window, `document.querySelector('.mcp-editor input')?.disabled`, "MCP immutable edit identity");
     await clickText(window, "保存配置", ".mcp-editor button");
@@ -208,8 +232,10 @@ app.whenReady().then(async () => {
     console.log("UI smoke: approval mode ready");
 
     await waitFor(window, `document.querySelector('.plan-mode-selector')?.getAttribute('aria-pressed') === 'false' && !document.querySelector('.plan-mode-selector').disabled`, "idle execute mode");
+    const executeHeight = await evaluate(window, `document.querySelector('.plan-mode-selector').getBoundingClientRect().height`);
     await evaluate(window, `document.querySelector('.plan-mode-selector').click()`);
     await waitFor(window, `document.querySelector('.plan-mode-selector').getAttribute('aria-pressed') === 'true' && document.querySelector('.plan-mode-note').innerText.includes('完全访问也不例外')`, "Plan read-only guidance");
+    assert(await evaluate(window, `document.querySelector('.plan-mode-selector').getBoundingClientRect().height === ${executeHeight}`), "Execute and Plan controls have different heights.");
     await evaluate(window, `document.querySelector('.permission-selector').click()`);
     await clickText(window, "完全访问权限", '.permission-popover button');
     await waitFor(window, `document.querySelector('.permission-selector').classList.contains('mode-full')`, "full access fixture selection");
@@ -224,6 +250,13 @@ app.whenReady().then(async () => {
 
     await clickText(window, "OpenAI", ".model-selector");
     await waitFor(window, `document.querySelector('[aria-label="选择 Provider 和模型"]')`, "provider picker");
+    for (const width of [1366, 900]) {
+      await resizeViewport(window, width, 768, 'provider actions layout');
+      assert(await evaluate(window, `[...document.querySelectorAll('.provider-actions button')].every(el => getComputedStyle(el).whiteSpace === 'nowrap' && el.scrollWidth <= el.clientWidth + 1)`), 'Provider action labels wrap or clip.');
+      assert(await evaluate(window, `(() => { const el=document.querySelector('.sidebar-utilities'); return el.getBoundingClientRect().height < 150 && el.getBoundingClientRect().bottom <= innerHeight; })()`), 'Sidebar utility entries are spread apart or outside the viewport.');
+      await fs.promises.writeFile(path.join(smokeRoot, 'provider-layout-' + width + '.png'), (await window.webContents.capturePage()).toPNG());
+    }
+    await resizeViewport(window, 1366, 768, 'provider wide restore');
     await clickText(window, "Agnes", ".provider-nav-row > button");
     await waitFor(window, `document.body.innerText.includes('生图模型') && document.body.innerText.includes('视频模型')`, "media model groups");
     await clickText(window, "agnes-image-2.1-flash", ".capability-model-group .model-list button");

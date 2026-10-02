@@ -11,6 +11,7 @@ import { DesktopProviderRecoveryController } from "./provider-recovery-controlle
 import type { DesktopProviderRecoveryRequest } from "../shared/provider-recovery.js";
 import { DesktopTerminalController } from "./terminal-controller.js";
 import { DesktopBrowserController } from "./browser-controller.js";
+import { confirmFullAccess } from "./full-access-dialog.js";
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
 import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
@@ -241,13 +242,8 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return taskController.setApprovalMode(controller.trustedWorkspacePath(), request, async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return false;
-      const result = await dialog.showMessageBox(mainWindow, {
-        type: "warning", title: "开启完全访问权限？", defaultId: 0, cancelId: 0,
-        buttons: ["取消", "开启完全访问"],
-        message: "Xiu 将自动执行所有任务操作，包括危险操作，不再逐项请求批准。",
-        detail: "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。权限不超过当前 Windows 用户。工作区内文件检查点继续保留；工作区外修改不保存源码快照，也不能保证撤销。仅在当前工作区本次打开期间有效，重新打开或重启后需要重新确认。Plan 只读、MCP 连接授权和凭证保护仍独立生效。",
-      });
-      return result.response === 1;
+      await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
+      return confirmFullAccess(mainWindow);
     });
   });
   ipcMain.handle(desktopChannels.approvalDecide, async (event, request: RuntimeApprovalDecisionRequest) => {

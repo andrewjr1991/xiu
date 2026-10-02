@@ -1,12 +1,16 @@
 <div align="center">
 
-> Windows acceptance is still pending. Preview.8 passed five of six CI jobs and all nine Windows privacy checks, but the full Windows CLI suite had two failures (859 passed, 7 skipped). Preview.9 targets only those regressions; its validation and artifacts are pending. Preview.3 remains the last candidate with all six jobs passing.
+> Handoff baseline: preview.9 (`99f86cb`) passed all six CI jobs in run `36996849173` and was released as a GitHub pre-release; npm remains 0.20.2. Local UI corrections on this branch are not part of that immutable release. Real OS IME, external devices and paid Provider acceptance remain pending.
+
+Local desktop UI corrections: compact bottom-aligned utility entries, consistent Execute/Plan controls, non-wrapping model action labels, a collapsible tool sidebar that retains tabs/terminal state, and a main-process-owned Xiu-styled Full Access confirmation. No permission or recovery policy is relaxed.
 
 Development candidate: the desktop composer now has an idle-only Execute / Plan read-only switch backed by the shared runtime. Plan still blocks write/execute tools under Full access; continuing history or recovering a task keeps the mode you explicitly selected. A new conversation and Provider/model reconfiguration in the same open workspace keep that selection. Closing/reopening or switching workspaces starts in Execute mode; Full access still resets on reconfiguration. IME candidate-confirmation Enter no longer submits a task or steering message; normal Enter sends and Shift+Enter inserts a newline. Automated synthetic-event coverage does not replace testing with a real OS input method.
 
-> Development candidate: **0.20.3-preview.9**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
+> Development candidate: **0.20.3-preview.10**. This UI follow-up is authorized for pre-release publication after exact-commit verification. The stable npm `latest` remains 0.20.2; preview builds use the `preview` channel. Candidate scope and verification are tracked in [development progress](./docs/development-progress.md).
 
 # Xiu
+
+本地未发布 UI 修正：MCP 详情默认折叠，工作台支持拖动调宽，配置恢复增加分步说明，完全访问确认窗口使用无系统标题栏的 Xiu 样式；权限与凭证边界保持不变。
 
 0.20.2 desktop preview: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected.
 

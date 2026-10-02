@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/desktop",
-  "version": "0.20.3-preview.9",
+  "version": "0.20.3-preview.10",
   "private": true,
   "description": "Xiu local-first desktop workbench.",
   "author": "Xiu",
@@ -23,6 +23,7 @@
     "smoke": "node scripts/smoke.mjs",
     "smoke:ui": "npm run build && electron scripts/ui-smoke-harness.cjs",
     "smoke:browser": "node scripts/browser-smoke.mjs",
+    "smoke:full-access": "electron scripts/full-access-dialog-smoke.cjs",
     "smoke:installer:win": "node scripts/windows-installer-smoke.mjs",
     "smoke:installer:msix:win": "node scripts/windows-msix-smoke.mjs"
   },

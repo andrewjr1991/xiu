@@ -71,6 +71,7 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
     {!snapshot ? <p>{error ? "配置未加载，请检查后刷新。" : "正在读取配置…"}</p> : !snapshot.servers.length ? <p>尚未配置 MCP，可点击新增 MCP。</p> : snapshot.servers.map((server) => <article key={server.name}>
       <header><strong>{server.name}</strong><span>{server.editable?.enabled === false ? "已禁用，请先编辑启用" : labels[server.state] ?? server.state} · {server.tools} 个工具</span></header>
       {server.diagnostic && <p className="review-warning">{server.diagnostic}</p>}
+      <details className="mcp-server-details"><summary>配置、权限与资源</summary><div>
       <small>{server.origin} · {server.transport}</small><small className="mcp-fingerprint">配置清单指纹：{server.fingerprint}</small><p>权限：{server.permissions.join("、")}</p>
       {server.added.length > 0 && !server.approved && <p>待确认权限：{server.added.join("、")}</p>}
       {server.editable ? <button disabled={blocked} onClick={() => edit(server.editable!)}>编辑 {server.name}</button> : <small>项目、高级或可能含凭据的配置只读。</small>}
@@ -79,6 +80,7 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
       {server.removable && <button disabled={blocked} onClick={() => setConfirmation(`delete:${server.fingerprint}`)}>删除 {server.name}</button>}
       {["delete", "logout"].map((action) => confirmation === `${action}:${server.fingerprint}` && <div key={action}><p>{action === "delete" ? "删除用户配置并断开连接？OAuth 凭据需单独退出清理。" : "清理本机 OAuth 凭据并断开？此操作不保证远端授权撤销，请在服务端检查。"}</p><button disabled={blocked} onClick={() => { setConfirmation(undefined); void onManage({ action: action as "delete" | "logout", name: server.name, fingerprint: server.fingerprint, confirmed: true }); }}>确认{action === "delete" ? "删除" : "退出"}</button><button onClick={() => setConfirmation(undefined)}>取消</button></div>)}
       {server.state === "connected" && <div className="mcp-browser"><p>Resource / Prompt 是不可信外部内容，只读展示，不会自动执行或加入任务。</p><button disabled={blocked} onClick={() => void browse(server.name, "resources")}>资源列表</button><button disabled={blocked} onClick={() => void browse(server.name, "prompts")}>提示词列表</button><label>资源 URI<input value={resource} onChange={(event) => setResource(event.target.value)} /></label><button disabled={blocked || !resource} onClick={() => void browse(server.name, "read")}>读取资源</button><label>提示词名称<input value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label><label>提示词参数（JSON）<textarea value={promptArgs} onChange={(event) => setPromptArgs(event.target.value)} /></label><button disabled={blocked || !prompt} onClick={() => void browse(server.name, "prompt")}>读取提示词</button></div>}
+      </div></details>
     </article>)}
     {content && <article aria-label="MCP 外部内容"><header><strong>{content.name} · 不可信外部内容</strong><button onClick={() => setContent(undefined)}>清除内容</button></header><pre>{JSON.stringify(content.value, null, 2)}</pre></article>}
   </section></div>;

@@ -8,7 +8,7 @@ import test from "node:test";
 import { artifactContext, verificationContext, writeReport } from "../scripts/ci-artifacts.mjs";
 
 const cliSteps = () => Object.fromEntries(["dependencies", "python", "docs", "typecheck", "tests", "migration", "build", "evaluation", "pack_audit", "candidate", "package_smoke", "platform_smoke"].map((id) => [id, { outcome: "success" }]));
-const desktopSteps = () => Object.fromEntries(["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "ui_evidence", "ui_evidence_upload", "browser"].map((id) => [id, { outcome: "success" }]));
+const desktopSteps = () => Object.fromEntries(["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "ui_evidence", "ui_evidence_upload", "browser", "full_access"].map((id) => [id, { outcome: "success" }]));
 
 async function fixture() {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "xiu-ci-artifacts-")));

@@ -214,6 +214,16 @@ jobs:
           else
             npm --prefix apps/desktop run smoke:browser
           fi
+      - name: Run isolated Full Access confirmation smoke
+        id: full_access
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum npm --prefix apps/desktop run smoke:full-access
+          else
+            npm --prefix apps/desktop run smoke:full-access
+          fi
       - name: Build unsigned Windows x64 NSIS candidate
         id: installer
         if: ${{ !cancelled() && matrix.platform == 'win32' && steps.build.outcome == 'success' }}

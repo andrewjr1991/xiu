@@ -432,7 +432,11 @@ button, input, textarea { font: inherit; }
 .settings-provider-dialog { position: relative; width: min(760px, calc(100vw - 48px)); }
 .settings-provider-dialog .provider-popover { position: relative; left: auto; bottom: auto; width: 100%; }
 .settings-provider-dialog .provider-grid { height: min(430px, calc(100vh - 190px)); }
-.sidebar-mcp { margin-top: auto; padding: 12px; text-align: left; color: #65758b; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
+.sidebar-mcp { flex: 0 0 auto; margin-top: 0; padding: 10px 12px; text-align: left; color: #65758b; border: 0; border-radius: 10px; background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
+.sidebar-utilities { margin-top: auto; display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; }
+.sidebar-utilities .sidebar-footer { margin-top: 5px; }
+.sidebar > section { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.sidebar:has(.sidebar-mcp) { gap: 12px; }
 .sidebar-mcp:hover { background: #e6effb; color: #147bea; }
 .sidebar-mcp:focus-visible, .mcp-panel button:focus-visible { outline: 2px solid #147bea; outline-offset: 2px; }
 .sidebar-mcp + .sidebar-footer { margin-top: 0; }
@@ -452,9 +456,50 @@ button, input, textarea { font: inherit; }
 .mcp-panel pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f1f5fa; padding: 12px; }
 .mcp-panel a { overflow-wrap: anywhere; }
 
-.plan-mode-selector { flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: nowrap; }
+.plan-mode-selector { flex: 0 0 auto; min-height: 30px; padding: 0 9px; border: 1px solid #dce5f0; border-radius: 9px; color: #526176; background: #f5f8fc; cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap; }
 .plan-mode-selector.selected { color: #275d47; background: #eaf4ee; border-color: #adcbbb; }
 .plan-mode-note { font-size: 12px; color: #456b56; padding: 4px 6px 8px; }
-/* Keep every mode control reachable when the conversation pane is narrow. */
-.composer-tools { flex-wrap: wrap; row-gap: 4px; }
-.composer-tools .model-selector { flex-basis: 160px; min-width: min(160px, 100%); }
+/* Mode and permission stay fixed; the model label takes remaining space. */
+.composer-tools { flex-wrap: nowrap; }
+.composer-tools .attach-button { flex: 0 0 29px; }
+.composer-tools .model-selector { flex: 1 1 0; min-width: 0; }
+@media (max-width: 1100px) {
+  .composer-tools { display: grid !important; grid-template-columns: auto 29px minmax(0, 1fr); row-gap: 6px; }
+  .composer-tools .model-selector { grid-column: 1 / -1; width: 100%; }
+  .composer-tools .permission-selector { padding: 0 4px; }
+  .model-selector .model-provider { max-width: 35%; overflow: hidden; text-overflow: ellipsis; }
+  .composer .provider-popover { position: fixed; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); width: min(640px, calc(100vw - 40px)); max-height: calc(100vh - 140px); overflow: auto; }
+}
+.provider-actions { flex-wrap: nowrap; overflow-x: auto; }
+.provider-actions button { flex: 0 0 auto; white-space: nowrap; font-family: inherit; }
+.provider-header-actions { flex: 0 0 auto; }
+.provider-header-actions button { white-space: nowrap; }
+.provider-summary > div { min-width: 0; }
+.provider-summary > div small { overflow-wrap: anywhere; }
+.provider-summary > span { flex: 0 0 auto; white-space: nowrap; }
+.resizable-task-layout { grid-template-columns: minmax(0, var(--task-split, 46.5%)) 12px minmax(0, 1fr); gap: 0; }
+.task-splitter { cursor: col-resize; touch-action: none; position: relative; border-radius: 6px; outline-offset: -2px; }
+.task-splitter::after { content: ""; position: absolute; width: 3px; top: 12px; bottom: 12px; left: 4px; border-radius: 3px; background: transparent; transition: background .15s; }
+.task-splitter:hover::after, .task-splitter:focus-visible::after, .resizing .task-splitter::after { background: #82b9ef; }
+.resizing { user-select: none; }.resizing iframe { pointer-events: none; }
+.task-layout:has(.workbench-collapsed) { grid-template-columns: minmax(0, 1fr) 0 0; }
+.task-layout:has(.workbench-collapsed) .task-splitter, .task-layout:has(.workbench-full) .task-splitter { visibility: hidden; pointer-events: none; }
+.workbench-collapsed { display: none; }
+.workspace-header-actions { display: flex; align-items: center; gap: 12px; }
+.workbench-reopen { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #6e798c; font: inherit; cursor: pointer; }
+.workbench-reopen:hover { background: #e8f2ff; color: #126fcf; }
+.workbench-reopen:focus-visible { outline: 2px solid #147bea; outline-offset: 2px; }
+.mcp-panel { width: min(680px, calc(100vw - 48px)); border: 1px solid #dce5f0; border-radius: 16px; padding: 20px; box-shadow: 0 16px 60px rgba(26,45,73,.16); font: inherit; scrollbar-width: thin; }
+.mcp-panel > header { margin-bottom: 16px; }.mcp-panel h2 { font-size: 18px; margin: 0; }.mcp-panel h3 { font-size: 14px; }
+.mcp-panel p, .mcp-panel small { font-family: inherit; font-size: 12px; line-height: 1.6; }
+.mcp-panel button { font: inherit; font-size: 12px; padding: 8px 12px; border-radius: 8px; }
+.mcp-panel > header button { margin: 0; width: 32px; height: 32px; padding: 0; font-size: 20px; }
+.mcp-panel article { padding: 12px; margin-top: 12px; }.mcp-panel article header { font-size: 12px; flex-wrap: wrap; gap: 6px; }
+.mcp-actions { display: flex; flex-wrap: wrap; gap: 6px; }.mcp-actions button { margin: 0; }
+.mcp-server-details summary { cursor: pointer; color: #65758b; font-size: 12px; padding-top: 10px; }
+.mcp-server-details > div { padding-top: 10px; }.mcp-server-details summary:hover { color: #147bea; }
+.recovery-guide { padding: 12px 14px; background: #f5f8fc; border-radius: 10px; font-size: 12px; color: #526078; }
+.recovery-guide p { margin: 6px 0; }.recovery-guide ol { margin: 8px 0 0; padding-left: 20px; line-height: 1.8; }
+.recovery-status { padding: 10px 12px; background: #f5f8fc; border-radius: 8px; }
+.plan-mode-selector:hover { border-color: #b9d9ff; background: #edf5ff; }
+.plan-mode-selector:focus-visible { outline: 2px solid #82b9ef; outline-offset: 2px; }
