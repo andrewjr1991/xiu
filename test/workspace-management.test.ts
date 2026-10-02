@@ -69,6 +69,9 @@ test("skill preview cancellation and wrong token leave installed directory untou
   await assert.rejects(service.change({ action: "skill-install", revision: second.revision, token: "wrong", confirmed: true }));
   await assert.rejects(service.change({ action: "skill-install", revision: second.revision, token: second.token, confirmed: true }));
   await assert.rejects(fs.stat(installed));
+  await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: inert-canary-no-request\n---\nMetadata must not expose a known credential");
+  const safe = await service.prepareSkill(source);
+  assert.equal(JSON.stringify(safe).includes("inert-canary-no-request"), false);
 });
 
 test("management snapshots contain bounded metadata, not known provider credentials or source paths", async () => {

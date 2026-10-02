@@ -32,6 +32,14 @@ export class WorkspaceManagementService {
   constructor(private readonly registry: ProviderRegistry, private readonly skills: SkillRegistry,
     private readonly settings = new SettingsStore()) {}
 
+  private metadata(value: string, limit: number): string {
+    const secrets = this.registry.list().flatMap((item) => {
+      const profile = this.registry.get(item.id);
+      return [profile?.apiKey, profile?.apiKeyEnv ? process.env[profile.apiKeyEnv] : undefined];
+    }).filter((key): key is string => Boolean(key));
+    return redactSecrets(value, secrets).slice(0, limit);
+  }
+
   private async digest(root: string): Promise<string> {
     const hash = createHash("sha256");
     let count = 0; let bytes = 0;
@@ -78,7 +86,8 @@ export class WorkspaceManagementService {
       if (this.closed || generation !== this.previewGeneration) throw new Error("Skill preview cancelled.");
       const token = randomUUID(); const expiresAt = Date.now() + 5 * 60_000;
       this.pending = { root, packageRoot, digest, token, expiresAt, revision };
-      return { revision, token, digest, expiresAt: new Date(expiresAt).toISOString(), skills };
+      return { revision, token, digest, expiresAt: new Date(expiresAt).toISOString(),
+        skills: skills.map((skill) => ({ ...skill, name: this.metadata(skill.name, 160) })) };
     } catch (error) { await fs.rm(root, { recursive: true, force: true }); throw error; }
   }
 
