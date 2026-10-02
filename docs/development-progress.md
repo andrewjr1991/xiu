@@ -1,8 +1,21 @@
 # Xiu 开发阶段记录
 
+## 阶段一后续修正：0.20.3-preview.3
+
+- 状态：本地 742 项测试，732 通过、10 项 Windows 专属跳过、0 失败；尚未提交/推送或完成远端验收，不发布 npm
+- 范围：后台 worker 启动失败诊断/异步错误与输出收尾回归，保留立即退出启动器的原有断言及期限；运行时 Undici 依赖补丁升级
+- 原 Windows 存活失败根因尚未由诊断证据确定，必须以精确新提交的远端 CI 复测，不把 Linux 通过当作 Windows 修复证明
+- 已验证：CLI/桌面类型检查、CLI 构建、桌面主进程/Renderer 编译及静态 smoke、文档检查、10/10 模拟评测、9/9 Python 迁移测试；运行时依赖审计零已知漏洞，独立后台用例在 Node 20.18.1 和 24.19 通过
+- 红/绿回归：源码 worker 从仓库外目录启动的 loader 解析、退出后的尾部输出，在旧 HEAD 失败、新实现通过。它们不等同已确定 Windows CI 原失败根因
+- Python 首次通配 discovery 未发现测试，已改为直接执行测试文件并取得 9/9；未将零测试命令记为通过
+- 包检查：328 文件 dry-pack，包含 bootstrap 模块，不包含 Electron/用户配置；CLI 隔离安装和 Linux Unicode/后台 worker 平台 smoke 通过，桌面独立 worker 通过。首次包命令默认 npm 缓存不可用，切换可写隔离缓存后通过
+- 后续回填：精确提交、CI 结果及可下载安装候选
+
 ## 阶段一后续修正：0.20.3-preview.2
 
-- 状态：本地 736 项测试中 726 通过、10 项 Windows 专属跳过、0 失败；类型检查、构建、模拟评测、桌面编译/静态 smoke 与 CLI 精确包安装/Linux 平台 smoke 通过。等待精确提交的远端 UI 和 Windows 安装验收，尚未接受或发布 npm
+- 状态：整体未接受，未发布 npm。本地 736 项测试中 726 通过、10 项 Windows 专属跳过、0 失败；远端三个桌面作业及 Linux/macOS CLI 通过，Windows CLI 的启动器退出后后台任务存活用例失败。Windows 安装器构建及安装/升级/中断重启/卸载通过，不覆盖该失败门禁
+- 精确提交：[4b34b2f222441c2c76bed88a64d96edface46545](https://github.com/andrewjr1991/xiu/commit/4b34b2f222441c2c76bed88a64d96edface46545)；CI：[36939303801](https://github.com/andrewjr1991/xiu/actions/runs/36939303801)
+- 可复测候选：[Windows x64 未签名 EXE](https://github.com/andrewjr1991/xiu/actions/runs/36939303801/artifacts/11199501651)、[Windows CLI tarball](https://github.com/andrewjr1991/xiu/actions/runs/36939303801/artifacts/11199243453)；解压后按内附 manifest 和 SHA256SUMS 核验。Artifacts 有保留期限，不能保证永久下载
 - 修复范围：UI smoke 在窗口尺寸变化后等待两次渲染帧，并复核最终宽高；避免在排队的 resize/scroll 事件发送前打开下拉菜单。保留断言、原超时和单次点击，不用重试掩盖失败
 - 新增四项确定性辅助测试；失败时记录有界布局/焦点/菜单诊断与截图
 - 上一提交：9334a0ff10cc58687bb7f55b5b62a43dc906fc47；其 CI 及候选文件见下文。新精确提交与摘要以本次 Actions manifest 为准

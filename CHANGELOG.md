@@ -2,6 +2,12 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.3 — Unreleased candidate
+
+- Resolve development worker loaders from the installation rather than caller working directory, preserve final pipe output before completion, and record bounded startup/spawn failures. Retain the immediate-launcher-exit regression and its existing deadline. Exact Windows CI verification remains required; no original root-cause claim yet.
+- Update direct Undici to 7.29.1 and the Cheerio transitive copy to 6.29.0. Keep runtime dependency audit and full regressions separate from product/security acceptance.
+- Preview.2 passed all three desktop jobs, including unsigned Windows installer lifecycle checks, but one Windows CLI background survival regression failed. Candidate remains unaccepted.
+
 ## 0.20.3-preview.2 — Unreleased candidate
 
 - Make desktop UI smoke wait through rendering frames after viewport changes, preserving every assertion and timeout. Add deterministic ordering/late-size regressions and bounded layout/menu failure diagnostics.

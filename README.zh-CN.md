@@ -1,6 +1,6 @@
 <div align="center">
 
-> 当前开发候选：**0.20.3-preview.2**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
+> 当前开发候选：**0.20.3-preview.3**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
 
 # Xiu
 

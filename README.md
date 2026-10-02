@@ -1,6 +1,6 @@
 <div align="center">
 
-> Development candidate: **0.20.3-preview.2**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
+> Development candidate: **0.20.3-preview.3**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
 
 # Xiu
 

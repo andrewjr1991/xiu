@@ -4,11 +4,15 @@ import path from "node:path";
 import process from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import { BACKGROUND_BOOTSTRAP_SOURCE } from "./background-bootstrap.js";
 import { redactSecrets } from "./secret-redaction.js";
 
 const BACKGROUND_SCHEMA_VERSION = 1 as const;
 const MAX_PREVIEW = 240;
+const FAILURE_STAGES = new Set(["bootstrap", "worker", "shell"]);
+const FAILURE_CODES = new Set(["UNKNOWN", "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_DLOPEN_FAILED"]);
 
 export type BackgroundProcessState = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
@@ -25,6 +29,7 @@ export interface BackgroundProcessRecord {
   exitCode?: number | null;
   signal?: string;
   outputBytes: number;
+  failure?: { stage: "bootstrap" | "worker" | "shell"; code: string };
 }
 
 export interface BackgroundOutputPage {
@@ -88,6 +93,9 @@ function validRecord(value: unknown): value is BackgroundProcessRecord {
     && typeof item.startedAt === "string" && Number.isFinite(Date.parse(item.startedAt))
     && typeof item.updatedAt === "string" && Number.isFinite(Date.parse(item.updatedAt))
     && Number.isSafeInteger(item.outputBytes) && item.outputBytes! >= 0
+    && (item.failure === undefined || (item.failure !== null && typeof item.failure === "object"
+      && Object.keys(item.failure).length === 2
+      && FAILURE_STAGES.has(item.failure.stage) && FAILURE_CODES.has(item.failure.code)))
     && (item.pid === undefined || (Number.isSafeInteger(item.pid) && item.pid! > 0))
     && (item.childPid === undefined || (Number.isSafeInteger(item.childPid) && item.childPid! > 0));
 }
@@ -146,12 +154,14 @@ function outputSize(id: string): number {
   } catch { return 0; }
 }
 
-function workerInvocation(requestFile: string): { program: string; args: string[] } {
+function workerInvocation(requestFile: string, bootstrapFile: string): { program: string; args: string[] } {
   if (process.versions.electron && !workerProgram) throw new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime.");
   const source = (workerSource ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
-  if (fs.existsSync(source)) return { program: workerProgram ?? process.execPath, args: [source, requestFile] };
-  const development = fileURLToPath(new URL("./background-worker.ts", import.meta.url));
-  return { program: workerProgram ?? process.execPath, args: ["--import", "tsx", development, requestFile] };
+  if (workerSource || fs.existsSync(source)) return { program: workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, pathToFileURL(source).href] };
+  const development = new URL("./background-worker.ts", import.meta.url).href;
+  // Resolve from this installation, never from the user's current directory.
+  const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+  return { program: workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, development, loader] };
 }
 
 export function configureBackgroundWorkspace(cwd: string, root = path.join(os.homedir(), ".xiu", "background")): void {
@@ -159,7 +169,7 @@ export function configureBackgroundWorkspace(cwd: string, root = path.join(os.ho
   storageRoot = path.resolve(root);
   ensureSafeDirectory(workspaceDirectory());
   const cutoff = Date.now() - 5 * 60_000;
-  for (const name of fs.readdirSync(workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.request\.json$/.test(item))) {
+  for (const name of fs.readdirSync(workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.(?:request\.json|bootstrap\.cjs)$/.test(item))) {
     const file = path.join(workspaceDirectory(), name);
     const stat = fs.lstatSync(file);
     if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
@@ -173,6 +183,7 @@ export function startBackgroundProcess(command: string, cwd = workspace): { id: 
   const directory = workspaceDirectory();
   ensureSafeDirectory(directory);
   const requestFile = path.join(directory, `.${id}.request.json`);
+  const bootstrapFile = path.join(directory, `.${id}.bootstrap.cjs`);
   const now = new Date().toISOString();
   const record: BackgroundProcessRecord = {
     version: BACKGROUND_SCHEMA_VERSION,
@@ -185,25 +196,34 @@ export function startBackgroundProcess(command: string, cwd = workspace): { id: 
     outputBytes: 0,
   };
   const request: BackgroundRequest = { version: BACKGROUND_SCHEMA_VERSION, recordFile: recordFile(id), outputFile: outputFile(id), cwd: workspace, command };
-  const invocation = workerInvocation(requestFile);
+  const invocation = workerInvocation(requestFile, bootstrapFile);
   atomicWrite(recordFile(id), record);
   fs.writeFileSync(requestFile, `${JSON.stringify(request)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  const failLaunch = (error: unknown): void => {
+    for (const file of [requestFile, bootstrapFile]) try { fs.unlinkSync(file); } catch { /* best effort */ }
+    // Capture paths now; another foreground workspace can be selected before
+    // spawn's asynchronous error event arrives.
+    const current = readRecord(request.recordFile);
+    if (!current || current.state !== "starting") return;
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const safeCode = ["ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM"].includes(code ?? "") ? code! : "UNKNOWN";
+    atomicWrite(request.recordFile, { ...current, state: "failed", updatedAt: new Date().toISOString(), failure: { stage: "bootstrap", code: safeCode } });
+  };
   try {
+    fs.writeFileSync(bootstrapFile, BACKGROUND_BOOTSTRAP_SOURCE, { encoding: "utf8", mode: 0o600, flag: "wx" });
     const child = spawn(invocation.program, invocation.args, { detached: true, windowsHide: true, stdio: "ignore" });
+    child.once("error", (error) => { try { failLaunch(error); } catch { /* storage unavailable; don't crash the foreground */ } });
     child.unref();
     // The worker exclusively owns state transitions after spawn. A parent-side
     // write here can race with, and overwrite, the worker's terminal record.
     return { id, pid: child.pid };
   } catch (error) {
-    try { fs.unlinkSync(requestFile); } catch { /* best effort */ }
-    record.state = "failed";
-    record.updatedAt = new Date().toISOString();
-    atomicWrite(recordFile(id), record);
+    failLaunch(error);
     throw error;
   }
 }
 
-export function listBackgroundProcesses(): Array<{ id: string; pid?: number; command: string; state: BackgroundProcessState; running: boolean; elapsedMs: number; outputBytes: number }> {
+export function listBackgroundProcesses(): Array<{ id: string; pid?: number; command: string; state: BackgroundProcessState; running: boolean; elapsedMs: number; outputBytes: number; failure?: BackgroundProcessRecord["failure"] }> {
   let names: string[];
   try { names = fs.readdirSync(workspaceDirectory()); }
   catch { return []; }
@@ -216,6 +236,7 @@ export function listBackgroundProcesses(): Array<{ id: string; pid?: number; com
       id: record.id, pid: record.pid, command: record.commandPreview, state: record.state,
       running: record.state === "starting" || record.state === "running",
       elapsedMs: Math.max(0, Date.now() - Date.parse(record.startedAt)), outputBytes: record.outputBytes,
+      ...(record.failure ? { failure: record.failure } : {}),
     }));
 }
 
