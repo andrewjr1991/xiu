@@ -16,6 +16,7 @@ app.whenReady().then(async () => {
     console.log('Dialog smoke:', action);
     const result = confirmFullAccess(parent);
     const child = BrowserWindow.getAllWindows().filter(window => window !== parent).sort((a,b) => b.id-a.id)[0];
+    const closed = new Promise(resolve => child.once('closed', resolve));
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Dialog did not show: '+action)), 8000); child.once('show', () => {clearTimeout(timer);resolve();}); });
     assert.equal(child.webContents.getLastWebPreferences().nodeIntegration, false);
     assert.equal(child.webContents.getLastWebPreferences().sandbox, true);
@@ -25,8 +26,9 @@ app.whenReady().then(async () => {
     else if (action === 'escape') await child.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));true`);
     else await child.webContents.executeJavaScript(`document.getElementById('${action === 'close-button' ? 'close' : action}').click();true`);
     assert.equal(await result, action === 'accept');
+    await closed;
   }
   parent.destroy();
   console.log('Full Access dialog: cancel, close, Escape, explicit acceptance and isolation passed.');
-  app.exit(0);
+  app.quit();
 }).catch(error => { console.error(error); app.exit(1); });
