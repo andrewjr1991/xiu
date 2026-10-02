@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import {
   backgroundProcessOutput,
@@ -280,4 +281,621 @@ test("persisted background failure metadata must use bounded allowlisted values"
   }
   await fs.writeFile(file, JSON.stringify(original));
   assert.deepEqual(listBackgroundProcesses()[0]?.failure, { stage: "bootstrap", code: "ENOENT" });
+});
+
+async function createFaultWorker(root: string, fault: string): Promise<string> {
+  const source = path.join(root, "fault-worker.mjs");
+  await fs.writeFile(source, [
+    `import fs from 'node:fs';`,
+    `const request = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));`,
+    fault,
+    `await import(${JSON.stringify(loaderUrl)});`,
+    `await import(${JSON.stringify(pathToFileURL(path.resolve("src/background-worker.ts")).href)});`,
+  ].join("\n"));
+  return source;
+}
+
+test("transient terminal metadata contention retries only metadata, never the command", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-terminal-retry-"));
+  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  const marker = path.join(root, "command-count");
+  const faultCount = path.join(root, "fault-count");
+  const workload = path.join(root, "once.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(marker)}, 'x'); console.log('ran-once');`);
+  const source = await createFaultWorker(root, `
+const rename = fs.renameSync;
+let failed = false;
+fs.renameSync = function(from, to) {
+  if (to === request.recordFile && !failed && JSON.parse(fs.readFileSync(from, 'utf8')).state === 'completed') {
+    failed = true;
+    fs.writeFileSync(${JSON.stringify(faultCount)}, 'x');
+    throw Object.assign(new Error('terminal-private-canary'), { code: 'EPERM' });
+  }
+  return rename.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const record = await waitForTerminal(id);
+  assert.equal(record.state, "completed", JSON.stringify(record));
+  assert.equal(await fs.readFile(faultCount, "utf8"), "x");
+  assert.equal(await fs.readFile(marker, "utf8"), "x");
+  assert.match(backgroundProcessOutput(id), /ran-once/);
+  assert.doesNotMatch(backgroundProcessOutput(id), /terminal-private-canary/);
+});
+
+test("exhausted terminal metadata writes retain bounded failure evidence without replay", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-terminal-denied-"));
+  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  const marker = path.join(root, "command-count");
+  const faultCount = path.join(root, "fault-count");
+  const workload = path.join(root, "once.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(marker)}, 'x'); console.log('output-is-not-completion');`);
+  const source = await createFaultWorker(root, `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  if (to === request.recordFile && !['starting', 'running'].includes(JSON.parse(fs.readFileSync(from, 'utf8')).state)) {
+    fs.appendFileSync(${JSON.stringify(faultCount)}, 'x');
+    throw Object.assign(new Error('terminal-persistent-private-canary'), { code: 'EACCES' });
+  }
+  return rename.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const record = await waitForTerminal(id);
+  assert.equal(record.state, "interrupted", JSON.stringify(record));
+  assert.deepEqual(record.failure, { stage: "state-write", code: "EACCES" });
+  // Six completion attempts are mandatory. A second six-attempt failure
+  // publication is permitted only after owned-tree termination is confirmed.
+  assert.match(await fs.readFile(faultCount, "utf8"), /^x{6}(?:x{6})?$/);
+  assert.equal(await fs.readFile(marker, "utf8"), "x");
+  const output = backgroundProcessOutput(id);
+  assert.match(output, /output-is-not-completion/);
+  assert.match(output, /state-write failed \(EACCES\)/);
+  const evidence = JSON.stringify(record) + output;
+  assert.doesNotMatch(evidence, /terminal-persistent-private-canary/);
+  assert.ok(evidence.length < 2000);
+});
+
+test("an asynchronous output persistence error is recorded without exposing exception text", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-output-error-"));
+  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  const workload = path.join(root, "output.mjs");
+  await fs.writeFile(workload, "console.log('trigger-output-write');\n");
+  const source = await createFaultWorker(root, `
+const append = fs.appendFileSync;
+fs.appendFileSync = function(file) {
+  if (file === request.outputFile) throw Object.assign(new Error('output-private-canary'), { code: 'ENOSPC' });
+  return append.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const record = await waitForTerminal(id);
+  // The shell can finish before taskkill reaches it on Windows. Without
+  // confirmed tree termination, recovery must preserve an unknown outcome.
+  assert.ok(["failed", "interrupted"].includes(record.state), JSON.stringify(record));
+  assert.deepEqual(record.failure, { stage: "output", code: "ENOSPC" });
+  const output = backgroundProcessOutput(id);
+  assert.match(output, /output failed \(ENOSPC\)/);
+  assert.doesNotMatch(JSON.stringify(record) + output, /output-private-canary/);
+});
+
+test("a zero worker exit without terminal publication is not command success", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-missing-terminal-"));
+  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  const workload = path.join(root, "output.mjs");
+  await fs.writeFile(workload, "console.log('output-is-not-completion');\n");
+  const source = await createFaultWorker(root, `
+const rename = fs.renameSync;
+fs.renameSync = function(from, to) {
+  if (to === request.recordFile && JSON.parse(fs.readFileSync(from, 'utf8')).state === 'completed') process.exit(0);
+  return rename.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const record = await waitForTerminal(id);
+  assert.equal(record.state, "interrupted", JSON.stringify(record));
+  assert.deepEqual(record.failure, { stage: "worker-exit", code: "MISSING_TERMINAL" });
+  assert.match(backgroundProcessOutput(id), /output-is-not-completion/);
+});
+
+test("invalid failure receipts cannot disclose arbitrary restored fields", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-receipt-validation-"));
+  t.after(() => removeBackgroundTestRoot(root));
+  configureBackgroundWorkspace(root, root);
+  const directory = path.join(root, (await fs.readdir(root))[0]!);
+  const id = "abcdef123456";
+  const file = path.join(directory, `${id}.json`);
+  const receipt = path.join(directory, `${id}.failure.json`);
+  const record = { version: 1, id, workspaceId: "fixture", commandPreview: "fixture", state: "running", startedAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), outputBytes: 0 };
+  for (const failure of [{ stage: "secret-receipt-canary", code: "EACCES" }, { stage: "state-write", code: "EACCES", secret: "receipt-canary" }, { stage: "state-write", code: "receipt-canary".repeat(1000) }]) {
+    await fs.writeFile(file, JSON.stringify(record));
+    await fs.writeFile(receipt, JSON.stringify(failure));
+    const listed = listBackgroundProcesses();
+    assert.equal(listed[0]?.state, "interrupted");
+    assert.equal(listed[0]?.failure, undefined);
+    assert.doesNotMatch(JSON.stringify(listed), /canary/);
+  }
+});
+
+test("a cancellation observed during metadata retry cannot be overwritten by completion", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-retry-cancel-"));
+  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  const workload = path.join(root, "output.mjs");
+  await fs.writeFile(workload, "console.log('finished-before-record-write');\n");
+  const source = await createFaultWorker(root, `
+const rename = fs.renameSync;
+let failed = false;
+fs.renameSync = function(from, to) {
+  if (to === request.recordFile && !failed && JSON.parse(fs.readFileSync(from, 'utf8')).state === 'completed') {
+    failed = true;
+    const current = JSON.parse(fs.readFileSync(to, 'utf8'));
+    fs.writeFileSync(to, JSON.stringify({ ...current, state: 'cancelled' }));
+    throw Object.assign(new Error('simulated-sharing-contention'), { code: 'EPERM' });
+  }
+  return rename.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const record = await waitForTerminal(id);
+  assert.equal(record.state, "cancelled", JSON.stringify(record));
+  // Let the bounded retry finish before checking that its stale completion
+  // snapshot did not replace the terminal cancellation.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(listBackgroundProcesses().find((item) => item.id === id)?.state, "cancelled");
+});
+
+test("output failure cannot finish a TERM-ignoring command before its owned process stops", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-live-output-error-"));
+  const pidFile = path.join(root, "workload.pid");
+  let workloadPid: number | undefined;
+  const alive = async (): Promise<boolean> => {
+    if (!workloadPid) return false;
+    try { process.kill(workloadPid, 0); } catch { return false; }
+    if (process.platform === "linux") {
+      try { if (/^\d+ \(.*\) Z /.test(await fs.readFile(`/proc/${workloadPid}/stat`, "utf8"))) return false; } catch { return false; }
+    }
+    return true;
+  };
+  t.after(async () => {
+    configureBackgroundRuntime();
+    configureBackgroundWorkspace(root, root);
+    await stopAllBackgroundProcesses();
+    if (await alive()) try { process.kill(workloadPid!, "SIGKILL"); } catch {}
+    await removeBackgroundTestRoot(root);
+  });
+  const workload = path.join(root, "long-output.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setTimeout(() => console.log('trigger-output-write'), 200);
+setInterval(() => {}, 1000);
+`);
+  const source = await createFaultWorker(root, `
+const append = fs.appendFileSync;
+fs.appendFileSync = function(file) {
+  if (file === request.outputFile) throw Object.assign(new Error('live-output-private-canary'), { code: 'ENOSPC' });
+  return append.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const { id } = startBackgroundProcess(nodeCommand(workload));
+  configureBackgroundRuntime();
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline && !workloadPid) {
+    try { workloadPid = Number(await fs.readFile(pidFile, "utf8")); } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(workloadPid);
+  assert.equal(await alive(), true, "the fixture must be alive before output failure");
+  let observedActiveAfterFailure = false;
+  while (Date.now() < deadline && await alive()) {
+    const record = listBackgroundProcesses().find((item) => item.id === id);
+    // Recheck liveness after the snapshot to avoid treating a just-completed
+    // Windows taskkill as premature state publication.
+    if (await alive()) {
+      assert.equal(record?.running, true, JSON.stringify(record));
+      if (record.failure) observedActiveAfterFailure = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(await alive(), false, "owned workload must not leak after output failure");
+  if (process.platform !== "win32") assert.equal(observedActiveAfterFailure, true);
+  const record = await waitForTerminal(id);
+  assert.ok(["failed", "interrupted"].includes(record.state), JSON.stringify(record));
+  assert.deepEqual(record.failure, { stage: "output", code: "ENOSPC" });
+  assert.doesNotMatch(JSON.stringify(record) + backgroundProcessOutput(id), /live-output-private-canary/);
+});
+
+test("Windows background cleanup resolves taskkill under SystemRoot instead of PATH", async () => {
+  for (const [file, expectedCalls] of [["src/background.ts", 1], ["src/background-worker.ts", 1]] as const) {
+    const source = await fs.readFile(path.resolve(file), "utf8");
+    assert.doesNotMatch(source, /spawn\(["']taskkill(?:\.exe)?["']/);
+    const absoluteCalls = source.match(/spawn\(path\.join\(process\.env\.SystemRoot \?\? "C:\\\\Windows", "System32", "taskkill\.exe"\),/g) ?? [];
+    assert.equal(absoluteCalls.length, expectedCalls, `${file} must use the system taskkill path for every cleanup call`);
+  }
+});
+
+async function withMockedForegroundStop(
+  platform: "win32" | "linux",
+  setup: (state: { alive: Set<number>; helperKills: string[]; spawnCalls: unknown[][]; signals: Array<[number, string | number | undefined]> }) => {
+    spawn?: (...args: unknown[]) => EventEmitter;
+    signal?: (pid: number, signal: string | number | undefined) => void;
+  },
+  run: (fixture: { id: string; file: string; state: { alive: Set<number>; helperKills: string[]; spawnCalls: unknown[][]; signals: Array<[number, string | number | undefined]> } }) => Promise<void>,
+): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-stop-mock-"));
+  configureBackgroundWorkspace(root, root);
+  const directory = path.join(root, (await fs.readdir(root))[0]!);
+  const id = "aabbccddeeff";
+  const file = path.join(directory, `${id}.json`);
+  await fs.writeFile(file, JSON.stringify({ version: 1, id, workspaceId: "fixture", commandPreview: "fixture", state: "running", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), pid: 100001, childPid: 100002, outputBytes: 0 }));
+  const state = { alive: new Set([100001, 100002]), helperKills: [] as string[], spawnCalls: [] as unknown[][], signals: [] as Array<[number, string | number | undefined]> };
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const originalKill = process.kill;
+  const originalSpawn = childProcess.spawn;
+  const hooks = setup(state);
+  try {
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+    process.kill = ((pid: number, signal?: string | number) => {
+      if (signal === 0) {
+        if (state.alive.has(pid) || (pid === -100001 && state.alive.size > 0)) return true;
+        throw Object.assign(new Error("fixture process absent"), { code: "ESRCH" });
+      }
+      state.signals.push([pid, signal]);
+      hooks.signal?.(pid, signal);
+      return true;
+    }) as typeof process.kill;
+    childProcess.spawn = ((...args: unknown[]) => {
+      state.spawnCalls.push(args);
+      if (!hooks.spawn) throw new Error("Unexpected mocked spawn");
+      return hooks.spawn(...args);
+    }) as typeof childProcess.spawn;
+    syncBuiltinESMExports();
+    await run({ id, file, state });
+  } finally {
+    process.kill = originalKill;
+    childProcess.spawn = originalSpawn;
+    Object.defineProperty(process, "platform", originalPlatform);
+    syncBuiltinESMExports();
+    await removeBackgroundTestRoot(root);
+  }
+}
+
+function mockedCleanupHelper(state: { helperKills: string[] }, outcome?: number | "error"): EventEmitter {
+  const child = new EventEmitter();
+  Object.assign(child, { kill: (signal: string) => { state.helperKills.push(signal); return true; }, unref: () => child });
+  if (outcome !== undefined) setImmediate(() => {
+    if (outcome === "error") child.emit("error", Object.assign(new Error("private-helper-error-canary"), { code: "ENOENT" }));
+    else child.emit("exit", outcome);
+  });
+  return child;
+}
+
+test("foreground stop keeps live PIDs active after a Windows cleanup error", async () => {
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => mockedCleanupHelper(state, "error") }), async ({ id, state }) => {
+    await assert.rejects(stopBackgroundProcess(id), /XIU_BACKGROUND_STOP_UNCONFIRMED/);
+    const record = listBackgroundProcesses().find((item) => item.id === id);
+    assert.equal(record?.running, true);
+    assert.deepEqual(record?.failure, { stage: "stop", code: "STOP_UNCONFIRMED" });
+    assert.deepEqual([...state.alive], [100001, 100002]);
+    assert.equal(state.spawnCalls.length, 2);
+    assert.doesNotMatch(JSON.stringify(record), /private-helper-error-canary/);
+  });
+});
+
+test("foreground stop bounds a stalled Windows helper and does not claim cancellation", async () => {
+  await withMockedForegroundStop("win32", (state) => {
+    state.alive.delete(100002);
+    return { spawn: () => mockedCleanupHelper(state) };
+  }, async ({ id, state }) => {
+    const started = Date.now();
+    await assert.rejects(stopBackgroundProcess(id), /cleanup timed out/);
+    assert.ok(Date.now() - started < 5_000, "helper timeout and liveness confirmation must be bounded");
+    assert.deepEqual(state.helperKills, ["SIGKILL"]);
+    assert.equal(listBackgroundProcesses().find((item) => item.id === id)?.running, true);
+    assert.deepEqual(listBackgroundProcesses()[0]?.failure, { stage: "stop", code: "STOP_TIMEOUT" });
+  });
+});
+
+test("successful taskkill output alone cannot cancel a still-live child", async () => {
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => {
+    state.alive.delete(100001);
+    return mockedCleanupHelper(state, 0);
+  } }), async ({ id, state }) => {
+    await assert.rejects(stopBackgroundProcess(id), /termination could not be confirmed/);
+    assert.equal(listBackgroundProcesses()[0]?.running, true);
+    assert.deepEqual([...state.alive], [100002]);
+  });
+});
+
+test("confirmed Windows stop cancels only after both saved PIDs disappear", async () => {
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => {
+    state.alive.clear();
+    return mockedCleanupHelper(state, 0);
+  } }), async ({ id, state }) => {
+    await stopBackgroundProcess(id);
+    assert.equal(listBackgroundProcesses()[0]?.state, "cancelled");
+    assert.equal(state.spawnCalls.length, 1);
+    assert.match(String(state.spawnCalls[0]?.[0]), /System32[\\/]taskkill\.exe$/);
+  });
+});
+
+test("POSIX foreground stop checks a live child after its worker exits", async () => {
+  await withMockedForegroundStop("linux", (state) => ({ signal: (pid) => { if (pid === -100001) state.alive.delete(100001); } }), async ({ id, state }) => {
+    await assert.rejects(stopBackgroundProcess(id), /XIU_BACKGROUND_STOP_UNCONFIRMED/);
+    assert.deepEqual(state.signals, [[-100001, "SIGTERM"], [-100001, "SIGKILL"]]);
+    assert.equal(listBackgroundProcesses()[0]?.running, true);
+    assert.deepEqual([...state.alive], [100002]);
+  });
+});
+
+test("a missing-PID starting request can still be cancelled without process commands", async () => {
+  await withMockedForegroundStop("win32", () => ({}), async ({ id, file, state }) => {
+    const record = JSON.parse(await fs.readFile(file, "utf8"));
+    delete record.pid; delete record.childPid; record.state = "starting";
+    await fs.writeFile(file, JSON.stringify(record));
+    await stopBackgroundProcess(id);
+    assert.equal(listBackgroundProcesses()[0]?.state, "cancelled");
+    assert.equal(state.spawnCalls.length, 0);
+    assert.equal(state.signals.length, 0);
+  });
+});
+
+test("foreground stop preserves a terminal result published while cleanup was pending", async () => {
+  let publish: (() => Promise<void>) | undefined;
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => {
+    const child = mockedCleanupHelper(state);
+    setImmediate(() => { void publish!().then(() => { state.alive.clear(); child.emit("exit", 0); }); });
+    return child;
+  } }), async ({ id, file }) => {
+    publish = async () => {
+      const record = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(file, JSON.stringify({ ...record, state: "completed", exitCode: 0 }));
+    };
+    await stopBackgroundProcess(id);
+    assert.equal(listBackgroundProcesses()[0]?.state, "completed");
+  });
+});
+
+test("foreground stop does not cancel a newly published live startup PID", async () => {
+  let publish: (() => Promise<void>) | undefined;
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => {
+    const child = mockedCleanupHelper(state);
+    setImmediate(() => { void publish!().then(() => { state.alive.clear(); state.alive.add(100003); child.emit("exit", 0); }); });
+    return child;
+  } }), async ({ id, file }) => {
+    publish = async () => {
+      const record = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(file, JSON.stringify({ ...record, childPid: 100003 }));
+    };
+    await assert.rejects(stopBackgroundProcess(id), /XIU_BACKGROUND_STOP_UNCONFIRMED/);
+    assert.equal(listBackgroundProcesses()[0]?.running, true);
+  });
+});
+
+async function fixtureProcessAlive(pid: number | undefined): Promise<boolean> {
+  if (!pid) return false;
+  try { process.kill(pid, 0); } catch { return false; }
+  if (process.platform === "linux") {
+    try { if (/^\d+ \(.*\) Z /.test(await fs.readFile(`/proc/${pid}/stat`, "utf8"))) return false; } catch { return false; }
+  }
+  return true;
+}
+
+async function assertFixtureStopsWithoutFalseCompletion(id: string, pidFile: string): Promise<number> {
+  const deadline = Date.now() + 15_000;
+  let pid: number | undefined;
+  while (Date.now() < deadline && !pid) {
+    try { pid = Number(await fs.readFile(pidFile, "utf8")); } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(pid, "fixture must publish readiness after installing its TERM handler");
+  let observedLive = false;
+  while (Date.now() < deadline && await fixtureProcessAlive(pid)) {
+    observedLive = true;
+    const record = listBackgroundProcesses().find((item) => item.id === id);
+    if (await fixtureProcessAlive(pid)) assert.equal(record?.running, true, JSON.stringify(record));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(observedLive, true);
+  assert.equal(await fixtureProcessAlive(pid), false, "owned fixture must be stopped despite ignoring TERM");
+  return pid;
+}
+
+test("startup metadata failure installs cleanup guards before a TERM-ignoring child can leak", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-startup-cleanup-"));
+  const pidFile = path.join(root, "ready.pid");
+  let workerPid: number | undefined;
+  t.after(async () => {
+    configureBackgroundRuntime();
+    if (workerPid) try { process.kill(-workerPid, "SIGKILL"); } catch {}
+    await removeBackgroundTestRoot(root);
+  });
+  const workload = path.join(root, "ignore-term.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const source = await createFaultWorker(root, `
+const rename = fs.renameSync;
+const pause = new Int32Array(new SharedArrayBuffer(4));
+fs.renameSync = function(from, to) {
+  if (to === request.recordFile && JSON.parse(fs.readFileSync(from, 'utf8')).state === 'running') {
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(${JSON.stringify(pidFile)}) && Date.now() < deadline) Atomics.wait(pause, 0, 0, 10);
+    if (!fs.existsSync(${JSON.stringify(pidFile)})) throw new Error('fixture readiness failed');
+    throw Object.assign(new Error('startup-metadata-private-canary'), { code: 'EPERM' });
+  }
+  return rename.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const started = startBackgroundProcess(nodeCommand(workload));
+  workerPid = started.pid;
+  configureBackgroundRuntime();
+  await assertFixtureStopsWithoutFalseCompletion(started.id, pidFile);
+  const directory = (await fs.readdir(root, { withFileTypes: true })).find((entry) => entry.isDirectory())!;
+  const record = JSON.parse(await fs.readFile(path.join(root, directory.name, `${started.id}.json`), "utf8"));
+  assert.equal(record.childPid, undefined, "regression must cover failure before child PID persistence");
+  assert.notEqual(record.state, "completed");
+  const receipt = await fs.readFile(path.join(root, directory.name, `${started.id}.failure.json`), "utf8");
+  assert.deepEqual(JSON.parse(receipt), { stage: "worker", code: "EPERM" });
+  assert.doesNotMatch(receipt, /startup-metadata-private-canary/);
+});
+
+test("output failure still escalates after the shell closes a redirected descendant's pipes", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-redirected-child-"));
+  const pidFile = path.join(root, "ready.pid");
+  let workerPid: number | undefined;
+  t.after(async () => {
+    configureBackgroundRuntime();
+    if (workerPid) try { process.kill(-workerPid, "SIGKILL"); } catch {}
+    await removeBackgroundTestRoot(root);
+  });
+  const descendant = path.join(root, "descendant.mjs");
+  await fs.writeFile(descendant, `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const workload = path.join(root, "parent.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs'; import { spawn } from 'node:child_process';
+const child = spawn(process.execPath, [${JSON.stringify(descendant)}], { stdio: 'ignore' });
+child.unref();
+const ready = setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)})) { clearInterval(ready); console.log('trigger-output-error'); } }, 10);
+setInterval(() => {}, 1000);
+`);
+  const source = await createFaultWorker(root, `
+const append = fs.appendFileSync;
+fs.appendFileSync = function(file) {
+  if (file === request.outputFile) throw Object.assign(new Error('redirected-private-canary'), { code: 'ENOSPC' });
+  return append.apply(this, arguments);
+};`);
+  configureBackgroundWorkspace(root, root);
+  configureBackgroundRuntime(process.execPath, source);
+  const started = startBackgroundProcess(nodeCommand(workload));
+  workerPid = started.pid;
+  configureBackgroundRuntime();
+  await assertFixtureStopsWithoutFalseCompletion(started.id, pidFile);
+  const record = listBackgroundProcesses().find((item) => item.id === started.id);
+  assert.notEqual(record?.state, "completed");
+  assert.deepEqual(record?.failure, { stage: "output", code: "ENOSPC" });
+});
+
+test("foreground stop escalates for an owned group after saved PIDs exit", async () => {
+  await withMockedForegroundStop("linux", (state) => ({ signal: (pid, signal) => {
+    if (pid !== -100001) return;
+    if (signal === "SIGTERM") { state.alive.clear(); state.alive.add(100003); }
+    else if (signal === "SIGKILL") state.alive.clear();
+  } }), async ({ id, state }) => {
+    await stopBackgroundProcess(id);
+    assert.deepEqual(state.signals, [[-100001, "SIGTERM"], [-100001, "SIGKILL"]]);
+    assert.equal(listBackgroundProcesses()[0]?.state, "cancelled");
+  });
+});
+
+test("unconfirmed group escalation retains active evidence with no saved PID alive", async () => {
+  await withMockedForegroundStop("linux", (state) => ({ signal: (pid, signal) => {
+    if (pid !== -100001) return;
+    if (signal === "SIGTERM") { state.alive.clear(); state.alive.add(100003); }
+    else if (signal === "SIGKILL") throw Object.assign(new Error("fixture signal denied"), { code: "EPERM" });
+  } }), async ({ id, file, state }) => {
+    await assert.rejects(stopBackgroundProcess(id), /XIU_BACKGROUND_STOP_UNCONFIRMED/);
+    assert.deepEqual([...state.alive], [100003]);
+    const record = JSON.parse(await fs.readFile(file, "utf8"));
+    await fs.writeFile(file, JSON.stringify({ ...record, updatedAt: new Date(0).toISOString() }));
+    assert.equal(listBackgroundProcesses()[0]?.running, true, "group liveness must prevent false interruption after the grace period");
+  });
+});
+
+test("a premature concurrent cancellation cannot hide an unconfirmed live group", async () => {
+  let cancel: (() => Promise<void>) | undefined;
+  await withMockedForegroundStop("win32", (state) => ({ spawn: () => {
+    const child = mockedCleanupHelper(state);
+    setImmediate(() => { void cancel!().then(() => child.emit("exit", 0)); });
+    return child;
+  } }), async ({ id, file }) => {
+    cancel = async () => {
+      const record = JSON.parse(await fs.readFile(file, "utf8"));
+      await fs.writeFile(file, JSON.stringify({ ...record, state: "cancelled" }));
+    };
+    await assert.rejects(stopBackgroundProcess(id), /XIU_BACKGROUND_STOP_UNCONFIRMED/);
+    assert.equal(listBackgroundProcesses()[0]?.running, true);
+    assert.deepEqual(listBackgroundProcesses()[0]?.failure, { stage: "stop", code: "STOP_UNCONFIRMED" });
+  });
+});
+
+test("directed worker stop cannot publish cancellation before redirected descendants stop", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-directed-stop-"));
+  const pidFile = path.join(root, "ready.pid");
+  let workerPid: number | undefined;
+  t.after(async () => {
+    if (workerPid) try { process.kill(-workerPid, "SIGKILL"); } catch {}
+    await removeBackgroundTestRoot(root);
+  });
+  const descendant = path.join(root, "descendant.mjs");
+  await fs.writeFile(descendant, `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+  const workload = path.join(root, "parent.mjs");
+  await fs.writeFile(workload, `import { spawn } from 'node:child_process';
+spawn(process.execPath, [${JSON.stringify(descendant)}], { stdio: 'ignore' }).unref();
+setInterval(() => {}, 1000);
+`);
+  configureBackgroundWorkspace(root, root);
+  const started = startBackgroundProcess(nodeCommand(workload));
+  workerPid = started.pid;
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try { if (await fs.readFile(pidFile, "utf8")) break; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(workerPid);
+  assert.ok(await fs.readFile(pidFile, "utf8"));
+  process.kill(workerPid, "SIGTERM");
+  await assertFixtureStopsWithoutFalseCompletion(started.id, pidFile);
+  const record = listBackgroundProcesses().find((item) => item.id === started.id);
+  assert.notEqual(record?.state, "cancelled", "only the foreground can confirm the directed stop's full group disappearance");
+});
+
+test("directed stop retains a final unterminated output line after pipe closure", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-stop-partial-"));
+  const ready = path.join(root, "ready");
+  let workerPid: number | undefined;
+  t.after(async () => {
+    if (workerPid) try { process.kill(-workerPid, "SIGKILL"); } catch {}
+    await removeBackgroundTestRoot(root);
+  });
+  const workload = path.join(root, "partial.mjs");
+  await fs.writeFile(workload, `import fs from 'node:fs';
+process.stdout.write('partial-stop-output', () => fs.writeFileSync(${JSON.stringify(ready)}, 'ready'));
+setInterval(() => {}, 1000);
+`);
+  configureBackgroundWorkspace(root, root);
+  const started = startBackgroundProcess(nodeCommand(workload));
+  workerPid = started.pid;
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try { if (await fs.readFile(ready, "utf8")) break; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(workerPid);
+  assert.equal(await fs.readFile(ready, "utf8"), "ready");
+  process.kill(workerPid, "SIGTERM");
+  while (Date.now() < deadline && !backgroundProcessOutput(started.id).includes("partial-stop-output")) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(backgroundProcessOutput(started.id), /partial-stop-output/);
+  assert.notEqual(listBackgroundProcesses().find((item) => item.id === started.id)?.state, "cancelled");
 });

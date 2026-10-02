@@ -38,7 +38,7 @@ async function privateFixtureWrite(filename: string, bytes: string, options?: Pa
   if (process.platform === "win32") {
     // Elevated Windows runners can choose Administrators as a new file's
     // default owner. Model the production writer's explicit current-user owner.
-    const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $acl.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User); Set-Acl -LiteralPath $p -AclObject $acl`;
+    const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $acl.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }`;
     await runFixturePowerShell("owner", script, { ...process.env, XIU_TEST_TARGET: filename });
   }
 }
@@ -527,7 +527,7 @@ test("Windows directory and file ACL changes are rechecked and never repaired si
   const f = await upgraded(t);
   const before = await fs.readFile(f.filename);
   const backup = path.join(f.recovery, `${f.backupId}.json`);
-  const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::Read,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl`;
+  const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::Read,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }`;
   await runFixturePowerShell("modify", script, { ...process.env, XIU_TEST_TARGET: backup });
   await assert.rejects(f.registry.previewConfigurationRecovery(f.backupId), /protected regular file/);
   await runFixturePowerShell("modify", script, { ...process.env, XIU_TEST_TARGET: f.recovery });

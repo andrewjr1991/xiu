@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const CLI_CHECKS = ["dependencies", "python", "docs", "typecheck", "tests", "migration", "build", "evaluation", "pack_audit", "candidate", "package_smoke", "platform_smoke"];
-const DESKTOP_CHECKS = ["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "browser"];
+const DESKTOP_CHECKS = ["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "ui_evidence", "ui_evidence_upload", "browser"];
 const OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
 
 export function verificationContext(kind, platform, steps) {

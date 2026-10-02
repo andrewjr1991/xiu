@@ -1,10 +1,10 @@
 <div align="center">
 
-> Windows configuration acceptance is pending. Preview.4 exposed ACL-check failures; preview.5 retains that implementation. Use the fully verified preview.3 for real channel configuration until the new candidate passes all gates.
+> Windows configuration acceptance is pending. Preview.4/5 exposed ACL-check failures; preview.6 failed its required Windows privacy preflight at initialize-write (Set-Acl), so the full Windows CLI tests were skipped. Preview.7 changes ACL persistence and background failure handling; exact Windows proof is still pending. Use the fully verified preview.3 for real channel configuration until the new candidate passes all gates.
 
 Development candidate: the desktop composer now has an idle-only Execute / Plan read-only switch backed by the shared runtime. Plan still blocks write/execute tools under Full access; continuing history or recovering a task keeps the mode you explicitly selected. A new conversation and Provider/model reconfiguration in the same open workspace keep that selection. Closing/reopening or switching workspaces starts in Execute mode; Full access still resets on reconfiguration. IME candidate-confirmation Enter no longer submits a task or steering message; normal Enter sends and Shift+Enter inserts a newline. Automated synthetic-event coverage does not replace testing with a real OS input method.
 
-> Development candidate: **0.20.3-preview.6**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
+> Development candidate: **0.20.3-preview.7**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
 
 # Xiu
 
@@ -25,6 +25,8 @@ English | [简体中文](./README.zh-CN.md)
 This version is `0.20.2`. Fresh installations start with no preconfigured Providers. It adds desktop MCP management, a tabbed review workbench, child-task and categorized evidence views, and installed Node/npm compatibility. Upgrade CLI and desktop together because channel settings migrate to format 5. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI. The patch release also persists capability-specific model selections, consistently bounds generated-media downloads, and fixes Windows background-process handoff.
 
 Development candidate Provider recovery: run `xiu --provider-config-diagnostics` to list metadata-only diagnostics and verified protected backups, then `xiu --provider-config-preview <backup-id>` to review one. `xiu --provider-config-recover <backup-id>` requires an interactive terminal and typed `RECOVER`; `-y`, piped input, blank input and cancellation cannot restore. The desktop sidebar has **Provider 配置诊断与恢复**, including when normal Provider startup fails, with a separate native confirmation. Close other Xiu clients first and restart after recovery. `current` is only offered for a verifiably dead-owner write lock: it keeps current settings, not a backup restore. Future schemas cannot be downgraded; system credentials are not restored.
+
+Preview.7 keeps owner-only ACL readback and fail-closed behavior, uses direct .NET Owner/DACL persistence with fixed exception categories, and resolves PowerShell from a validated absolute SystemRoot. Background metadata retries are bounded and never replay commands or output; a stop whose process termination cannot be confirmed keeps active/unknown evidence and returns an explicit error. Existing unprotected recovery directories are not silently repaired or deleted. No preview.7 binaries or CI acceptance are recorded yet.
 
 ## Install
 

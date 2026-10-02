@@ -328,6 +328,9 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.querySelector('[aria-label="Provider 配置恢复"]')?.innerText.includes('配置损坏')`, "malformed provider diagnostics");
     await clickText(window, "预览此备份", ".mcp-panel button");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="配置恢复预览"]'))`, "configuration recovery preview");
+    // Capture only the synthetic preload fixture, never a real configuration.
+    await settleLayout(window);
+    await fs.promises.writeFile(path.join(smokeRoot, "recovery-preview-1366.png"), (await window.webContents.capturePage()).toPNG());
     await clickText(window, "取消预览", ".mcp-panel button");
     await waitFor(window, `!document.querySelector('[aria-label="配置恢复预览"]')`, "configuration preview cancellation");
     await clickText(window, "预览此备份", ".mcp-panel button");
@@ -338,6 +341,8 @@ app.whenReady().then(async () => {
     assert(await evaluate(window, `(() => { const r=document.querySelector('[aria-label="Provider 配置恢复"]').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight; })()`), "Recovery panel must fit narrow viewport.");
     await clickText(window, "预览此备份", ".mcp-panel button");
     await waitFor(window, `Boolean(document.querySelector('[aria-label="配置恢复预览"]'))`, "close cancellation preview");
+    await settleLayout(window);
+    await fs.promises.writeFile(path.join(smokeRoot, "recovery-preview-900.png"), (await window.webContents.capturePage()).toPNG());
     await evaluate(window, `document.querySelector('[aria-label="关闭配置恢复"]').click()`);
     await waitFor(window, `!document.querySelector('[aria-label="Provider 配置恢复"]')`, "closing recovery cancels preview");
     await clickText(window, "Provider 配置诊断与恢复", ".sidebar-mcp");

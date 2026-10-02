@@ -1,23 +1,37 @@
 # Xiu 开发阶段记录
 
+## 阶段二后续修正：0.20.3-preview.7
+
+- 状态：本地最终 867 项测试，852 通过、15 项平台专属跳过、0 失败；尚未提交/推送或完成目标平台验收，未发布 npm。最后完整六作业通过仍为 preview.3
+- 基线：preview.6 / 17480422e1c58eaf18caedd34c193e2fc192c408，整体未接受；Windows 隐私预检 initialize-write（Set-Acl）失败，不据此推定原始系统错误或根因
+- Provider：新对象改用 .NET 直接持久化已修改的 Owner/DACL，保留 Group/SACL，保留写入前 owner-only 回读及已有对象逐次验证；固定异常类别与经过校验的绝对 SystemRoot PowerShell 路径，不暴露原始异常/路径/账户，不放宽保护或失败重试
+- 后台：仅本地元数据替换进行有界重试，固定阶段/代码的独立失败凭据、异步输出/状态回调保护；进程/管道关闭和终止确认后才报告终态。Windows 清理使用 OS-helper 路径；前台停止无法确认时保留活动/未知状态并返回明确错误，不重放命令或输出
+- 合成 UI 证据：Windows/macOS/Linux 桌面成功运行后均须验证并上传精确白名单中的六张 PNG，包含 1366×768 与 900×768 的恢复预览。制品名包含桌面版本、平台、完整提交 SHA 与 run attempt，保留 30 天；缺少图片或上传失败不能记为门禁通过。白名单不包含临时用户资料或配置，既有失败上传路径不变；不修改生产 UI。跨平台截图仍须下载本轮 CI 制品后逐张检查，目前视觉验收待完成
+- 本地通过：两端 typecheck、最终全量测试、CLI 构建/桌面编译及静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装/Linux 平台 smoke。默认 npm 缓存路径不可写导致初次 dry-pack 失败，使用可写隔离缓存重跑通过；依赖下载使用获准的官方 Registry 访问。精确提交六作业（尤其 Windows 隐私预检、完整 CLI 与安装生命周期）仍待执行
+- 独立复查发现并修正失败收尾的 SIGTERM 处理器安装顺序、重定向后代进程提前解除强杀计时、并发取消误报及最后半行输出丢失；复查子集 12/12，Node 20 后台 34 项及最后半行新增项分别通过。本地结果不能替代 Windows
+- 已知既有缺口：bootstrap 启动领取与尚无 PID 时的取消没有跨进程串行协议，仍有旧快照覆盖取消的窄竞态；本轮未修改 bootstrap，下一步以共享领取/取消协议处理，不能以一次额外读取宣称消除竞态
+- 产物待回填：本轮 CLI tarball、Windows 未签名 EXE、完整提交 SHA、manifest/逐项状态及实际文件 SHA-256；不得复用旧版本产物作为本轮通过证据
+- 不包含暂停中的原生联网认证，不宣称真实 OS IME、付费 Provider 或用户设备已验收。旧不安全恢复目录不会被静默修复，不应直接删除可能含原始备份的目录
+
 ## 阶段二后续修正：0.20.3-preview.6
 
-- 状态：本地 838 项测试，825 通过、13 项平台专属跳过、0 失败；尚未提交/推送或完成目标平台验收
+- 状态：已推送 17480422e1c58eaf18caedd34c193e2fc192c408，整体未接受。本地 838 项测试，825 通过、13 项平台专属跳过、0 失败；精确 CI 三平台桌面与 Linux/macOS CLI 通过，Windows CLI 必需隐私预检 nonzero-exit，阶段 initialize-write（Set-Acl），全量测试跳过、其他检查通过
 - 范围：Windows ACL 固定诊断与类型化/无进度输出脚本、必需隐私预检、CLI 测试退出有界化、macOS 测试壳精确视口
 - Windows 旧失败根因仍须由新预检及固定阶段信息确认，不把推测或 Linux 跳过记为修复通过；不放宽权限、不缓存 ACL 验证、不绕过断言
 - 不含暂停中的原生联网认证改动。CLI/桌面类型检查、CLI 构建、桌面编译与静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装/Linux 平台 smoke 均通过
 - 新增 Windows 隐私预检为必需独立门禁，失败时全量测试不启动且清单记录失败/跳过；不把 Linux 平台跳过当作 Windows 通过
 - 既有恢复限制：首次 ACL 初始化失败可能留下不受保护的空恢复目录；后续客户端不静默修改已有目录权限。本候选不宣称自动修复所有旧安装，不能直接删除可能包含原始备份的目录
-- 独立复查未发现本轮新增阻断问题；Windows PowerShell/DACL 与 macOS 真实目标结果仍待 CI
-- 待回填精确提交/CI、测试安装候选
+- 本地独立复查未发现新增阻断问题，但不覆盖其后 Windows CI 隐私预检失败；macOS 桌面本轮通过，不代表真实系统输入法通过
+- 精确 CI：[36956274234](https://github.com/andrewjr1991/xiu/actions/runs/36956274234)；[Windows 未接受 EXE 候选](https://github.com/andrewjr1991/xiu/actions/runs/36956274234/artifacts/11206108131)，实际文件 SHA-256 `1e0417483c4a5ba098525d5ba9539809db81bb97bb0ac956aa9cba722967e553`
+- [Windows 未接受 CLI tarball](https://github.com/andrewjr1991/xiu/actions/runs/36956274234/artifacts/11205443958)，实际文件 SHA-256 `8dc55aedfc16e9c3597bfd5ba58ed8e6b36dd173e211226a5143f8ae219f9860`；链接与实际摘要已核验。构建产物存在不等于 Windows CLI 门禁通过
 
 ## 阶段二后续修正：0.20.3-preview.5
 
-- 状态：已推送 df22006f9da6cf7c5c6d2868e5e89e936871f3ff；整体未接受。Windows/Linux 桌面及 Linux/macOS CLI 通过，macOS 桌面在可见屏幕限制导致的视口检查失败，Windows CLI 尚在运行。本地 826 项，814 通过、12 跳过、0 失败
+- 状态：已推送 df22006f9da6cf7c5c6d2868e5e89e936871f3ff；整体未接受。Windows/Linux 桌面及 Linux/macOS CLI 通过，macOS 桌面在可见屏幕限制导致的视口检查失败，Windows CLI 在 35 分钟后取消，日志包含九项 ACL 失败及仓库外 cwd 后台用例在输出后成为 interrupted。本地 826 项，814 通过、12 跳过、0 失败
 - 范围：仅修复键盘 UI 验收的真实窗口/WebContents 焦点前提；保留生产 IME guard、所有清理/Shift+Enter 断言与原时限
 - 新增焦点就绪回归与分项诊断；修正严格合成诊断通配的隐藏路径上传
 - CLI/桌面类型检查、构建/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、隔离包安装及 Linux 平台 smoke 通过。初次包安装受环境网络限制，离线缓存不足；获准访问后的独立包/平台重跑通过，未冒充初次成功
-- preview.4 的 Windows CLI 仍在独立运行，结果不会由本轮覆盖或自动取消；两次提交都须单独核验
+- preview.4 和 preview.5 的 Windows CLI 均已取消；各次失败独立保留，不由后续候选覆盖。preview.5 Windows CLI 制品 11205643983 仅有报告，没有可安装 tarball；取消不能记为全量通过
 - 精确 CI：[36954185355](https://github.com/andrewjr1991/xiu/actions/runs/36954185355)；[Windows EXE 候选](https://github.com/andrewjr1991/xiu/actions/runs/36954185355/artifacts/11205435972)，实际文件 SHA-256 f549e54bca0b79117dd110688e78f1b1fb3aa38fe08557a2e29879bd376ed40e 已核对。已提供下载并明确整体仍未接受
 
 ## 阶段二：0.20.3-preview.4

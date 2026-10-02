@@ -2,6 +2,16 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.7 — Unreleased candidate
+
+- Require validation/upload of six allowlisted synthetic UI PNGs after successful desktop runs on Windows, macOS and Linux, including wide/narrow recovery previews. Artifacts identify version/platform/full SHA/attempt and are retained 30 days; missing evidence cannot pass. Production UI is unchanged; downloaded CI screenshots still await cross-platform visual review.
+
+- Persist only modified Windows Owner/DACL sections through direct .NET APIs instead of Set-Acl; preserve owner-only readback, repeated validation and fail-closed behavior. Add fixed exception categories and a validated absolute SystemRoot PowerShell path; no permissive fallback or raw exception disclosure.
+- Retry only background metadata replacement with bounded delays; never replay commands/output. Guard asynchronous output/state callbacks and retain write-once, fixed-code failure receipts when the main record is unavailable.
+- Keep terminal state behind confirmed shutdown/output closure. Use OS-helper paths for Windows cleanup; an unconfirmed foreground stop retains active/unknown evidence and returns an explicit error.
+- Preview.6 passed three desktop jobs and Linux/macOS CLI, but Windows privacy preflight failed with nonzero-exit at initialize-write (Set-Acl); full Windows CLI tests were skipped. Preview.5 Windows CLI was cancelled after 35 minutes with nine ACL failures and an outside-cwd background task interrupted after output. Neither candidate is accepted; the exact underlying historical errno/root cause is unproven.
+- Preview.7 validation, exact commit/CI and artifacts remain pending. Preview.3 is the last fully green candidate; real OS IME, paid Providers and external devices remain separate acceptance work. Paused managed-web authentication is outside this change.
+
 ## 0.20.3-preview.6 — Unreleased candidate
 
 - Add a required Windows provider-privacy preflight and fixed, secret-free ACL failure stages/process categories. Preserve owner-only checks; typed PowerShell constructors/enums and suppressed progress output need exact Windows validation.

@@ -8,6 +8,7 @@ import test from "node:test";
 import { artifactContext, verificationContext, writeReport } from "../scripts/ci-artifacts.mjs";
 
 const cliSteps = () => Object.fromEntries(["dependencies", "python", "docs", "typecheck", "tests", "migration", "build", "evaluation", "pack_audit", "candidate", "package_smoke", "platform_smoke"].map((id) => [id, { outcome: "success" }]));
+const desktopSteps = () => Object.fromEntries(["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "ui_evidence", "ui_evidence_upload", "browser"].map((id) => [id, { outcome: "success" }]));
 
 async function fixture() {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "xiu-ci-artifacts-")));
@@ -50,11 +51,29 @@ test("Windows CLI requires the privacy preflight and cannot mask its failure", (
 });
 
 test("desktop checks require browser isolation and Windows installer acceptance", () => {
-  const steps = Object.fromEntries(["dependencies", "desktop_dependencies", "typecheck", "build", "smoke", "ui", "browser"].map((id) => [id, { outcome: "success" }]));
+  const steps = desktopSteps();
   assert.equal(verificationContext("desktop", "linux", steps).status, "passed");
   assert.equal(verificationContext("desktop", "win32", steps).status, "incomplete");
   delete steps.browser;
   assert.equal(verificationContext("desktop", "linux", steps).status, "incomplete");
+});
+
+test("desktop evidence validation and upload are required on every platform", () => {
+  for (const platform of ["linux", "darwin", "win32"]) {
+    for (const gate of ["ui_evidence", "ui_evidence_upload"]) {
+      const steps: Record<string, { outcome: string; conclusion?: string }> = {
+        ...desktopSteps(), installer: { outcome: "success" }, installer_smoke: { outcome: "success" }, candidate: { outcome: "success" },
+      };
+      assert.equal(verificationContext("desktop", platform, steps).status, "passed");
+      steps[gate] = { outcome: "failure", conclusion: "success" };
+      assert.equal(verificationContext("desktop", platform, steps).status, "failed");
+      assert.equal(verificationContext("desktop", platform, steps).checks[gate], "failure");
+      steps[gate] = { outcome: "skipped" };
+      assert.equal(verificationContext("desktop", platform, steps).status, "incomplete");
+      delete steps[gate];
+      assert.equal(verificationContext("desktop", platform, steps).status, "incomplete");
+    }
+  }
 });
 
 test("CI reports bind candidates, checksums and test outcomes to the exact commit", async () => {
@@ -78,6 +97,29 @@ test("CI reports bind candidates, checksums and test outcomes to the exact commi
     assert.ok(sums.includes(`${manifest.files[0].sha256}  ${context.candidateName}`));
     assert.ok(sums.includes(`${createHash("sha256").update(json).digest("hex")}  manifest.json`));
     assert.deepEqual(await readFile(path.join(context.directory, context.candidateName)), candidate);
+  } finally { await f.close(); }
+});
+
+test("desktop candidates stay unaccepted when screenshot evidence is failed or missing", async () => {
+  const f = await fixture();
+  try {
+    const env = { XIU_CI_PLATFORM: "win32", GITHUB_SHA: f.commit };
+    const context = await artifactContext(f.root, "desktop", env);
+    await mkdir(context.staging, { recursive: true });
+    await writeFile(path.join(context.staging, context.candidateName), "synthetic installer fixture");
+    for (const gate of ["ui_evidence", "ui_evidence_upload"]) {
+      for (const outcome of ["failure", "skipped", undefined]) {
+        const steps: Record<string, { outcome: string }> = {
+          ...desktopSteps(), installer: { outcome: "success" }, installer_smoke: { outcome: "success" }, candidate: { outcome: "success" },
+        };
+        if (outcome) steps[gate] = { outcome }; else delete steps[gate];
+        const manifest = await writeReport(f.root, "desktop", { ...env, XIU_CI_STEPS: JSON.stringify(steps) });
+        assert.equal(manifest.source.worktreeModified, false);
+        assert.equal(manifest.candidate.available, true);
+        assert.equal(manifest.candidate.acceptance, "unaccepted-candidate");
+        assert.equal(manifest.verification.status, outcome === "failure" ? "failed" : "incomplete");
+      }
+    }
   } finally { await f.close(); }
 });
 
@@ -136,6 +178,11 @@ test("CI keeps failed checks visible and uploads candidates without publishing",
   assert.match(workflow, /id: provider_privacy/);
   assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts/);
   assert.match(workflow, /matrix\.platform != 'win32' \|\| steps\.provider_privacy\.outcome == 'success'/);
+  const desktopWorkflow = workflow.slice(workflow.indexOf("\n  desktop:"));
+  const validationIndex = desktopWorkflow.indexOf("id: ui_evidence\n");
+  const uploadIndex = desktopWorkflow.indexOf("id: ui_evidence_upload\n");
+  const reportIndex = desktopWorkflow.indexOf("id: report\n");
+  assert.ok(validationIndex >= 0 && uploadIndex > validationIndex && reportIndex > uploadIndex, "desktop report must observe evidence validation and upload outcomes");
   const helper = await readFile(path.resolve("apps/desktop/scripts/package-windows.mjs"), "utf8");
   assert.match(helper, /"--publish", "never"/);
 });

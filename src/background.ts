@@ -11,8 +11,8 @@ import { redactSecrets } from "./secret-redaction.js";
 
 const BACKGROUND_SCHEMA_VERSION = 1 as const;
 const MAX_PREVIEW = 240;
-const FAILURE_STAGES = new Set(["bootstrap", "worker", "shell"]);
-const FAILURE_CODES = new Set(["UNKNOWN", "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_DLOPEN_FAILED"]);
+const FAILURE_STAGES = new Set(["bootstrap", "worker", "shell", "output", "state-write", "worker-exit", "stop"]);
+const FAILURE_CODES = new Set(["UNKNOWN", "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "EBUSY", "EIO", "MISSING_TERMINAL", "STOP_TIMEOUT", "STOP_UNCONFIRMED", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_DLOPEN_FAILED"]);
 
 export type BackgroundProcessState = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
@@ -29,7 +29,7 @@ export interface BackgroundProcessRecord {
   exitCode?: number | null;
   signal?: string;
   outputBytes: number;
-  failure?: { stage: "bootstrap" | "worker" | "shell"; code: string };
+  failure?: { stage: "bootstrap" | "worker" | "shell" | "output" | "state-write" | "worker-exit" | "stop"; code: string };
 }
 
 export interface BackgroundOutputPage {
@@ -82,6 +82,21 @@ function ensureSafeDirectory(directory: string): void {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Unsafe background state directory: ${directory}`);
 }
 
+function validFailure(value: unknown): value is NonNullable<BackgroundProcessRecord["failure"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const failure = value as NonNullable<BackgroundProcessRecord["failure"]>;
+  return Object.keys(failure).length === 2 && FAILURE_STAGES.has(failure.stage) && FAILURE_CODES.has(failure.code);
+}
+function readFailure(id: string): BackgroundProcessRecord["failure"] {
+  try {
+    const file = recordFile(id).replace(/\.json$/, ".failure.json");
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256) return undefined;
+    const failure: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    return validFailure(failure) ? failure : undefined;
+  } catch { return undefined; }
+}
+
 function validRecord(value: unknown): value is BackgroundProcessRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Partial<BackgroundProcessRecord>;
@@ -93,9 +108,7 @@ function validRecord(value: unknown): value is BackgroundProcessRecord {
     && typeof item.startedAt === "string" && Number.isFinite(Date.parse(item.startedAt))
     && typeof item.updatedAt === "string" && Number.isFinite(Date.parse(item.updatedAt))
     && Number.isSafeInteger(item.outputBytes) && item.outputBytes! >= 0
-    && (item.failure === undefined || (item.failure !== null && typeof item.failure === "object"
-      && Object.keys(item.failure).length === 2
-      && FAILURE_STAGES.has(item.failure.stage) && FAILURE_CODES.has(item.failure.code)))
+    && (item.failure === undefined || validFailure(item.failure))
     && (item.pid === undefined || (Number.isSafeInteger(item.pid) && item.pid! > 0))
     && (item.childPid === undefined || (Number.isSafeInteger(item.childPid) && item.childPid! > 0));
 }
@@ -116,15 +129,21 @@ function processAlive(pid: number | undefined): boolean {
 }
 
 function backgroundRecordAlive(record: BackgroundProcessRecord): boolean {
-  return processAlive(record.pid) || processAlive(record.childPid);
+  return knownProcessTargets(record).some(processAlive);
 }
 
-async function waitForProcessExit(pid: number, attempts = 40): Promise<boolean> {
+function knownPids(record: BackgroundProcessRecord): number[] {
+  return [...new Set([record.pid, record.childPid].filter((pid): pid is number => pid !== undefined))];
+}
+function knownProcessTargets(record: BackgroundProcessRecord): number[] {
+  return [...knownPids(record), ...(process.platform !== "win32" && record.pid ? [-record.pid] : [])];
+}
+async function waitForProcessesExit(pids: number[], attempts = 40): Promise<boolean> {
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (!processAlive(pid)) return true;
+    if (pids.every((pid) => !processAlive(pid))) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  return !processAlive(pid);
+  return pids.every((pid) => !processAlive(pid));
 }
 
 function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
@@ -139,7 +158,8 @@ function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
     // in-memory "running" snapshot can never overwrite completed evidence.
     const latest = readRecord(recordFile(record.id));
     if (latest && (latest.state !== record.state || latest.updatedAt !== record.updatedAt || latest.pid !== record.pid)) return refresh(latest);
-    const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(record.id) };
+    const failure = readFailure(record.id);
+    const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(record.id), ...(failure ? { failure } : {}) };
     atomicWrite(recordFile(record.id), next);
     return next;
   }
@@ -261,30 +281,93 @@ export function readBackgroundProcessOutput(id: string, cursor = 0, maximumBytes
 
 export function backgroundProcessOutput(id: string): string { return readBackgroundProcessOutput(id).text; }
 
+async function stopWindowsTree(pid: number): Promise<{ confirmed: boolean; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (confirmed: boolean, timedOut = false): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ confirmed, timedOut });
+    };
+    try {
+      const child = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      child.once("exit", (code) => finish(code === 0));
+      child.once("error", () => finish(false));
+      timer = setTimeout(() => {
+        // Only stop our own cleanup helper. Its timeout is not evidence that
+        // the requested process tree stopped, even if it exits afterward.
+        finish(false, true);
+        try { child.kill("SIGKILL"); } catch { /* still unconfirmed */ }
+        child.unref();
+      }, 2_000);
+    } catch { finish(false); }
+  });
+}
+
 export async function stopBackgroundProcess(id: string): Promise<void> {
-  const record = readRecord(recordFile(id));
+  const file = recordFile(id);
+  const record = readRecord(file);
   if (!record) throw new Error(`Unknown background process: ${id}`);
   if (!["starting", "running"].includes(record.state)) return;
-  if (process.platform === "win32" && record.pid) {
-    await new Promise<void>((resolve) => {
-      const child = spawn("taskkill.exe", ["/PID", String(record.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      child.once("exit", () => resolve()); child.once("error", () => resolve());
-    });
-    if (record.childPid && processAlive(record.childPid)) {
-      await new Promise<void>((resolve) => {
-        const child = spawn("taskkill.exe", ["/PID", String(record.childPid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-        child.once("exit", () => resolve()); child.once("error", () => resolve());
-      });
-    }
-  } else if (record.pid) {
-    try { process.kill(-record.pid, "SIGTERM"); } catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* already gone */ } }
-    if (!(await waitForProcessExit(record.pid))) {
-      try { process.kill(-record.pid, "SIGKILL"); } catch { try { process.kill(record.pid, "SIGKILL"); } catch { /* already gone */ } }
-      await waitForProcessExit(record.pid);
+  const pids = knownPids(record);
+  const targets = knownProcessTargets(record);
+  let confirmed = true;
+  let timedOut = false;
+  if (targets.some(processAlive)) {
+    if (process.platform === "win32") {
+      for (const pid of pids) {
+        if (!processAlive(pid)) continue;
+        const result = await stopWindowsTree(pid);
+        confirmed = confirmed && result.confirmed;
+        timedOut = timedOut || result.timedOut;
+      }
+      confirmed = (await waitForProcessesExit(pids)) && confirmed;
+    } else {
+      let groupSignalled = false;
+      if (record.pid) {
+        try { process.kill(-record.pid, "SIGTERM"); groupSignalled = true; }
+        catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* still unconfirmed */ } }
+      }
+      if (!(await waitForProcessesExit(targets))) {
+        if (record.pid) {
+          try { process.kill(-record.pid, "SIGKILL"); groupSignalled = true; }
+          catch { /* fall back only to saved owned PIDs, without claiming tree confirmation */ }
+        }
+        if (!groupSignalled) for (const pid of pids) {
+          if (processAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch { /* still unconfirmed */ }
+        }
+      }
+      confirmed = (await waitForProcessesExit(targets)) && groupSignalled;
     }
   }
-  const next = { ...record, state: "cancelled" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(id) };
-  atomicWrite(recordFile(id), next);
+  // Preserve worker completion/cancellation that arrived while stopping, and
+  // recheck newly published startup PIDs before declaring cancellation.
+  const latest = readRecord(file);
+  if (!latest) throw new Error("XIU_BACKGROUND_STOP_UNCONFIRMED: Background state is unavailable; process termination remains unknown.");
+  if (!confirmed || backgroundRecordAlive(latest)) {
+    const code = timedOut ? "STOP_TIMEOUT" : "STOP_UNCONFIRMED";
+    try {
+      // A concurrent cancellation is an intent, not shutdown proof. Keep it
+      // cancellable if a known owned PID/group is still live. Preserve genuine
+      // completed/failed evidence rather than rewriting it from a stop request.
+      if (["starting", "running", "cancelled"].includes(latest.state)) {
+        atomicWrite(file, { ...latest, state: latest.state === "cancelled" ? "running" : latest.state, updatedAt: new Date().toISOString(), failure: latest.failure ?? { stage: "stop", code } });
+      }
+    } catch { /* Existing active evidence remains; never manufacture cancellation. */ }
+    throw new Error(`XIU_BACKGROUND_STOP_UNCONFIRMED: ${timedOut ? "Process cleanup timed out" : "Process termination could not be confirmed"}; the background task remains active or unknown.`);
+  }
+  if (!["starting", "running"].includes(latest.state)) return;
+  // A still-unclaimed starting request has no known PID. Cancellation remains
+  // a terminal gate that the bootstrap/worker must observe before executing.
+  const bytes = (() => {
+    try {
+      const stat = fs.lstatSync(path.join(path.dirname(file), `${id}.log`));
+      return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
+    } catch { return 0; }
+  })();
+  atomicWrite(file, { ...latest, state: "cancelled", updatedAt: new Date().toISOString(), outputBytes: bytes });
 }
 
 /** Explicit test/admin cleanup. Normal Xiu shutdown deliberately does not call this. */

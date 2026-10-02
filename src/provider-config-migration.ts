@@ -42,6 +42,17 @@ const WINDOWS_ACL_STAGES = [
 ] as const;
 export type ProviderWindowsPrivacyFailure = "spawn" | "timeout" | "stdio-limit" | "nonzero-exit" | "process" | "protocol";
 export type ProviderWindowsPrivacyStage = typeof WINDOWS_ACL_STAGES[number] | "process-start" | "timeout" | "output-limit" | "process" | "protocol";
+const WINDOWS_ACL_CATEGORIES = ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "argument", "io", "unknown"] as const;
+export type ProviderWindowsPrivacyCategory = typeof WINDOWS_ACL_CATEGORIES[number] | "unavailable";
+
+function windowsPrivacyResult(error: unknown): { stage: typeof WINDOWS_ACL_STAGES[number]; category: ProviderWindowsPrivacyCategory } | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const stdout = (error as { stdout?: unknown }).stdout;
+  if (typeof stdout !== "string" || stdout.length > 100) return undefined;
+  const match = /^XIU_ACL_V1:([a-z-]+)(?::([a-z-]+))?\r?\n?$/.exec(stdout);
+  if (!match || !(WINDOWS_ACL_STAGES as readonly string[]).includes(match[1]!) || (match[2] && !(WINDOWS_ACL_CATEGORIES as readonly string[]).includes(match[2]))) return undefined;
+  return { stage: match[1] as typeof WINDOWS_ACL_STAGES[number], category: (match[2] as ProviderWindowsPrivacyCategory | undefined) ?? "unavailable" };
+}
 
 export function providerWindowsPrivacyFailureKind(error: unknown): ProviderWindowsPrivacyFailure {
   if (!error || typeof error !== "object") return "process";
@@ -56,12 +67,15 @@ export function providerWindowsPrivacyFailureKind(error: unknown): ProviderWindo
 export function providerWindowsPrivacyFailureStage(error: unknown): ProviderWindowsPrivacyStage {
   if (!error || typeof error !== "object") return "process";
   const result = error as { code?: unknown; killed?: unknown; stdout?: unknown };
-  if (result.code === "ENOENT" || result.code === "EACCES") return "process-start";
+  if (providerWindowsPrivacyFailureKind(error) === "spawn") return "process-start";
   if (result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "output-limit";
   if (result.killed === true) return "timeout";
-  if (typeof result.stdout !== "string" || result.stdout.length > 100) return "process";
-  const match = /^XIU_ACL_V1:([a-z-]+)\r?\n?$/.exec(result.stdout);
-  return match && (WINDOWS_ACL_STAGES as readonly string[]).includes(match[1]!) ? match[1] as ProviderWindowsPrivacyStage : "process";
+  return windowsPrivacyResult(error)?.stage ?? "process";
+}
+
+export function providerWindowsPrivacyFailureCategory(error: unknown): ProviderWindowsPrivacyCategory {
+  const kind = providerWindowsPrivacyFailureKind(error);
+  return kind === "nonzero-exit" || kind === "process" ? windowsPrivacyResult(error)?.category ?? "unavailable" : "unavailable";
 }
 
 // Typed enums and constructors work in Windows PowerShell 5.1 as well as newer
@@ -75,6 +89,31 @@ $WarningPreference = 'SilentlyContinue'
 $VerbosePreference = 'SilentlyContinue'
 $DebugPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
+function Get-XiuPrivacyFailureCategory([System.Exception] $exception) {
+  $fallback = 'unknown'
+  # Inspect at most eight wrappers; only fixed categories can leave this process.
+  for ($depth = 0; $null -ne $exception -and $depth -lt 8; $depth++) {
+    $code = 0
+    if ($exception -is [System.ComponentModel.Win32Exception]) { $code = $exception.NativeErrorCode }
+    elseif (($exception.HResult -band 0x7fff0000) -eq 0x00070000) { $code = $exception.HResult -band 0xffff }
+    switch ($code) {
+      5 { return 'access-denied' }
+      87 { return 'invalid-parameter' }
+      1307 { return 'invalid-owner' }
+      1308 { return 'invalid-group' }
+      1314 { return 'privilege-not-held' }
+      1336 { return 'invalid-acl' }
+      1338 { return 'invalid-descriptor' }
+    }
+    if ($exception -is [System.Security.AccessControl.PrivilegeNotHeldException]) { return 'privilege-not-held' }
+    if ($exception -is [System.UnauthorizedAccessException] -or $exception -is [System.Security.SecurityException]) { $fallback = 'access-denied' }
+    elseif ($fallback -eq 'unknown' -and $exception -is [System.ArgumentException]) { $fallback = 'argument' }
+    elseif ($fallback -eq 'unknown' -and $exception -is [System.InvalidOperationException]) { $fallback = 'invalid-operation' }
+    elseif ($fallback -eq 'unknown' -and $exception -is [System.IO.IOException]) { $fallback = 'io' }
+    $exception = $exception.InnerException
+  }
+  return $fallback
+}
 $stage = 'identity'
 try {
   $p = $env:XIU_PROVIDER_PRIVATE_TARGET
@@ -98,7 +137,11 @@ try {
     $stage = 'initialize-add-rule'
     $acl.AddAccessRule($rule)
     $stage = 'initialize-write'
-    Set-Acl -LiteralPath $p -AclObject $acl
+    # Framework persistence writes only modified Owner and Access sections.
+    # Set-Acl instead copies every section and can request unrelated audit
+    # privileges. Leave Group and SACL untouched; do not retry a denied write.
+    if ($isDirectory) { [System.IO.Directory]::SetAccessControl($p, $acl) }
+    else { [System.IO.File]::SetAccessControl($p, $acl) }
   }
   $stage = 'verify-read'
   $acl = Get-Acl -LiteralPath $p
@@ -122,13 +165,14 @@ try {
   [Console]::Out.WriteLine('XIU_ACL_V1:ok')
   exit 0
 } catch {
-  [Console]::Out.WriteLine('XIU_ACL_V1:' + $stage)
+  $category = Get-XiuPrivacyFailureCategory $_.Exception
+  [Console]::Out.WriteLine('XIU_ACL_V1:' + $stage + ':' + $category)
   exit 1
 }
 `;
 
 export class ProviderConfigurationError extends Error {
-  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false, readonly privacyStage?: ProviderWindowsPrivacyStage, readonly privacyFailure?: ProviderWindowsPrivacyFailure) { super(message); this.name = "ProviderConfigurationError"; }
+  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false, readonly privacyStage?: ProviderWindowsPrivacyStage, readonly privacyFailure?: ProviderWindowsPrivacyFailure, readonly privacyCategory?: ProviderWindowsPrivacyCategory) { super(message); this.name = "ProviderConfigurationError"; }
 }
 function failure(code: string): ProviderConfigurationError {
   const messages: Record<string, string> = {
@@ -145,15 +189,30 @@ function failure(code: string): ProviderConfigurationError {
   };
   return new ProviderConfigurationError(code, messages[code] ?? messages.io!);
 }
+
+/** Resolve the fixed OS helper without consulting the workspace or PATH. */
+export function providerWindowsPowerShellPath(systemRoot: string | undefined): string {
+  const root = systemRoot?.replace(/\//g, "\\");
+  // SystemRoot must identify a local, drive-absolute directory. Do not accept
+  // drive-relative, UNC/device, traversal, or Win32-aliased path components.
+  const components = root?.slice(3).replace(/\\$/, "").split("\\");
+  if (!root || !/^[a-z]:\\/i.test(root) || /[\x00-\x1f<>"|?*:]/.test(root.slice(2)) || !components?.length || components.some((part) => !part || part === "." || part === ".." || /[ .]$/.test(part))) {
+    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL helper location is unavailable or invalid.`, false, "process-start", "spawn", "unavailable");
+  }
+  return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+}
+
 export async function verifyProviderWindowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
   try {
-    const result = await runFile("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" } });
+    const executable = providerWindowsPowerShellPath(process.env.SystemRoot);
+    const result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: { ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" } });
     if (!/^XIU_ACL_V1:ok\r?\n?$/.test(result.stdout)) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
   } catch (error) {
     if (error instanceof ProviderConfigurationError) throw error;
     const stage = providerWindowsPrivacyFailureStage(error);
     const kind = providerWindowsPrivacyFailureKind(error);
-    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: ${kind}; stage: ${stage}.`, false, stage, kind);
+    const category = providerWindowsPrivacyFailureCategory(error);
+    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: ${kind}; stage: ${stage}; category: ${category}.`, false, stage, kind, category);
   }
 }
 
