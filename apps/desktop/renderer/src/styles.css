@@ -435,6 +435,7 @@ button, input, textarea { font: inherit; }
 .sidebar-mcp { flex: 0 0 auto; margin-top: 0; padding: 10px 12px; text-align: left; color: #65758b; border: 0; border-radius: 10px; background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
 .sidebar-utilities { margin-top: auto; display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; }
 .sidebar-utilities .sidebar-footer { margin-top: 5px; }
+.sidebar-utilities .sidebar-mcp { min-height: 30px; padding-top: 6px; padding-bottom: 6px; }
 .sidebar > section { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .sidebar:has(.sidebar-mcp) { gap: 12px; }
 .sidebar-mcp:hover { background: #e6effb; color: #147bea; }
@@ -494,6 +495,11 @@ button, input, textarea { font: inherit; }
 .mcp-panel p, .mcp-panel small { font-family: inherit; font-size: 12px; line-height: 1.6; }
 .mcp-panel button { font: inherit; font-size: 12px; padding: 8px 12px; border-radius: 8px; }
 .mcp-panel > header button { margin: 0; width: 32px; height: 32px; padding: 0; font-size: 20px; }
+.management-panel nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.management-panel nav button { margin: 0; }
+.management-panel nav button[aria-pressed="true"] { background: #147bea; color: white; }
+.management-panel details { border-bottom: 1px solid #dce5f0; padding: 12px 0; }
+.management-panel summary { cursor: pointer; font-size: 13px; }
 .mcp-panel article { padding: 12px; margin-top: 12px; }.mcp-panel article header { font-size: 12px; flex-wrap: wrap; gap: 6px; }
 .mcp-actions { display: flex; flex-wrap: wrap; gap: 6px; }.mcp-actions button { margin: 0; }
 .mcp-server-details summary { cursor: pointer; color: #65758b; font-size: 12px; padding-top: 10px; }

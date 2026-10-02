@@ -1,6 +1,6 @@
 <div align="center">
 
-> Handoff baseline: preview.9 (`99f86cb`) passed all six CI jobs in run `36996849173` and was released as a GitHub pre-release; npm remains 0.20.2. Local UI corrections on this branch are not part of that immutable release. Real OS IME, external devices and paid Provider acceptance remain pending.
+> Current development: 0.20.3-preview.11 candidate. Background lifecycle coordination and shared desktop search/routing/Skills/report management are under acceptance. Released GitHub baseline is preview.10; npm publication is paused and latest remains 0.20.2. Real OS IME and external-device acceptance are pending.
 
 Local desktop UI corrections: compact bottom-aligned utility entries, consistent Execute/Plan controls, non-wrapping model action labels, a collapsible tool sidebar that retains tabs/terminal state, and a main-process-owned Xiu-styled Full Access confirmation. No permission or recovery policy is relaxed.
 

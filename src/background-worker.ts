@@ -4,9 +4,10 @@ import process from "node:process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { redactSecrets } from "./secret-redaction.js";
+import { withBackgroundLifecycle } from "./background-lifecycle.js";
 
 interface Request { version: 1; recordFile: string; outputFile: string; cwd: string; command: string }
-interface RecordValue { version: 1; id: string; workspaceId: string; commandPreview: string; state: string; startedAt: string; updatedAt: string; pid?: number; childPid?: number; exitCode?: number | null; signal?: string; outputBytes: number; failure?: Failure }
+interface RecordValue { version: 1; id: string; workspaceId: string; commandPreview: string; state: string; startedAt: string; updatedAt: string; pid?: number; childPid?: number; exitCode?: number | null; signal?: string; outputBytes: number; failure?: Failure; stopRequested?: boolean }
 
 type FailureStage = "worker" | "shell" | "output" | "state-write" | "worker-exit";
 interface Failure { stage: FailureStage; code: string }
@@ -35,7 +36,7 @@ function atomicWrite(file: string, value: unknown): void {
   } finally { try { fs.unlinkSync(temporary); } catch { /* renamed */ } }
 }
 
-function update(request: Request, fields: Partial<RecordValue>): void {
+function updateUnlocked(request: Request, fields: Partial<RecordValue>): void {
   for (let attempt = 0; ; attempt++) {
     try {
       const stat = fs.lstatSync(request.recordFile);
@@ -43,6 +44,7 @@ function update(request: Request, fields: Partial<RecordValue>): void {
       const current = JSON.parse(fs.readFileSync(request.recordFile, "utf8")) as RecordValue;
       // Re-read on every metadata retry: cancellation/terminal evidence wins.
       if (current.state !== "starting" && current.state !== "running") return;
+      if (current.stopRequested) return;
       atomicWrite(request.recordFile, { ...current, ...fields, pid: process.pid, updatedAt: new Date().toISOString(), outputBytes: (() => { try { return fs.statSync(request.outputFile).size; } catch { return 0; } })() });
       return;
     } catch (error) {
@@ -53,6 +55,10 @@ function update(request: Request, fields: Partial<RecordValue>): void {
       Atomics.wait(retrySignal, 0, 0, retryDelays[attempt]);
     }
   }
+}
+
+function update(request: Request, fields: Partial<RecordValue>): void {
+  withBackgroundLifecycle(request.recordFile, () => updateUnlocked(request, fields));
 }
 
 function createRedactedAppender(file: string): { write(value: Buffer): void; flush(): void } {
@@ -155,21 +161,22 @@ try {
   request = JSON.parse(fs.readFileSync(requestFile, "utf8")) as Request;
   const activeRequest = request;
   fs.unlinkSync(requestFile);
-  const current = JSON.parse(fs.readFileSync(request.recordFile, "utf8")) as RecordValue;
-  if (current.state !== "starting") process.exit(0);
-  const directory = fs.lstatSync(path.dirname(request.outputFile));
+  withBackgroundLifecycle(request.recordFile, () => {
+  const current = JSON.parse(fs.readFileSync(activeRequest.recordFile, "utf8")) as RecordValue;
+  if (current.state !== "starting" || current.stopRequested) return;
+  const directory = fs.lstatSync(path.dirname(activeRequest.outputFile));
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Unsafe background output directory");
-  fs.closeSync(fs.openSync(request.outputFile, "ax", 0o600));
+  fs.closeSync(fs.openSync(activeRequest.outputFile, "ax", 0o600));
   const windows = process.platform === "win32";
   const shell = windows ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/sh";
-  child = spawn(shell, windows ? ["-NoProfile", "-NonInteractive", "-Command", request.command] : ["-lc", request.command], {
-    cwd: request.cwd,
+  child = spawn(shell, windows ? ["-NoProfile", "-NonInteractive", "-Command", activeRequest.command] : ["-lc", activeRequest.command], {
+    cwd: activeRequest.cwd,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, XIU_DETACHED_BACKGROUND: "1" },
   });
-  const stdout = createRedactedAppender(request.outputFile);
-  const stderr = createRedactedAppender(request.outputFile);
+  const stdout = createRedactedAppender(activeRequest.outputFile);
+  const stderr = createRedactedAppender(activeRequest.outputFile);
   child.stdout?.on("data", (chunk: Buffer) => guard(() => stdout.write(chunk), "output"));
   child.stderr?.on("data", (chunk: Buffer) => guard(() => stderr.write(chunk), "output"));
   const terminate = (): void => {
@@ -199,7 +206,8 @@ try {
   });
   // All lifecycle guards must exist before state persistence can throw. A
   // startup write failure still owns a live command and must finish cleanup.
-  update(request, { state: "running", childPid: child.pid });
+  updateUnlocked(activeRequest, { state: "running", childPid: child.pid });
+  });
 } catch (error) {
   if (requestFile) try { fs.unlinkSync(requestFile); } catch { /* best effort */ }
   try { fail(error, "worker"); } catch { /* Unsafe/unwritable state cannot be repaired here. */ }

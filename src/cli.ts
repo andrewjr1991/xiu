@@ -7,6 +7,7 @@ import process from "node:process";
 import chalk from "chalk";
 import { Command } from "commander";
 import { Agent, BackgroundApprovalRequiredError } from "./agent.js";
+import { createProviderPolicy } from "./runtime/provider-policy.js";
 import { configureBackgroundWorkspace, listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
@@ -1225,82 +1226,9 @@ async function main(): Promise<void> {
         `工具 ${capabilityStateName(probe.tools)} / 视觉 ${capabilityStateName(probe.vision)}`,
         `tools ${capabilityStateName(probe.tools)} / vision ${capabilityStateName(probe.vision)}`);
     };
-    agent.setFailoverController({
-      resolve: async (request) => {
-        const chain = providerRegistry.failoverChain(request.originProviderId);
-        if (!chain.length) return { reason: localize(language, `主 Provider ${request.originProviderId} 未配置备用链`, `No failover chain is configured for primary provider ${request.originProviderId}`) };
-        const skipped: Array<{ providerId: string; reason: string }> = [];
-        for (const providerId of chain) {
-          if (request.attemptedProviderIds.includes(providerId)) {
-            skipped.push({ providerId, reason: localize(language, "本次任务已尝试", "already attempted in this task") });
-            continue;
-          }
-          const profile = providerRegistry.get(providerId);
-          if (!profile) {
-            skipped.push({ providerId, reason: localize(language, "配置不存在", "profile not found") });
-            continue;
-          }
-          const model = providerRegistry.activeModel(providerId) ?? profile.model;
-          const effective = runtimeProfile(profile, model);
-          if (request.requiresTools && !effective.features.tools) {
-            skipped.push({ providerId, reason: localize(language, "当前请求需要工具能力", "the current request requires tool support") });
-            continue;
-          }
-          const candidateConfig = profileConfig(profile, model);
-          const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
-          if (request.estimatedInputTokens >= safeInputLimit) {
-            skipped.push({ providerId, reason: localize(language, `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过安全输入线 ${safeInputLimit.toLocaleString()}`, `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the safe input limit ${safeInputLimit.toLocaleString()}`) });
-            continue;
-          }
-          return {
-            candidate: {
-              config: candidateConfig,
-              provider: createProvider(candidateConfig),
-              tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
-              label: profile.name,
-            },
-            skipped,
-          };
-        }
-        return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
-      },
-    });
-    agent.setRoutingController({
-      resolve: async (request) => {
-        const policy = providerRegistry.routingPolicy();
-        if (!policy.enabled) return {};
-        const targetProviderId = policy.phases[request.phase];
-        if (!targetProviderId) {
-          if (request.currentProviderId === request.defaultProviderId && request.currentModel === request.defaultModel) return {};
-          return { useDefault: true, targetProviderId: request.defaultProviderId, reason: localize(language, `当前阶段未绑定 Provider，恢复任务默认模型`, `no provider is assigned to this stage; restoring the task default model`) };
-        }
-        const profile = providerRegistry.get(targetProviderId);
-        if (!profile) return { targetProviderId, reason: localize(language, "目标 Provider 配置不存在", "the target provider profile does not exist") };
-        const model = providerRegistry.activeModel(targetProviderId) ?? profile.model;
-        const effective = runtimeProfile(profile, model);
-        if (request.requiresTools && !effective.features.tools) {
-          return { targetProviderId, reason: localize(language, "当前阶段需要工具能力，但目标模型不支持工具", "this stage requires tools, but the target model does not support tools") };
-        }
-        const candidateConfig = profileConfig(profile, model);
-        if (candidateConfig.providerId === request.currentProviderId && candidateConfig.model === request.currentModel) return {};
-        const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
-        if (request.estimatedInputTokens >= safeInputLimit) {
-          return { targetProviderId, reason: localize(language,
-            `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过目标模型安全输入线 ${safeInputLimit.toLocaleString()}`,
-            `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the target model safe input limit ${safeInputLimit.toLocaleString()}`) };
-        }
-        return {
-          targetProviderId,
-          reason: localize(language, `用户已将 ${request.phase} 阶段绑定到 ${profile.name}`, `the user assigned the ${request.phase} stage to ${profile.name}`),
-          candidate: {
-            config: candidateConfig,
-            provider: createProvider(candidateConfig),
-            tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
-            label: profile.name,
-          },
-        };
-      },
-    });
+    const policy = createProviderPolicy(providerRegistry, profileConfig, (candidate) => [...buildBaseTools(candidate), ...mcpManager.tools()], language);
+    agent.setFailoverController(policy.failover);
+    agent.setRoutingController(policy.routing);
     const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
       status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
       try {

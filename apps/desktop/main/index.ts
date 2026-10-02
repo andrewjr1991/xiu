@@ -333,6 +333,34 @@ function registerIpc(): void {
     controller.trustedWorkspacePath();
     return (await getProviderController()).snapshot();
   });
+  ipcMain.handle(desktopChannels.managementSnapshot, async (event) => {
+    assertTrustedSender(event);
+    return taskController.managementSnapshot(controller.trustedWorkspacePath());
+  });
+  ipcMain.handle(desktopChannels.skillPrepare, async (event) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端。");
+    return taskController.prepareSkillInstallation(workspace, async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+      const result = await dialog.showOpenDialog(mainWindow, { title: "选择本地 Skill 包目录", properties: ["openDirectory"] });
+      return result.canceled ? undefined : result.filePaths[0];
+    });
+  }));
+  ipcMain.handle(desktopChannels.skillCancel, async (event) => {
+    assertTrustedSender(event);
+    return taskController.cancelSkillInstallation(controller.trustedWorkspacePath());
+  });
+  ipcMain.handle(desktopChannels.taskDiagnostics, async (event) => {
+    assertTrustedSender(event);
+    return taskController.taskDiagnostics(controller.trustedWorkspacePath());
+  });
+  ipcMain.handle(desktopChannels.managementChange, async (event, request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改配置。");
+    return taskController.changeManagement(workspace, request);
+  }));
   ipcMain.handle(desktopChannels.providerModels, async (event, request: DesktopProviderModelsRequest) => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();

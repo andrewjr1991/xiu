@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
+import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
+import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-management.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
 import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.js";
@@ -56,6 +59,53 @@ export class DesktopTaskController {
     if (!host.mcp) throw new Error("当前运行时不支持 MCP。");
     try { return await host.mcp.snapshot(); }
     catch { throw new Error("MCP 配置无法读取，请检查用户或项目 .xiu/mcp.json（错误详情不含凭据）。"); }
+  }
+
+  async managementSnapshot(workspace: string) {
+    const host = await this.ensure(workspace);
+    if (!host.management) throw new Error("管理服务不可用。");
+    return host.management.snapshot();
+  }
+
+  async changeManagement(workspace: string, request: WorkspaceManagementRequest) {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
+    await this.assertCanReconfigure(workspace);
+    this.assertIdleContext(host, workspace, contextId);
+    if (!host.management) throw new Error("管理服务不可用。");
+    this.mcpBusy = true;
+    try { await host.management.change(request); }
+    catch { throw new Error("配置保存失败或已变化，请刷新后重试。"); }
+    finally { this.mcpBusy = false; }
+    return this.reload(workspace);
+  }
+
+  async prepareSkillInstallation(workspace: string, choose: () => Promise<string | undefined>) {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
+    await this.assertCanReconfigure(workspace);
+    this.assertIdleContext(host, workspace, contextId);
+    if (!host.management) throw new Error("管理服务不可用。");
+    this.mcpBusy = true;
+    try {
+      const source = await choose();
+      if (this.host !== host || this.workspace !== workspace || this.modeContextId !== contextId) throw new Error("上下文已变化。");
+      return source ? await host.management.prepareSkill(source) : undefined;
+    } catch { throw new Error("无法预览此技能包。请选择未安装、无链接且权限声明有效的本地目录。"); }
+    finally { this.mcpBusy = false; }
+  }
+
+  async cancelSkillInstallation(workspace: string) {
+    const host = await this.ensure(workspace);
+    await host.management?.cancelSkillPreview();
+  }
+
+  async taskDiagnostics(workspace: string) {
+    const host = await this.ensure(workspace);
+    const run = await host.journal.latest();
+    const clean = (value: string) => (host.sanitize?.(value) ?? redactSecrets(value)).slice(0, 60_000);
+    return { report: clean(run ? formatExecutionReport(buildExecutionReport({ cwd: workspace, run }), "zh-CN") : "尚无任务报告。"),
+      diagnostics: clean(formatTaskDiagnostics(host.agent?.status().diagnostics, "zh-CN")) };
   }
 
   async changeMcp(workspace: string, action: "reload" | "disconnect" | "approve", request?: import("../shared/protocol.js").DesktopMcpApproveRequest) {

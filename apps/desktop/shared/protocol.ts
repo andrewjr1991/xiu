@@ -275,6 +275,11 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  managementSnapshot(): Promise<import("../../../src/runtime/workspace-management.js").WorkspaceManagementSnapshot>;
+  prepareSkillInstallation(): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
+  cancelSkillInstallation(): Promise<void>;
+  changeManagement(request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest): Promise<DesktopRuntimeConnection>;
+  taskDiagnostics(): Promise<{ report: string; diagnostics: string }>;
   browser(request: DesktopBrowserRequest): Promise<DesktopBrowserState>;
   onBrowserState(listener: (state: DesktopBrowserState) => void): () => void;
   manageMcp(request: DesktopMcpManageRequest): Promise<WorkspaceMcpSnapshot>;
@@ -327,6 +332,11 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  managementSnapshot: "management:snapshot",
+  skillPrepare: "skill:prepare",
+  skillCancel: "skill:cancel",
+  managementChange: "management:change",
+  taskDiagnostics: "task:diagnostics",
   browser: "browser:control",
   browserState: "browser:state",
   mcpManage: "mcp:manage",

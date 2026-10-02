@@ -3,7 +3,9 @@
  * It uses only Node built-ins so missing/broken worker imports leave durable,
  * non-secret failure evidence even after the launcher has exited.
  */
-export const BACKGROUND_BOOTSTRAP_SOURCE = String.raw`
+import { lifecycleGate } from "./background-lifecycle.js";
+
+export const BACKGROUND_BOOTSTRAP_SOURCE = `const lifecycleGate = ${lifecycleGate.toString()};\n` + String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
@@ -25,6 +27,7 @@ function writeRecord(record) {
 function fail(error) {
   try {
     if (!request) request = JSON.parse(fs.readFileSync(requestFile, "utf8"));
+    lifecycleGate(fs, request.recordFile, () => {
     const current = readRecord();
     if (current.state !== "starting") return;
     const code = safeCodes.has(error && error.code) ? error.code : "UNKNOWN";
@@ -35,6 +38,7 @@ function fail(error) {
     writeRecord({ ...current, pid: process.pid, state: "failed", exitCode: 1,
       failure: { stage: "bootstrap", code }, updatedAt: new Date().toISOString(),
       outputBytes: fs.statSync(request.outputFile).size });
+    });
   } catch { /* Unwritable or unsafe storage must never trigger command execution. */ }
   finally { try { fs.unlinkSync(requestFile); } catch {} }
   process.exitCode = 1;
@@ -42,9 +46,13 @@ function fail(error) {
 (async () => {
   try { fs.unlinkSync(__filename); } catch {}
   request = JSON.parse(fs.readFileSync(requestFile, "utf8"));
-  const current = readRecord();
-  if (current.state !== "starting") { try { fs.unlinkSync(requestFile); } catch {} return; }
-  writeRecord({ ...current, pid: process.pid, updatedAt: new Date().toISOString() });
+  const claimed = lifecycleGate(fs, request.recordFile, () => {
+    const current = readRecord();
+    if (current.state !== "starting") return false;
+    writeRecord({ ...current, pid: process.pid, updatedAt: new Date().toISOString() });
+    return true;
+  });
+  if (!claimed) { try { fs.unlinkSync(requestFile); } catch {} return; }
   if (loader) await import(loader);
   await import(source);
 })().catch(fail);

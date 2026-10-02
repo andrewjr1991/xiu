@@ -113,6 +113,27 @@ app.whenReady().then(async () => {
     const desktopViewport = await evaluate(window, `({ width: innerWidth, height: innerHeight })`);
     assert(desktopViewport.width === 1366 && desktopViewport.height === 768, `1366x768 desktop viewport was not created: ${JSON.stringify(desktopViewport)}.`);
     console.log("UI smoke: viewport ready");
+    const checkManagement = async (label) => {
+      await clickText(window, "工具与运行设置", '.sidebar-utilities button');
+      await waitFor(window, "Boolean(document.querySelector('.management-panel'))", "management mounted");
+      await clickText(window, "模型路由", '.management-panel nav button');
+      await waitFor(window, "Boolean(document.querySelector('.management-panel [aria-label=\"主渠道\"]'))", "routing fields ready");
+      assert(await evaluate(window, "(() => {const r=document.querySelector('.management-panel').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()"), "Management dialog exceeds viewport.");
+      await clickText(window, "Skills", '.management-panel nav button');
+      await clickText(window, "选择本地技能包并预览", '.management-panel button');
+      await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能安装预览\"]'))", "skill permission preview");
+      await clickText(window, "取消预览", '.management-panel button');
+      await clickText(window, "报告与诊断", '.management-panel nav button');
+      await waitFor(window, "document.querySelector('.management-panel').textContent.includes('本机执行报告 fixture')", "bounded local report");
+      await settleLayout(window);
+      await fs.promises.writeFile(path.join(smokeRoot, `management-${label}.png`), (await window.webContents.capturePage()).toPNG());
+      await evaluate(window, "document.querySelector('[aria-label=\"关闭管理面板\"]').click()");
+      await waitFor(window, "!document.querySelector('.management-panel')", "management closed");
+    };
+    await checkManagement("1366");
+    window.webContents.setZoomFactor(1.25);
+    await checkManagement("zoom125");
+    window.webContents.setZoomFactor(1);
     const checkInspectorLayout = async () => {
       assert(await evaluate(window, `[...document.querySelectorAll('.inspector-tabs button')].every(el => getComputedStyle(el).whiteSpace === 'nowrap' && getComputedStyle(el).flexShrink === '0')`), "Inspector tabs can wrap or shrink into vertical text.");
       assert(await evaluate(window, `(() => { const el=document.querySelector('.task-console'); return el.scrollWidth <= el.clientWidth + 1; })()`), "Conversation overflows its grid column.");
@@ -151,6 +172,7 @@ app.whenReady().then(async () => {
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-1366.png"), (await window.webContents.capturePage()).toPNG());
     await resizeViewport(window, 900, 768, "inspector narrow resize");
+    await checkManagement("900");
     await checkInspectorLayout();
     await fs.promises.writeFile(path.join(smokeRoot, "inspector-ui-900.png"), (await window.webContents.capturePage()).toPNG());
     await resizeViewport(window, 1366, 768, "inspector wide restore");

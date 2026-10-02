@@ -21,6 +21,30 @@ import {
 
 const loaderUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const backgroundModuleUrl = pathToFileURL(path.resolve("src/background.ts")).href;
+
+test("cancellation before bootstrap claims its PID permanently gates a delayed launch", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-unclaimed-"));
+  t.after(() => removeBackgroundTestRoot(root));
+  configureBackgroundWorkspace(root, root);
+  const marker = path.join(root, "must-not-execute.txt");
+  const script = path.join(root, "command.cjs");
+  await fs.writeFile(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`);
+  const original = childProcess.spawn;
+  let launch: { program: string; args: readonly string[] } | undefined;
+  t.mock.method(childProcess, "spawn", (program: string, args: readonly string[]) => {
+    launch = { program, args };
+    return Object.assign(new EventEmitter(), { unref() {} });
+  });
+  syncBuiltinESMExports();
+  const job = startBackgroundProcess(nodeCommand(script), root);
+  await stopBackgroundProcess(job.id);
+  t.mock.restoreAll(); syncBuiltinESMExports();
+  assert.ok(launch);
+  const delayed = original(launch.program, launch.args, { windowsHide: true, stdio: "ignore" });
+  await new Promise<void>((resolve, reject) => { delayed.once("error", reject); delayed.once("close", () => resolve()); });
+  assert.equal(listBackgroundProcesses().find((item) => item.id === job.id)?.state, "cancelled");
+  assert.equal(fsSync.existsSync(marker), false);
+});
 function quoteCommand(value: string): string {
   return process.platform === "win32" ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", `'"'"'`)}'`;
 }

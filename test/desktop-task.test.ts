@@ -10,6 +10,7 @@ import { TaskRunJournal } from "../src/task-run.js";
 import { loadTaskChangeHistory, saveTaskChangeHistory } from "../src/task-change-history.js";
 import type { TaskChangeReport } from "../src/task-changes.js";
 import { XiuRuntime, type RuntimeTaskDriver } from "../src/runtime/xiu-runtime.js";
+import type { WorkspaceManagementService } from "../src/runtime/workspace-management.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -19,13 +20,15 @@ function deferred<T>() {
 }
 
 class FakeDriver implements RuntimeTaskDriver {
+  planMode = false;
+  setPlanMode(enabled: boolean): void { this.planMode = enabled; }
   outcome: ReturnType<RuntimeTaskDriver["status"]>["outcome"] = "idle";
   result = deferred<string>();
   steering: string[] = [];
   run(): Promise<string> { this.outcome = "running"; return this.result.promise; }
   cancel(): boolean { this.outcome = "cancelled"; this.result.reject(new Error("cancelled")); return true; }
   steer(text: string): boolean { this.steering.push(text); return true; }
-  status() { return { outcome: this.outcome }; }
+  status() { return { outcome: this.outcome, planMode: this.planMode }; }
 }
 
 function historicalReport(file: string, line: string): TaskChangeReport {
@@ -34,6 +37,31 @@ function historicalReport(file: string, line: string): TaskChangeReport {
     preview: `@@ -0,0 +1,1 @@ (preview)\n+ ${line}`, limitations: [],
   }] };
 }
+
+test("desktop management reload revokes Full Access and preserves Plan; active tasks cannot mutate", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-controller-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  let changed = 0;
+  let driver: FakeDriver;
+  const controller = new DesktopTaskController(() => undefined, async () => {
+    const runtime = new XiuRuntime();
+    driver = new FakeDriver(); runtime.attachDriver(driver);
+    return { runtime, provider: { id: "test", label: "Test", model: "test-model" }, journal: new TaskRunJournal(workspace, path.join(workspace, "journals")),
+      setApprovalMode() {}, management: { change: async () => { changed++; } } as unknown as WorkspaceManagementService };
+  });
+  const initial = await controller.connect(workspace);
+  const planned = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId });
+  await controller.setApprovalMode(workspace, { mode: "full", contextId: planned.modeContextId }, async () => true);
+  const reloaded = await controller.changeManagement(workspace, { action: "routing", revision: "fixture", enabled: true });
+  assert.equal(changed, 1);
+  assert.equal(reloaded.approvalMode, "ask");
+  assert.equal(reloaded.runtime.snapshot.planMode, true);
+  assert.notEqual(reloaded.modeContextId, planned.modeContextId);
+  await controller.createTask(workspace, "fixture running task");
+  await assert.rejects(controller.changeManagement(workspace, { action: "routing", revision: "fixture", enabled: false }));
+  assert.equal(changed, 1);
+  driver!.outcome = "completed"; driver!.result.resolve("done");
+});
 
 test("desktop empty-provider runtime opens but cannot create, continue or recover tasks", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-no-provider-"));

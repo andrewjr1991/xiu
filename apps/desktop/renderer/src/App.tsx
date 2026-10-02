@@ -7,6 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { desktopTerminalVisuals } from "./terminal-visuals.js";
 import { McpPanel } from "./McpPanel.js";
 import { RecoveryPanel } from "./RecoveryPanel.js";
+import { ManagementPanel } from "./ManagementPanel.js";
 import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "../../shared/provider-recovery.js";
 import { ResizableTaskLayout } from "./ResizableTaskLayout.js";
 import { ChangesPanel } from "./ChangesPanel.js";
@@ -551,6 +552,7 @@ export function App() {
   const [providerRecoveryError, setProviderRecoveryError] = useState<string>();
   const providerRestartRequired = providerRecovery?.restartRequired === true;
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [managementOpen, setManagementOpen] = useState(false);
   const [mcpSnapshot, setMcpSnapshot] = useState<WorkspaceMcpSnapshot>();
   const [workspace, setWorkspace] = useState(emptyWorkspace);
   const [connection, setConnection] = useState<DesktopRuntimeConnection>();
@@ -643,6 +645,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    setManagementOpen(false);
     if (workspace.trust !== "trusted") {
       setConnection(undefined); setRuntime(undefined); runtimeRef.current = undefined; setEvents([]); setDraft(undefined); setPendingMessage(undefined); setHistoryView(undefined); setReview(undefined); setTaskCompletionChanges(undefined); setSelectedDiff(undefined); setFilePreview(undefined); setProviderOpen(false); setProviderSettings(undefined); setCredentialEditing(undefined); setApiKey(""); return;
     }
@@ -1041,6 +1044,7 @@ export function App() {
   const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || connection?.writer === "active-elsewhere"} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <main className="app-shell">
+    {managementOpen && <ManagementPanel disabled={isActive || connection?.writer === "active-elsewhere"} onClose={() => setManagementOpen(false)} onConnection={(next) => { setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-200)); setDraft(undefined); }} />}
     <header className="titlebar"><div className="brand"><Logo /><span>Xiu</span></div><div className="titlebar-context">{workspace.workspace?.name ?? "本地优先桌面工作台"}</div><div className="preview-badge">v0.20 · 预览</div></header>
     <aside className="sidebar">
       <button className="primary-button new-task-button" disabled={busy || isActive || workspace.trust !== "trusted"} onClick={() => void newConversation()}>＋ 新建任务</button>
@@ -1048,6 +1052,7 @@ export function App() {
       <section><h2>最近项目</h2>{workspace.recent.length === 0 ? <p className="muted">尚无可信工作区</p> : workspace.recent.map((item) => <div className="sidebar-item" key={item.id}><button className={`workspace-row ${workspace.workspace?.id === item.id ? "selected" : ""}`} disabled={busy || isActive} onClick={() => void runWorkspace(() => window.xiuDesktop.openRecentWorkspace({ workspaceId: item.id }))}><span className="folder-icon">⌁</span><span>{item.name}</span><small>{item.trusted ? "可信" : "需确认"}</small></button><button className="sidebar-delete" disabled={busy || isActive} title={`从最近项目移除 ${item.name}`} aria-label={`从最近项目移除 ${item.name}`} onClick={() => setConfirmation({ kind: "workspace", id: item.id, name: item.name })}>×</button></div>)}</section>
       {workspace.trust === "trusted" && <section className="history"><h2>最近任务</h2>{workspace.tasks.slice(0, 7).map((task) => <div className="sidebar-item" key={task.id}><button className={`history-row ${activeConversationId === task.id ? "selected" : ""}`} disabled={busy || isActive} title={task.title} onClick={() => void openTaskHistory(task.id)}><span className={`task-dot ${task.status}`} /><span>{task.title}</span></button><button className="sidebar-delete" disabled={busy || isActive} title={`删除任务 ${task.title}`} aria-label={`删除任务 ${task.title}`} onClick={() => setConfirmation({ kind: "task", id: task.id, name: task.title })}>×</button></div>)}</section>}
       <div className="sidebar-utilities"><button className="sidebar-mcp" disabled={busy || workspace.trust !== "trusted"} onClick={() => { setMcpOpen(true); void refreshMcp(); }}>MCP 连接与权限</button>
+      <button className="sidebar-mcp" disabled={busy || workspace.trust !== "trusted"} onClick={() => setManagementOpen(true)}>工具与运行设置</button>
       <button className="sidebar-mcp" disabled={busy} onClick={openProviderRecovery}>Provider 配置诊断与恢复</button>
       <button className="sidebar-footer" disabled={busy || workspace.trust !== "trusted"} onClick={() => void openProviderPicker("settings")}>⚙ 设置与模型</button></div>
     </aside>

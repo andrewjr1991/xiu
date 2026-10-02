@@ -20,6 +20,9 @@ import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
 import { MultiAgentCoordinator, createMultiAgentTools, requireCompletedSubagent, selectSubagentTools } from "../multi-agent.js";
 import { configureBackgroundRuntime, configureBackgroundWorkspace, listBackgroundProcesses } from "../background.js";
 import { resolveNodeRuntime } from "../node-runtime.js";
+import { createWebSearchTools } from "../web-search.js";
+import { createProviderPolicy } from "./provider-policy.js";
+import { WorkspaceManagementService } from "./workspace-management.js";
 
 export interface WorkspaceAgentHost {
   providerConfigured?: boolean;
@@ -29,6 +32,8 @@ export interface WorkspaceAgentHost {
   agent?: Agent;
   checkpointManager?: CheckpointManager;
   projectIndex?: ProjectIndex;
+  management?: WorkspaceManagementService;
+  sanitize?: (value: string) => string;
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
   mcp?: WorkspaceMcpService;
   coordinator?: MultiAgentCoordinator;
@@ -100,9 +105,11 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   const planManager = new TaskPlanManager(undefined, false, language);
   const checkpointManager = new CheckpointManager(workspace);
   const journal = new TaskRunJournal(workspace, options.journalRoot);
-  const runtime = new XiuRuntime({
-    sanitize: (value) => redactSecrets(value, config.apiKey ? [config.apiKey] : []),
-  });
+  const sanitize = (value: string) => redactSecrets(value, [config.apiKey, ...registry.list().map((item) => {
+    const target = registry.get(item.id);
+    return target?.apiKey ?? (target?.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined);
+  })].filter((key): key is string => Boolean(key)));
+  const runtime = new XiuRuntime({ sanitize });
   let approvalMode: WorkspaceApprovalMode = "ask";
   let approvalTail: Promise<unknown> = Promise.resolve();
   const requestApproval = (request: ApprovalRequest): Promise<boolean> => {
@@ -117,12 +124,17 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   const desktopDeferredTools = new Set(["start_background_command", "list_background_commands", "read_background_output", "stop_background_command"]);
   configureBackgroundWorkspace(workspace, options.backgroundRoot);
   configureBackgroundRuntime(await resolveNodeRuntime().catch(() => undefined));
+  const initialMediaTools = createMediaTools(config);
+  const mediaNames = new Set(initialMediaTools.map((tool) => tool.name));
   const tools = [
     ...builtinTools,
     ...createProjectIndexTools(projectIndex),
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
-    ...createMediaTools(config),
+    ...initialMediaTools,
+    // Managed device enrollment is intentionally not initiated by the desktop.
+    // Explicit public/env-key configurations use the exact CLI tools/gates.
+    ...createWebSearchTools(settings.webSearch?.managedAuth ? undefined : settings.webSearch),
   ];
 
   let provider: ModelProvider;
@@ -196,7 +208,18 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
-  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools([...tools, ...mcpManager.tools()]));
+  const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name)), ...createMediaTools(next), ...mcpManager.tools()];
+  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)));
+  const policy = createProviderPolicy(registry, (target, targetModel) => {
+    const next = createWorkspaceProviderConfig(target, targetModel, workspace, registry.credentialRevision(target.id), language);
+    next.projectConfigurationTrusted = true;
+    next.autoApprove = false;
+    return next;
+  }, (next) => {
+    return currentTools(next);
+  }, language);
+  agent.setFailoverController(policy.failover);
+  agent.setRoutingController(policy.routing);
   const interrupted = await journal.interrupted();
   const latest = interrupted ?? await journal.latest();
   if (latest) checkpointManager.setSession(latest.sessionId);
@@ -209,12 +232,14 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       recommendation: interrupted.recommendation,
     });
   }
+  const management = new WorkspaceManagementService(registry, skillRegistry);
   return {
     providerConfigured: Boolean(requestedProfile || options.provider), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
     setApprovalMode: (mode) => {
       approvalMode = mode;
       agent.setAccessMode(mode === "full" ? "full" : "workspace");
     },
-    coordinator, background: () => listBackgroundProcesses().slice(0, 80), mcp, close: async () => { await coordinator.shutdown(); await mcp.close(); },
+    management, sanitize,
+    coordinator, background: () => listBackgroundProcesses().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
   };
 }

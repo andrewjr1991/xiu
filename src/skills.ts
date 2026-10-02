@@ -98,10 +98,26 @@ async function copyTree(source: string, destination: string): Promise<void> {
         fileCount++;
         if (totalBytes > MAX_INSTALL_BYTES || fileCount > 1000) throw new Error("Skill package exceeds the 20 MB or 1000-file safety limit");
         await fs.copyFile(from, to);
-      }
+      } else throw new Error("Skill packages may only contain regular files and directories.");
     }
   }
   await copy(source, destination);
+}
+
+/** Prepare local packages without executing scripts or writing installed skills. */
+export async function stageLocalSkillPackage(source: string, destination: string): Promise<Array<{ name: string; permissions: ExtensionPermission[]; warnings: string[] }>> {
+  const root = await fs.lstat(source);
+  if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("Select a regular local skill directory.");
+  await copyTree(source, destination);
+  const files = await fg("**/SKILL.md", { cwd: destination, absolute: true, onlyFiles: true, unique: true, ignore: ["**/.git/**"] });
+  if (!files.length || files.length > 100) throw new Error("Skill package must contain 1-100 SKILL.md files.");
+  const items = await Promise.all(files.map(async (file) => {
+    const meta = frontmatter(await fs.readFile(file, "utf8"));
+    const parsed = skillPermissions(meta);
+    return { name: safeName(meta.name || path.basename(path.dirname(file))), permissions: parsed.permissions, warnings: parsed.unknown };
+  }));
+  if (new Set(items.map((item) => item.name)).size !== items.length || items.some((item) => item.name.length > 128 || item.warnings.length)) throw new Error("Duplicate skills, oversized names or unknown permissions are not installable.");
+  return items;
 }
 
 export class SkillRegistry {
