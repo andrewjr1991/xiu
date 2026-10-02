@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
 import vm from "node:vm";
+import { createComposerEnterGuard } from "../apps/desktop/renderer/src/composer-enter-guard.js";
 
 const require = createRequire(import.meta.url);
-const { resizeViewport, settleLayout, waitFor } = require("../apps/desktop/scripts/ui-smoke-helpers.cjs");
+const { resizeViewport, settleLayout, waitFor, focusForKeyboard } = require("../apps/desktop/scripts/ui-smoke-helpers.cjs");
 
 function renderer() {
   let frames: Array<() => void> = [];
@@ -93,4 +94,89 @@ test("desktop UI waits return a boolean across the isolated bridge and still fai
   const target = renderer();
   await waitFor(target.window, "document.querySelector('button')", "button");
   await assert.rejects(waitFor(target.window, "false", "missing option", 0), /Timed out waiting for missing option/);
+});
+
+
+function keyboardRenderer(deliverFocusEvents = true) {
+  let shown = false;
+  let nativeFocused = false;
+  const events: string[] = [];
+  const guard = createComposerEnterGuard();
+  const focusListeners = new Set<() => void>();
+  const document = {
+    activeElement: undefined as unknown,
+    hasFocus: () => nativeFocused,
+    querySelector: (_selector: string) => input,
+  };
+  const input = {
+    nodeName: "TEXTAREA",
+    disabled: false,
+    addEventListener(type: string, listener: () => void) { if (type === "focusin") focusListeners.add(listener); },
+    removeEventListener(type: string, listener: () => void) { if (type === "focusin") focusListeners.delete(listener); },
+    focus() {
+      document.activeElement = input;
+      if (nativeFocused && deliverFocusEvents) {
+        events.push("focusin");
+        for (const listener of [...focusListeners]) listener();
+      }
+    },
+    blur() {
+      document.activeElement = undefined;
+      // Chromium does not deliver focusout to React's delegated onBlur while
+      // its hidden WebContents has never obtained native document focus.
+      if (nativeFocused && deliverFocusEvents) { events.push("focusout"); guard.reset(); }
+    },
+  };
+  const context = vm.createContext({ document, setTimeout, clearTimeout });
+  return {
+    events, document, input, guard, focusListeners,
+    setNativeFocused(value: boolean) { nativeFocused = value; },
+    window: {
+      show() { shown = true; events.push("show"); },
+      focus() { assert.equal(shown, true); events.push("window.focus"); },
+      webContents: {
+        focus() { events.push("webContents.focus"); },
+        async executeJavaScript(source: string) { return vm.runInContext(source, context); },
+      },
+    },
+  };
+}
+
+test("desktop keyboard smoke obtains real focus before exercising React blur cleanup", async () => {
+  const target = keyboardRenderer();
+  target.input.focus();
+  assert.equal(target.document.activeElement, target.input);
+  assert.equal(target.document.hasFocus(), false, "a hidden window can select a textarea without native focus");
+  target.guard.compositionStart();
+  target.input.blur(); target.input.focus();
+  assert.equal(target.guard.shouldSubmit({ key: "Enter" }), false, "the old hidden-window probe never delivered onBlur");
+  let ready = false;
+  const focus = focusForKeyboard(target.window, ".composer textarea", "composer").then(() => { ready = true; });
+  await nextTurn();
+  assert.deepEqual(target.events, ["show", "window.focus", "webContents.focus"]);
+  assert.equal(ready, false, "activeElement must not satisfy keyboard readiness without document focus");
+  target.setNativeFocused(true);
+  await focus;
+  assert.deepEqual(target.events.slice(-2), ["focusout", "focusin"]);
+  assert.equal(target.focusListeners.size, 0);
+  target.guard.compositionStart();
+  target.input.blur(); target.input.focus();
+  assert.equal(target.guard.shouldSubmit({ key: "Enter" }), true, "real focusout resets composition with no timeout or relaxed assertion");
+});
+
+test("desktop keyboard smoke requires an actual focus event, not only activeElement and hasFocus", async () => {
+  const target = keyboardRenderer(false);
+  target.setNativeFocused(true);
+  target.input.focus();
+  await assert.rejects(focusForKeyboard(target.window, ".composer textarea", "composer", 10), /keyboard target focusin/);
+  assert.equal(target.document.activeElement, target.input);
+  assert.equal(target.focusListeners.size, 0, "failed readiness must remove its listener");
+});
+
+test("desktop keyboard smoke fails closed for a disabled composer", async () => {
+  const target = keyboardRenderer();
+  target.setNativeFocused(true);
+  target.input.disabled = true;
+  await assert.rejects(focusForKeyboard(target.window, ".composer textarea", "composer"), /missing or disabled/);
+  assert.equal(target.focusListeners.size, 0);
 });

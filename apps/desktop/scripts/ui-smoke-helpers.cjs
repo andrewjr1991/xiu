@@ -35,4 +35,29 @@ async function resizeViewport(window, width, height, label) {
   }
 }
 
-module.exports = { evaluate, waitFor, settleLayout, resizeViewport };
+async function focusForKeyboard(window, selector, label, timeout = 5000) {
+  // A hidden BrowserWindow can retain document.activeElement without receiving
+  // native focusin/focusout or sendInputEvent keyboard input. Establish real
+  // WebContents focus first; a DOM-only activeElement check is insufficient.
+  window.show();
+  window.focus();
+  window.webContents.focus();
+  await waitFor(window, "document.hasFocus()", `${label} focused WebContents`, timeout);
+  await evaluate(window, `new Promise((resolve, reject) => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el || el.disabled) { reject(new Error('Keyboard target is missing or disabled')); return; }
+    const cleanup = () => { clearTimeout(timer); el.removeEventListener('focusin', onFocus); };
+    const onFocus = () => {
+      cleanup();
+      if (document.hasFocus() && document.activeElement === el) resolve(true);
+      else reject(new Error('Keyboard target received focusin without document focus'));
+    };
+    const timer = setTimeout(() => { cleanup(); reject(new Error('Timed out waiting for keyboard target focusin')); }, ${timeout});
+    el.addEventListener('focusin', onFocus);
+    // Require a fresh native event even if a prior hidden .focus() selected it.
+    if (document.activeElement === el) el.blur();
+    el.focus();
+  })`);
+}
+
+module.exports = { evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard };

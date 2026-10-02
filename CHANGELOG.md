@@ -2,6 +2,12 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.5 — Unreleased candidate
+
+- Give keyboard smoke a visible, focused BrowserWindow/WebContents and require an actual textarea focusin before exercising IME cleanup and native Shift+Enter. Preserve assertions and deadlines; production input logic is unchanged.
+- Add deterministic focus readiness tests, per-path cleanup diagnostics and strictly scoped hidden-path diagnostic artifact upload.
+- Preview.4 generated a verified unsigned installer but failed all three desktop UI jobs; exact candidate verification is required again.
+
 ## 0.20.3-preview.4 — Unreleased candidate
 
 - Add a shared-runtime desktop Execute/Plan switch with idle/context guards, Full Access precedence, session-mode preservation and failure-safe logging/conversation boundaries.

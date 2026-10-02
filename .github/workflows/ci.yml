@@ -191,6 +191,7 @@ jobs:
         with:
           name: xiu-ui-diagnostics-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
           path: .desktop-build-temp/ui-smoke-failure.*
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
       - name: Record desktop progress and checksums

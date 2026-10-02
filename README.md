@@ -2,7 +2,7 @@
 
 Development candidate: the desktop composer now has an idle-only Execute / Plan read-only switch backed by the shared runtime. Plan still blocks write/execute tools under Full access; continuing history or recovering a task keeps the mode you explicitly selected. A new conversation and Provider/model reconfiguration in the same open workspace keep that selection. Closing/reopening or switching workspaces starts in Execute mode; Full access still resets on reconfiguration. IME candidate-confirmation Enter no longer submits a task or steering message; normal Enter sends and Shift+Enter inserts a newline. Automated synthetic-event coverage does not replace testing with a real OS input method.
 
-> Development candidate: **0.20.3-preview.4**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
+> Development candidate: **0.20.3-preview.5**. This source branch adds reliability fixes and per-commit test artifacts; it is not published to npm. Candidate scope, verification status, and installation records are tracked in [development progress](./docs/development-progress.md). The latest verified public npm baseline is 0.20.2.
 
 # Xiu
 

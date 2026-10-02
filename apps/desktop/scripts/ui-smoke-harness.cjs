@@ -1,7 +1,7 @@
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { evaluate, waitFor, settleLayout, resizeViewport } = require("./ui-smoke-helpers.cjs");
+const { evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard } = require("./ui-smoke-helpers.cjs");
 
 const smokeRoot = path.resolve(__dirname, "../../..", ".desktop-build-temp");
 fs.mkdirSync(smokeRoot, { recursive: true });
@@ -42,6 +42,7 @@ const setComposerText = (window, text) => evaluate(window, `(() => {
 // Synthetic composition verifies renderer wiring only. It does not stand in for
 // the Windows/macOS/Linux native candidate-window acceptance matrix.
 const checkComposerIme = async (window, label) => {
+  await focusForKeyboard(window, composerSelector, label);
   const text = `${label}中文候选词`;
   await setComposerText(window, text);
   const before = await evaluate(window, `window.xiuSmoke.calls().filter(call => call === 'task:create' || call === 'task:steer').length`);
@@ -80,7 +81,7 @@ const checkComposerIme = async (window, label) => {
     begin(); end(); el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true })); const release = enter();
     return { blur, windowBlur, release };
   })()`);
-  assert(cleaned.blur && cleaned.windowBlur && cleaned.release, `${label}: stale IME state swallowed a deliberate Enter after focus/key release cleanup.`);
+  assert(cleaned.blur && cleaned.windowBlur && cleaned.release, `${label}: stale IME state swallowed a deliberate Enter after focus/key release cleanup: ${JSON.stringify(cleaned)}.`);
 
   await setComposerText(window, "第一行");
   window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter", modifiers: ["shift"] });
@@ -98,7 +99,7 @@ app.whenReady().then(async () => {
     await window.loadFile(path.join(__dirname, "..", "dist", "renderer", "index.html"));
     await evaluate(window, `(() => {
       window.xiuSmokeLayoutEvents = [];
-      for (const type of ['resize', 'scroll', 'focusin']) window.addEventListener(type, (event) => {
+      for (const type of ['resize', 'scroll', 'focusin', 'focusout', 'blur']) window.addEventListener(type, (event) => {
         window.xiuSmokeLayoutEvents.push({ type, at: performance.now(), target: event.target?.nodeName,
           className: typeof event.target?.className === 'string' ? event.target.className : undefined,
           width: innerWidth, height: innerHeight, menuOpen: Boolean(document.querySelector('.xiu-select-menu')) });
@@ -354,7 +355,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error(error?.stack ?? String(error));
     try {
-      const diagnostics = await evaluate(window, `({ platform: navigator.platform, width: innerWidth, height: innerHeight,
+      const diagnostics = await evaluate(window, `({ platform: navigator.platform, width: innerWidth, height: innerHeight, documentFocused: document.hasFocus(),
         focused: document.activeElement?.outerHTML?.slice(0, 1000),
         options: [...document.querySelectorAll('.xiu-select-menu [role="option"]')].map(el => el.textContent),
         layoutEvents: window.xiuSmokeLayoutEvents, calls: window.xiuSmoke?.calls() })`);
