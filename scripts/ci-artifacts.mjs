@@ -10,7 +10,7 @@ const DESKTOP_CHECKS = ["dependencies", "desktop_dependencies", "typecheck", "bu
 const OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
 
 export function verificationContext(kind, platform, steps) {
-  const required = kind === "cli" ? [...CLI_CHECKS, ...(platform === "win32" ? ["provider_privacy"] : [])] : [...DESKTOP_CHECKS, ...(platform === "win32" ? ["installer", "installer_smoke", "candidate"] : [])];
+  const required = kind === "cli" ? [...CLI_CHECKS, ...(platform === "win32" ? ["provider_privacy", "windows_regressions"] : [])] : [...DESKTOP_CHECKS, ...(platform === "win32" ? ["installer", "installer_smoke", "candidate"] : [])];
   const checks = Object.fromEntries(required.map((name) => [name, OUTCOMES.has(steps[name]?.outcome) ? steps[name].outcome : "not-run"]));
   const values = Object.values(checks);
   return {

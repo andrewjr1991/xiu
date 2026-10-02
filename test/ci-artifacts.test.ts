@@ -45,8 +45,15 @@ test("Windows CLI requires the privacy preflight and cannot mask its failure", (
   steps.provider_privacy = { outcome: "success" };
   assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
   steps.tests = { outcome: "success" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
+  steps.windows_regressions = { outcome: "failure", conclusion: "success" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "failed");
+  steps.windows_regressions = { outcome: "skipped" };
+  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
+  steps.windows_regressions = { outcome: "success" };
   assert.equal(verificationContext("cli", "win32", steps).status, "passed");
   delete steps.provider_privacy;
+  delete steps.windows_regressions;
   assert.equal(verificationContext("cli", "linux", steps).status, "passed");
 });
 
@@ -177,7 +184,9 @@ test("CI keeps failed checks visible and uploads candidates without publishing",
   assert.match(workflow, /retention-days: 30/);
   assert.match(workflow, /id: provider_privacy/);
   assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts/);
-  assert.match(workflow, /matrix\.platform != 'win32' \|\| steps\.provider_privacy\.outcome == 'success'/);
+  assert.match(workflow, /id: windows_regressions/);
+  assert.match(workflow, /--test-name-pattern="workspace cleanup\|rapid detached commands\|CLI current action" test\/background\.test\.ts test\/provider-recovery-entry\.test\.ts/);
+  assert.match(workflow, /steps\.provider_privacy\.outcome == 'success' && steps\.windows_regressions\.outcome == 'success'/);
   const desktopWorkflow = workflow.slice(workflow.indexOf("\n  desktop:"));
   const validationIndex = desktopWorkflow.indexOf("id: ui_evidence\n");
   const uploadIndex = desktopWorkflow.indexOf("id: ui_evidence_upload\n");

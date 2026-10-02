@@ -1,11 +1,24 @@
 # Xiu 开发阶段记录
 
+## 阶段二两项回归修正：0.20.3-preview.9
+
+- Windows 新增必需的定点回归门禁：隐私预检通过后，先执行清理竞态/快速启动/保留当前配置恢复用例；两项前置门禁均通过才启动全量测试。失败、跳过和缺失进入候选清单，不能记为通过；原全量测试和断言不减少。
+
+- 状态：本地 880 项测试，865 通过、15 项平台专属跳过、0 失败；两端类型检查、CLI 构建、桌面编译/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、preview.9 隔离包安装和 Linux 平台 smoke 通过。精确提交六作业与产物待回填，未发布 npm
+- 基线：preview.8 / c7efc8de9f156ddda761c8393d37df4f0965efe5，Windows 隐私预检通过，但完整 CLI 两项失败，整体未接受
+- 范围：preview.9 仅针对这两项 Windows 失败：后台目录枚举后对象消失时仅容忍 ENOENT，保留类型检查及其他错误；恢复入口测试夹具按生产流程初始化写锁所有者，不放宽 ACL 或恢复规则。确定性旧实现回归复现了四种真实 ENOENT 消失窗口，新实现通过；其他 I/O 错误及文件资格检查仍生效。写锁所有者解释有源码依据，原失败日志未给具体阶段，仍须 Windows 重跑确认。新功能继续暂停。
+- 复查：三处修正及 CI 门禁独立只读复查无阻断问题；13 项定点回归和 11 项制品门禁测试通过，不能代替真实 Windows 验证
+- 门禁：保留原失败断言；验证 ENOENT 消失、非 ENOENT 错误传播与类型检查，恢复锁夹具必须匹配生产初始化；同一提交重跑隐私/完整 CLI/桌面/安装门禁
+- 限制：已有视觉捕获缺口与 bootstrap 领取/无 PID 取消竞态仍未修复；不自动修复/删除旧不安全恢复目录，原生联网认证继续暂停
+
 ## 阶段二最小修正：0.20.3-preview.8
 
-- 状态：本地 868 项测试，853 通过、15 项平台专属跳过、0 失败；两端类型检查、CLI 构建、桌面编译/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、preview.8 隔离包安装和 Linux 平台 smoke 均通过。窄范围独立复查无阻断问题；Windows 实际预检、精确提交/CI、CLI tarball 和 Windows 未签名 EXE 待回填。未发布 npm，暂停新功能，不能继承 preview.7 的五个通过作业
+- 状态：本地 868 项测试，853 通过、15 项平台专属跳过、0 失败；两端类型检查、CLI 构建、桌面编译/静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移、334 文件 dry-pack、preview.8 隔离包安装和 Linux 平台 smoke 均通过。窄范围本地独立复查无阻断问题，但不覆盖其后 Windows 全量失败。preview.8（c7efc8de9f156ddda761c8393d37df4f0965efe5）的 CI 36993723905 已结束：六作业中五个通过，Windows 隐私预检 9/9 通过；完整 Windows CLI 868 项中 859 通过、7 跳过、2 失败，构建/包/平台/评测检查通过，整体仍未接受。未发布 npm，暂停新功能，最后完整六作业通过仍为 preview.3
+- 精确 CI：[36993723905](https://github.com/andrewjr1991/xiu/actions/runs/36993723905)，提交 `c7efc8de9f156ddda761c8393d37df4f0965efe5`。两项失败分别涉及后台目录枚举时 bootstrap 消失与恢复入口写锁夹具；实际修正和诊断见 preview.9
+- 已核验 [Windows 未接受 EXE](https://github.com/andrewjr1991/xiu/actions/runs/36993723905/artifacts/11221116372)：123409504 字节，SHA-256 `743147e36da95e214a900ebe2c022490ad35cd1354e0ccc8ea20820dce27f41a`，已提供下载；[Windows 未接受 CLI tarball](https://github.com/andrewjr1991/xiu/actions/runs/36993723905/artifacts/11221371589)：779172 字节，SHA-256 `da63edcf3269db7a400c1e193e07d42ab5a538336e3e93d82ef564077d8a5837`。实际文件字节和摘要已核验，构建成功不代表候选通过
 - 基线：preview.7 / 2464823d9c6bd181bf4fe55d4e0d1b535a3ed7b4，整体未接受，详见下一节
 - 范围：preview.8 仅在 Windows PowerShell 子进程环境中按大小写不敏感方式移除继承的 PSModulePath，父进程环境不变；保留 Get-Acl 回读、.NET Owner/DACL 持久化和 owner-only 失败关闭规则。新增固定 command-not-found 类别，并修正异常包装测试夹具；不同时改写生产读取 API。
-- 依据：[Microsoft 中间进程启动 Windows PowerShell 的模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7)。pwsh → Node → Windows PowerShell 的继承路径与文档场景相符，但实际失败仍须由精确 Windows 运行证明，不能反推所有旧版本的唯一根因
+- 依据：[Microsoft 中间进程启动 Windows PowerShell 的模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7)。pwsh → Node → Windows PowerShell 的继承路径与文档场景相符，preview.8 精确 Windows 隐私预检已通过，但不能反推所有旧版本的唯一根因
 - 异常测试：旧包装夹具外层 ArgumentException 的 HRESULT 已对应 invalid-parameter，不能要求优先返回其内层类别；改用独立 .NET 夹具验证真正包装链，并保留外层类别优先规则
 - 验收要求：子环境混合大小写键清理及父环境不变回归；Windows 实际 Get-Acl、秘密写入前保护、已有对象逐次校验、失败关闭、完整 CLI 与全部桌面/安装门禁。生产 Get-Acl API 和 ACL 判定不变
 - 视觉证据：preview.7 的三平台 18 张合成 PNG 已检查：Linux 中文缺字属于运行环境字体缺口，macOS 宽窗恢复图截取了错误状态，三平台菜单图均未显示展开菜单；来源详情中的 canary 是有意的活动预览，不是隐私泄漏证据。截图存在不等于视觉验收全部通过，截图修正排在 Windows 隐私门禁之后。

@@ -58,9 +58,14 @@ jobs:
         if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
         timeout-minutes: 3
         run: node --test --import tsx test/provider-windows-privacy.test.ts
+      - name: Verify Windows cleanup and current-recovery regressions
+        id: windows_regressions
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.provider_privacy.outcome == 'success' }}
+        timeout-minutes: 3
+        run: node --test --import tsx --test-name-pattern="workspace cleanup|rapid detached commands|CLI current action" test/background.test.ts test/provider-recovery-entry.test.ts
       - name: Run tests
         id: tests
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || steps.provider_privacy.outcome == 'success') }}
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || (steps.provider_privacy.outcome == 'success' && steps.windows_regressions.outcome == 'success')) }}
         run: npm run test:ci
       - name: Run Python migration regressions
         id: migration

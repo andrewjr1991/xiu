@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,86 @@ async function waitForTerminal(id: string) {
 function removeBackgroundTestRoot(root: string): Promise<void> {
   return fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
 }
+
+test("workspace cleanup tolerates a launch artifact disappearing after enumeration or inspection", async (t) => {
+  for (const suffix of ["request.json", "bootstrap.cjs"]) {
+    for (const operation of ["lstatSync", "unlinkSync"] as const) {
+      await t.test(`${suffix} disappears before ${operation}`, async (t) => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-race-"));
+        t.after(() => removeBackgroundTestRoot(root));
+        configureBackgroundWorkspace(root, root);
+        const directory = path.join(root, (await fs.readdir(root))[0]!);
+        const file = path.join(directory, `.012345abcdef.${suffix}`);
+        await fs.writeFile(file, "temporary launch artifact");
+        await fs.utimes(file, new Date(0), new Date(0));
+        const original = fsSync[operation];
+        const unlink = fsSync.unlinkSync;
+        let removed = false;
+        t.mock.method(fsSync, operation, function (target: fsSync.PathLike, ...args: unknown[]) {
+          if (target === file && !removed) {
+            // Deterministically model worker/other-manager cleanup after this
+            // manager enumerated the file, using the real filesystem ENOENT.
+            removed = true;
+            unlink(file);
+          }
+          return Reflect.apply(original, fsSync, [target, ...args]);
+        });
+        assert.doesNotThrow(() => configureBackgroundWorkspace(root, root));
+        assert.equal(removed, true, "the disappearance window must be exercised");
+        assert.equal(fsSync.existsSync(file), false);
+      });
+    }
+  }
+});
+
+test("workspace cleanup still propagates inspection and removal I/O failures", async (t) => {
+  for (const operation of ["lstatSync", "unlinkSync"] as const) {
+    for (const code of ["EACCES", "EIO"]) {
+      await t.test(`${operation} ${code}`, async (t) => {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-error-"));
+        t.after(() => removeBackgroundTestRoot(root));
+        configureBackgroundWorkspace(root, root);
+        const directory = path.join(root, (await fs.readdir(root))[0]!);
+        const file = path.join(directory, ".012345abcdef.bootstrap.cjs");
+        await fs.writeFile(file, "temporary launch artifact");
+        await fs.utimes(file, new Date(0), new Date(0));
+        const original = fsSync[operation];
+        const failure = Object.assign(new Error("fixture storage failure"), { code });
+        t.mock.method(fsSync, operation, function (target: fsSync.PathLike, ...args: unknown[]) {
+          if (target === file) throw failure;
+          return Reflect.apply(original, fsSync, [target, ...args]);
+        });
+        assert.throws(() => configureBackgroundWorkspace(root, root), (error) => error === failure);
+        assert.equal(await fs.readFile(file, "utf8"), "temporary launch artifact");
+      });
+    }
+  }
+});
+
+test("workspace cleanup retains its artifact name, age, regular-file, and symlink checks", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-checks-"));
+  t.after(() => removeBackgroundTestRoot(root));
+  configureBackgroundWorkspace(root, root);
+  const directory = path.join(root, (await fs.readdir(root))[0]!);
+  const stale = path.join(directory, ".000000000001.request.json");
+  const fresh = path.join(directory, ".000000000002.bootstrap.cjs");
+  const nonFile = path.join(directory, ".000000000003.request.json");
+  const symbolic = path.join(directory, ".000000000004.bootstrap.cjs");
+  const unrelated = path.join(directory, "unrelated.json");
+  for (const file of [stale, fresh, symbolic, unrelated]) await fs.writeFile(file, "keep unless eligible");
+  await fs.mkdir(nonFile);
+  for (const file of [stale, nonFile, symbolic, unrelated]) await fs.utimes(file, new Date(0), new Date(0));
+  const lstat = fsSync.lstatSync;
+  t.mock.method(fsSync, "lstatSync", function (target: fsSync.PathLike, ...args: unknown[]) {
+    const stat = Reflect.apply(lstat, fsSync, [target, ...args]);
+    // A synthetic link stat keeps this check portable to Windows hosts that
+    // cannot create symlinks, and asserts the explicit no-symlink condition.
+    if (target === symbolic) stat.isSymbolicLink = () => true;
+    return stat;
+  });
+  configureBackgroundWorkspace(root, root);
+  assert.deepEqual((await fs.readdir(directory)).sort(), [fresh, nonFile, symbolic, unrelated].map((file) => path.basename(file)).sort());
+});
 
 test("background commands can be listed, inspected, and stopped", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-"));

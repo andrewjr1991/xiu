@@ -2,11 +2,19 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.9 — Unreleased candidate
+
+- Require the focused Windows cleanup/current-recovery regressions after privacy preflight and before the full suite; preserve complete tests and record every gate in candidate metadata.
+
+- Target only two Windows CLI regressions: tolerate ENOENT disappearance during background directory enumeration, preserving type checks and all other errors; initialize recovery-test write-lock ownership like production without weakening ACL policy. Diagnosis and regression evidence remain pending.
+- Preview.8 CI 36993723905 finished with five of six jobs passing: Windows privacy preflight passed 9/9, while full Windows CLI had 859 passes, 7 skips and 2 failures out of 868 tests. Build/package/platform/eval checks passed; verified binaries do not make the candidate accepted.
+- Preview.9 local validation, exact-commit CI and artifacts remain pending. New features and managed-web authentication remain paused; existing visual-capture gaps and bootstrap claim/cancel race remain open.
+
 ## 0.20.3-preview.8 — Unreleased candidate
 
 - Limit this follow-up to the Windows privacy gate: remove inherited PSModulePath case-insensitively from the Windows PowerShell child environment, without mutating its parent. Preserve Get-Acl readback, direct .NET Owner/DACL persistence, owner-only rules and fail-closed behavior; do not simultaneously rewrite the production read API.
-- Follow Microsoft's documented intermediate-process module-loading guidance; exact Windows proof and the historical root cause remain unconfirmed. Add a fixed command-not-found category and correct the exception-wrapper fixture without changing outer-exception precedence.
-- Preview.8 local validation, exact-commit CI and artifacts remain pending. Preview.7's Windows failure is not covered by its five green jobs or verified binaries. New features are paused; screenshot capture corrections follow the privacy gate.
+- Follow Microsoft's documented intermediate-process module-loading guidance; the historical root cause remains unconfirmed despite preview.8 passing the Windows privacy preflight. Add a fixed command-not-found category and correct the exception-wrapper fixture without changing outer-exception precedence.
+- Preview.8 local validation passed (853 passes, 15 skips, no failures); exact Windows privacy checks passed, but full Windows CLI had two failures. CI and verified artifact details are recorded in development progress; this candidate remains unaccepted.
 - Preserve the known bootstrap claim/cancel race and unsafe existing-recovery-directory limitation. Managed-web authentication remains paused.
 
 ## 0.20.3-preview.7 — Unreleased candidate

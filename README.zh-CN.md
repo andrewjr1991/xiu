@@ -1,10 +1,10 @@
 <div align="center">
 
-> Windows 配置验收仍未完成：preview.7 的五个 CI 作业通过，但 Windows 隐私预检在目录 .NET 写入成功后的 Get-Acl 回读失败，全量 Windows CLI 跳过。preview.8 仅隔离子 PowerShell 模块环境并修正异常夹具，真实 Windows 证明待完成；新候选全部门禁通过前，真实渠道配置继续使用完整通过的 preview.3。
+> Windows 验收仍未完成：preview.8（c7efc8de9f156ddda761c8393d37df4f0965efe5）的 CI 36993723905 已结束：六作业中五个通过，Windows 隐私预检 9/9 通过；完整 Windows CLI 868 项中 859 通过、7 跳过、2 失败，构建/包/平台/评测检查通过，整体仍未接受。preview.9 仅处理这两项失败，验收与产物待完成；最后完整六作业通过仍为 preview.3。
 
 开发候选：桌面输入区新增空闲时可切换的“执行 / Plan · 只读”，由共享运行时实施。完全访问也不能绕过 Plan 的写入/执行工具限制；继续历史或恢复任务保留用户当前明确选择的模式。新对话及同一已打开工作区中的渠道/模型重配保留选择；关闭重开或切换工作区默认执行模式。完全访问仍在重配后重置。输入法候选确认 Enter 不再提交任务或追加要求，普通 Enter 发送、Shift+Enter 换行；合成事件自动化覆盖不代替真实系统输入法验收。
 
-> 当前开发候选：**0.20.3-preview.8**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
+> 当前开发候选：**0.20.3-preview.9**。此源码分支包含可靠性修复与逐提交测试产物，尚未发布 npm。候选范围、验证状态及安装记录见[开发进展](./docs/development-progress.md)；已核验的公开 npm 基线为 0.20.2。
 
 # Xiu
 
@@ -26,7 +26,7 @@
 
 开发候选的 Provider 配置恢复：CLI 先运行 `xiu --provider-config-diagnostics` 查看不含密钥、渠道内容或路径的诊断与可验证备份，再用 `xiu --provider-config-preview <备份ID>` 预览。`xiu --provider-config-recover <备份ID>` 只接受交互式终端中明确输入 `RECOVER`；`-y`、管道、空输入和取消均不能恢复。桌面侧栏“Provider 配置诊断与恢复”在正常渠道启动失败时仍可进入，恢复需要独立系统确认。操作前关闭其他 Xiu 客户端，成功后必须重启。保留当前配置的 `current` 仅用于已验证退出进程的中断写锁，不是恢复备份；不允许降级未来格式，不恢复系统凭据。
 
-preview.8 仅在 Windows PowerShell 子进程环境中按大小写不敏感方式移除继承的 PSModulePath，父进程环境不变；保留 Get-Acl 回读、.NET Owner/DACL 持久化和 owner-only 失败关闭规则。新增固定 command-not-found 类别，并修正异常包装测试夹具；不同时改写生产读取 API。此调整依据 [Microsoft 的中间进程模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.6#starting-windows-powershell-from-powershell-7)，不声称旧失败根因已完全证明。preview.7 产物已核验但未接受，preview.8 验收与产物待回填。后台仅有界重试元数据，不重放命令/输出；未确认停止保留活动/未知状态。已有不安全恢复目录不会被静默修复或删除。
+preview.9 仅针对这两项 Windows 失败：后台目录枚举后对象消失时仅容忍 ENOENT，保留类型检查及其他错误；恢复入口测试夹具按生产流程初始化写锁所有者，不放宽 ACL 或恢复规则。具体诊断与回归证据待补齐，新功能继续暂停。继承 preview.8 的子 PowerShell 模块环境隔离；owner-only 回读与失败关闭不变。已有不安全恢复目录不会被静默修复或删除；不要直接删除可能包含原始配置备份的目录。
 
 ## 安装
 

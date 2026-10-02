@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
+import { providerWindowsPrivacyFailureStage, verifyProviderWindowsPrivacy } from "../src/provider-config-migration.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommandIO } from "../src/commands/provider-recovery.js";
 import { DesktopProviderRecoveryController } from "../apps/desktop/main/provider-recovery-controller.js";
 
@@ -38,6 +39,42 @@ function safe(value: unknown, root: string) {
   assert.ok(!text.includes(root), "no local paths");
   assert.ok(!text.includes('"profiles"'), "no profile payload");
 }
+
+async function privateLockFixture(filename: string, pid: number, nonce: string): Promise<void> {
+  const handle = await fs.open(filename, "wx", 0o600);
+  try {
+    // Match the production writer: a new file can inherit the private DACL
+    // while an elevated Windows token still selects Administrators as owner.
+    // Initialize this empty fixture before writing its synthetic lock payload.
+    if (process.platform === "win32") await verifyProviderWindowsPrivacy(filename, false, true);
+    await handle.writeFile(JSON.stringify({ pid, nonce }));
+    await handle.sync();
+  } finally { await handle.close(); }
+  if (process.platform === "win32") await verifyProviderWindowsPrivacy(filename, false, false);
+}
+
+function recoveryAssertionSummary(output: { output: string[]; asked: number }): string {
+  // Never print captured CLI text, even on assertion failure. Derive only
+  // fixed labels from a bounded suffix and pass stages through the allowlist.
+  const text = output.output.slice(-4).map((value) => value.slice(0, 1024)).join("\n");
+  const stage = /Windows ACL failure: [a-z-]+; stage: ([a-z-]{1,40});/.exec(text)?.[1];
+  const aclStage = providerWindowsPrivacyFailureStage({ stdout: `XIU_ACL_V1:${stage ?? ""}` });
+  const reason = text.includes("protected regular file/directory") ? "storage-privacy"
+    : text.includes("active or interrupted write lock") ? "write-lock"
+      : text.includes("changed in another client") ? "revision-changed"
+        : text.includes("storage operation failed") ? "storage-io" : "other";
+  return `Provider current recovery: confirmation=${output.asked > 0 ? "requested" : "not-requested"}; reason=${reason}; acl-stage=${aclStage}`;
+}
+
+test("recovery assertion diagnostics expose only bounded fixed labels", () => {
+  const root = "fixture-private-directory";
+  const summary = recoveryAssertionSummary({ output: ["x".repeat(10_000), `${root} ${canary} Windows ACL failure: nonzero-exit; stage: verify-owner; category: unknown.`], asked: 0 });
+  assert.equal(summary, "Provider current recovery: confirmation=not-requested; reason=other; acl-stage=verify-owner");
+  safe(summary, root);
+  const unknown = recoveryAssertionSummary({ output: [`Windows ACL failure: nonzero-exit; stage: ${canary}; category: unknown.`], asked: 1 });
+  assert.equal(unknown, "Provider current recovery: confirmation=requested; reason=other; acl-stage=process");
+  safe(unknown, root);
+});
 
 test("CLI recovery diagnostics and preview work without loading malformed settings and never restore", async (t) => {
   const f = await fixture(t);
@@ -234,19 +271,22 @@ test("CLI current action keeps valid settings and clearly distinguishes dead-loc
   const f = await fixture(t);
   const current = '{"version":5,"profiles":[]}';
   await fs.writeFile(f.filename, current);
+  if (process.platform === "win32") await verifyProviderWindowsPrivacy(f.filename, false, false);
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
   const pid = child.pid!;
   await new Promise<void>((resolve, reject) => { child.once("exit", () => resolve()); child.once("error", reject); });
   const lock = path.join(`${f.filename}.recovery`, "write.lock");
-  await fs.writeFile(lock, JSON.stringify({ pid, nonce: "fixture" }), { mode: 0o600 });
+  await privateLockFixture(lock, pid, "fixture");
   const output = io("RECOVER");
-  assert.deepEqual(await runProviderRecoveryCommand(f.registry, { action: "recover", backupId: "current" }, output.value), { exitCode: 0, restartRequired: true });
+  const recovered = await runProviderRecoveryCommand(f.registry, { action: "recover", backupId: "current" }, output.value);
+  safe(output.output, f.root);
+  assert.deepEqual(recovered, { exitCode: 0, restartRequired: true }, recoveryAssertionSummary(output));
   assert.equal(await fs.readFile(f.filename, "utf8"), current);
   await assert.rejects(fs.stat(lock), { code: "ENOENT" });
   assert.match(output.output.join("\n"), /Keep current settings/);
   assert.match(output.output.join("\n"), /schema 5 \(unchanged\)/);
   assert.doesNotMatch(output.output.join("\n"), /Configuration backup restored|schema 5 →/);
-  await fs.writeFile(lock, JSON.stringify({ pid, nonce: "fixture-desktop" }), { mode: 0o600 });
+  await privateLockFixture(lock, pid, "fixture-desktop");
   const desktop = new DesktopProviderRecoveryController({ registry: new ProviderRegistry(f.filename), isBusy: () => false, confirm: async (preview) => {
     assert.equal(preview.action, "keep-current");
     return true;

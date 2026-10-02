@@ -191,8 +191,14 @@ export function configureBackgroundWorkspace(cwd: string, root = path.join(os.ho
   const cutoff = Date.now() - 5 * 60_000;
   for (const name of fs.readdirSync(workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.(?:request\.json|bootstrap\.cjs)$/.test(item))) {
     const file = path.join(workspaceDirectory(), name);
-    const stat = fs.lstatSync(file);
-    if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
+    } catch (error) {
+      // A worker or another manager can remove a launch artifact after this
+      // scan's readdir or lstat. Only an already-missing entry is harmless.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 
