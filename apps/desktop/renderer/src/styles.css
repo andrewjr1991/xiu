@@ -451,3 +451,10 @@ button, input, textarea { font: inherit; }
 .mcp-panel textarea { min-height: 64px; resize: vertical; }
 .mcp-panel pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f1f5fa; padding: 12px; }
 .mcp-panel a { overflow-wrap: anywhere; }
+
+.plan-mode-selector { flex-shrink: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; white-space: nowrap; }
+.plan-mode-selector.selected { color: #275d47; background: #eaf4ee; border-color: #adcbbb; }
+.plan-mode-note { font-size: 12px; color: #456b56; padding: 4px 6px 8px; }
+/* Keep every mode control reachable when the conversation pane is narrow. */
+.composer-tools { flex-wrap: wrap; row-gap: 4px; }
+.composer-tools .model-selector { flex-basis: 160px; min-width: min(160px, 100%); }

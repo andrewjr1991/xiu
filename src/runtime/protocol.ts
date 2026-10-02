@@ -54,6 +54,8 @@ export interface XiuRuntimeSnapshot {
   schemaVersion: typeof XIU_RUNTIME_SCHEMA_VERSION;
   sequence: number;
   generatedAt: string;
+  /** Current execution policy; older snapshots default to execution mode. */
+  planMode?: boolean;
   task?: RuntimeTaskSnapshot;
 }
 
@@ -103,6 +105,7 @@ export type RuntimeCommand =
   | { type: "task.create"; task: string }
   | { type: "task.steer"; text: string }
   | { type: "task.stop" }
+  | { type: "plan.mode.set"; enabled: boolean }
   | { type: "approval.decide"; approvalId: string; allowed: boolean; rememberForSession?: true; confirmedRisk?: "dangerous" };
 
 export interface RuntimeConnection {
@@ -126,6 +129,7 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
       schemaVersion: XIU_RUNTIME_SCHEMA_VERSION,
       sequence: event.sequence,
       generatedAt: event.timestamp,
+      ...(snapshot.planMode !== undefined ? { planMode: snapshot.planMode } : {}),
       task: {
         id: event.taskId,
         state: "running",

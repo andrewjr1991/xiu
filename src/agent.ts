@@ -278,6 +278,7 @@ export class Agent {
   }
 
   private accessMode: "workspace" | "full" = "workspace";
+  private changingPlanMode = false;
 
   setAccessMode(mode: "workspace" | "full"): void {
     if (this.activeController) throw new Error("Cannot change access mode during a task");
@@ -286,6 +287,7 @@ export class Agent {
   }
 
   async run(task: string): Promise<string> {
+    if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
     const startedAt = Date.now();
     const controller = new AbortController();
     this.activeController = controller;
@@ -347,28 +349,41 @@ export class Agent {
       if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("failed");
       throw error;
     } finally {
-      this.stats.activeMs += Date.now() - startedAt;
-      this.stats.estimatedTokens = estimateConversationTokens(this.messages);
-      if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
-      await this.checkpointDiagnostics();
-      if (this.activeController === controller) this.activeController = undefined;
-      this.pendingSteering = [];
-      this.primaryTask = undefined;
-      this.steeringHistory = [];
-      this.taskFailoverOriginProviderId = undefined;
-      this.taskAttemptedProviders.clear();
-      if (this.taskWasRouted && this.taskRoutingOrigin) {
-        Object.assign(this.config, this.taskRoutingOrigin.config);
-        this.provider = this.taskRoutingOrigin.provider;
-        this.tools = [...this.taskRoutingOrigin.tools];
-        this.system = undefined;
-        this.events.onProviderRouteRestore?.({ providerId: this.config.providerId, model: this.config.model });
+      try {
+        this.stats.activeMs += Date.now() - startedAt;
+        this.stats.estimatedTokens = estimateConversationTokens(this.messages);
+        if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
+        await this.checkpointDiagnostics();
+      } catch (error) {
+        this.lastRunOutcome = "failed";
+        this.lastRunFailureReason = "runtime_error";
+        this.taskDiagnostics?.complete("failed");
+        throw error;
+      } finally {
+        // Persistence can fail after execution has ended. Never retain an active
+        // controller or task-scoped state that would permanently block recovery.
+        if (this.activeController === controller) this.activeController = undefined;
+        this.pendingSteering = [];
+        this.primaryTask = undefined;
+        this.steeringHistory = [];
+        this.taskFailoverOriginProviderId = undefined;
+        this.taskAttemptedProviders.clear();
+        try {
+          if (this.taskWasRouted && this.taskRoutingOrigin) {
+            Object.assign(this.config, this.taskRoutingOrigin.config);
+            this.provider = this.taskRoutingOrigin.provider;
+            this.tools = [...this.taskRoutingOrigin.tools];
+            this.system = undefined;
+            this.events.onProviderRouteRestore?.({ providerId: this.config.providerId, model: this.config.model });
+          }
+        } finally {
+          this.taskRoutingOrigin = undefined;
+          this.taskWasRouted = false;
+          this.taskRouteNotices.clear();
+          this.recoverySource = undefined;
+          this.blockedRecoveryOperations.clear();
+        }
       }
-      this.taskRoutingOrigin = undefined;
-      this.taskWasRouted = false;
-      this.taskRouteNotices.clear();
-      this.recoverySource = undefined;
-      this.blockedRecoveryOperations.clear();
     }
   }
 
@@ -986,7 +1001,8 @@ export class Agent {
     }
   }
 
-  clearConversation(): void {
+  clearConversation(options: { preservePlanMode?: boolean } = {}): void {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot clear the conversation while a task or mode change is active.");
     this.messages = [];
     this.system = undefined;
     this.sessionPath = undefined;
@@ -1000,7 +1016,7 @@ export class Agent {
     this.primaryTask = undefined;
     this.toolEvidence = [];
     this.taskDiagnostics = undefined;
-    this.planManager?.restore(undefined, false);
+    this.planManager?.restore(undefined, options.preservePlanMode ? this.planManager.mode() : false);
     this.checkpointManager?.clearSession();
   }
 
@@ -1106,8 +1122,8 @@ export class Agent {
     };
   }
 
-  restoreSession(restored: RestoredSession): void {
-    if (this.activeController) throw new Error("Cannot switch sessions while a task is running.");
+  restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot switch sessions while a task or mode change is active.");
     this.messages = restored.messages;
     this.sessionPath = restored.file;
     this.sessionId = restored.id;
@@ -1122,7 +1138,7 @@ export class Agent {
     this.toolEvidence = [];
     this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
     if (restored.model) this.setModelInMemory(restored.model);
-    this.planManager?.restore(restored.plan, restored.planMode);
+    this.planManager?.restore(restored.plan, options.preservePlanMode ? this.planManager.mode() : restored.planMode);
     this.checkpointManager?.setSession(restored.id);
   }
 
@@ -1135,9 +1151,15 @@ export class Agent {
   }
 
   async setPlanMode(enabled: boolean): Promise<void> {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot change Plan mode while a task is running or another mode change is pending.");
+    if (typeof enabled !== "boolean") throw new Error("Invalid Plan mode.");
     if (!this.planManager) throw new Error("Plan manager is unavailable.");
-    this.planManager.setMode(enabled);
-    if (this.sessionPath) await this.log(this.sessionPath, { type: "plan_mode", enabled });
+    this.changingPlanMode = true;
+    try {
+      // Do not report failure after silently changing the execution policy.
+      if (this.sessionPath) await this.log(this.sessionPath, { type: "plan_mode", enabled });
+      this.planManager.setMode(enabled);
+    } finally { this.changingPlanMode = false; }
   }
 
   plan(): string {

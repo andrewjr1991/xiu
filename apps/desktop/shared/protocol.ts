@@ -8,6 +8,8 @@ import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/re
 export type { WorkspaceMcpSnapshot, WorkspaceMcpDraft, WorkspaceMcpOAuthFlow } from "../../../src/runtime/mcp-service.js";
 import type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
 import type { WorkspaceMcpDraft } from "../../../src/runtime/mcp-service.js";
+import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "./provider-recovery.js";
+export type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "./provider-recovery.js";
 export interface DesktopMcpApproveRequest { name: string; fingerprint: string; confirmed: true }
 export type DesktopMcpManageRequest =
   | { action: "save"; draft: WorkspaceMcpDraft }
@@ -59,9 +61,12 @@ export interface DesktopRuntimeConnection {
   provider: { id: string; label: string; model: string };
   writer: "available" | "active-here" | "active-elsewhere";
   approvalMode?: DesktopApprovalMode;
+  /** Opaque host/conversation revision for an idle-only mode change. */
+  modeContextId?: string;
 }
 
 export type DesktopApprovalMode = "ask" | "workspace" | "full";
+export interface DesktopPlanModeRequest { enabled: boolean; contextId: string }
 export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode }
 
 export interface DesktopProviderProfile {
@@ -290,6 +295,7 @@ export interface XiuDesktopBridge {
   newConversation(): Promise<DesktopRuntimeConnection>;
   steerTask(request: RuntimeTaskRequest): Promise<boolean>;
   stopTask(): Promise<boolean>;
+  setPlanMode(request: DesktopPlanModeRequest): Promise<DesktopRuntimeConnection>;
   setApprovalMode(request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection>;
   decideApproval(request: RuntimeApprovalDecisionRequest): Promise<void>;
   openTaskHistory(request: DesktopTaskHistoryRequest): Promise<DesktopTaskHistorySnapshot>;
@@ -303,6 +309,7 @@ export interface XiuDesktopBridge {
   recoverTask(request: DesktopRecoveryRequest): Promise<DesktopRuntimeConnection>;
   abandonRecovery(request: DesktopRecoveryAbandonRequest): Promise<DesktopReviewSnapshot>;
   providerSnapshot(): Promise<DesktopProviderSnapshot>;
+  providerRecovery(request: DesktopProviderRecoveryRequest): Promise<DesktopProviderRecoverySnapshot>;
   discoverProviderModels(request: DesktopProviderModelsRequest): Promise<DesktopProviderSnapshot>;
   selectProvider(request: DesktopProviderSelectRequest): Promise<DesktopProviderMutationResult>;
   saveProviderCredential(request: DesktopProviderCredentialRequest): Promise<DesktopProviderMutationResult>;
@@ -341,6 +348,7 @@ export const desktopChannels = {
   conversationNew: "runtime:conversation-new",
   taskSteer: "runtime:task-steer",
   taskStop: "runtime:task-stop",
+  planModeSet: "runtime:plan-mode-set",
   approvalModeSet: "runtime:approval-mode-set",
   approvalDecide: "runtime:approval-decide",
   taskHistoryOpen: "runtime:task-history-open",
@@ -355,6 +363,7 @@ export const desktopChannels = {
   recoveryResume: "recovery:resume",
   recoveryAbandon: "recovery:abandon",
   providerSnapshot: "provider:snapshot",
+  providerRecovery: "provider:configuration-recovery",
   providerModels: "provider:models",
   providerSelect: "provider:select",
   providerCredentialSave: "provider:credential-save",

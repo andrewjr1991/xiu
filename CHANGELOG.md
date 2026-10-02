@@ -2,6 +2,14 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
+## 0.20.3-preview.4 — Unreleased candidate
+
+- Add a shared-runtime desktop Execute/Plan switch with idle/context guards, Full Access precedence, session-mode preservation and failure-safe logging/conversation boundaries.
+- Prevent IME candidate-confirmation Enter and same-tick duplicate events from submitting tasks or steering messages.
+- Protect provider schema upgrades with verified private backups, revision/transaction locks and explicit recovery in CLI and desktop, including malformed-startup diagnostics, native/typed confirmation and restart latches.
+- Validate private Windows ACLs and preserve credentials/backups after uncertain writes; unknown recovery lock ownership remains blocked.
+- Exact candidate CI, real Windows ACLs and synthetic Electron UI checks remain required; real OS IME and paid Provider acceptance are separate.
+
 ## 0.20.3-preview.3 — Unreleased candidate
 
 - Resolve development worker loaders from the installation rather than caller working directory, preserve final pipe output before completion, and record bounded startup/spawn failures. Retain the immediate-launcher-exit regression and its existing deadline. Exact Windows CI verification remains required; no original root-cause claim yet.

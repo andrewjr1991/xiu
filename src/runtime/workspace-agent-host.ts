@@ -190,6 +190,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     run: async (task) => { try { return await adapter.run(task); } finally { await coordinator.shutdown(); } },
     cancel: () => { const cancelled = adapter.cancel(); void coordinator.shutdown(); return cancelled; },
     steer: (text) => adapter.steer(text), status: () => adapter.status(),
+    setPlanMode: (enabled) => adapter.setPlanMode(enabled),
   });
   let mcpCredentials;
   try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }

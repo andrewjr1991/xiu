@@ -1,10 +1,12 @@
-import fs from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, timingSafeEqual } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderName } from "./config.js";
 import type { CapabilityProbeState, ModelCapabilityProbe } from "./capability-probe.js";
 import { LegacyCredentialStore, credentialRef, readEnvironmentCredential, type CredentialBackendStatus, type CredentialRef, type CredentialStore } from "./credential-store.js";
+import { ProviderConfigurationStorage, ProviderConfigurationError, type ProviderConfigurationSnapshot, type ProviderConfigurationDiagnostics, type ProviderConfigurationRecoveryPreview } from "./provider-config-migration.js";
+export type { ProviderConfigurationDiagnostics, ProviderConfigurationRecoveryPreview } from "./provider-config-migration.js";
 import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "./provider-routing.js";
 
 export interface ProviderFeatures {
@@ -226,19 +228,49 @@ export class ProviderRegistry {
   private pluginProfiles: ProviderProfile[] = [];
   private credentials: LegacyCredentialStore<string, "provider-api-key">;
   private saveOperation: Promise<void> = Promise.resolve();
-  private saveSequence = 0;
+  private mutationOperation: Promise<void> = Promise.resolve();
+  private readonly mutationContext = new AsyncLocalStorage<{ active: boolean }>();
+  private readonly configurationStorage: ProviderConfigurationStorage;
+  private configurationSnapshot?: ProviderConfigurationSnapshot;
+  private configurationWritable = true;
+  private configurationRestartRequired = false;
 
   constructor(
     private readonly filename = path.join(os.homedir(), ".xiu", "providers.json"),
     private systemCredentials?: CredentialStore<string, "provider-api-key">,
   ) {
     this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: filename });
+    this.configurationStorage = new ProviderConfigurationStorage(filename);
   }
 
   async load(): Promise<void> {
+    return this.serializeMutation(async () => {
+      if (this.configurationRestartRequired) throw new ProviderConfigurationError("restart", "Provider settings were restored. Restart this client before using or changing providers.");
+      await this.saveOperation;
+      this.configurationWritable = false;
+      try {
+        const snapshot = await this.configurationStorage.read();
+        const decoded = snapshot ? this.decodeConfiguration(snapshot.bytes) : { file: { version: 5 as const, profiles: [] }, store: new LegacyCredentialStore<string, "provider-api-key">({ kind: "provider-api-key", location: this.filename }) };
+        this.file = decoded.file;
+        this.credentials = decoded.store;
+        this.configurationSnapshot = snapshot;
+        this.configurationWritable = true;
+        // The original bytes must be durably backed up before the v5 replacement.
+        if (snapshot && snapshot.sourceVersion! < 5) await this.save(true);
+      } catch (error) {
+        this.configurationWritable = false;
+        this.file = { version: 5, profiles: [] };
+        this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
+        throw error instanceof ProviderConfigurationError ? error : new ProviderConfigurationError("invalid", "Provider configuration is invalid. It was left unchanged; use explicit backup recovery if needed.");
+      }
+    });
+  }
+
+  private decodeConfiguration(bytes: Buffer): { file: ProviderFile; store: LegacyCredentialStore<string, "provider-api-key"> } {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as Partial<ProviderFile>;
-      if (![1, 2, 3, 4, 5].includes(Number(parsed.version)) || !Array.isArray(parsed.profiles)) throw new Error("unsupported provider configuration format");
+      const parsed = JSON.parse(bytes.toString("utf8")) as Partial<ProviderFile>;
+      if (!parsed || ![1, 2, 3, 4, 5].includes(parsed.version as number)) throw new ProviderConfigurationError("unsupported", "Unsupported provider configuration format. Upgrade CLI and desktop together; settings were left unchanged.");
+      if (!Array.isArray(parsed.profiles)) throw new Error("invalid profiles");
       const sourceVersion = Number(parsed.version);
       if (parsed.profiles.length > 106) throw new Error("provider configuration contains more than 106 profiles");
       const legacyCredentials: Record<string, string> = {};
@@ -353,22 +385,62 @@ export class ProviderRegistry {
           }
         }
       }
-      this.credentials = new LegacyCredentialStore({
+      const store = new LegacyCredentialStore<string, "provider-api-key">({
         kind: "provider-api-key", location: this.filename, values: credentials,
         revisions: parsed.credentialRevisions && typeof parsed.credentialRevisions === "object" ? parsed.credentialRevisions : undefined,
       });
-      this.file = { version: 5, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, activeCapabilityModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
-      // Keep an unresolved active id in memory: an approved plugin may contribute
-      // that provider after workspace trust is established later in startup.
-      if (sourceVersion < 5) await this.save();
+      const file: ProviderFile = { version: 5, active: typeof parsed.active === "string" ? parsed.active : undefined, activeModels, activeCapabilityModels, failoverChains, routing, profiles, credentialRefs, credentialMigrations, credentialMigrationIntents, probes: [...uniqueProbes.values()] };
+      return { file, store };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.file = { version: 5, profiles: [] };
-        this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
-        return;
-      }
-      throw new Error(`Could not read Xiu provider settings: ${error instanceof Error ? error.message : String(error)}`);
+      throw error instanceof ProviderConfigurationError ? error : new ProviderConfigurationError("invalid", "Provider configuration is invalid. It was left unchanged; use explicit backup recovery if needed.");
     }
+  }
+
+  private serializeMutation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.mutationContext.getStore()?.active) return run();
+    const operation = this.mutationOperation.then(async () => {
+      const lease = { active: true };
+      try { return await this.mutationContext.run(lease, run); }
+      finally { lease.active = false; }
+    });
+    this.mutationOperation = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private mutate<T>(run: () => Promise<T>): Promise<T> {
+    return this.serializeMutation(async () => {
+      if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing configuration; recovery requires restarting this client.");
+      try { return await this.configurationStorage.transaction(this.configurationSnapshot, run); }
+      catch (error) { if (error instanceof ProviderConfigurationError) this.configurationWritable = false; throw error; }
+    });
+  }
+
+  private async assertCredentialConfigurationCurrent(): Promise<void> {
+    await this.saveOperation;
+    if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing credentials; recovery requires restarting this client.");
+    await this.configurationStorage.assertCurrent(this.configurationSnapshot);
+  }
+
+  configurationDiagnostics(): Promise<ProviderConfigurationDiagnostics> {
+    return this.configurationStorage.diagnostics((bytes) => { this.decodeConfiguration(bytes); });
+  }
+
+  /** Reserved "current" keeps settings and clears only a proven dead-owner write lock. */
+  previewConfigurationRecovery(backupId: string): Promise<ProviderConfigurationRecoveryPreview> {
+    return this.configurationStorage.previewRecovery(backupId, (bytes) => { this.decodeConfiguration(bytes); });
+  }
+
+  async confirmConfigurationRecovery(token: string, confirmed: boolean): Promise<{ restoredVersion: number; restartRequired: true }> {
+    return this.serializeMutation(async () => {
+      await this.saveOperation;
+      const result = await this.configurationStorage.confirmRecovery(token, confirmed, (bytes) => { this.decodeConfiguration(bytes); });
+      this.configurationWritable = false;
+      this.configurationRestartRequired = true;
+      this.file = { version: 5, profiles: [] };
+      this.pluginProfiles = [];
+      this.credentials = new LegacyCredentialStore({ kind: "provider-api-key", location: this.filename });
+      return result;
+    });
   }
 
   list(): ProviderProfile[] {
@@ -439,146 +511,162 @@ export class ProviderRegistry {
   }
 
   async migrateApiKeysToSystem(ids: string[], store: CredentialStore<string, "provider-api-key">): Promise<ProviderCredentialInfo[]> {
-    const selected = [...new Set(ids)];
-    if (!selected.length) throw new Error("No Provider credentials were selected for migration");
-    const known = new Set(this.list().map((profile) => profile.id));
-    const values = new Map<string, string>();
-    const targets = new Map<string, CredentialRef<"provider-api-key">>();
-    for (const id of selected) {
-      if (!known.has(id)) throw new Error(`Provider profile not found: ${id}`);
-      if (this.file.credentialRefs?.[id]) throw new Error(`Provider credential is already migrated: ${id}`);
-      const value = this.credentials.get(this.credentials.ref(id));
-      if (!value) throw new Error(`Provider has no legacy local API key: ${id}`);
-      const target = credentialRef("system", "provider-api-key", `provider:${id}:api-key`);
-      const intent = this.file.credentialMigrationIntents?.[id];
-      if (store.has(target) && !intent) throw new Error(`A system credential already exists for ${id}; use /credentials forget before retrying`);
-      if (intent && (intent.to.id !== target.id || intent.from.id !== id)) throw new Error(`Provider has an incompatible interrupted migration record: ${id}`);
-      values.set(id, value);
-      targets.set(id, target);
-    }
-    const previousIntents = structuredClone(this.file.credentialMigrationIntents ?? {});
-    this.file.credentialMigrationIntents ??= {};
-    const preparedAt = new Date().toISOString();
-    for (const id of selected) this.file.credentialMigrationIntents[id] = {
-      providerId: id, from: this.credentials.ref(id), to: targets.get(id)!, preparedAt,
-    };
-    try { await this.save(); }
-    catch (error) {
-      this.file.credentialMigrationIntents = previousIntents;
-      throw error;
-    }
-    const attempted: CredentialRef<"provider-api-key">[] = [];
-    try {
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      const selected = [...new Set(ids)];
+      if (!selected.length) throw new Error("No Provider credentials were selected for migration");
+      const known = new Set(this.list().map((profile) => profile.id));
+      const values = new Map<string, string>();
+      const targets = new Map<string, CredentialRef<"provider-api-key">>();
       for (const id of selected) {
-        const target = targets.get(id)!;
-        const interruptedCopy = store.get(target);
-        if (interruptedCopy !== undefined && !sameSecret(interruptedCopy, values.get(id)!)) throw new Error(`Interrupted system credential does not match the legacy key for ${id}; explicit cleanup is required`);
-        attempted.push(target);
-        const writtenRef = store.set(target, values.get(id)!);
-        const restored = store.get(writtenRef);
-        if (restored === undefined || !sameSecret(restored, values.get(id)!)) throw new Error(`System credential verification failed for ${id}`);
-        targets.set(id, writtenRef);
+        if (!known.has(id)) throw new Error(`Provider profile not found: ${id}`);
+        if (this.file.credentialRefs?.[id]) throw new Error(`Provider credential is already migrated: ${id}`);
+        const value = this.credentials.get(this.credentials.ref(id));
+        if (!value) throw new Error(`Provider has no legacy local API key: ${id}`);
+        const target = credentialRef("system", "provider-api-key", `provider:${id}:api-key`);
+        const intent = this.file.credentialMigrationIntents?.[id];
+        if (store.has(target) && !intent) throw new Error(`A system credential already exists for ${id}; use /credentials forget before retrying`);
+        if (intent && (intent.to.id !== target.id || intent.from.id !== id)) throw new Error(`Provider has an incompatible interrupted migration record: ${id}`);
+        values.set(id, value);
+        targets.set(id, target);
       }
-      const previousRefs = structuredClone(this.file.credentialRefs ?? {});
-      const previousMigrations = structuredClone(this.file.credentialMigrations ?? {});
-      const migratedAt = new Date().toISOString();
-      this.file.credentialRefs ??= {};
-      this.file.credentialMigrations ??= {};
-      for (const id of selected) {
-        const to = targets.get(id)!;
-        this.file.credentialRefs[id] = to;
-        this.file.credentialMigrations[id] = {
-          providerId: id, from: this.credentials.ref(id), to, migratedAt, legacyCopyPresent: true,
-        };
-        delete this.file.credentialMigrationIntents?.[id];
-      }
+      const previousIntents = structuredClone(this.file.credentialMigrationIntents ?? {});
+      this.file.credentialMigrationIntents ??= {};
+      const preparedAt = new Date().toISOString();
+      for (const id of selected) this.file.credentialMigrationIntents[id] = {
+        providerId: id, from: this.credentials.ref(id), to: targets.get(id)!, preparedAt,
+      };
       try { await this.save(); }
       catch (error) {
-        this.file.credentialRefs = previousRefs;
-        this.file.credentialMigrations = previousMigrations;
+        this.file.credentialMigrationIntents = previousIntents;
         throw error;
       }
-      this.systemCredentials = store;
-      return this.credentialInfo().filter((item) => selected.includes(item.providerId));
-    } catch (error) {
-      let cleaned = true;
-      for (const ref of attempted.reverse()) {
-        try { if (store.has(ref) && !store.delete(ref)) cleaned = false; }
-        catch { cleaned = false; }
+      const attempted: CredentialRef<"provider-api-key">[] = [];
+      try {
+        for (const id of selected) {
+          const target = targets.get(id)!;
+          const interruptedCopy = store.get(target);
+          if (interruptedCopy !== undefined && !sameSecret(interruptedCopy, values.get(id)!)) throw new Error(`Interrupted system credential does not match the legacy key for ${id}; explicit cleanup is required`);
+          attempted.push(target);
+          const writtenRef = store.set(target, values.get(id)!);
+          const restored = store.get(writtenRef);
+          if (restored === undefined || !sameSecret(restored, values.get(id)!)) throw new Error(`System credential verification failed for ${id}`);
+          targets.set(id, writtenRef);
+        }
+        const previousRefs = structuredClone(this.file.credentialRefs ?? {});
+        const previousMigrations = structuredClone(this.file.credentialMigrations ?? {});
+        const migratedAt = new Date().toISOString();
+        this.file.credentialRefs ??= {};
+        this.file.credentialMigrations ??= {};
+        for (const id of selected) {
+          const to = targets.get(id)!;
+          this.file.credentialRefs[id] = to;
+          this.file.credentialMigrations[id] = {
+            providerId: id, from: this.credentials.ref(id), to, migratedAt, legacyCopyPresent: true,
+          };
+          delete this.file.credentialMigrationIntents?.[id];
+        }
+        try { await this.save(); }
+        catch (error) {
+          this.file.credentialRefs = previousRefs;
+          this.file.credentialMigrations = previousMigrations;
+          throw error;
+        }
+        this.systemCredentials = store;
+        return this.credentialInfo().filter((item) => selected.includes(item.providerId));
+      } catch (error) {
+        // A rename/fsync/readback failure can occur after the reference switch
+        // reached disk. Deleting the verified system copies then would leave
+        // persisted references dangling. Retain copies and require fresh load.
+        if (error instanceof ProviderConfigurationError && error.replacementMayHaveCommitted) throw error;
+        let cleaned = true;
+        for (const ref of attempted.reverse()) {
+          try { if (store.has(ref) && !store.delete(ref)) cleaned = false; }
+          catch { cleaned = false; }
+        }
+        if (cleaned) this.file.credentialMigrationIntents = previousIntents;
+        try { await this.save(); } catch { /* The durable prepared intent remains a recovery marker. */ }
+        throw error;
       }
-      if (cleaned) this.file.credentialMigrationIntents = previousIntents;
-      try { await this.save(); } catch { /* The durable prepared intent remains a recovery marker. */ }
-      throw error;
-    }
+    });
   }
 
   async cleanupLegacyApiKey(id: string): Promise<void> {
-    const ref = this.file.credentialRefs?.[id];
-    const receipt = this.file.credentialMigrations?.[id];
-    if (!ref || !receipt || !this.systemCredentials) throw new Error(`Provider credential is not in a cleanable migrated state: ${id}`);
-    const legacy = this.credentials.get(this.credentials.ref(id));
-    const system = this.systemCredentials.get(ref);
-    if (!legacy) return;
-    if (!system || receipt.to.id !== ref.id || receipt.to.revision !== ref.revision) throw new Error(`The active system credential could not be verified for ${id}; cleanup was refused`);
-    const previousReceipt = structuredClone(receipt);
-    this.credentials.delete(this.credentials.ref(id));
-    receipt.legacyCopyPresent = false;
-    try { await this.save(); }
-    catch (error) {
-      this.credentials.set(this.credentials.ref(id), legacy);
-      this.file.credentialMigrations![id] = previousReceipt;
-      throw error;
-    }
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      const ref = this.file.credentialRefs?.[id];
+      const receipt = this.file.credentialMigrations?.[id];
+      if (!ref || !receipt || !this.systemCredentials) throw new Error(`Provider credential is not in a cleanable migrated state: ${id}`);
+      const legacy = this.credentials.get(this.credentials.ref(id));
+      const system = this.systemCredentials.get(ref);
+      if (!legacy) return;
+      if (!system || receipt.to.id !== ref.id || receipt.to.revision !== ref.revision) throw new Error(`The active system credential could not be verified for ${id}; cleanup was refused`);
+      const previousReceipt = structuredClone(receipt);
+      this.credentials.delete(this.credentials.ref(id));
+      receipt.legacyCopyPresent = false;
+      try { await this.save(); }
+      catch (error) {
+        this.credentials.set(this.credentials.ref(id), legacy);
+        this.file.credentialMigrations![id] = previousReceipt;
+        throw error;
+      }
+    });
   }
 
   async rollbackSystemApiKey(id: string): Promise<boolean> {
-    const ref = this.file.credentialRefs?.[id];
-    const receipt = this.file.credentialMigrations?.[id];
-    if (!ref || !receipt) throw new Error(`Provider credential is not migrated: ${id}`);
-    const legacyRef = this.credentials.ref(id);
-    const hasLegacy = receipt.legacyCopyPresent && this.credentials.has(legacyRef);
-    let restoredFromSystem = false;
-    if (!hasLegacy) {
-      if (!this.systemCredentials) throw new Error(`Windows Credential Manager is unavailable; ${id} could not be restored`);
-      const systemValue = this.systemCredentials.get(ref);
-      if (!systemValue) throw new Error(`The active system credential could not be read for rollback: ${id}`);
-      this.credentials.set(legacyRef, systemValue);
-      restoredFromSystem = true;
-    }
-    const previousRef = structuredClone(ref);
-    const previousReceipt = structuredClone(receipt);
-    delete this.file.credentialRefs?.[id];
-    delete this.file.credentialMigrations?.[id];
-    delete this.file.credentialMigrationIntents?.[id];
-    try { await this.save(); }
-    catch (error) {
-      if (restoredFromSystem) this.credentials.delete(this.credentials.ref(id));
-      (this.file.credentialRefs ??= {})[id] = previousRef;
-      (this.file.credentialMigrations ??= {})[id] = previousReceipt;
-      throw error;
-    }
-    if (!this.systemCredentials) return false;
-    try { return this.systemCredentials.delete(ref); }
-    catch { return false; }
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      const ref = this.file.credentialRefs?.[id];
+      const receipt = this.file.credentialMigrations?.[id];
+      if (!ref || !receipt) throw new Error(`Provider credential is not migrated: ${id}`);
+      const legacyRef = this.credentials.ref(id);
+      const hasLegacy = receipt.legacyCopyPresent && this.credentials.has(legacyRef);
+      let restoredFromSystem = false;
+      if (!hasLegacy) {
+        if (!this.systemCredentials) throw new Error(`Windows Credential Manager is unavailable; ${id} could not be restored`);
+        const systemValue = this.systemCredentials.get(ref);
+        if (!systemValue) throw new Error(`The active system credential could not be read for rollback: ${id}`);
+        this.credentials.set(legacyRef, systemValue);
+        restoredFromSystem = true;
+      }
+      const previousRef = structuredClone(ref);
+      const previousReceipt = structuredClone(receipt);
+      delete this.file.credentialRefs?.[id];
+      delete this.file.credentialMigrations?.[id];
+      delete this.file.credentialMigrationIntents?.[id];
+      try { await this.save(); }
+      catch (error) {
+        if (restoredFromSystem) this.credentials.delete(this.credentials.ref(id));
+        (this.file.credentialRefs ??= {})[id] = previousRef;
+        (this.file.credentialMigrations ??= {})[id] = previousReceipt;
+        throw error;
+      }
+      if (!this.systemCredentials) return false;
+      try { return this.systemCredentials.delete(ref); }
+      catch { return false; }
+    });
   }
 
   async forgetLocalApiKey(id: string): Promise<void> {
-    if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
-    const ref = this.file.credentialRefs?.[id];
-    if (ref) {
-      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the system credential was not changed");
-      this.systemCredentials.delete(ref);
-      delete this.file.credentialRefs?.[id];
-      delete this.file.credentialMigrations?.[id];
-    } else if (this.systemCredentials) {
-      // Explicit forget also removes a deterministic orphan left by an interrupted
-      // migration or a rollback whose post-switch system cleanup failed.
-      this.systemCredentials.delete(credentialRef("system", "provider-api-key", `provider:${id}:api-key`));
-    }
-    delete this.file.credentialMigrationIntents?.[id];
-    this.credentials.delete(this.credentials.ref(id));
-    this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
-    await this.save();
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+      const ref = this.file.credentialRefs?.[id];
+      if (ref) {
+        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the system credential was not changed");
+        this.systemCredentials.delete(ref);
+        delete this.file.credentialRefs?.[id];
+        delete this.file.credentialMigrations?.[id];
+      } else if (this.systemCredentials) {
+        // Explicit forget also removes a deterministic orphan left by an interrupted
+        // migration or a rollback whose post-switch system cleanup failed.
+        this.systemCredentials.delete(credentialRef("system", "provider-api-key", `provider:${id}:api-key`));
+      }
+      delete this.file.credentialMigrationIntents?.[id];
+      this.credentials.delete(this.credentials.ref(id));
+      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
+      await this.save();
+    });
   }
 
   private resolveStoredCredential(id: string): string | undefined {
@@ -596,26 +684,32 @@ export class ProviderRegistry {
   }
 
   async setRoutingEnabled(enabled: boolean): Promise<void> {
-    (this.file.routing ??= { enabled: false, phases: {} }).enabled = enabled;
-    await this.save();
+    return this.mutate(async () => {
+      (this.file.routing ??= { enabled: false, phases: {} }).enabled = enabled;
+      await this.save();
+    });
   }
 
   async setRoutingPhase(phase: ProviderRoutingPhase, providerId?: string): Promise<void> {
-    if (providerId !== undefined && !this.get(providerId)) throw new Error(`Provider profile not found: ${providerId}`);
-    const routing = (this.file.routing ??= { enabled: false, phases: {} });
-    if (providerId) routing.phases[phase] = providerId;
-    else delete routing.phases[phase];
-    await this.save();
+    return this.mutate(async () => {
+      if (providerId !== undefined && !this.get(providerId)) throw new Error(`Provider profile not found: ${providerId}`);
+      const routing = (this.file.routing ??= { enabled: false, phases: {} });
+      if (providerId) routing.phases[phase] = providerId;
+      else delete routing.phases[phase];
+      await this.save();
+    });
   }
 
   async setFailoverChain(id: string, chain: string[]): Promise<void> {
-    if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
-    if (chain.length > 8) throw new Error("A failover chain can contain at most 8 providers");
-    const normalized = [...new Set(chain)];
-    if (normalized.includes(id)) throw new Error("The primary provider cannot be its own fallback");
-    for (const fallbackId of normalized) if (!this.get(fallbackId)) throw new Error(`Provider profile not found: ${fallbackId}`);
-    (this.file.failoverChains ??= {})[id] = normalized;
-    await this.save();
+    return this.mutate(async () => {
+      if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+      if (chain.length > 8) throw new Error("A failover chain can contain at most 8 providers");
+      const normalized = [...new Set(chain)];
+      if (normalized.includes(id)) throw new Error("The primary provider cannot be its own fallback");
+      for (const fallbackId of normalized) if (!this.get(fallbackId)) throw new Error(`Provider profile not found: ${fallbackId}`);
+      (this.file.failoverChains ??= {})[id] = normalized;
+      await this.save();
+    });
   }
 
   capabilityProbe(providerId: string, model: string): ModelCapabilityProbe | undefined {
@@ -625,105 +719,118 @@ export class ProviderRegistry {
   }
 
   async setCapabilityProbe(probe: ModelCapabilityProbe): Promise<void> {
-    if (!this.get(probe.providerId)) throw new Error(`Provider profile not found: ${probe.providerId}`);
-    const profile = this.get(probe.providerId)!;
-    const normalized = validateProbe({ ...probe, profileFingerprint: probeFingerprint(profile, probe.model) }, new Set(this.list().map((profile) => profile.id)));
-    this.file.probes = (this.file.probes ?? []).filter((item) => item.providerId !== normalized.providerId || item.model !== normalized.model);
-    this.file.probes.push(normalized);
-    if (this.file.probes.length > 500) this.file.probes.splice(0, this.file.probes.length - 500);
-    await this.save();
+    return this.mutate(async () => {
+      if (!this.get(probe.providerId)) throw new Error(`Provider profile not found: ${probe.providerId}`);
+      const profile = this.get(probe.providerId)!;
+      const normalized = validateProbe({ ...probe, profileFingerprint: probeFingerprint(profile, probe.model) }, new Set(this.list().map((profile) => profile.id)));
+      this.file.probes = (this.file.probes ?? []).filter((item) => item.providerId !== normalized.providerId || item.model !== normalized.model);
+      this.file.probes.push(normalized);
+      if (this.file.probes.length > 500) this.file.probes.splice(0, this.file.probes.length - 500);
+      await this.save();
+    });
   }
 
   async setActive(id: string, model?: string): Promise<void> {
-    if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
-    if (model !== undefined && (!model.trim() || model.length > 200)) throw new Error("Active model must be 1-200 characters");
-    this.file.active = id;
-    if (model) (this.file.activeModels ??= {})[id] = model.trim();
-    await this.save();
+    return this.mutate(async () => {
+      if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+      if (model !== undefined && (!model.trim() || model.length > 200)) throw new Error("Active model must be 1-200 characters");
+      this.file.active = id;
+      if (model) (this.file.activeModels ??= {})[id] = model.trim();
+      await this.save();
+    });
   }
 
   async setCapabilityModel(id: string, capability: keyof ProviderCapabilityModels, model: string): Promise<void> {
-    const profile = this.get(id);
-    if (!profile) throw new Error(`Provider profile not found: ${id}`);
-    if (!profile.features[capability]) throw new Error(`Provider ${id} does not enable ${capability}`);
-    if (!model.trim() || model.length > 200 || /[\r\n\0]/.test(model)) throw new Error("Capability model must be 1-200 characters without line breaks");
-    this.file.active = id;
-    const models = (this.file.activeCapabilityModels ??= {});
-    (models[id] ??= {})[capability] = model.trim();
-    await this.save();
+    return this.mutate(async () => {
+      const profile = this.get(id);
+      if (!profile) throw new Error(`Provider profile not found: ${id}`);
+      if (!profile.features[capability]) throw new Error(`Provider ${id} does not enable ${capability}`);
+      if (!model.trim() || model.length > 200 || /[\r\n\0]/.test(model)) throw new Error("Capability model must be 1-200 characters without line breaks");
+      this.file.active = id;
+      const models = (this.file.activeCapabilityModels ??= {});
+      (models[id] ??= {})[capability] = model.trim();
+      await this.save();
+    });
   }
 
   async upsert(profile: ProviderProfile): Promise<void> {
-    const normalized = validateProviderProfile({ ...profile, builtin: false });
-    if (this.pluginProfiles.some((item) => item.id === normalized.id)) throw new Error(`Plugin provider id cannot be replaced: ${normalized.id}`);
-    const { apiKey, ...storedProfile } = normalized;
-    const existing = this.file.profiles.findIndex((item) => item.id === normalized.id);
-    const previous = existing >= 0 ? this.file.profiles[existing] : undefined;
-    if (existing >= 0) this.file.profiles[existing] = storedProfile as ProviderProfile;
-    else this.file.profiles.push(storedProfile as ProviderProfile);
-    if (apiKey) this.credentials.set(this.credentials.ref(normalized.id), apiKey);
-    if (apiKey || !previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
-      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
-    }
-    await this.save();
+    return this.mutate(async () => {
+      const normalized = validateProviderProfile({ ...profile, builtin: false });
+      if (this.pluginProfiles.some((item) => item.id === normalized.id)) throw new Error(`Plugin provider id cannot be replaced: ${normalized.id}`);
+      const { apiKey, ...storedProfile } = normalized;
+      const existing = this.file.profiles.findIndex((item) => item.id === normalized.id);
+      const previous = existing >= 0 ? this.file.profiles[existing] : undefined;
+      if (existing >= 0) this.file.profiles[existing] = storedProfile as ProviderProfile;
+      else this.file.profiles.push(storedProfile as ProviderProfile);
+      if (apiKey) this.credentials.set(this.credentials.ref(normalized.id), apiKey);
+      if (apiKey || !previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
+        this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
+      }
+      await this.save();
+    });
   }
 
   async setApiKey(id: string, apiKey?: string): Promise<void> {
-    if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
-    if (apiKey !== undefined && (!apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey))) throw new Error("apiKey must be 1-4096 characters without line breaks");
-    const systemRef = this.file.credentialRefs?.[id];
-    if (systemRef) {
-      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the credential was not changed");
-      if (apiKey) {
-        const updatedRef = this.systemCredentials.set(systemRef, apiKey);
-        this.file.credentialRefs![id] = updatedRef;
-        if (this.file.credentialMigrations?.[id]) {
-          this.file.credentialMigrations[id]!.to = updatedRef;
-          this.file.credentialMigrations[id]!.migratedAt = new Date().toISOString();
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
+      if (apiKey !== undefined && (!apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey))) throw new Error("apiKey must be 1-4096 characters without line breaks");
+      const systemRef = this.file.credentialRefs?.[id];
+      if (systemRef) {
+        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the credential was not changed");
+        if (apiKey) {
+          const updatedRef = this.systemCredentials.set(systemRef, apiKey);
+          this.file.credentialRefs![id] = updatedRef;
+          if (this.file.credentialMigrations?.[id]) {
+            this.file.credentialMigrations[id]!.to = updatedRef;
+            this.file.credentialMigrations[id]!.migratedAt = new Date().toISOString();
+          }
+        } else {
+          await this.forgetLocalApiKey(id);
+          return;
         }
-      } else {
-        await this.forgetLocalApiKey(id);
-        return;
-      }
-    } else if (apiKey) this.credentials.set(this.credentials.ref(id), apiKey);
-    else this.credentials.delete(this.credentials.ref(id));
-    this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
-    await this.save();
+      } else if (apiKey) this.credentials.set(this.credentials.ref(id), apiKey);
+      else this.credentials.delete(this.credentials.ref(id));
+      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
+      await this.save();
+    });
   }
 
   async remove(id: string): Promise<void> {
-    const next = this.file.profiles.filter((profile) => profile.id !== id);
-    if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
-    const systemRef = this.file.credentialRefs?.[id];
-    if (systemRef) {
-      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the provider was not removed");
-      this.systemCredentials.delete(systemRef);
-    }
-    this.file.profiles = next;
-    this.credentials.delete(this.credentials.ref(id));
-    delete this.file.credentialRefs?.[id];
-    delete this.file.credentialMigrations?.[id];
-    delete this.file.credentialMigrationIntents?.[id];
-    if (this.file.activeModels) delete this.file.activeModels[id];
-    if (this.file.failoverChains) {
-      delete this.file.failoverChains[id];
-      for (const [primaryId, chain] of Object.entries(this.file.failoverChains)) this.file.failoverChains[primaryId] = chain.filter((item) => item !== id);
-    }
-    if (this.file.routing) {
-      for (const phase of Object.keys(this.file.routing.phases) as ProviderRoutingPhase[]) {
-        if (this.file.routing.phases[phase] === id) delete this.file.routing.phases[phase];
+    return this.mutate(async () => {
+      await this.assertCredentialConfigurationCurrent();
+      const next = this.file.profiles.filter((profile) => profile.id !== id);
+      if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
+      const systemRef = this.file.credentialRefs?.[id];
+      if (systemRef) {
+        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the provider was not removed");
+        this.systemCredentials.delete(systemRef);
       }
-    }
-    this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
-    if (this.file.active === id) this.file.active = undefined;
-    if (this.file.activeCapabilityModels) delete this.file.activeCapabilityModels[id];
-    await this.save();
+      this.file.profiles = next;
+      this.credentials.delete(this.credentials.ref(id));
+      delete this.file.credentialRefs?.[id];
+      delete this.file.credentialMigrations?.[id];
+      delete this.file.credentialMigrationIntents?.[id];
+      if (this.file.activeModels) delete this.file.activeModels[id];
+      if (this.file.failoverChains) {
+        delete this.file.failoverChains[id];
+        for (const [primaryId, chain] of Object.entries(this.file.failoverChains)) this.file.failoverChains[primaryId] = chain.filter((item) => item !== id);
+      }
+      if (this.file.routing) {
+        for (const phase of Object.keys(this.file.routing.phases) as ProviderRoutingPhase[]) {
+          if (this.file.routing.phases[phase] === id) delete this.file.routing.phases[phase];
+        }
+      }
+      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
+      if (this.file.active === id) this.file.active = undefined;
+      if (this.file.activeCapabilityModels) delete this.file.activeCapabilityModels[id];
+      await this.save();
+    });
   }
 
-  private async save(): Promise<void> {
+  private async save(upgrade = false): Promise<void> {
     const operation = this.saveOperation.then(async () => {
-      await fs.mkdir(path.dirname(this.filename), { recursive: true });
-      const temporary = `${this.filename}.${process.pid}.${++this.saveSequence}.tmp`;
+      if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing configuration; recovery requires restarting this client.");
       const safeFile: ProviderFile = {
         version: 5,
         active: this.file.active,
@@ -739,12 +846,8 @@ export class ProviderRegistry {
         credentialMigrationIntents: structuredClone(this.file.credentialMigrationIntents ?? {}),
         probes: [...(this.file.probes ?? [])],
       };
-      await fs.writeFile(temporary, `${JSON.stringify(safeFile, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-      try { await fs.rename(temporary, this.filename); }
-      catch (error) {
-        await fs.rm(temporary, { force: true }).catch(() => undefined);
-        throw error;
-      }
+      try { this.configurationSnapshot = await this.configurationStorage.commit(this.configurationSnapshot, Buffer.from(`${JSON.stringify(safeFile, null, 2)}\n`), upgrade); }
+      catch (error) { this.configurationWritable = false; throw error; }
     });
     this.saveOperation = operation.then(() => undefined, () => undefined);
     await operation;

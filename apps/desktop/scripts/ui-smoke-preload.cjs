@@ -11,6 +11,8 @@ const workspace = {
 let sequence = 0;
 let task;
 let approvalMode = "ask";
+let planMode = false;
+let modeContextRevision = 1;
 let activeProviderId = "openai";
 let activeModel = "gpt-5";
 const activeCapabilityModels = {
@@ -19,18 +21,23 @@ const activeCapabilityModels = {
 };
 let terminal = { state: "idle" };
 let recoveryActive = false;
+const workspaceListeners = new Set();
 const runtimeListeners = new Set();
 const terminalListeners = new Set();
 const browserListeners = new Set();
 const calls = [];
 let onboardingSnapshot;
+let providerRecoveryConfirm = false;
+let providerRecoveryState = { contextId: "fixture-recovery-context", restartRequired: false,
+  diagnostics: { supportedVersion: 5, sourceVersion: null, state: "invalid", backups: [{ id: "12345678-1234-1234-1234-123456789abc", sourceVersion: 4, reason: "upgrade", createdAt: "2026-10-01T00:00:00.000Z" }], issues: ["invalid-settings"], compatibilityNotice: "Upgrade CLI and desktop together." } };
+const providerRecoveryView = () => JSON.parse(JSON.stringify(providerRecoveryState));
 let mcp = { servers: [
   { name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" } },
   { name: "secure", origin: "user:secure", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true },
 ] };
 const mcpView = () => JSON.parse(JSON.stringify(mcp));
 
-const runtime = () => ({ runtime: { snapshot: { schemaVersion: 1, sequence, generatedAt: now(), ...(task ? { task } : {}) }, events: [], resyncRequired: false }, conversationId: task?.id, provider: { id: activeProviderId, label: activeProviderId === "openai" ? "OpenAI" : "Agnes", model: activeModel }, writer: "available", approvalMode });
+const runtime = () => ({ runtime: { snapshot: { schemaVersion: 1, sequence, generatedAt: now(), planMode, ...(task ? { task } : {}) }, events: [], resyncRequired: false }, conversationId: task?.id, provider: { id: activeProviderId, label: activeProviderId === "openai" ? "OpenAI" : "Agnes", model: activeModel }, writer: "available", approvalMode, modeContextId: `smoke-mode-context-${modeContextRevision}` });
 const emit = (type, payload) => {
   sequence += 1;
   const event = { schemaVersion: 1, eventId: `event-${sequence}`, taskId: task.id, sequence, timestamp: now(), type, payload };
@@ -76,9 +83,17 @@ const bridge = {
   },
   continueTask: async ({ text }) => bridge.createTask({ text }),
   newConversation: async () => { task = undefined; sequence = 0; return runtime(); },
-  steerTask: async () => true,
+  steerTask: async ({ text }) => { calls.push("task:steer"); emit("task.steered", { text }); return true; },
   stopTask: async () => { calls.push("task:stop"); recoveryActive = true; task = { ...task, state: "cancelled", updatedAt: now() }; emit("task.finished", { state: "cancelled", error: "用户已停止" }); return true; },
   setApprovalMode: async ({ mode }) => { approvalMode = mode; calls.push(`approval-mode:${mode}`); return runtime(); },
+  setPlanMode: async ({ enabled, contextId }) => {
+    if (contextId !== `smoke-mode-context-${modeContextRevision}`) throw new Error("stale Plan mode context");
+    if (task && ["running", "waiting_approval", "stopping"].includes(task.state)) throw new Error("Plan mode requires an idle task");
+    planMode = enabled;
+    modeContextRevision += 1;
+    calls.push(`plan-mode:${enabled}`);
+    return runtime();
+  },
   decideApproval: async ({ approvalId, allowed }) => {
     calls.push(`approval:${allowed}`);
     task = { ...task, state: "running", pendingApproval: undefined, updatedAt: now() };
@@ -100,6 +115,17 @@ const bridge = {
   restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
   recoverTask: async () => runtime(),
   abandonRecovery: async () => review(),
+  providerRecovery: async (request) => {
+    calls.push(`provider-recovery:${request.action}`);
+    if (request.action === "snapshot" || request.action === "cancel") providerRecoveryState.preview = undefined;
+    else if (request.action === "preview") providerRecoveryState.preview = { action: "restore-backup", token: "fixture-recovery-token", backupId: request.backupId, sourceVersion: 4, currentVersion: null, expiresAt: "2026-10-01T00:05:00.000Z", warnings: ["Close other Xiu clients. Restart after recovery."] };
+    else if (request.action === "recover") {
+      calls.push(`provider-recovery:native-confirm:${providerRecoveryConfirm}`);
+      providerRecoveryState.preview = undefined;
+      if (providerRecoveryConfirm) providerRecoveryState.restartRequired = true;
+    }
+    return providerRecoveryView();
+  },
   providerSnapshot: async () => providers(),
   discoverProviderModels: async () => providers(),
   selectProvider: async ({ providerId, model, capability }) => { activeProviderId = providerId; if (capability) { activeCapabilityModels[providerId][capability] = model; calls.push(`provider:${providerId}/${capability}/${model}`); } else { activeModel = model; calls.push(`provider:${providerId}/${model}`); } return { settings: providers(), connection: runtime() }; },
@@ -123,13 +149,16 @@ const bridge = {
   writeTerminal: async ({ data }) => { calls.push(`terminal:write:${data}`); },
   resizeTerminal: async ({ cols, rows }) => { terminal = { ...terminal, cols, rows }; return terminal; },
   stopTerminal: async () => { terminal = { state: "exited", sessionId: "terminal-1", shell: "PowerShell", cols: terminal.cols, rows: terminal.rows, exitCode: 0 }; calls.push("terminal:stop"); return terminal; },
-  onSnapshot: () => () => {},
+  onSnapshot: (listener) => { workspaceListeners.add(listener); return () => workspaceListeners.delete(listener); },
   onRuntimeEvent: (listener) => { runtimeListeners.add(listener); return () => runtimeListeners.delete(listener); },
   onTerminalEvent: (listener) => { terminalListeners.add(listener); return () => terminalListeners.delete(listener); },
 };
 
 contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
-contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls], emitBrowser: (state) => { for (const listener of browserListeners) listener(state); }, freshProviders: () => {
+contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls],
+  recoveryConfirmation: (confirmed) => { providerRecoveryConfirm = confirmed; },
+  recoveryWorkspace: (selected) => { const value = selected ? workspace : { bridgeVersion: 1, trust: "none", recent: [], tasks: [] }; for (const listener of workspaceListeners) listener(value); },
+  emitBrowser: (state) => { for (const listener of browserListeners) listener(state); }, freshProviders: () => {
   const templates = providers().profiles.map((profile) => ({ id: profile.id, name: profile.name, kind: profile.kind, model: profile.defaultModel, capabilityModels: profile.capabilityModels, features: profile.features }));
   onboardingSnapshot = { activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {}, templates };
   activeProviderId = ""; activeModel = "";

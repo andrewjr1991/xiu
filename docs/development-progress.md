@@ -1,15 +1,27 @@
 # Xiu 开发阶段记录
 
+## 阶段二：0.20.3-preview.4
+
+- 状态：本地最终整合 823 项测试，811 通过、12 项平台专属跳过、0 失败；未推送、未接受，必须核验本候选精确 CI
+- 范围：桌面共享 Plan 模式、输入法/重复提交保护、Provider 受保护备份与两端显式恢复
+- 复查修正：最终任务日志失败释放活动标志，新对话/删除与模式切换互斥；只读恢复诊断不阻止停止/审批；凭据事务锁、Windows 私有 ACL、替换大小预检和不确定提交保护
+- 验证边界：本地合成单元测试不等于真实系统 IME；Windows DACL/安装和 Electron UI 留待目标 CI。未知恢复锁保留数据并失败关闭，不提供强制清锁
+- 本地通过：CLI/桌面类型检查、CLI 构建、桌面主进程/Renderer 编译及静态 smoke、文档、10/10 模拟评测、9/9 Python 迁移。独立复查用原始失败夹具验证了日志失败及同轮会话/模式竞态修复
+- 本地 Electron 图形验收受限：无可用 DISPLAY/Xvfb，headless 初始化失败，临时显示服务未建立；不记为通过，新增 UI 场景由目标 CI 执行
+- CLI 隔离包安装及 Linux Unicode/后台任务平台 smoke 通过；dry-pack 已核对新恢复和 bootstrap 模块、版本与排除 Electron/用户配置
+- 待回填：精确提交、CI 与安装候选
+
 ## 阶段一后续修正：0.20.3-preview.3
 
-- 状态：本地 742 项测试，732 通过、10 项 Windows 专属跳过、0 失败；尚未提交/推送或完成远端验收，不发布 npm
+- 状态：自动化门禁通过；精确提交 8b7853ccfde1aac87be2d3dfc28a70b68a4d7850 的六个 CI 作业全部通过。Windows 742 项，741 通过、1 跳过、0 失败，包含此前失败的立即退出启动器用例；未发布 npm
 - 范围：后台 worker 启动失败诊断/异步错误与输出收尾回归，保留立即退出启动器的原有断言及期限；运行时 Undici 依赖补丁升级
 - 原 Windows 存活失败根因尚未由诊断证据确定，必须以精确新提交的远端 CI 复测，不把 Linux 通过当作 Windows 修复证明
 - 已验证：CLI/桌面类型检查、CLI 构建、桌面主进程/Renderer 编译及静态 smoke、文档检查、10/10 模拟评测、9/9 Python 迁移测试；运行时依赖审计零已知漏洞，独立后台用例在 Node 20.18.1 和 24.19 通过
 - 红/绿回归：源码 worker 从仓库外目录启动的 loader 解析、退出后的尾部输出，在旧 HEAD 失败、新实现通过。它们不等同已确定 Windows CI 原失败根因
 - Python 首次通配 discovery 未发现测试，已改为直接执行测试文件并取得 9/9；未将零测试命令记为通过
 - 包检查：328 文件 dry-pack，包含 bootstrap 模块，不包含 Electron/用户配置；CLI 隔离安装和 Linux Unicode/后台 worker 平台 smoke 通过，桌面独立 worker 通过。首次包命令默认 npm 缓存不可用，切换可写隔离缓存后通过
-- 后续回填：精确提交、CI 结果及可下载安装候选
+- 精确 CI：[36949835519](https://github.com/andrewjr1991/xiu/actions/runs/36949835519)；[Windows 未签名 EXE 包](https://github.com/andrewjr1991/xiu/actions/runs/36949835519/artifacts/11204055041)、[Windows CLI 包](https://github.com/andrewjr1991/xiu/actions/runs/36949835519/artifacts/11203343598)
+- 已下载并核对 manifest、实际文件字节和 SHA-256；EXE 为 8ccb6a903b0fbb4d8dca6e0bd9a1754d171fbfe0f2a963eb94563756dd62bd25，CLI tarball 为 82598dbcdeb40867f10e9149e725d85f092124ffc3e9d462f810a0ce33a03eff。三平台自动化通过不代表真实模型质量、外部设备或成熟产品完全验收
 
 ## 阶段一后续修正：0.20.3-preview.2
 

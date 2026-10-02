@@ -13,6 +13,7 @@ import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-
 import { CheckpointManager } from "./checkpoint.js";
 import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
 import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
+import { runProviderRecoveryCommand, type ProviderRecoveryCommand } from "./commands/provider-recovery.js";
 import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
@@ -217,6 +218,9 @@ const program = new Command()
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
   .option("--update-doctor", "run read-only update and installation diagnostics, then exit", false)
+  .option("--provider-config-diagnostics", "list safe Provider configuration diagnostics and recovery backups, then exit", false)
+  .option("--provider-config-preview <backup-id>", "preview Provider backup recovery (or current for dead-lock cleanup), then exit")
+  .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
   .parse();
@@ -307,6 +311,18 @@ async function chooseSession(workspace: string, language: UiLanguage) {
 
 async function main(): Promise<void> {
   const options = program.opts();
+  const recoveryOptions = [options.providerConfigDiagnostics, options.providerConfigPreview, options.providerConfigRecover].filter(Boolean);
+  if (recoveryOptions.length) {
+    if (recoveryOptions.length !== 1 || program.args.length) throw new Error("Choose one Provider configuration command without a task.");
+    const command: ProviderRecoveryCommand = options.providerConfigRecover ? { action: "recover", backupId: options.providerConfigRecover }
+      : options.providerConfigPreview ? { action: "preview", backupId: options.providerConfigPreview } : { action: "list" };
+    const result = await runProviderRecoveryCommand(new ProviderRegistry(), command, {
+      language: normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE) ?? "en-US",
+      interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY), write: (text) => console.log(text), ask: askQuestion,
+    });
+    process.exitCode = result.exitCode;
+    return;
+  }
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
   if (options.updateDoctor) {
@@ -330,7 +346,11 @@ async function main(): Promise<void> {
   try { mcpSystemCredentialStore = await createWindowsSystemCredentialStore("mcp-oauth-record"); }
   catch { /* OAuth remains usable through the compatibility store until explicitly migrated. */ }
   const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
-  await providerRegistry.load();
+  try { await providerRegistry.load(); }
+  catch (error) {
+    console.error("Provider configuration could not be loaded. Inspect it without starting a task: xiu --provider-config-diagnostics");
+    throw error;
+  }
   const pluginRegistry = new PluginRegistry(path.resolve(options.cwd ?? process.cwd()), undefined, packageJson.version);
   await pluginRegistry.refresh(false);
   const globalPluginContributions = await pluginRegistry.loadApprovedContributions();

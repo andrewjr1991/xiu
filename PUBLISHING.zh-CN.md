@@ -1,3 +1,5 @@
+> 0.20.3-preview.4 开发候选：CLI/桌面配套升级，新增 Provider 备份与显式恢复。恢复后要求重启；旧客户端不遵守新锁，须先退出其他客户端。Windows 仅要求未签名 x64 EXE；不把 Windows ACL 跳过或真实 IME 未测写成通过。每次推送的精确提交、CI 与产物见 [开发阶段记录](./docs/development-progress.md)。
+
 # Xiu 更新、发布与安装指南
 
 0.20.2 工作台增量候选门禁：独立 Diff 的目录树/搜索/历史轮次/缺失快照；子智能体真实执行、权限不扩张、取消等待和整合独立确认；后台 Node worker 解包启动；桌面 npm/npx MCP 在 Electron 中不能以主程序当作 Node。`node apps/desktop/scripts/runtime-node-smoke.mjs` 验证真实 Electron、隔离 MCP 服务与后台 worker；可显式指定 `XIU_MCP_REAL_CONFIG` 核验已有授权的 everything 服务，不写真实清单或权限。正式包不能包含测试 harness/桥接；MSIX 仍需可信签名，仅在用户授权后发布。

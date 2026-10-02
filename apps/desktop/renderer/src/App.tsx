@@ -1,10 +1,13 @@
 import { Select } from "./Select.js";
+import { createComposerEnterGuard } from "./composer-enter-guard.js";
 import { BrowserPane } from "./BrowserPane.js";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { desktopTerminalVisuals } from "./terminal-visuals.js";
 import { McpPanel } from "./McpPanel.js";
+import { RecoveryPanel } from "./RecoveryPanel.js";
+import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "../../shared/provider-recovery.js";
 import { ChangesPanel } from "./ChangesPanel.js";
 import { SubagentCards, TaskDataPanel } from "./TaskDataPanel.js";
 import type { WorkspaceMcpSnapshot, DesktopMcpManageRequest, DesktopMcpBrowseRequest } from "../../shared/protocol.js";
@@ -540,6 +543,10 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
 }
 
 export function App() {
+  const [providerRecoveryOpen, setProviderRecoveryOpen] = useState(false);
+  const [providerRecovery, setProviderRecovery] = useState<DesktopProviderRecoverySnapshot>();
+  const [providerRecoveryError, setProviderRecoveryError] = useState<string>();
+  const providerRestartRequired = providerRecovery?.restartRequired === true;
   const [mcpOpen, setMcpOpen] = useState(false);
   const [mcpSnapshot, setMcpSnapshot] = useState<WorkspaceMcpSnapshot>();
   const [workspace, setWorkspace] = useState(emptyWorkspace);
@@ -554,7 +561,9 @@ export function App() {
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [submittedAttachments, setSubmittedAttachments] = useState<DesktopAttachment[]>([]);
   const [input, setInput] = useState("");
+  const [composerEnterGuard] = useState(() => createComposerEnterGuard());
   const [busy, setBusy] = useState(false);
+  const submitPendingRef = useRef(false);
   const [error, setError] = useState<string>();
   const [dangerConfirmed, setDangerConfirmed] = useState(false);
   const [review, setReview] = useState<DesktopReviewSnapshot>();
@@ -636,6 +645,13 @@ export function App() {
     void Promise.all([refreshRuntime(0), refreshReview()]).catch((reason) => setError(String(reason)));
   }, [workspace.trust, workspace.workspace?.id]);
 
+  useEffect(() => {
+    // Losing native focus can cancel an IME without a final compositionend.
+    window.addEventListener("blur", composerEnterGuard.reset);
+    return () => { window.removeEventListener("blur", composerEnterGuard.reset); composerEnterGuard.reset(); };
+  }, [composerEnterGuard]);
+  useEffect(() => { composerEnterGuard.reset(); }, [composerEnterGuard, workspace.trust, workspace.workspace?.id]);
+
   useEffect(() => { changeViewRef.current = changeView; }, [changeView]);
   useEffect(() => { historyViewRef.current = historyView; }, [historyView]);
 
@@ -676,8 +692,10 @@ export function App() {
   };
 
   const submit = async () => {
+    if (providerRestartRequired || busy || submitPendingRef.current || status === "waiting_approval" || status === "stopping" || connection?.writer === "active-elsewhere") return;
     const visibleText = input.trim();
     if (!visibleText && !attachments.length) return;
+    submitPendingRef.current = true;
     if (!isActive) { setTaskCompletionChanges(undefined); setSelectedDiff(undefined); }
     const text = [visibleText, attachments.map((attachment) => attachment.reference).join("\n")].filter(Boolean).join("\n\n");
     const steering = Boolean(runtime?.task && activeStates.has(runtime.task.state));
@@ -698,7 +716,7 @@ export function App() {
       }
       setPendingMessage(undefined);
     } catch (reason) { setPendingMessage(undefined); setSubmittedAttachments([]); setInput((current) => current || visibleText); setAttachments((current) => current.length ? current : attachments); setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setBusy(false); }
+    finally { submitPendingRef.current = false; setBusy(false); }
   };
 
   const newConversation = async () => {
@@ -770,6 +788,7 @@ export function App() {
     try {
       const next = await window.xiuDesktop.deleteTask({ taskId, confirmed: true });
       setWorkspace(next);
+      await refreshRuntime(0);
       if (historyView?.taskId === taskId && !next.tasks.some((task) => task.id === taskId)) setHistoryView(undefined);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
@@ -795,6 +814,16 @@ export function App() {
     if (current.kind === "task") await deleteTask(current.id);
     else await removeRecentWorkspace(current.id);
     setConfirmation(undefined);
+  };
+
+  const setPlanMode = async (enabled: boolean) => {
+    if (providerRestartRequired || !connection?.modeContextId || busy || isActive) return;
+    setBusy(true); setError(undefined);
+    try {
+      const next = await window.xiuDesktop.setPlanMode({ enabled, contextId: connection.modeContextId });
+      setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot;
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
   };
 
   const setApprovalMode = async (mode: DesktopApprovalMode) => {
@@ -842,6 +871,29 @@ export function App() {
     try { setReview(await window.xiuDesktop.abandonRecovery({ runId })); await refreshRuntime(0); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
+  };
+
+  const manageProviderRecovery = async (request: DesktopProviderRecoveryRequest) => {
+    setBusy(true); setProviderRecoveryError(undefined);
+    try {
+      const next = await window.xiuDesktop.providerRecovery(request);
+      setProviderRecovery(next);
+      if (next.restartRequired) {
+        setConnection(undefined); setRuntime(undefined); runtimeRef.current = undefined;
+        setProviderSettings(undefined); setProviderOpen(false); setPermissionOpen(false);
+        setError(undefined);
+      }
+    } catch (reason) { setProviderRecoveryError(reason instanceof Error ? reason.message : "配置恢复未完成，请刷新诊断。"); }
+    finally { setBusy(false); }
+  };
+  const openProviderRecovery = () => {
+    setProviderOpen(false); setPermissionOpen(false); setProviderRecoveryOpen(true);
+    void manageProviderRecovery({ action: "snapshot" });
+  };
+  const closeProviderRecovery = async () => {
+    if (busy) return;
+    if (providerRecovery?.preview) await manageProviderRecovery({ action: "cancel", contextId: providerRecovery.contextId, token: providerRecovery.preview.token });
+    setProviderRecoveryOpen(false);
   };
 
   const openProviderPicker = async (placement: "composer" | "settings" = "composer") => {
@@ -973,6 +1025,7 @@ export function App() {
   const status = runtime?.task?.state ?? "idle";
   const modelLabel = connection ? `${connection.provider.label} · ${connection.provider.model}` : "正在准备运行时";
   const approvalMode = connection?.approvalMode ?? "ask";
+  const planMode = runtime?.planMode ?? false;
   const currentTaskEvents = useMemo(() => events.filter((event) => !runtime?.task || event.taskId === runtime.task.id), [events, runtime?.task?.id]);
   const historyPlan = useMemo(() => latestPlan(historyView?.events ?? []), [historyView]);
   const eventPlan = useMemo(() => latestPlan(currentTaskEvents), [currentTaskEvents]);
@@ -991,11 +1044,13 @@ export function App() {
       <section><h2>最近项目</h2>{workspace.recent.length === 0 ? <p className="muted">尚无可信工作区</p> : workspace.recent.map((item) => <div className="sidebar-item" key={item.id}><button className={`workspace-row ${workspace.workspace?.id === item.id ? "selected" : ""}`} disabled={busy || isActive} onClick={() => void runWorkspace(() => window.xiuDesktop.openRecentWorkspace({ workspaceId: item.id }))}><span className="folder-icon">⌁</span><span>{item.name}</span><small>{item.trusted ? "可信" : "需确认"}</small></button><button className="sidebar-delete" disabled={busy || isActive} title={`从最近项目移除 ${item.name}`} aria-label={`从最近项目移除 ${item.name}`} onClick={() => setConfirmation({ kind: "workspace", id: item.id, name: item.name })}>×</button></div>)}</section>
       {workspace.trust === "trusted" && <section className="history"><h2>最近任务</h2>{workspace.tasks.slice(0, 7).map((task) => <div className="sidebar-item" key={task.id}><button className={`history-row ${activeConversationId === task.id ? "selected" : ""}`} disabled={busy || isActive} title={task.title} onClick={() => void openTaskHistory(task.id)}><span className={`task-dot ${task.status}`} /><span>{task.title}</span></button><button className="sidebar-delete" disabled={busy || isActive} title={`删除任务 ${task.title}`} aria-label={`删除任务 ${task.title}`} onClick={() => setConfirmation({ kind: "task", id: task.id, name: task.title })}>×</button></div>)}</section>}
       <button className="sidebar-mcp" disabled={busy || workspace.trust !== "trusted"} onClick={() => { setMcpOpen(true); void refreshMcp(); }}>MCP 连接与权限</button>
+      <button className="sidebar-mcp" disabled={busy} onClick={openProviderRecovery}>Provider 配置诊断与恢复</button>
       <button className="sidebar-footer" disabled={busy || workspace.trust !== "trusted"} onClick={() => void openProviderPicker("settings")}>⚙ 设置与模型</button>
     </aside>
     <section className="workspace-main">
       <header className="workspace-header"><div><h1>{workspace.workspace?.name ?? "欢迎使用 Xiu"}</h1><p>{workspace.workspace?.path ?? (workspace.trust === "required" ? "确认信任前不会读取项目内容" : "选择一个本地项目开始")}</p></div>{workspace.workspace && <span className={`status-chip ${workspace.trust}`}>{workspace.trust === "trusted" ? stateLabels[status] : "需要信任"}</span>}</header>
       <div className="content-area">
+        {providerRestartRequired && <div className="writer-warning" role="status">{providerRecovery?.completedAction === "keep-current" ? "中断写锁已清理，当前 Provider 配置未改变。" : "Provider 配置已恢复。"}请退出并重新打开 Xiu 后继续；CLI 与桌面需使用匹配版本。</div>}
         {(workspace.error || error) && <div className="error-banner">{error ?? workspace.error}</div>}
         {workspace.trust === "none" && <div className="empty-state"><Logo /><h2>打开你的第一个工作区</h2><p>项目内容保留在本机。Xiu 只会在获得信任后读取项目指令、任务历史或文件。</p><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.chooseWorkspace())}>选择文件夹</button></div>}
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
@@ -1005,12 +1060,18 @@ export function App() {
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={openDiff} />}
               {approval && <section className={`approval-card risk-${approval.risk}`}><header><div><span className="eyebrow">需要你的批准</span><h2>{approval.description}</h2></div><span className="risk-chip">{approval.risk}</span></header>{approval.preview && <pre>{approval.preview}</pre>}<dl><div><dt>权限范围</dt><dd>{approval.sessionScope && approval.risk !== "dangerous" ? "可仅允许一次，或记住这一类操作直至退出 Xiu" : "仅本次操作"}</dd></div><div><dt>可能影响</dt><dd>{approval.effects.join("；")}</dd></div><div><dt>恢复方式</dt><dd>{approval.recovery}</dd></div></dl>{approval.risk === "dangerous" && <label className="danger-check"><input type="checkbox" checked={dangerConfirmed} onChange={(event) => setDangerConfirmed(event.target.checked)} />我理解该操作可能不可逆，并确认继续</label>}<footer><button className="secondary-button" disabled={busy} onClick={() => void decide(false)}>拒绝</button><button className="secondary-button" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true)}>仅本次允许</button>{approval.sessionScope && approval.risk !== "dangerous" && <button className="primary-button compact" disabled={busy} onClick={() => void decide(true, true)}>本次会话始终允许</button>}</footer></section>}
             </div>
-            <div className="composer-area">{connection?.writer === "active-elsewhere" && <div className="writer-warning">另一个进程或窗口正在写入此工作区。请先在原任务中停止，随后重新打开工作区。</div>}{historyView && !isActive && <div className="history-resume-note">已载入历史上下文，可直接继续此任务。</div>}{plan && <details className="plan-strip" open={planOpen} onToggle={(event) => setPlanOpen(event.currentTarget.open)}><summary><span>{planDone} / {plan.steps.length} 步</span><div><i style={{ width: `${plan.steps.length ? planDone / plan.steps.length * 100: 0}%` }} /></div><span>{planCurrentTitle}</span><b>{planOpen ? "收起" : "展开"}</b></summary><div className="plan-details"><strong>{plan.goal}</strong><ol>{plan.steps.map((step) => <li className={step.status} key={step.id}><span>{step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"}</span>{step.title}</li>)}</ol></div></details>}<div className="composer" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => { event.preventDefault(); void importFiles([...event.dataTransfer.files]); }}>{attachments.length > 0 && <EditableAttachmentTiles attachments={attachments} onRemove={removeAttachment} />}<textarea value={input} disabled={status === "waiting_approval" || status === "stopping" || connection?.writer === "active-elsewhere"} onChange={(event) => setInput(event.target.value)} onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); void importFiles(files); } }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} placeholder={historyView && !isActive ? "继续这个任务…" : isActive ? "补充要求或调整方向…" : "描述你想完成的任务…"} /><div className="composer-footer"><div className="composer-tools"><button className="attach-button" title="添加文件或图片" disabled={busy} onClick={() => void addAttachments("choose")}>＋</button><button className={`permission-selector mode-${approvalMode}`} disabled={!connection || isActive} title={approvalModeDetails[approvalMode].description} onClick={() => { setProviderOpen(false); setPermissionOpen((open) => !open); }}><span>{approvalModeDetails[approvalMode].icon}</span><strong>{approvalModeDetails[approvalMode].label}</strong><i>⌄</i></button><button className="model-selector" title={modelLabel} disabled={!connection} onClick={() => { setPermissionOpen(false); if (providerOpen) closeProviderPicker(); else void openProviderPicker("composer"); }}>{connection ? <><span className="model-provider">{connection.provider.label}</span><span className="model-divider">·</span><strong className="model-name">{connection.provider.model}</strong></> : <strong className="model-name">正在准备运行时</strong>}<span className="model-chevron">⌄</span></button></div><div>{isActive && <button className="stop-button" onClick={() => void stop()}>停止</button>}<button className="send-button" disabled={busy || (!input.trim() && !attachments.length) || status === "waiting_approval" || status === "stopping" || connection?.writer === "active-elsewhere"} onClick={() => void submit()}>↑</button></div></div>{permissionOpen && <div className="permission-popover" role="menu" aria-label="权限模式"><header><strong>权限模式</strong><small>按所选模式执行；完全访问含危险操作</small></header>{(Object.keys(approvalModeDetails) as DesktopApprovalMode[]).map((mode) => <button key={mode} className={approvalMode === mode ? "selected" : ""} disabled={busy || isActive} onClick={() => void setApprovalMode(mode)}><span className={`permission-icon mode-${mode}`}>{approvalModeDetails[mode].icon}</span><span><strong>{approvalModeDetails[mode].label}</strong><small>{approvalModeDetails[mode].description}</small></span><i>{approvalMode === mode ? "✓" : ""}</i></button>)}</div>}{providerOpen && providerPlacement === "composer" && providerPicker}</div></div>
+            <div className="composer-area">{connection?.writer === "active-elsewhere" && <div className="writer-warning">另一个进程或窗口正在写入此工作区。请先在原任务中停止，随后重新打开工作区。</div>}{historyView && !isActive && <div className="history-resume-note">已载入历史上下文，可直接继续此任务。</div>}{planMode && <div className="plan-mode-note" role="status">Plan 只读：仅分析与规划，不执行写入或命令；完全访问也不例外。</div>}{plan && <details className="plan-strip" open={planOpen} onToggle={(event) => setPlanOpen(event.currentTarget.open)}><summary><span>{planDone} / {plan.steps.length} 步</span><div><i style={{ width: `${plan.steps.length ? planDone / plan.steps.length * 100: 0}%` }} /></div><span>{planCurrentTitle}</span><b>{planOpen ? "收起" : "展开"}</b></summary><div className="plan-details"><strong>{plan.goal}</strong><ol>{plan.steps.map((step) => <li className={step.status} key={step.id}><span>{step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"}</span>{step.title}</li>)}</ol></div></details>}<div className="composer" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => { event.preventDefault(); void importFiles([...event.dataTransfer.files]); }}>{attachments.length > 0 && <EditableAttachmentTiles attachments={attachments} onRemove={removeAttachment} />}<textarea value={input} disabled={providerRestartRequired || status === "waiting_approval" || status === "stopping" || connection?.writer === "active-elsewhere"} onChange={(event) => setInput(event.target.value)} onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); void importFiles(files); } }} onCompositionStart={() => composerEnterGuard.compositionStart()} onCompositionEnd={() => composerEnterGuard.compositionEnd()} onBlur={() => composerEnterGuard.reset()} onKeyUp={() => composerEnterGuard.keyUp()} onKeyDown={(event) => { if (composerEnterGuard.shouldSubmit(event.nativeEvent)) { event.preventDefault(); void submit(); } }} placeholder={historyView && !isActive ? "继续这个任务…" : isActive ? "补充要求或调整方向…" : "描述你想完成的任务…"} /><div className="composer-footer"><div className="composer-tools"><button className={`plan-mode-selector${planMode ? " selected" : ""}`} aria-pressed={planMode} aria-label="Plan 只读模式" disabled={providerRestartRequired || busy || !connection?.modeContextId || isActive || connection?.writer === "active-elsewhere"} title={planMode ? "Plan 只读：仅分析与规划，完全访问也不能写入或执行；空闲时可切换" : "执行模式：按权限设置执行任务；点击切换为 Plan 只读"} onClick={() => void setPlanMode(!planMode)}>{planMode ? "Plan · 只读" : "执行"}</button><button className="attach-button" title="添加文件或图片" disabled={busy} onClick={() => void addAttachments("choose")}>＋</button><button className={`permission-selector mode-${approvalMode}`} disabled={!connection || isActive} title={approvalModeDetails[approvalMode].description} onClick={() => { setProviderOpen(false); setPermissionOpen((open) => !open); }}><span>{approvalModeDetails[approvalMode].icon}</span><strong>{approvalModeDetails[approvalMode].label}</strong><i>⌄</i></button><button className="model-selector" title={modelLabel} disabled={!connection} onClick={() => { setPermissionOpen(false); if (providerOpen) closeProviderPicker(); else void openProviderPicker("composer"); }}>{connection ? <><span className="model-provider">{connection.provider.label}</span><span className="model-divider">·</span><strong className="model-name">{connection.provider.model}</strong></> : <strong className="model-name">正在准备运行时</strong>}<span className="model-chevron">⌄</span></button></div><div>{isActive && <button className="stop-button" onClick={() => void stop()}>停止</button>}<button className="send-button" disabled={providerRestartRequired || busy || (!input.trim() && !attachments.length) || status === "waiting_approval" || status === "stopping" || connection?.writer === "active-elsewhere"} onClick={() => void submit()}>↑</button></div></div>{permissionOpen && <div className="permission-popover" role="menu" aria-label="权限模式"><header><strong>权限模式</strong><small>按所选模式执行；完全访问含危险操作</small></header>{(Object.keys(approvalModeDetails) as DesktopApprovalMode[]).map((mode) => <button key={mode} className={approvalMode === mode ? "selected" : ""} disabled={busy || isActive} onClick={() => void setApprovalMode(mode)}><span className={`permission-icon mode-${mode}`}>{approvalModeDetails[mode].icon}</span><span><strong>{approvalModeDetails[mode].label}</strong><small>{approvalModeDetails[mode].description}</small></span><i>{approvalMode === mode ? "✓" : ""}</i></button>)}</div>}{providerOpen && providerPlacement === "composer" && providerPicker}</div></div>
           </section>
           <ReviewInspector review={review} events={timelineEvents} selectedPath={selectedDiff?.path} history={isActive ? undefined : historyView} tab={reviewTab} changeView={changeView} preview={filePreview} previewMode={previewMode} active={isActive || busy} onTab={setReviewTab} onChangeView={(view) => void selectChangeView(view)} onPreview={(file) => void openPreview(file)} onDiff={openDiff} onPreviewMode={setPreviewMode} onRefresh={() => void refreshReview().catch((reason) => setError(String(reason)))} onRestore={(id) => void restoreCheckpoint(id)} onRecover={(id) => void recoverTask(id)} onAbandon={(id) => void abandonRecovery(id)} />
         </div>}
       </div>
     </section>
+    {providerRecoveryOpen && <RecoveryPanel snapshot={providerRecovery} busy={busy} error={providerRecoveryError}
+      onRefresh={() => void manageProviderRecovery({ action: "snapshot" })}
+      onPreview={(backupId) => { if (providerRecovery) void manageProviderRecovery({ action: "preview", contextId: providerRecovery.contextId, backupId }); }}
+      onRecover={() => { if (providerRecovery?.preview) void manageProviderRecovery({ action: "recover", contextId: providerRecovery.contextId, token: providerRecovery.preview.token }); }}
+      onCancel={() => { if (providerRecovery?.preview) void manageProviderRecovery({ action: "cancel", contextId: providerRecovery.contextId, token: providerRecovery.preview.token }); }}
+      onClose={() => void closeProviderRecovery()} />}
     {confirmation && <ConfirmationDialog kind={confirmation.kind} name={confirmation.name} busy={busy} onCancel={() => setConfirmation(undefined)} onConfirm={() => void confirmDestructiveAction()} />}
     {mcpOpen && <McpPanel snapshot={mcpSnapshot} busy={busy} error={error} disabled={isActive || connection?.writer === "active-elsewhere"} onRefresh={() => void refreshMcp()} onReload={() => void changeMcp("reload")} onDisconnect={() => void changeMcp("disconnect")} onApprove={(name, fingerprint) => void changeMcp("approve", name, fingerprint)} onManage={manageMcp} onBrowse={browseMcp} onClose={() => void closeMcp()} />}
     {providerOpen && providerPlacement === "settings" && <div className="dialog-backdrop settings-provider-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProviderPicker(); }}><div className="settings-provider-dialog" onMouseDown={(event) => event.stopPropagation()}>{providerPicker}</div></div>}
