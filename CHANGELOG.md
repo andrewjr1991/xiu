@@ -2,7 +2,9 @@
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 
-## 0.20.3-preview.10 — Pre-release candidate
+## 0.20.3-preview.10 — GitHub pre-release
+
+- Exact source `c6d6ec5` passed all six jobs in CI run `37005365523`; GitHub assets and tag are published. npm preview publication is still awaiting browser confirmation; stable latest remains 0.20.2.
 
 - Align sidebar utilities, Execute/Plan controls and model picker actions across wide and narrow windows.
 - Collapse MCP details by default and explain Provider configuration recovery without changing authorization or recovery behavior.

@@ -6,7 +6,7 @@ Local desktop UI corrections: compact bottom-aligned utility entries, consistent
 
 Development candidate: the desktop composer now has an idle-only Execute / Plan read-only switch backed by the shared runtime. Plan still blocks write/execute tools under Full access; continuing history or recovering a task keeps the mode you explicitly selected. A new conversation and Provider/model reconfiguration in the same open workspace keep that selection. Closing/reopening or switching workspaces starts in Execute mode; Full access still resets on reconfiguration. IME candidate-confirmation Enter no longer submits a task or steering message; normal Enter sends and Shift+Enter inserts a newline. Automated synthetic-event coverage does not replace testing with a real OS input method.
 
-> Development candidate: **0.20.3-preview.10**. This UI follow-up is authorized for pre-release publication after exact-commit verification. The stable npm `latest` remains 0.20.2; preview builds use the `preview` channel. Candidate scope and verification are tracked in [development progress](./docs/development-progress.md).
+> **0.20.3-preview.10** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.10), with unsigned Windows x64 installer and CLI tarball. All six exact-commit CI jobs passed for `c6d6ec5` ([run](https://github.com/andrewjr1991/xiu/actions/runs/37005365523)). npm preview publication still awaits the maintainer's browser confirmation; stable `latest` remains 0.20.2. Earlier candidate descriptions below are historical. Real OS IME and external-device acceptance remain pending.
 
 # Xiu
 
