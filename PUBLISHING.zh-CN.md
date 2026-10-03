@@ -1,6 +1,26 @@
-## 0.20.5 发布候选（2026-10-03）
+## 0.20.5 正式发布记录（2026-10-03）
 
-维护者已验收视觉优化并授权提交、推送、合并 main 与发布。本次统一版本为 0.20.5，不覆盖 0.20.4。候选与 main 各自须六项 CI 作业通过，正式附件仅使用 main 原始 CI 制品并核对源码、版本、摘要及清单。Windows 仍未签名，构建期 HTTP-cache 已知告警不代表已修复。npm latest 已核实为 0.20.4；当前 npm 未认证，若无法发布则交付同源 tarball 并明确待办。以下“不提交/不发布”均为旧候选阶段记录。
+经 [PR #6](https://github.com/andrewjr1991/xiu/pull/6) 合并 main，[GitHub 正式版](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5) 已公开，不覆盖 0.20.4。正式源码固定为 `386157f389d9d27ecdd443c024955f198f01ffa6`。[候选 CI](https://github.com/andrewjr1991/xiu/actions/runs/37125149946)、PR CI 37125160325 和独立 [main CI 37126166861](https://github.com/andrewjr1991/xiu/actions/runs/37126166861) 各六作业通过。Windows 全量 1004 项：997 通过、7 跳过、0 失败；Ubuntu/macOS 各 987 通过、17 跳过、0 失败。Windows 安装生命周期验收通过。
+
+五个附件仅取自该 main 的原始 CI 制品，核验源码、版本、清洁工作树、清单、大小与 SHA256 后上传，再回读核验。源目录 `apps/desktop/release` 保存 CLI tarball、未签名安装器、两份 manifest 与 `SHA256SUMS-0.20.5`，未覆盖旧版。上传使用现有代理；发布后文档提交不改变 tag 或制品来源。
+
+- CLI SHA256：`28054cabbb3aab4b0f198b3fc4a710d902d9af2129fd70a7abc6fe33d761e1bf`。
+- Windows 安装器 SHA256：`b5555d8f1cea0511f4a90972e4761226ecfbed6f790364f7ab75fa4a17a2caea`，签名状态 `NotSigned`。
+- npm tarball integrity：`sha512-+tiZ6rf+iNCxfjZS+gBz58x7EDxYnSFNB3FJOZuDTrssgmhGxBrZvCMYZcTgybG+Uyb9MLO+DcZctXGnWgNGZQ==`。
+
+本地全量尝试受宿主 PowerShell ConstrainedLanguage / ACL 夹具影响，出现 8 项既有 Provider 迁移权限测试失败，随后在远端 main 六作业通过后停止；不能称本地全量通过。未放宽权限或测试断言。构建期 HTTP-cache 已知告警、未签名风险继续披露；不宣称渠道停顿已消除或浏览器人工试玩通过。
+
+npm 0.20.5 尚未发布：当前认证返回 `ENEEDAUTH`，Registry latest 为 0.20.4。登录后先确认 0.20.5 未被发布，再发布同一 CI tarball（绝不覆盖已发布版本），回读完整性及 latest：
+
+```powershell
+npm login --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli@0.20.5 version --registry=https://registry.npmjs.org
+npm publish "apps/desktop/release/xiu-ai-cli-0.20.5-386157f389d9d27ecdd443c024955f198f01ffa6.tgz" --access public --tag latest --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli@0.20.5 version dist.integrity --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org
+```
+
+以下“不提交/不发布”、本地安装器摘要及旧 npm 待办均为历史阶段记录，不代表当前发布状态。
 
 ## 0.20.4 正式发布记录（历史）
 

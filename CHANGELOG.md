@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.20.5 — Release candidate (2026-10-03)
+## 0.20.5 — Released (2026-10-03)
+
+GitHub release published from verified main CI artifacts. npm publication remains pending authentication; npm latest is 0.20.4. Windows installer remains unsigned.
 
 - Preserve task continuation and model-switch context; remove model-invented child budgets while retaining explicit host limits.
 - Separate first-body, stream-idle and complete-response deadlines; show safe public output and numeric transport progress. Only explicit continuation changes transport after a stream failure.

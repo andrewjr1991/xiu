@@ -1,6 +1,6 @@
 <div align="center">
 
-> 0.20.5 release candidate: accepted desktop refinements, task continuation, staged summaries, compact warnings and safe live output. Release awaits exact candidate/main CI. npm latest was verified as 0.20.4; Windows builds remain unsigned. Earlier local-only notes below are historical.
+> [0.20.5 GitHub release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5): desktop refinements, task continuation, staged summaries, compact warnings and safe live output. Candidate and independent main CI each passed all six jobs; release assets come from main CI. npm publication is pending authentication (latest: 0.20.4). Windows builds remain unsigned. Earlier local-only notes below are historical.
 
 Local desktop visual refinement: quieter event headings replace bold operation counts; factual progress is borderless and empty status summaries are omitted without deleting records. History titles stay on one line, neutral surfaces reduce nested-card clutter, the workspace header is shorter, and return-to-latest floats over output. Safety controls and complete logs remain available.
 
