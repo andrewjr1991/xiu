@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DesktopProviderController } from "../apps/desktop/main/provider-controller.js";
+import { DesktopProviderController, providerConfigurationMessage } from "../apps/desktop/main/provider-controller.js";
+import { ProviderConfigurationError } from "../src/provider-config-migration.js";
 import { credentialRef, type CredentialBackendStatus, type CredentialRef, type CredentialStore } from "../src/credential-store.js";
 import { ProviderRegistry, providerTemplate } from "../src/provider-registry.js";
 
@@ -47,6 +48,31 @@ async function fixture() {
   });
   return { root, registryFile, modelCacheFile, system, registry, controller };
 }
+
+test("explicit picker refresh reloads changed settings without replaying selection or rewriting the file", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const other = new ProviderRegistry(item.registryFile, item.system);
+  await other.load();
+  await other.setActive("office", "other-client-model");
+  const saved = await fs.readFile(item.registryFile, "utf8");
+  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /其他客户端修改/);
+  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /重新打开模型选择器/);
+  const refreshed = await item.controller.refresh();
+  assert.equal(refreshed.activeModel, "other-client-model");
+  assert.equal(await fs.readFile(item.registryFile, "utf8"), saved);
+  const selected = await item.controller.select({ providerId: "office", model: "requested-model" });
+  assert.equal(selected.activeModel, "requested-model");
+});
+
+test("configuration reload and recovery restart remain distinct, bounded non-secret errors", () => {
+  const reload = providerConfigurationMessage(new ProviderConfigurationError("reload", "private-path-canary"));
+  const restart = providerConfigurationMessage(new ProviderConfigurationError("restart", "secret-canary"));
+  assert.match(reload!, /重新打开模型选择器/);
+  assert.doesNotMatch(reload!, /必须退出|private-path-canary/);
+  assert.match(restart!, /必须退出.*重新打开/);
+  assert.doesNotMatch(restart!, /secret-canary/);
+});
 
 test("desktop fresh onboarding adds Agnes without an environment variable and can remove the last channel", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-empty-"));

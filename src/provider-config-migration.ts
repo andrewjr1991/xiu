@@ -89,6 +89,54 @@ $WarningPreference = 'SilentlyContinue'
 $VerbosePreference = 'SilentlyContinue'
 $DebugPreference = 'SilentlyContinue'
 $ErrorActionPreference = 'Stop'
+# Corporate application-control policies can prohibit all non-core .NET calls.
+# Select this backend BEFORE any mutation; never retry a failed ACL write using
+# another backend. Native tools are resolved from SystemRoot, not PATH.
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+  $stage = 'identity'
+  try {
+    $identity = & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh
+    if ($LASTEXITCODE -ne 0 -or $identity -notmatch ',"(S-1-[0-9]+(?:-[0-9]+)+)"\s*$') { throw 'Identity unavailable' }
+    $sid = $Matches[1]
+    $p = $env:XIU_PROVIDER_PRIVATE_TARGET
+    $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
+    $stage = 'verify-owner'
+    $sddl = (Get-Acl -LiteralPath $p).Sddl
+    if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:' -or $Matches[1] -ne $sid) { throw 'Owner mismatch' }
+    if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
+      # Only newly created empty objects reach initialization. Remove inherited
+      # ACEs, grant the current SID, and preserve Group/SACL metadata.
+      # Do not request WRITE_OWNER/SeRestorePrivilege just to set the existing
+      # owner to itself. A different owner is rejected, never taken over.
+      $stage = 'initialize-protection'
+      & "$env:SystemRoot\System32\icacls.exe" $p /inheritance:r /q | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Protection initialization failed' }
+      $stage = 'initialize-add-rule'
+      $grant = '*' + $sid + ':F'
+      if ($isDirectory) { $grant = '*' + $sid + ':(OI)(CI)F' }
+      & "$env:SystemRoot\System32\icacls.exe" $p /grant:r $grant /q | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Rule initialization failed' }
+    }
+    $stage = 'verify-read'
+    $sddl = (Get-Acl -LiteralPath $p).Sddl
+    $stage = 'verify-owner'
+    if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:') { throw 'Owner unavailable' }
+    if ($Matches[1] -ne $sid) { throw 'Owner mismatch' }
+    $stage = 'verify-rule-rights'
+    # Exact DACL grammar: protected, one allow ACE, full control, current SID.
+    # Reject extra/deny/callback/inherit-only rules and unknown descriptor forms.
+    if ($sddl -notmatch 'D:(P(?:AI|AR)*)(\(A;([^;]*);FA;;;(S-1-[0-9]+(?:-[0-9]+)+)\))(?:S:|$)') { throw 'DACL mismatch' }
+    $flags = $Matches[3]
+    if ($Matches[4] -ne $sid) { throw 'Rule identity mismatch' }
+    $stage = 'verify-directory-inheritance'
+    if (($isDirectory -and $flags -ne 'OICI') -or (!$isDirectory -and $flags -ne '')) { throw 'Inheritance mismatch' }
+    Write-Output 'XIU_ACL_V1:ok'
+    exit 0
+  } catch {
+    Write-Output ('XIU_ACL_V1:' + $stage + ':unknown')
+    exit 1
+  }
+}
 function Get-XiuPrivacyFailureCategory([System.Exception] $exception) {
   $fallback = 'unknown'
   # Inspect at most eight wrappers; only fixed categories can leave this process.

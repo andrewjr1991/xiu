@@ -7,6 +7,7 @@ import { DesktopTaskController } from "../apps/desktop/main/task-controller.js";
 import { CheckpointManager } from "../src/checkpoint.js";
 import type { WorkspaceAgentHost } from "../src/runtime/workspace-agent-host.js";
 import { TaskRunJournal } from "../src/task-run.js";
+import { MultiAgentCoordinator } from "../src/multi-agent.js";
 import { loadTaskChangeHistory, saveTaskChangeHistory } from "../src/task-change-history.js";
 import type { TaskChangeReport } from "../src/task-changes.js";
 import { XiuRuntime, type RuntimeTaskDriver } from "../src/runtime/xiu-runtime.js";
@@ -37,6 +38,64 @@ function historicalReport(file: string, line: string): TaskChangeReport {
     preview: `@@ -0,0 +1,1 @@ (preview)\n+ ${line}`, limitations: [],
   }] };
 }
+
+test("desktop cancellation binds current parent and child, requires confirmation, and respects Plan", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-child-cancel-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runtime = new XiuRuntime();
+  const driver = new FakeDriver(); runtime.attachDriver(driver);
+  const entered = deferred<void>();
+  const coordinator = new MultiAgentCoordinator(root, async (_task, context) => {
+    entered.resolve();
+    await new Promise<void>((_resolve, reject) => context.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    return { result: "unused", stats: { modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, activeMs: 0 } };
+  }, { onTaskUpdate: (run, child) => runtime.recordSubagent({ id: `${run.id}:${child.id}`, runId: run.id, taskId: child.id, title: child.title, role: child.role, status: child.status }) });
+  await coordinator.initialize();
+  const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, coordinator, journal: new TaskRunJournal(root, path.join(root, "journals")), provider: { id: "p", label: "p", model: "m" } }));
+  await controller.connect(root);
+  const running = runtime.createTask("parent task");
+  const run = await coordinator.start("fixture", [{ id: "reviewer", title: "Review", instructions: "fixture", role: "reviewer" }]);
+  await entered.promise;
+  const request = { runId: run.id, taskId: "reviewer", parentTaskId: runtime.snapshot().task!.id };
+  let confirmations = 0;
+  const confirm = async () => { confirmations++; return true; };
+  await assert.rejects(controller.cancelSubagent(root, { ...request, parentTaskId: "old-parent" }, confirm), /不属于/);
+  await assert.rejects(controller.cancelSubagent(root, { ...request, taskId: "foreign" }, confirm), /不属于/);
+  assert.equal(confirmations, 0);
+  await controller.cancelSubagent(root, request, async () => false);
+  assert.equal(coordinator.get(run.id).tasks[0]!.status, "running");
+  driver.planMode = true;
+  await assert.rejects(controller.cancelSubagent(root, request, confirm), /Plan/);
+  driver.planMode = false;
+  await assert.rejects(controller.cancelSubagent(root, request, async () => { driver.planMode = true; return true; }), /已经变化/);
+  assert.equal(coordinator.get(run.id).tasks[0]!.status, "running");
+  driver.planMode = false;
+  await controller.cancelSubagent(root, request, confirm);
+  assert.equal(confirmations, 1);
+  assert.equal(coordinator.get(run.id).tasks[0]!.status, "cancelled");
+  await assert.rejects(controller.cancelSubagent(root, request, confirm), /已结束/);
+  await coordinator.shutdown();
+  driver.outcome = "completed"; driver.result.resolve("done"); await running;
+});
+
+test("an idle controller identifies its own unfinished journal lock rather than another window", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-own-journal-lock-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const journal = new TaskRunJournal(root, path.join(root, "journals"));
+  await journal.begin({ sessionId: "unfinished", task: "fixture", providerId: "p", model: "m" });
+  const runtime = new XiuRuntime();
+  const driver = new FakeDriver();
+  runtime.attachDriver(driver);
+  const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, journal, provider: { id: "p", label: "p", model: "m" } }));
+  const connection = await controller.connect(root);
+  assert.equal(connection.writer, "recovery-required");
+  assert.match(connection.journalWarning!, /本窗口/);
+  assert.equal((await journal.lockStatus()).active, true);
+  const running = runtime.createTask("fixture active task");
+  assert.equal((await controller.reviewSnapshot(root)).recovery, undefined);
+  driver.outcome = "completed"; driver.result.resolve("done");
+  await running;
+});
 
 test("desktop management reload revokes Full Access and preserves Plan; active tasks cannot mutate", async (t) => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-controller-"));
@@ -183,6 +242,29 @@ test("desktop task history opens a bounded, redacted resumable transcript", asyn
   await assert.rejects(() => controller.openTaskHistory(workspace, { taskId: "..\\escape" }), /Invalid task history/);
 });
 
+test("legacy web history keeps result evidence out of the action description", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-web-history-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const sessions = path.join(workspace, ".xiu", "sessions");
+  await fs.mkdir(sessions, { recursive: true });
+  await fs.writeFile(path.join(sessions, "session-web.jsonl"), `${JSON.stringify({ type: "task", timestamp: "2026-09-29T01:00:00.000Z", task: "搜索新闻" })}\n`);
+  const journal = new TaskRunJournal(workspace, path.join(root, "journals"));
+  const run = await journal.begin({ sessionId: "session-web", task: "搜索新闻", providerId: "test", model: "model" });
+  const operation = await journal.beginOperation({ kind: "tool", name: "web_search", risk: "read", sideEffect: "none" });
+  const evidence = "UNTRUSTED WEB CONTENT: external evidence\nSearch query: news\nResults (10):";
+  await journal.finishOperation(operation, "succeeded", evidence);
+  await journal.complete("completed");
+  const runtime = new XiuRuntime();
+  runtime.attachDriver(new FakeDriver());
+  const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, provider: { id: "test", label: "Test", model: "model" }, journal }));
+  const history = await controller.openTaskHistory(workspace, { taskId: run.runId });
+  const started = history.events.find((event) => event.type === "tool.started");
+  const finished = history.events.find((event) => event.type === "tool.finished");
+  assert.equal(started?.type === "tool.started" && started.payload.description, "web_search");
+  assert.equal(finished?.type === "tool.finished" && finished.payload.summary, evidence.replace(/\n/g, " "));
+});
+
 test("desktop task history reuses the exact persisted runtime event stream", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-exact-history-"));
   const workspace = path.join(root, "workspace");
@@ -206,6 +288,41 @@ test("desktop task history reuses the exact persisted runtime event stream", asy
   const history = await controller.openTaskHistory(workspace, { taskId: run.runId });
   assert.equal(history.fidelity, "exact");
   assert.deepEqual(history.events.map((event) => event.eventId), ["event-1"]);
+});
+
+test("mixed legacy and exact rounds retain replies in their own round and preserve child results", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mixed-history-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const sessions = path.join(workspace, ".xiu", "sessions");
+  await fs.mkdir(sessions, { recursive: true });
+  await fs.writeFile(path.join(sessions, "session-mixed.jsonl"), [
+    { type: "task", task: "make snake", timestamp: "2026-10-03T01:00:00Z" },
+    { type: "assistant", text: "old snake result" },
+    { type: "task", task: "review with children", timestamp: "2026-10-03T02:00:00Z" },
+    { type: "assistant", text: "new review result" },
+  ].map((event) => JSON.stringify(event)).join("\n"));
+  const journal = new TaskRunJournal(workspace, path.join(root, "journals"));
+  await journal.begin({ sessionId: "session-mixed", task: "make snake", providerId: "p", model: "m" });
+  await journal.complete("completed");
+  const latest = await journal.begin({ sessionId: "session-mixed", task: "review with children", providerId: "p", model: "m" });
+  await journal.complete("completed");
+  await journal.saveRuntimeEvents(latest.runId, [
+    { schemaVersion: 1, eventId: "new-start", taskId: "new", sequence: 1, timestamp: latest.startedAt, type: "task.started", payload: { taskPreview: "review with children" } },
+    { schemaVersion: 1, eventId: "child-complete", taskId: "new", sequence: 2, timestamp: latest.startedAt, type: "subagent.updated", payload: { agent: { id: "child", runId: "child-run", title: "Review", role: "reviewer", status: "completed", result: "child result" } } },
+    { schemaVersion: 1, eventId: "new-reply", taskId: "new", sequence: 3, timestamp: latest.startedAt, type: "assistant.message", payload: { text: "new review result", hasToolCalls: false } },
+  ]);
+  const runtime = new XiuRuntime(); runtime.attachDriver(new FakeDriver());
+  const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, journal, provider: { id: "p", label: "p", model: "m" } }));
+  const history = await controller.openTaskHistory(workspace, { taskId: "session-mixed" });
+  const split = history.events.findIndex((event) => event.eventId === "new-start");
+  assert.ok(split > 0);
+  assert.match(JSON.stringify(history.events.slice(0, split)), /old snake result/);
+  assert.doesNotMatch(JSON.stringify(history.events.slice(split)), /old snake result/);
+  assert.match(JSON.stringify(history.events.slice(split)), /child result/);
+  assert.equal(history.events.filter((event) => event.type === "assistant.message").length, 2);
+  assert.equal(history.fidelity, "reconstructed");
+  assert.deepEqual(history.events.map((event) => event.sequence), history.events.map((_, index) => index + 1));
 });
 
 test("desktop task history never mixes events from another conversation", async (t) => {

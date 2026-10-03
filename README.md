@@ -1,5 +1,13 @@
 <div align="center">
 
+**0.20.4 release candidate:** local acceptance passed; the maintainer authorized push, merge to main and formal publication. Includes compact per-turn activity, child-agent avatars and status, a full task overview, grouped workspace controls, history isolation, search freshness and constrained-Windows compatibility fixes. Exact merged-source CI and artifact verification are required before release. npm latest is currently 0.20.3; this environment is not logged in. The Windows installer remains unsigned. Earlier local notes below describe pre-release checkpoints, not the current authorization.
+
+Unreleased local follow-up: each task round has a collapsed elapsed-time/activity entry, with final replies and actionable failures outside it. Role avatars remain consistent across child-agent activity, overview and details. Workspace settings, overview, terminal and sidebar controls are grouped at the top right. History preserves per-round attribution; the overview can be fully hidden.
+
+Local subagent follow-up fixes keep history/live task views consistent and remove native button borders. Reopening the model picker explicitly reloads settings without retrying a failed write; restored settings still require restart. An unreleased corporate Windows compatibility fix selects a native ACL backend before mutations in constrained PowerShell. Existing unsafe ACLs remain blocked and are never silently repaired. The maintainer subsequently authorized a one-time owner-only ACL repair of the empty local recovery directory; read-only privacy verification passed, without changing configuration content or clearing locks. Exact-source CI and real-machine model switching acceptance remain required.
+
+Unreleased local work for **0.20.4**: chronological subagent dispatch/start/terminal updates, synchronized task details and independently confirmed cancellation. Progress ticks do not duplicate starts; historical tasks do not keep ticking or re-dispatch. Plan mode cannot cancel tasks; cancellation preserves files and Worktrees. This is not part of the published 0.20.3 assets. Computer Use remains a separate future preview.
+
 **0.20.3** is available as a [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3), with an unsigned Windows x64 installer, CLI tarball, original CI manifests and SHA256SUMS from exact source `2ad7891d8756d98001e8d6a23dc4603ccddd998d`. All six jobs passed in [CI 37099780173](https://github.com/andrewjr1991/xiu/actions/runs/37099780173); uploaded asset digests match. Managed desktop-search authentication, safe folder/SKILL.md/ZIP imports and dependency hardening are included; manual Skill, real IME and external-device acceptance passed. The unpatched build-only HTTP-cache advisory is explicitly disclosed and accepted, not fixed. npm publication is delegated to the maintainer using the same CI tarball and remains pending; GitHub publication does not update npm latest. Earlier candidate notes below are historical.
 
 Candidate **0.20.3-preview.13** adds desktop Skill imports from folders, standalone `SKILL.md`, and ZIP packages. Use Tools & Runtime Settings → Skills, preview the package and declared permissions, then explicitly confirm. Single-file import excludes siblings; use a folder or ZIP for resources. Imports never run bundled scripts or overwrite installed skills. Store discovery, remote installers and update management remain later work. Commit/push for exact-source CI is authorized; publication remains conditional on CI and the outstanding build-dependency risk decision.
@@ -17,6 +25,8 @@ Development candidate: the desktop composer now has an idle-only Execute / Plan 
 > **0.20.3-preview.10** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.10), with unsigned Windows x64 installer and CLI tarball. All six exact-commit CI jobs passed for `c6d6ec5` ([run](https://github.com/andrewjr1991/xiu/actions/runs/37005365523)). npm preview publication still awaits the maintainer's browser confirmation; stable `latest` remains 0.20.2. Earlier candidate descriptions below are historical. Real OS IME and external-device acceptance remain pending.
 
 # Xiu
+
+本地开发候选（未发布）：右侧任务概览汇总任务摘要、当前环境与分支、本轮子智能体、技能/MCP 调用、工作区后台进程、文件产出和来源记录。分组可折叠，无数据不占位；收起详情仍保留概览，也可完全隐藏。历史视图不借用实时环境或后台进程。
 
 本地未发布 UI 修正：MCP 详情默认折叠，工作台支持拖动调宽，配置恢复增加分步说明，完全访问确认窗口使用无系统标题栏的 Xiu 样式；权限与凭证边界保持不变。
 

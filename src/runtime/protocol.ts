@@ -85,6 +85,7 @@ export type RuntimeEventType = keyof RuntimeEventPayloads;
 
 export interface RuntimeSubagentCard {
   id: string; runId: string; title: string; role: string; status: string;
+  taskId?: string; mode?: "shared_readonly" | "worktree"; dependencies?: string[]; createdAt?: string;
   startedAt?: string; completedAt?: string; durationMs?: number;
   progress?: string; result?: string; error?: string;
 }

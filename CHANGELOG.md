@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.4 — Release candidate (2026-10-03)
+
+- Add chronological child-agent status, consistent role avatars, inspectable results and independently confirmed cancellation without expanding permissions.
+- Collapse intermediate activity into one elapsed-time entry per task round; keep final answers, failures, approval and recovery controls visible.
+- Expand the task overview and group workspace settings, overview, terminal and sidebar controls at the top right.
+- Preserve per-round history and current continuation results without borrowing stale task outputs or live workspace facts.
+- Deduplicate search progress, provide trusted current-date context, and retain inspectable web evidence.
+- Improve constrained-PowerShell privacy verification and explicit provider refresh without repairing existing unsafe ACLs automatically; bound transient Windows task-record rename retries without replaying tools.
+- Maintainer local acceptance passed; exact merged-source CI and artifact checks remain release gates. Windows installer remains unsigned; prior build-only HTTP-cache advisory acceptance remains disclosed. npm 0.20.3 is now confirmed published; 0.20.4 publication is pending.
+
+
 ## 0.20.3 — GitHub Release (npm publication pending)
 
 - Combine desktop managed-search lazy device registration/token renewal with confirmed local folder, SKILL.md and ZIP Skill imports; preserve trust, Plan, credentials, immutable permission preview and no-overwrite enforcement.

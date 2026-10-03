@@ -10,11 +10,12 @@ app.disableHardwareAcceleration();
 app.whenReady().then(async () => {
   const outfile = path.join(root, 'dialog.cjs');
   buildSync({ entryPoints: [path.join(__dirname, '../main/full-access-dialog.ts')], outfile, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] });
-  const { confirmFullAccess } = require(outfile);
+  const { confirmFullAccess, confirmSubagentCancel } = require(outfile);
   const parent = new BrowserWindow({ show: false });
+  for (const confirm of [confirmFullAccess, confirmSubagentCancel]) {
   for (const action of ['cancel', 'close', 'escape', 'close-button', 'accept']) {
     console.log('Dialog smoke:', action);
-    const result = confirmFullAccess(parent);
+    const result = confirm(parent);
     const child = BrowserWindow.getAllWindows().filter(window => window !== parent).sort((a,b) => b.id-a.id)[0];
     const closed = new Promise(resolve => child.once('closed', resolve));
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Dialog did not show: '+action)), 8000); child.once('show', () => {clearTimeout(timer);resolve();}); });
@@ -28,7 +29,8 @@ app.whenReady().then(async () => {
     assert.equal(await result, action === 'accept');
     await closed;
   }
+  }
   parent.destroy();
-  console.log('Full Access dialog: cancel, close, Escape, explicit acceptance and isolation passed.');
+  console.log('Full Access and subagent cancellation dialogs: cancel, close, Escape, explicit acceptance and isolation passed.');
   app.quit();
 }).catch(error => { console.error(error); app.exit(1); });

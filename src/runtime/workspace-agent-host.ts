@@ -175,7 +175,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       requireCompletedSubagent(status);
       return { result: redactSecrets(result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000), stats: status.stats, verification: await child.getVerificationEvidence() };
     } finally { context.signal.removeEventListener("abort", cancel); }
-  }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
+  }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, taskId: task.id, mode: task.mode, dependencies: task.dependencies, createdAt: task.createdAt, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
   await coordinator.initialize();
   tools.push(...createMultiAgentTools(coordinator).map((tool) => tool.name !== "integrate_agent" ? tool : { ...tool, execute: async (input: Record<string, unknown>, context: import("../types.js").ToolContext) => {
     const allowed = await runtime.requestApproval({ risk: "dangerous", description: "将子智能体 Worktree 变更整合到主工作区（始终需要确认）", preview: await tool.preview!(input, context) });

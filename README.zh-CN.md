@@ -1,3 +1,7 @@
+# 0.20.4 正式候选状态
+
+维护者已确认本地测试通过并授权提交、推送、合并 main 后发布。子智能体头像与状态、过程折叠、任务概览、集中工具栏，以及历史续接、检索时效和受限 Windows 兼容修正纳入本次版本；仍须精确合并提交 CI 与制品核验。npm latest 已核实为 0.20.3，本机未登录；Windows 安装器仍未签名。下方旧版本说明仅供追溯。
+
 <div align="center">
 
 > **0.20.3-preview.11** 已作为 [GitHub 预发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11)公开，包含未签名 Windows x64 安装器、CLI tarball 和验证清单，均来自精确源码 `cc49096`。[CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003) 六作业全部通过；Windows 全量 890 项，883 通过、7 跳过、0 失败。npm 预览发布已获授权，但本机登录状态保存受阻，尚未发布；稳定 latest 保持 0.20.2。真实输入法与外部设备仍待独立验收，不宣称稳定版通过。

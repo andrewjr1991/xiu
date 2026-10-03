@@ -11,6 +11,11 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 const runFile = promisify(execFile);
 const canary = "fixture_privacy_Q7nP8_no_real_key";
 
+async function fullLanguageAvailable(): Promise<boolean> {
+  const result = await runFile(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoProfile", "-NonInteractive", "-Command", "$ExecutionContext.SessionState.LanguageMode"], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment(process.env) });
+  return result.stdout.trim() === "FullLanguage";
+}
+
 test("Windows Provider privacy child environment drops only case-insensitive PSModulePath keys", () => {
   const parent = Object.freeze({ SystemRoot: "C:\\Windows", PATH: "fixture-path", PSModulePath: "fixture-ps7-modules", PSMODULEPATH: "fixture-uppercase", pSmOdUlEpAtH: "", XIU_PROVIDER_PRIVATE_TARGET: "fixture-target", XIU_PROVIDER_DIRECTORY: "1", XIU_PROVIDER_INITIALIZE: "0", fixtureUnset: undefined });
   const before = { ...parent };
@@ -58,6 +63,7 @@ const ownerAndAccessWrite = `if ($isDirectory) { [System.IO.Directory]::SetAcces
 // A failed historical comparison is evidence, never permission to skip a failed
 // candidate. Each variant gets its own empty fixture; no write is retried.
 test("Windows privacy preflight compares fresh and existing descriptors and requires section-scoped persistence", { skip: process.platform !== "win32", timeout: 120_000 }, async (t) => {
+  if (!await fullLanguageAvailable()) { t.skip("Historical .NET descriptor comparison requires FullLanguage; constrained production backend is covered separately"); return; }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu descriptor 中文 ' "));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   assert.ok(PROVIDER_WINDOWS_PRIVACY_SCRIPT.includes(freshDescriptor));
@@ -124,14 +130,13 @@ test("Windows Provider privacy preflight creates verifies and rejects changed ow
   const current = await fs.readFile(filename);
 
   const broaden = async (target: string) => {
-    const script = `$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; try { $p=$env:XIU_TEST_PRIVATE_TARGET; $acl=Get-Acl -LiteralPath $p; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::Read,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }; exit 0 } catch { exit 1 }`;
-    try { await runFile(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, XIU_TEST_PRIVATE_TARGET: target }) }); }
+    try { await runFile(path.win32.join(process.env.SystemRoot!, "System32", "icacls.exe"), [target, "/grant", "*S-1-1-0:R", "/q"], { windowsHide: true, timeout: 15_000, maxBuffer: 1024 }); }
     catch { throw new Error("Windows privacy fixture modification failed"); }
   };
   const rejectedPrivately = (error: unknown) => {
     assert.ok(error instanceof ProviderConfigurationError);
     assert.equal(error.code, "unsafe");
-    assert.equal(error.privacyStage, "verify-rule-count");
+    assert.ok(["verify-rule-count", "verify-rule-rights"].includes(error.privacyStage!));
     assert.ok(!String(error).includes(canary) && !String(error).includes(root), "privacy errors must expose fixed stage codes only");
     return true;
   };
@@ -168,8 +173,9 @@ test("Windows ACL subprocess failures expose only bounded allowlisted stage code
   assert.equal(providerWindowsPrivacyFailureCategory({ killed: true, stdout: "XIU_ACL_V1:initialize-write:access-denied" }), "unavailable");
 });
 
-test("Windows privacy preflight classifies wrapped exceptions without their private messages", { skip: process.platform !== "win32", timeout: 20_000 }, async () => {
-  const prefix = PROVIDER_WINDOWS_PRIVACY_SCRIPT.slice(0, PROVIDER_WINDOWS_PRIVACY_SCRIPT.indexOf("$stage = 'identity'"));
+test("Windows privacy preflight classifies wrapped exceptions without their private messages", { skip: process.platform !== "win32", timeout: 20_000 }, async (t) => {
+  if (!await fullLanguageAvailable()) { t.skip("Constructing .NET exception fixtures requires FullLanguage"); return; }
+  const prefix = "$ErrorActionPreference = 'Stop'\n" + PROVIDER_WINDOWS_PRIVACY_SCRIPT.slice(PROVIDER_WINDOWS_PRIVACY_SCRIPT.indexOf("function Get-XiuPrivacyFailureCategory"), PROVIDER_WINDOWS_PRIVACY_SCRIPT.lastIndexOf("$stage = 'identity'"));
   const script = `${prefix}
 try {
   $cases = @(

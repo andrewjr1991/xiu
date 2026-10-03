@@ -2,10 +2,18 @@ import { BrowserWindow } from "electron";
 
 // A main-process-owned, isolated confirmation. The task renderer cannot resolve it.
 export async function confirmFullAccess(parent: BrowserWindow): Promise<boolean> {
+  return confirmAction(parent, false);
+}
+
+export async function confirmSubagentCancel(parent: BrowserWindow): Promise<boolean> {
+  return confirmAction(parent, true);
+}
+
+async function confirmAction(parent: BrowserWindow, cancelling: boolean): Promise<boolean> {
   const window = new BrowserWindow({
     parent, modal: true, width: 560, height: 390, resizable: false, frame: false,
     minimizable: false, maximizable: false, show: false, autoHideMenuBar: true,
-    title: "Xiu · 完全访问权限", backgroundColor: "#ffffff",
+    title: cancelling ? "Xiu · 取消子任务" : "Xiu · 完全访问权限", backgroundColor: "#ffffff",
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -21,11 +29,11 @@ export async function confirmFullAccess(parent: BrowserWindow): Promise<boolean>
       small{display:block;color:#7c899c;margin-top:12px}footer{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
       button{border:1px solid #dce5f0;border-radius:9px;padding:9px 16px;font:inherit;cursor:pointer;color:#526176;background:#f5f8fc}
       #accept{background:#187fe7;color:white;border-color:#187fe7}button:focus-visible{outline:2px solid #82b9ef;outline-offset:3px}
-    </style><button id="close" aria-label="关闭">×</button><div class="icon">◇</div><h1>开启完全访问权限？</h1>
-    <p>Xiu 将自动执行任务操作，包括危险操作，不再逐项请求批准。</p>
-    <div class="warning">可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。工作区外修改不保存源码快照，不能保证撤销。</div>
-    <small>仅本次工作区打开期间有效，重开或重配后撤销。权限不超过当前系统用户；工作区内检查点、Plan 只读、MCP 授权和凭证保护仍独立生效。</small>
-    <footer><button id="cancel">取消</button><button id="accept">开启完全访问</button></footer></html>`;
+    </style><button id="close" aria-label="关闭">×</button><div class="icon">◇</div><h1>${cancelling ? "停止这个子智能体？" : "开启完全访问权限？"}</h1>
+    <p>${cancelling ? "取消后，这个子任务将停止工作；依赖它的任务可能无法继续。" : "Xiu 将自动执行任务操作，包括危险操作，不再逐项请求批准。"}</p>
+    <div class="warning">${cancelling ? "已产生的文件和结果会保留。取消不会撤销修改、删除 Worktree，也不会自动重新执行任务。" : "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。工作区外修改不保存源码快照，不能保证撤销。"}</div>
+    <small>${cancelling ? "仅停止当前父任务下选中的子任务。整合结果仍需独立确认；取消不授予新的权限。" : "仅本次工作区打开期间有效，重开或重配后撤销。权限不超过当前系统用户；工作区内检查点、Plan 只读、MCP 授权和凭证保护仍独立生效。"}</small>
+    <footer><button id="cancel">${cancelling ? "继续工作" : "取消"}</button><button id="accept">${cancelling ? "确认取消子任务" : "开启完全访问"}</button></footer></html>`;
   return new Promise<boolean>((resolve) => {
     let settled = false;
     const finish = (accepted: boolean) => {

@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { UiLanguage } from "./i18n.js";
 
+/** Fresh host clock context, rebuilt for every request rather than restored from history. */
+export function buildTemporalContext(now = new Date()): string {
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return `Trusted host clock: current local date is ${date}; timezone is ${zone}; current instant is ${now.toISOString()}. This clock supersedes stale dates in conversation history and model memory. For latest, recent, today, current or time-bounded web research, establish the requested time range before the FIRST search. Unless the user explicitly requests a historical year/range, anchor queries to this date and the current year, not a year guessed from memory. Respect explicit historical requests and do not silently change their dates. Search snippets are only discovery hints: open the sources, distinguish publication dates from event dates, and label undated or older fallback evidence honestly. A year in a query does not prove freshness; never invent dates or claim current facts without supporting evidence.`;
+}
+
 async function readProjectInstructions(cwd: string): Promise<string> {
   const candidates = ["AGENTS.md", "XIU.md", "CLAUDE.md"];
   const sections: string[] = [];

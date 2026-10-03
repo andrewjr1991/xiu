@@ -327,6 +327,7 @@ export class MultiAgentCoordinator {
     };
     this.runs.set(id, run);
     await this.persist(run);
+    for (const task of run.tasks) this.events.onTaskUpdate?.(cloneRun(run), structuredClone(task));
     this.launchDriver(run);
     return cloneRun(run);
   }

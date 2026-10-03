@@ -11,7 +11,7 @@ import { DesktopProviderRecoveryController } from "./provider-recovery-controlle
 import type { DesktopProviderRecoveryRequest } from "../shared/provider-recovery.js";
 import { DesktopTerminalController } from "./terminal-controller.js";
 import { DesktopBrowserController } from "./browser-controller.js";
-import { confirmFullAccess } from "./full-access-dialog.js";
+import { confirmFullAccess, confirmSubagentCancel } from "./full-access-dialog.js";
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
 import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
@@ -291,6 +291,14 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return taskController.reviewSnapshot(controller.trustedWorkspacePath(), request?.changeView);
   });
+  ipcMain.handle(desktopChannels.subagentCancel, async (event, request: import("../shared/protocol.js").DesktopSubagentCancelRequest) => {
+    assertTrustedSender(event);
+    return serializeWriterStart(async () => taskController.cancelSubagent(controller.trustedWorkspacePath(), request, async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
+      return confirmSubagentCancel(mainWindow);
+    }));
+  });
   ipcMain.handle(desktopChannels.filePreview, async (event, request: DesktopFilePreviewRequest) => {
     assertTrustedSender(event);
     return taskController.previewFile(controller.trustedWorkspacePath(), request);
@@ -331,7 +339,7 @@ function registerIpc(): void {
   ipcMain.handle(desktopChannels.providerSnapshot, async (event) => {
     assertTrustedSender(event);
     controller.trustedWorkspacePath();
-    return (await getProviderController()).snapshot();
+    return (await getProviderController()).refresh();
   });
   ipcMain.handle(desktopChannels.managementSnapshot, async (event) => {
     assertTrustedSender(event);

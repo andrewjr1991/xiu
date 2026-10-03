@@ -409,7 +409,7 @@ export class ProviderRegistry {
 
   private mutate<T>(run: () => Promise<T>): Promise<T> {
     return this.serializeMutation(async () => {
-      if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing configuration; recovery requires restarting this client.");
+      this.assertConfigurationWritable();
       try { return await this.configurationStorage.transaction(this.configurationSnapshot, run); }
       catch (error) { if (error instanceof ProviderConfigurationError) this.configurationWritable = false; throw error; }
     });
@@ -417,12 +417,17 @@ export class ProviderRegistry {
 
   private async assertCredentialConfigurationCurrent(): Promise<void> {
     await this.saveOperation;
-    if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing credentials; recovery requires restarting this client.");
+    this.assertConfigurationWritable();
     await this.configurationStorage.assertCurrent(this.configurationSnapshot);
   }
 
   configurationDiagnostics(): Promise<ProviderConfigurationDiagnostics> {
     return this.configurationStorage.diagnostics((bytes) => { this.decodeConfiguration(bytes); });
+  }
+
+  private assertConfigurationWritable(): void {
+    if (this.configurationRestartRequired) throw new ProviderConfigurationError("restart", "Provider settings were restored; recovery requires restarting this client.");
+    if (!this.configurationWritable) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing configuration. The previous write failed or settings changed; no operation was retried.");
   }
 
   /** Reserved "current" keeps settings and clears only a proven dead-owner write lock. */
@@ -830,7 +835,7 @@ export class ProviderRegistry {
 
   private async save(upgrade = false): Promise<void> {
     const operation = this.saveOperation.then(async () => {
-      if (!this.configurationWritable || this.configurationRestartRequired) throw new ProviderConfigurationError("reload", "Reload Provider settings before changing configuration; recovery requires restarting this client.");
+      this.assertConfigurationWritable();
       const safeFile: ProviderFile = {
         version: 5,
         active: this.file.active,

@@ -59,7 +59,8 @@ export interface DesktopRuntimeConnection {
   /** Stable conversation/session identity; runtime task ids change on follow-up. */
   conversationId?: string;
   provider: { id: string; label: string; model: string };
-  writer: "available" | "active-here" | "active-elsewhere";
+  writer: "available" | "active-here" | "active-elsewhere" | "recovery-required";
+  journalWarning?: string;
   approvalMode?: DesktopApprovalMode;
   /** Opaque host/conversation revision for an idle-only mode change. */
   modeContextId?: string;
@@ -67,6 +68,7 @@ export interface DesktopRuntimeConnection {
 
 export type DesktopApprovalMode = "ask" | "workspace" | "full";
 export interface DesktopPlanModeRequest { enabled: boolean; contextId: string }
+export interface DesktopSubagentCancelRequest { runId: string; taskId: string; parentTaskId: string }
 export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode }
 
 export interface DesktopProviderProfile {
@@ -222,6 +224,7 @@ export interface DesktopRecoveryEvidence {
 }
 
 export interface DesktopReviewSnapshot {
+  overview?: { workspace: string; taskId?: string; branch?: string; taskChanges?: TaskChangeReport };
   artifacts?: Array<{ path: string; kind: string }>;
   background?: Array<{ id: string; command: string; state: string; running: boolean; elapsedMs: number; outputBytes: number }>;
   tools?: DesktopReviewOperation[];
@@ -300,6 +303,7 @@ export interface XiuDesktopBridge {
   newConversation(): Promise<DesktopRuntimeConnection>;
   steerTask(request: RuntimeTaskRequest): Promise<boolean>;
   stopTask(): Promise<boolean>;
+  cancelSubagent(request: DesktopSubagentCancelRequest): Promise<DesktopRuntimeConnection>;
   setPlanMode(request: DesktopPlanModeRequest): Promise<DesktopRuntimeConnection>;
   setApprovalMode(request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection>;
   decideApproval(request: RuntimeApprovalDecisionRequest): Promise<void>;
@@ -358,6 +362,7 @@ export const desktopChannels = {
   conversationNew: "runtime:conversation-new",
   taskSteer: "runtime:task-steer",
   taskStop: "runtime:task-stop",
+  subagentCancel: "runtime:subagent-cancel",
   planModeSet: "runtime:plan-mode-set",
   approvalModeSet: "runtime:approval-mode-set",
   approvalDecide: "runtime:approval-decide",

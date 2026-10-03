@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
 import { refreshModelContext } from "./context.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { buildSystemPrompt, buildTemporalContext } from "./prompt.js";
 import { resolveWorkspacePath } from "./workspace-path.js";
 import { canonicalXiuIdentity, isXiuIdentityQuestion } from "./identity.js";
 import type { ProjectIndex } from "./project-index.js";
@@ -1455,12 +1455,13 @@ export class Agent {
       try {
         let response: Awaited<ReturnType<ModelProvider["complete"]>>;
         let streamed = false;
+        const system = `${this.system!}\n\n${buildTemporalContext()}`;
         const modelTools = toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools);
         if (allowStreaming && this.provider.stream && (this.events.onTextDelta || this.events.onDraftPreview)) {
           const preview = this.events.onDraftPreview ? new SafeDraftPreview(this.config.language ?? "en-US",
             [this.config.apiKey, readEnvironmentCredential(this.config.apiKeyEnv)].filter((value): value is string => Boolean(value))) : undefined;
           let visibleDraft = "";
-          response = await this.provider.stream(this.system!, this.messages, modelTools, (delta) => {
+          response = await this.provider.stream(system, this.messages, modelTools, (delta) => {
             emitted = true;
             if (preview) {
               visibleDraft = preview.push(delta) ?? visibleDraft;
@@ -1470,7 +1471,7 @@ export class Agent {
           preview?.finish();
           streamed = emitted && !preview;
         } else {
-          response = await this.provider.complete(this.system!, this.messages, modelTools, signal);
+          response = await this.provider.complete(system, this.messages, modelTools, signal);
         }
         this.taskDiagnostics?.finishModel(response.usage ?? { inputTokens: estimatedInput, outputTokens: Math.ceil(response.text.length / 4) }, true);
         await this.checkpointDiagnostics();

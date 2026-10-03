@@ -1,4 +1,22 @@
+## 0.20.4 正式发布流程（2026-10-03）
+
+维护者已确认本地测试通过，授权提交、推送、合并 main 后正式发布。CLI/桌面已统一升至 0.20.4，Registry latest 为 0.20.3，0.20.4 不存在。候选提交及合并后的精确提交须通过六作业 CI；GitHub Release 只使用该提交的原始 CI 制品与校验记录，不移动既有 tag 或覆盖旧资产。Windows x64 NSIS 继续未签名，保留既有构建期 HTTP-cache 风险披露。npm 本机 ENEEDAUTH，按此前选择将已核验 CI 包及命令交付维护者自行发布。下面“不提交/不发布”和旧 npm 待办是历史记录，不覆盖本节。
+
 > 当前正式版：0.20.3 两端一致，[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3) 已发布。精确源码 `2ad7891d8756d98001e8d6a23dc4603ccddd998d` 的 [CI 37099780173](https://github.com/andrewjr1991/xiu/actions/runs/37099780173) 六作业全绿；原始 CLI tarball、未签名 Windows NSIS、两份 manifest 和 SHA256SUMS 上传后摘要匹配。维护者确认 Skill、真实输入法和外部设备验收通过。npm 按最新选择由维护者自行发布同一 CI 包，目前待完成；GitHub 发布不代表 npm latest 已更新。CLI 全依赖及两端生产依赖审计为 0；桌面开发依赖仍有 8 条 high 传播项，共同根因 GHSA-ch52-4w7c-c8xp 无补丁，已明确风险接受并披露。不降级构建器、不抑制告警，普通下载未启用 HTTP 响应缓存，最终包不含该依赖。CI 全绿不表示漏洞修复。不覆盖已发布版本，不放宽企业 ACL。下方旧版本状态为历史记录。
+
+### 本地 Windows 产物位置
+
+当前交互优化候选使用 `Xiu-0.20.3-local-interaction-x64.exe`，未打包版本仍写入 `apps/desktop/release/win-unpacked`，安装器直接写入 `apps/desktop/release`。仅本地测试，不覆盖正式资产、不提交或发布；安装器不自动修复 Provider 权限。
+
+该候选本地验证：38 项专项测试、根目录/桌面类型检查、构建、文档检查、1366/900 宽窄界面测试，以及安装/启动/升级/中断重启/卸载检查通过。ASAR 主程序与渲染资源匹配本次构建，不含 UI 测试 preload；未跑全量测试或远端 CI。EXE 与安装包均为 NotSigned。安装包 SHA-256：`1fb4c024e1b98cfcaeacc0bda354930b544238e58303645b8d9053231a760947`。
+
+企业环境模型切换兼容修正候选命名为 `Xiu-0.20.3-local-provider-fix-x64.exe`，只修受限 PowerShell 权限检查实现，不自动更改既有不安全 ACL。维护者后来明确授权单独收紧本机空恢复目录 ACL，Xiu 只读权限核验通过，未改配置内容或清锁；模型切换仍须维护者重启后实测。该候选不构成提交、推送或发布授权。
+
+子任务实测修正测试包为 `Xiu-0.20.3-local-subagent-fix-x64.exe`，仍非正式版。Provider 存储测试在本机受企业 ACL 限制，最终 CI 必须覆盖真实多客户端刷新与恢复重启门禁；替身控制器和 UI 通过不代表存储测试通过。
+
+0.20.4 子智能体状态交互目前只作本地验证，包内版本暂保留 0.20.3，测试安装器命名为 `Xiu-0.20.3-local-subagent-x64.exe`；不得据此重发已发布的 0.20.3。正式候选须另行升版本，完成精确提交 CI、产物核验及维护者验收后再发布。本地类型检查、专项或界面检查不能替代最终提交的 CI。
+
+本地构建统一输出至 `apps/desktop/release`：未打包程序为 `apps/desktop/release/win-unpacked/Xiu.exe`，安装包直接放在 `apps/desktop/release`，不再为每次修正创建新输出子目录。未发布测试安装器使用带 `local` 标记的独立文件名，避免与正式发布资产混淆；该目录约定不代表提交、推送或发布授权。
 
 ### 0.20.3 维护者 npm 发布
 

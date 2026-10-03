@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
 import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
 import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-management.js";
@@ -8,7 +10,7 @@ import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.
 import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
 import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
-import { recoveryContinuation, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
+import { recoveryContinuation, safeTaskPreview, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
 import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
 
@@ -48,7 +50,9 @@ export class DesktopTaskController {
       runtime: host.runtime.connect(afterSequence),
       ...(conversationId ? { conversationId } : {}),
       provider: { ...host.provider },
-      writer: activeHere ? "active-here" : lock?.active && lock.live ? "active-elsewhere" : "available",
+      writer: activeHere ? "active-here" : host.journal.persistenceFailure() ? "recovery-required" : lock?.active && lock.live ? (lock.ownedHere ? "recovery-required" : "active-elsewhere") : "available",
+      ...(host.journal.persistenceFailure() ? { journalWarning: `任务记录保存失败（${host.journal.persistenceFailure()}）。任务已停止，请检查文件权限或占用后退出并重新启动 Xiu，再确认恢复或放弃中断任务；不会自动重跑已执行操作。` }
+        : lock?.ownedHere && !activeHere ? { journalWarning: "本窗口的任务已结束，但运行记录或写锁尚未完成收尾。请退出并重新启动 Xiu，再确认恢复或放弃中断任务。" } : {}),
       approvalMode: this.approvalMode,
       modeContextId: this.modeContextId,
     };
@@ -286,7 +290,9 @@ export class DesktopTaskController {
       const safe = clean(text);
       if (safe) entries.push({ id: `${session.id}-${entries.length + 1}`, kind, title, text: safe });
     };
+    const turnEntries: Array<{ preview: string; entries: DesktopTaskHistorySnapshot["entries"] }> = [];
     for (const turn of session.replay) {
+      const start = entries.length;
       push("user", turn.inputKind === "system" ? "系统续接" : "你", turn.task);
       for (const supplement of turn.supplements) push("user", "你 · 补充要求", supplement);
       for (const receipt of turn.receipts) push("activity", "运行记录", receipt);
@@ -294,6 +300,7 @@ export class DesktopTaskController {
       if (turn.response) push("assistant", "Xiu", turn.response);
       if (turn.question) push("assistant", "Xiu · 等待回答", turn.question);
       if (turn.completion && turn.completion.message !== turn.response) push("completion", turn.completion.success ? "已完成" : "未完成", turn.completion.message);
+      turnEntries.push({ preview: safeTaskPreview(turn.task, workspace), entries: entries.slice(start) });
     }
     if (!entries.length) {
       for (const message of session.messages) {
@@ -302,8 +309,15 @@ export class DesktopTaskController {
       }
     }
     const completeEventHistory = runs.length > 0 && runs.every((item) => (item.runtimeEvents?.length ?? 0) > 0);
-    const exactEvents = completeEventHistory ? this.combineHistoryEvents(runs) : [];
-    const reconstructed = exactEvents.length ? [] : runs.flatMap((item, index) => this.reconstructHistoryEvents(item, index === runs.length - 1 ? entries : []));
+    // A legacy round must not downgrade newer exact rounds or inherit another
+    // round's reply. Ambiguous legacy previews have no attributable reply.
+    let sequence = 0;
+    const historyEvents = runs.flatMap((item) => {
+      if (item.runtimeEvents?.length) return this.combineHistoryEvents([item]);
+      const matching = turnEntries.filter((turn) => turn.preview === item.taskPreview);
+      const uniqueRun = runs.filter((candidate) => candidate.taskPreview === item.taskPreview).length === 1;
+      return this.reconstructHistoryEvents(item, uniqueRun && matching.length === 1 ? matching[0]!.entries : []);
+    }).map((event) => ({ ...event, sequence: ++sequence })).slice(-1_000);
     let changes;
     const changeRounds = await Promise.all(runs.slice(-80).map(async (candidate) => ({ id: candidate.runId, startedAt: candidate.startedAt, report: await loadTaskChangeHistory(workspace, candidate.runId) })));
     for (const candidate of [...runs].reverse()) {
@@ -318,8 +332,8 @@ export class DesktopTaskController {
       ...(run?.providerId ?? session.providerId ? { providerId: run?.providerId ?? session.providerId } : {}),
       ...(run?.model ?? session.model ? { model: run?.model ?? session.model } : {}),
       entries: entries.slice(-200),
-      events: exactEvents.length ? exactEvents.slice(-1_000) : reconstructed,
-      fidelity: exactEvents.length ? "exact" : "reconstructed",
+      events: historyEvents,
+      fidelity: completeEventHistory ? "exact" : "reconstructed",
       changeRounds,
       ...(changes ? { changes } : {}),
       tools: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "tool").map((operation) => this.operation(operation, "command"))).slice(-80),
@@ -376,7 +390,7 @@ export class DesktopTaskController {
           : getWorkspaceDiff(workspace, changeView === "staged" ? "staged" : "workspace"),
       listReviewFiles(workspace),
       Promise.resolve(host.journal.currentRun()).then((run) => run ?? host.journal.latest()),
-      host.journal.interrupted(),
+      this.active(host) ? Promise.resolve(undefined) : host.journal.interrupted(),
       host.checkpointManager?.list() ?? Promise.resolve([]),
     ]);
     if (changeView === "task" && !this.baseline && this.completedTaskChanges?.taskId !== currentTaskId) changes.warnings = ["no-task-baseline: no in-memory baseline is available; showing current workspace changes.", ...changes.warnings];
@@ -388,6 +402,7 @@ export class DesktopTaskController {
     const changeRounds = await Promise.all(related.map(async (run) => ({ id: run.runId, startedAt: run.startedAt, report: await loadTaskChangeHistory(workspace, run.runId) })));
     return {
       changeRounds,
+      overview: { workspace, taskId: currentTaskId, taskChanges: taskReport, branch: await promisify(execFile)("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: workspace, windowsHide: true, timeout: 2000, maxBuffer: 4096 }).then(({ stdout }) => redactSecrets(stdout.trim()).slice(0, 160)).catch(() => undefined) },
       generatedAt: new Date().toISOString(), changeView, changes, files,
       artifacts: (taskReport?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })),
       background: host.background?.().map((item) => ({ ...item, command: redactSecrets(item.command).slice(0, 240) })) ?? [],
@@ -413,6 +428,27 @@ export class DesktopTaskController {
   async previewFile(workspace: string, request: DesktopFilePreviewRequest) {
     if (!request || typeof request.path !== "string") throw new Error("Invalid file preview request.");
     return previewReviewFile(workspace, request.path);
+  }
+
+  async cancelSubagent(workspace: string, request: import("../shared/protocol.js").DesktopSubagentCancelRequest, confirm: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
+    if (!request || [request.runId, request.taskId, request.parentTaskId].some((value) => typeof value !== "string" || !value || value.length > 160)) throw new Error("子任务取消请求无效。");
+    const host = await this.ensure(workspace);
+    const parent = host.runtime.snapshot().task;
+    const selected = parent?.subagents?.find((agent) => agent.runId === request.runId && agent.taskId === request.taskId);
+    if (!host.coordinator || parent?.id !== request.parentTaskId || !selected || !["running", "waiting_approval"].includes(parent.state) || !["pending", "running"].includes(selected.status)) throw new Error("子任务不存在、已结束或不属于当前任务。");
+    if (host.runtime.snapshot().planMode) throw new Error("Plan 只读模式不能取消子任务。");
+    if (this.permissionBusy || this.conversationBusy) throw new Error("请等待当前确认或会话切换完成。");
+    this.permissionBusy = true;
+    const generation = this.openingGeneration;
+    try {
+      if (!(await confirm())) return this.connect(workspace);
+      if (generation !== this.openingGeneration || this.host !== host || host.runtime.snapshot().task?.id !== request.parentTaskId || !["running", "waiting_approval"].includes(host.runtime.snapshot().task?.state ?? "") || host.runtime.snapshot().planMode) throw new Error("工作区或任务已经变化，取消操作未执行。");
+      const latest = host.coordinator.get(request.runId);
+      const child = latest.tasks.find((task) => task.id === request.taskId);
+      if (!child || !["pending", "running"].includes(child.status)) return this.connect(workspace);
+      await host.coordinator.cancel(request.runId, request.taskId);
+      return this.connect(workspace);
+    } finally { this.permissionBusy = false; }
   }
 
   async restoreCheckpoint(workspace: string, request: DesktopCheckpointRestoreRequest, confirmed: boolean): Promise<DesktopReviewSnapshot> {
@@ -653,7 +689,10 @@ export class DesktopTaskController {
         push("runtime.notice", { kind: "checkpoint", message: operation.evidence ?? "补充要求已记录" }, operation.finishedAt ?? operation.startedAt);
       } else {
         const verification = operation.kind === "verification";
-        push("tool.started", { name: operation.name, description: operation.evidence ?? operation.name, changesWorkspace: operation.sideEffect === "workspace", verification, risk: operation.risk ?? "read" }, operation.startedAt);
+        // Legacy web journals store result evidence, not the original query/action.
+        const description = operation.name === "web_search" || operation.name === "web_open"
+          ? operation.name : operation.evidence ?? operation.name;
+        push("tool.started", { name: operation.name, description, changesWorkspace: operation.sideEffect === "workspace", verification, risk: operation.risk ?? "read" }, operation.startedAt);
         if (operation.finishedAt) push("tool.finished", { name: operation.name, summary: operation.evidence ?? operation.status, verification }, operation.finishedAt);
       }
     }

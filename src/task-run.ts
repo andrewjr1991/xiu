@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { redactSecrets } from "./secret-redaction.js";
 import type { RuntimeEvent } from "./runtime/protocol.js";
 
@@ -101,6 +102,28 @@ export interface TaskRunLockStatus {
   live: boolean;
   runId?: string;
   ownerPid?: number;
+  ownedHere?: boolean;
+}
+
+/** Retry only local atomic replacement, never tool execution or destination deletion. */
+export async function renameTaskRunFile(temporary: string, file: string, platform = process.platform, rename = fs.rename): Promise<void> {
+  const delays = [40, 100, 200];
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(temporary, file); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (platform !== "win32" || !["EPERM", "EBUSY"].includes(code ?? "") || attempt >= delays.length) throw error;
+      await delay(delays[attempt]);
+    }
+  }
+}
+
+export class TaskRunPersistenceError extends Error {
+  readonly code = "XIU_JOURNAL_PERSISTENCE";
+  constructor(readonly storageCode: string) {
+    super(`Task-run journal could not be saved (${storageCode}). Execution stopped safely. Check filesystem permissions or file locks, then reopen the workspace and explicitly recover or abandon the interrupted task.`);
+    this.name = "TaskRunPersistenceError";
+  }
 }
 
 function workspaceIdentity(workspace: string): string {
@@ -164,7 +187,7 @@ async function atomicWrite(file: string, value: unknown): Promise<void> {
   const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     await fs.writeFile(temporary, `${JSON.stringify(value)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await fs.rename(temporary, file);
+    await renameTaskRunFile(temporary, file);
   } finally {
     await fs.unlink(temporary).catch(() => undefined);
   }
@@ -174,6 +197,7 @@ export class TaskRunJournal {
   readonly workspaceId: string;
   readonly instanceId = randomUUID();
   private current?: TaskRunRecord;
+  private storageFailure?: string;
 
   constructor(
     private readonly workspace: string,
@@ -218,7 +242,7 @@ export class TaskRunJournal {
     };
     try {
       if (options.resumedFrom) await this.abandon(options.resumedFrom, "superseded by confirmed recovery");
-      await atomicWrite(this.runFile(record.runId), record);
+      await this.writeRecord(record);
       this.current = record;
       return structuredClone(record);
     } catch (error) {
@@ -285,7 +309,7 @@ export class TaskRunJournal {
     }
     this.appendEvent(run, { type: "run-finished", status });
     run.updatedAt = run.finishedAt;
-    await atomicWrite(this.runFile(run.runId), run);
+    await this.writeRecord(run);
     this.current = undefined;
     await this.releaseLock(run.runId);
   }
@@ -303,7 +327,7 @@ export class TaskRunJournal {
     }
     this.appendEvent(run, { type: "run-paused", status: "paused", evidence });
     run.updatedAt = run.finishedAt;
-    await atomicWrite(this.runFile(run.runId), run);
+    await this.writeRecord(run);
     this.current = undefined;
     await this.releaseLock(run.runId);
   }
@@ -322,7 +346,7 @@ export class TaskRunJournal {
       }
     }
     this.appendEvent(record, { type: "run-abandoned", status: "abandoned", evidence });
-    await atomicWrite(this.runFile(record.runId), record);
+    await this.writeRecord(record);
   }
 
   async interrupted(): Promise<InterruptedTaskRun | undefined> {
@@ -372,7 +396,7 @@ export class TaskRunJournal {
     const record = await this.read(runId);
     if (!record) throw new Error(`Task-run journal not found: ${runId}`);
     record.runtimeEvents = structuredClone(events.slice(-1_000));
-    await atomicWrite(this.runFile(runId), record);
+    await this.writeRecord(record);
   }
 
   /** Returns the newest run for this workspace, including terminal runs. */
@@ -396,6 +420,7 @@ export class TaskRunJournal {
   }
 
   currentRun(): TaskRunRecord | undefined { return this.current ? structuredClone(this.current) : undefined; }
+  persistenceFailure(): string | undefined { return this.storageFailure; }
 
   /** Read-only lock inspection for CLI/desktop coexistence. Never removes or takes over a lock. */
   async lockStatus(): Promise<TaskRunLockStatus> {
@@ -420,10 +445,12 @@ export class TaskRunJournal {
       live: this.processAlive(lock.ownerPid!),
       runId: lock.runId,
       ownerPid: lock.ownerPid,
+      ownedHere: lock.ownerPid === process.pid && lock.ownerInstance === this.instanceId,
     };
   }
 
   private requireCurrent(): TaskRunRecord {
+    if (this.storageFailure) throw new TaskRunPersistenceError(this.storageFailure);
     if (!this.current || this.current.status !== "running") throw new Error("No active task run journal.");
     return this.current;
   }
@@ -453,7 +480,16 @@ export class TaskRunJournal {
   private async persist(): Promise<void> {
     const run = this.requireCurrent();
     run.updatedAt = new Date().toISOString();
-    await atomicWrite(this.runFile(run.runId), run);
+    await this.writeRecord(run);
+  }
+
+  private async writeRecord(record: TaskRunRecord): Promise<void> {
+    try { await atomicWrite(this.runFile(record.runId), record); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      this.storageFailure = typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : "UNKNOWN";
+      throw new TaskRunPersistenceError(this.storageFailure);
+    }
   }
 
   private async acquireLock(runId: string, resumedFrom?: string): Promise<void> {

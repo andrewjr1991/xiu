@@ -6,7 +6,7 @@ import test from "node:test";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { Agent } from "../src/agent.js";
-import { recoveryContinuation, safeTaskPreview, TaskRunJournal, taskOperationSignature, taskToolSideEffect } from "../src/task-run.js";
+import { recoveryContinuation, renameTaskRunFile, safeTaskPreview, TaskRunJournal, taskOperationSignature, taskToolSideEffect } from "../src/task-run.js";
 import type { AgentTool, ModelProvider } from "../src/types.js";
 
 async function fixture() {
@@ -16,6 +16,50 @@ async function fixture() {
   await fs.mkdir(workspace);
   return { root, workspace, journalRoot, journal: new TaskRunJournal(workspace, journalRoot) };
 }
+
+test("Windows journal replacement retries transient metadata failures only and remains bounded", async () => {
+  let attempts = 0;
+  await renameTaskRunFile("temporary", "original", "win32", async () => {
+    if (++attempts < 3) throw Object.assign(new Error("busy"), { code: "EPERM" });
+  });
+  assert.equal(attempts, 3);
+  attempts = 0;
+  await assert.rejects(renameTaskRunFile("temporary", "original", "win32", async () => {
+    attempts++;
+    throw Object.assign(new Error("busy"), { code: "EBUSY" });
+  }), /busy/);
+  assert.equal(attempts, 4);
+  attempts = 0;
+  await assert.rejects(renameTaskRunFile("temporary", "original", "win32", async () => {
+    attempts++;
+    throw Object.assign(new Error("denied"), { code: "EACCES" });
+  }), /denied/);
+  assert.equal(attempts, 1);
+});
+
+test("persistent journal failure retains original evidence and own lock and blocks new operations", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const run = await item.journal.begin({ sessionId: "storage-failure", task: "fixture", providerId: "p", model: "m" });
+  const original = await item.journal.read(run.runId);
+  const rename = fs.rename;
+  t.mock.method(fs, "rename", async (from: string, to: string) => {
+    if (String(to).endsWith(`${run.runId}.json`)) throw Object.assign(new Error(`denied private-path secret-token`), { code: "EPERM" });
+    return rename(from, to);
+  });
+  await assert.rejects(item.journal.beginOperation({ kind: "tool", name: "write_once", sideEffect: "external" }), (error: Error) => {
+    assert.match(error.message, /could not be saved \(EPERM\)/);
+    assert.doesNotMatch(error.message, /private-path|secret-token/);
+    return true;
+  });
+  assert.deepEqual(await item.journal.read(run.runId), original);
+  assert.equal((await item.journal.lockStatus()).ownedHere, true);
+  assert.equal((await new TaskRunJournal(item.workspace, item.journalRoot).lockStatus()).ownedHere, false);
+  assert.equal(item.journal.persistenceFailure(), "EPERM");
+  await assert.rejects(item.journal.beginOperation({ kind: "tool", name: "next", sideEffect: "external" }), /could not be saved/);
+  await assert.rejects(item.journal.complete("failed"), /could not be saved/);
+  assert.equal((await item.journal.lockStatus()).active, true);
+});
 
 test("persists bounded recovery evidence without full paths or secrets", async (t) => {
   const item = await fixture();
