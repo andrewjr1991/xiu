@@ -1,5 +1,7 @@
 <div align="center">
 
+Release candidate **0.20.3** combines managed desktop-search authentication, safe folder/SKILL.md/ZIP imports and dependency hardening. Manual Skill, real IME and external-device acceptance passed. The maintainer accepted explicitly retaining the unpatched build-only HTTP-cache advisory; publication is authorized only after all six exact-source CI jobs pass. CLI and desktop versions match; the version has not been published yet. Earlier candidate notes below are historical.
+
 Candidate **0.20.3-preview.13** adds desktop Skill imports from folders, standalone `SKILL.md`, and ZIP packages. Use Tools & Runtime Settings → Skills, preview the package and declared permissions, then explicitly confirm. Single-file import excludes siblings; use a folder or ZIP for resources. Imports never run bundled scripts or overwrite installed skills. Store discovery, remote installers and update management remain later work. Commit/push for exact-source CI is authorized; publication remains conditional on CI and the outstanding build-dependency risk decision.
 
 Maintainer acceptance passed for Skill import, real OS IME and external devices. Dependency hardening replaces fast-glob/braces with bounded tinyglobby matching and upgrades build-time sharp. CLI and both production audits are clean; desktop development audit retains the unpatched electron-builder HTTP-cache dependency advisory. This is not an audit-clean stable release; exact-commit CI remains required.

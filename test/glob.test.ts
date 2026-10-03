@@ -16,7 +16,9 @@ test("shared glob rejects nested, oversized and alternate malformed patterns bef
 });
 
 test("glob refuses linked static roots as well as links found during traversal", async (t) => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-glob-junction-"));
+  // macOS /var is a system symlink; the absolute-path control must exercise
+  // an ordinary external directory, not the intentionally refused link alias.
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "xiu-glob-junction-")));
   const cwd = path.join(base, "workspace");
   const outside = path.join(base, "outside");
   try {
