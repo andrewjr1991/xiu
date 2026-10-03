@@ -1,4 +1,15 @@
-> 当前正式候选：0.20.3，两端版本一致，尚未发布。维护者确认 Skill 实测、真实输入法及外部设备验收通过，并明确接受发布说明保留构建期 http-cache-semantics 告警，授权精确提交六作业 CI 全绿后发布 npm latest 与 GitHub Release。CLI 全依赖审计、CLI/桌面生产依赖审计均为 0；桌面开发依赖仍有 8 条 high 传播告警，共同根因 GHSA-ch52-4w7c-c8xp 无补丁。保留 electron-builder 26.15.3 的解压安全保护，不降级、不抑制；普通下载默认未启用 HTTP 响应缓存，最终包不含该依赖。风险接受不等于告警修复，CI 全绿也不代替修复。不覆盖已发布版本，不放宽企业 ACL 策略。下方旧版本状态为历史记录。
+> 当前正式版：0.20.3 两端一致，[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3) 已发布。精确源码 `2ad7891d8756d98001e8d6a23dc4603ccddd998d` 的 [CI 37099780173](https://github.com/andrewjr1991/xiu/actions/runs/37099780173) 六作业全绿；原始 CLI tarball、未签名 Windows NSIS、两份 manifest 和 SHA256SUMS 上传后摘要匹配。维护者确认 Skill、真实输入法和外部设备验收通过。npm 按最新选择由维护者自行发布同一 CI 包，目前待完成；GitHub 发布不代表 npm latest 已更新。CLI 全依赖及两端生产依赖审计为 0；桌面开发依赖仍有 8 条 high 传播项，共同根因 GHSA-ch52-4w7c-c8xp 无补丁，已明确风险接受并披露。不降级构建器、不抑制告警，普通下载未启用 HTTP 响应缓存，最终包不含该依赖。CI 全绿不表示漏洞修复。不覆盖已发布版本，不放宽企业 ACL。下方旧版本状态为历史记录。
+
+### 0.20.3 维护者 npm 发布
+
+使用已核验的 Windows CI tarball，不重新打包。SHA256：`ba23098b1df92fc09ef4430ca8349e7222e99baafc4693e554a2faa391a1f16c`。发布前查询该版本；若已存在，不覆盖，先核对其来源和完整性。
+
+```powershell
+npm.cmd publish "D:\QoderWork Project\AGENT\apps\desktop\release\v0.20.3-ci\cli\xiu-ai-cli-0.20.3-2ad7891d8756d98001e8d6a23dc4603ccddd998d.tgz" --access public --tag latest --registry=https://registry.npmjs.org/
+npm.cmd view '@xiu-ai/cli@latest' version dist.integrity --registry=https://registry.npmjs.org/
+```
+
+该包也可从上方 GitHub Release 下载；下载后核对 SHA256SUMS。正式 tag 始终指向产物源码，后续仅文档提交不移动 tag。
 
 2026-10-03 更新（覆盖以上候选状态）：[GitHub preview.11](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11) 已发布，精确 tag/产物源码为 `cc49096f987309fa38baa7947694ff2398f1ccff`，[CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003) 六作业全部通过。Windows 全量 890 项：883 通过、7 跳过、0 失败。资产直接从同一 CI 下载并逐项核验来源、版本、清洁工作树和 SHA256，上传后核验 GitHub digest 再公开草稿；包含未签名 NSIS、CLI tarball、两份 manifest 及 SHA256SUMS。npm 网页授权已完成，但保存登录状态 `.npmrc` 被系统拒绝，因此尚未发布 npm，需维护者在正常终端发布同一 CI tarball 至 preview 标签并回读版本/标签/完整性；不提升稳定 latest，不修改企业 ACL 策略。真实输入法/外部设备仍独立待验收。
 

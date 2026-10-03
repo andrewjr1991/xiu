@@ -1,11 +1,11 @@
 # Changelog
 
-## 0.20.3 — Release candidate (not yet published)
+## 0.20.3 — GitHub Release (npm publication pending)
 
 - Combine desktop managed-search lazy device registration/token renewal with confirmed local folder, SKILL.md and ZIP Skill imports; preserve trust, Plan, credentials, immutable permission preview and no-overwrite enforcement.
 - Replace vulnerable fast-glob/braces matching with a bounded tinyglobby adapter and upgrade build-time sharp; CLI and both production audits are clean.
 - Retain the unpatched build-only http-cache-semantics advisory (GHSA-ch52-4w7c-c8xp) with explicit maintainer risk acceptance. Normal builder downloads do not enable its HTTP response cache; the dependency is absent from shipped CLI/desktop artifacts. Do not downgrade the builder or suppress audit warnings.
-- Manual Skill, real OS IME and external-device acceptance passed. Publication awaits all six exact-source CI jobs and inspected version-matched artifacts. Desktop Windows x64 NSIS remains unsigned; other desktop platforms and Store signing are not newly claimed stable.
+- Manual Skill, real OS IME and external-device acceptance passed. All six jobs passed in CI 37099780173 for exact source `2ad7891d8756d98001e8d6a23dc4603ccddd998d`; GitHub Release assets and manifests were verified against their CI hashes before publication. npm publication is delegated to the maintainer using that unchanged CI tarball and is still pending. Desktop Windows x64 NSIS remains unsigned; other desktop platforms and Store signing are not newly claimed stable.
 
 ## 0.20.3-preview.13 — Local Skill import candidate (unreleased)
 
