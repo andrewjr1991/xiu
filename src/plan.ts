@@ -79,8 +79,8 @@ export class TaskPlanManager {
       : localize(this.language, "等待最终总结", "awaiting final summary");
     return localize(
       this.language,
-      `任务计划已更新：${completed}/${this.current.steps.length}；当前：${current}。完整计划可使用 /tasks 查看。`,
-      `Task plan updated: ${completed}/${this.current.steps.length}; now: ${current}. Use /tasks to view the full plan.`,
+      `任务计划已更新：${completed}/${this.current.steps.length}；当前：${current}。`,
+      `Task plan updated: ${completed}/${this.current.steps.length}; now: ${current}.`,
     );
   }
 

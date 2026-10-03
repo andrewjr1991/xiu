@@ -50,7 +50,11 @@ export class ToolLoopGuard {
     this.lastEvidence.clear();
   }
 
-  observe(name: string, input: Record<string, unknown>): LoopObservation {
+  observe(name: string, input: Record<string, unknown>, pendingWait = false): LoopObservation {
+    // Do not teach the cycle detector that a live wait/list/wait sequence is a
+    // loop. The caller supplies trusted host state, not a model-controlled flag.
+    // result() still limits repeated failures (invalid run IDs, cancellation).
+    if (pendingWait) { this.history = []; return { blocked: false, abort: false }; }
     const signature = toolCallSignature(name, input);
     this.history.push(signature);
     if (this.history.length > 24) this.history.shift();

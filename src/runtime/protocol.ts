@@ -69,7 +69,8 @@ export interface RuntimeEventPayloads {
   "assistant.draft": { text: string; receivedChars: number };
   "assistant.stream-end": Record<string, never>;
   "model.started": { turn: number };
-  "model.finished": Record<string, never>;
+  "model.progress": { chunks?: number; textCharacters?: number; argumentCharacters?: number };
+  "model.finished": { responseReceived?: boolean };
   "tool.started": { name: string; description: string; changesWorkspace: boolean; verification: boolean; risk: ApprovalRequest["risk"] | "read" };
   "tool.progress": { name: string; message: string };
   "tool.finished": { name: string; summary: string; result?: ToolResult; verification: boolean };

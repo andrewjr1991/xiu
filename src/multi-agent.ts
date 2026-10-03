@@ -374,11 +374,14 @@ export class MultiAgentCoordinator {
     return structuredClone(task);
   }
 
-  async retry(runId: string, taskId: string): Promise<SubagentRun> {
+  async retry(runId: string, taskId: string, options: { ignoreTaskTurnLimit?: boolean } = {}): Promise<SubagentRun> {
     const run = this.resolveRun(runId);
     const task = this.resolveTask(run, taskId);
     const repeatInspection = task.status === "completed" && task.mode === "shared_readonly" && ["reviewer", "tester"].includes(task.role);
     if (!retryableStatuses.has(task.status) && !repeatInspection) throw new Error(`Agent task ${task.id} is ${task.status}, not retryable.`);
+    // Model-facing retries must not resurrect legacy model-invented budgets.
+    // The trusted parent configuration still applies its explicit user limit.
+    if (options.ignoreTaskTurnLimit) task.maxTurns = undefined;
     task.status = "pending";
     task.error = undefined;
     task.result = undefined;
@@ -597,7 +600,6 @@ function taskSchema(): Record<string, unknown> {
       role: { type: "string", enum: ["explorer", "implementer", "reviewer", "tester"] },
       dependencies: { type: "array", items: { type: "string" } },
       mode: { type: "string", enum: ["shared_readonly", "worktree"] },
-      maxTurns: { type: "integer", minimum: 1, maximum: 100 },
     },
     required: ["id", "title", "instructions", "role"],
     additionalProperties: false,
@@ -675,7 +677,14 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
       describe: (input) => `start ${Array.isArray(input.tasks) ? input.tasks.length : 0} specialist agents`,
       async execute(input) {
         if (typeof input.goal !== "string" || !Array.isArray(input.tasks)) throw new Error("goal and tasks are required");
-        const run = await coordinator.start(input.goal, input.tasks as unknown as SubagentTaskInput[], typeof input.concurrency === "number" ? input.concurrency : undefined);
+        // A model-generated budget is not a user-configured execution limit.
+        // Ignore the legacy field from restored prompts; trusted host/CLI limits
+        // remain available independently of this model-facing tool.
+        const tasks = input.tasks.map((task) => {
+          const { maxTurns: _modelBudget, ...rest } = task as SubagentTaskInput;
+          return rest;
+        });
+        const run = await coordinator.start(input.goal, tasks, typeof input.concurrency === "number" ? input.concurrency : undefined);
         return `${formatAgentRun(run)}\nUse wait_agents with run_id ${run.id} to collect progress and results.`;
       },
     },
@@ -695,6 +704,11 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
       name: "wait_agents",
       description: "Wait up to 30 seconds for a multi-agent run to progress, then return statuses and completed results.",
       risk: "read",
+      isPendingWait: (input) => {
+        if (typeof input.run_id !== "string") return false;
+        try { return coordinator.get(input.run_id).tasks.some((task) => task.status === "running" || task.status === "pending"); }
+        catch { return false; }
+      },
       inputSchema: { type: "object", properties: { run_id: { type: "string" }, timeout_ms: { type: "integer", minimum: 0, maximum: 60000 } }, required: ["run_id"], additionalProperties: false },
       describe: (input) => `wait for agent run ${String(input.run_id ?? "")}`,
       async execute(input) {
@@ -728,7 +742,7 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
       describe: (input) => `retry agent ${String(input.task_id ?? "")}`,
       async execute(input) {
         if (typeof input.run_id !== "string" || typeof input.task_id !== "string") throw new Error("run_id and task_id are required");
-        return formatAgentRun(await coordinator.retry(input.run_id, input.task_id));
+        return formatAgentRun(await coordinator.retry(input.run_id, input.task_id, { ignoreTaskTurnLimit: true }));
       },
     },
     {

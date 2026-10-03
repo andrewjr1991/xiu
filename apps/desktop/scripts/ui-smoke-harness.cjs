@@ -1,6 +1,12 @@
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
+// A detached Windows GUI launch can lose its parent's output pipe. Treat that
+// as a failed test run and exit, instead of triggering Electron error dialogs.
+for (const stream of [process.stdout, process.stderr]) stream.on("error", (error) => {
+  if (error.code === "EPIPE") app.exit(1);
+  else throw error;
+});
 const { createSmokeWindow, evaluate, waitFor, settleLayout, resizeViewport, focusForKeyboard } = require("./ui-smoke-helpers.cjs");
 
 const smokeRoot = path.resolve(__dirname, "../../..", ".desktop-build-temp");
@@ -316,10 +322,9 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('long-task:30-turns')`, "30-turn task timeline");
     await evaluate(window, `window.xiuSmoke.emitWebFixture()`);
     await waitFor(window, `document.querySelector('.web-result-details')`, "compact web result detail");
-    assert(await evaluate(window, `document.querySelector('.turn-process') && !document.querySelector('.turn-process').open`), "Per-round process starts collapsed while running.");
-    await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
-    await waitFor(window, `document.querySelector('.turn-process').open`, "expand per-round process");
+    assert(await evaluate(window, `document.querySelector('.turn-process') && document.querySelector('.turn-process').open`), "Per-round process starts expanded while running.");
     await evaluate(window, `document.querySelector('.web-result-details').closest('.process-group').open = true`);
+    assert(await evaluate(window, `(() => { const group=document.querySelector('.web-result-details').closest('.process-group'); const heading=group.querySelector('summary'); const progress=group.querySelector('.model-progress-summary'); return heading.getBoundingClientRect().height <= 30 && heading.innerText.includes('运行记录') && !heading.innerText.includes('命令、工具与文件操作') && Number(getComputedStyle(heading.querySelector('strong')).fontWeight) <= 500 && (!progress || getComputedStyle(progress).borderTopWidth === '0px'); })()`), 'Process headings are quiet event records, not bold operation counts or nested cards.');
     assert(await evaluate(window, `(() => { const group=document.querySelector('.web-result-details').closest('.process-group'); const rows=[...group.querySelectorAll('.process-row')].filter(row=>row.textContent.includes('current holiday news')); return rows.length === 1 && rows[0].classList.contains('process-tool-finished'); })()`), "Paired web start/result must render as a single completed tool row, with no duplicate start row.");
     assert(await evaluate(window, `document.querySelector('.web-result-details').closest('.process-group').innerText.includes('返回 10 条结果') && !document.querySelector('.web-result-details').open && !document.body.innerText.includes('web-evidence-canary')`), "Web evidence must start collapsed with a compact result count.");
     await clickText(window, "查看检索结果详情", ".web-result-details summary");
@@ -328,14 +333,37 @@ app.whenReady().then(async () => {
     assert(await evaluate(window, `document.querySelector('.web-result-details a')?.getAttribute('href') === 'https://example.com/news'`), "Source Markdown must render a safe HTTPS link.");
     await clickText(window, "查看检索结果详情", ".web-result-details summary");
     assert(await evaluate(window, `document.querySelector('.plan-mode-selector').disabled`), "Plan mode must be locked while running.");
+    await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
+    await waitFor(window, `!document.querySelector('.turn-process').open`, "manually collapse running process");
+    assert(await evaluate(window, `(() => { const status=document.querySelector('.active-task-status'); const composer=document.querySelector('.composer'); document.querySelector('.task-scroll').scrollTop=0; const bounds=status?.getBoundingClientRect(); return status && !status.closest('.task-scroll') && bounds.height > 0 && bounds.bottom <= composer.getBoundingClientRect().top; })()`), "Live status stays visible above the composer outside folded/scrolled process details.");
     await checkComposerIme(window, "active composer");
     await setComposerText(window, "继续检查输入法验收");
     await evaluate(window, `(() => { const el=document.querySelector('.composer textarea'); for (let i=0;i<2;i++) el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true})); document.querySelector('.send-button').click(); return true; })()`);
     await waitFor(window, `window.xiuSmoke.calls().filter(call => call === 'task:steer').length === 1`, "normal Enter steers active task exactly once");
     assert(await evaluate(window, `window.xiuSmoke.calls().filter(call => call === 'task:create').length === 1`), "Active Enter must steer without creating another task.");
-    await waitFor(window, `document.querySelector('.timeline .subagent-activity')?.innerText.includes('调查任务验收')`, "chronological conversation subagent status");
-    assert(await evaluate(window, `document.querySelector('.turn-process').open`), "Progress updates must not collapse a manually opened process.");
+    await waitFor(window, `document.querySelector('.timeline .subagent-activity')?.textContent.includes('调查任务验收')`, "chronological conversation subagent status");
+    assert(await evaluate(window, `!document.querySelector('.turn-process').open`), "Progress updates must not reopen a manually collapsed process.");
+    await evaluate(window, `window.xiuSmoke.emitAlertFixture()`);
+    await waitFor(window, `document.querySelector('.turn-alerts') && document.querySelector('.active-task-status')?.textContent.includes('3,783')`, 'compact warnings and actual parameter progress');
+    assert(await evaluate(window, `(() => { const alerts=document.querySelector('.turn-alerts'); return !alerts.open && alerts.getBoundingClientRect().height < 80 && alerts.querySelectorAll('.turn-alert').length === 1; })()`), 'Long tool failures start folded and duplicate notice is suppressed.');
+    await evaluate(window, `document.querySelector('.turn-alerts > summary').click(); document.querySelector('.turn-alert > summary').click()`);
+    assert(await evaluate(window, `(() => { const detail=document.querySelector('.turn-alert-detail'); return detail.getBoundingClientRect().height <= 181 && detail.scrollHeight > detail.clientHeight && detail.textContent.includes('# log-format-canary') && !detail.querySelector('h1'); })()`), 'Full error evidence is scrollable and plain text, not giant Markdown headings.');
+    await evaluate(window, `document.querySelector('.turn-alerts > summary').click()`);
+    await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
+    await waitFor(window, `document.querySelector('.turn-process').open`, "reopen running process");
     assert(await evaluate(window, `document.querySelector('.subagent-activity .agent-avatar')?.getAttribute('aria-label') === '调查员头像'`), "Child activity uses an accessible role avatar.");
+    assert(await evaluate(window, `document.querySelector('.subagent-activity .agent-avatar svg') && !document.querySelector('.subagent-activity .agent-avatar svg text')`), "Child avatar uses a vector pattern, not a single role initial.");
+    await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight='1600px'`);
+    await waitFor(window, `(() => {const e=document.querySelector('.task-scroll');return e.scrollHeight-e.scrollTop-e.clientHeight < 2;})()`, "resize growth follows latest output");
+    await evaluate(window, `(() => {const e=document.querySelector('.task-scroll');e.dispatchEvent(new WheelEvent('wheel',{deltaY:-200,bubbles:true}));e.scrollTop=0;})()`);
+    await waitFor(window, `document.querySelector('.return-to-latest')`, "manual upward intent pauses follow");
+    assert(await evaluate(window, `getComputedStyle(document.querySelector('.return-to-latest')).gridArea === getComputedStyle(document.querySelector('.task-scroll')).gridArea`), 'Return-to-latest floats over the output, without taking another composer row.');
+    await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight='1900px'`);
+    await settleLayout(window);
+    assert(await evaluate(window, `document.querySelector('.task-scroll').scrollTop === 0`), "New content must not pull the user away from history.");
+    await evaluate(window, `document.querySelector('.return-to-latest').click()`);
+    await waitFor(window, `!document.querySelector('.return-to-latest') && (() => {const e=document.querySelector('.task-scroll');return e.scrollHeight-e.scrollTop-e.clientHeight < 2;})()`, "return to latest resumes follow");
+    await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight=''`);
     await evaluate(window, `document.querySelector('.overview-content').open = true`);
     await waitFor(window, `document.querySelector('.subagent-summary')?.innerText.includes('调查任务验收')`, "child summary visible without opening agents tab");
     await evaluate(window, `document.querySelector('[aria-label="收起侧栏"]').click()`);
@@ -346,6 +374,13 @@ app.whenReady().then(async () => {
       await settleLayout(window);
       assert(await evaluate(window, `(() => { const r=document.querySelector('.workspace-toolbar').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && document.querySelectorAll('.workspace-toolbar button').length === 4; })()`), "Grouped workspace toolbar fits both viewports.");
       assert(await evaluate(window, `(() => { const r=document.querySelector('.task-overview').getBoundingClientRect(); const c=document.querySelector('.composer').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && c.width > 200 && c.bottom <= innerHeight; })()`), "Summary and composer must remain usable in wide and narrow windows.");
+      await waitFor(window, `Boolean(document.querySelector('.plan-strip'))`, "compact plan ready");
+      const composerTop = await evaluate(window, `document.querySelector('.composer').getBoundingClientRect().top`);
+      await evaluate(window, `document.querySelector('.plan-strip').open = true`);
+      await settleLayout(window);
+      assert(await evaluate(window, `(() => { const r=document.querySelector('.plan-details').getBoundingClientRect(); const s=document.querySelector('.plan-strip summary').getBoundingClientRect(); return s.height <= 36 && r.height <= 262 && r.top >= 0 && r.left >= 0 && r.right <= innerWidth && Math.abs(document.querySelector('.composer').getBoundingClientRect().top - ${composerTop}) < 2; })()`), "Plan details must be bounded and must not push the composer down.");
+      await fs.promises.writeFile(path.join(smokeRoot, `compact-plan-${width}.png`), (await window.webContents.capturePage()).toPNG());
+      await evaluate(window, `document.querySelector('.plan-strip').open = false`);
       await fs.promises.writeFile(path.join(smokeRoot, `subagent-summary-${width}.png`), (await window.webContents.capturePage()).toPNG());
     }
     assert(await evaluate(window, `document.querySelector('.task-overview').innerText.includes('smoke-overview-branch') && document.querySelector('.task-overview').innerText.includes('后台进程')`), "Overview exposes workspace environment and background processes.");
@@ -420,6 +455,10 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.historyFixture()`);
     await clickText(window, "历史续接验收", ".history-row");
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`, "old history fixture loaded");
+    await evaluate(window, `document.querySelector('.history-view h2').textContent='很长的历史任务需求，包含完整约束和验收条件。'.repeat(30)`);
+    await settleLayout(window);
+    assert(await evaluate(window, `(() => { const title=document.querySelector('.history-view h2'); return getComputedStyle(title).textOverflow === 'ellipsis' && title.getBoundingClientRect().height <= 24 && document.querySelector('.task-scroll').scrollWidth <= document.querySelector('.task-scroll').clientWidth; })()`), 'Long history titles stay on one line; full request remains in the conversation.');
+    await fs.promises.writeFile(path.join(smokeRoot, 'quiet-history-1366.png'), (await window.webContents.capturePage()).toPNG());
     await setComposerText(window, "请重新安排只读审查");
     // Opening history refreshes the recovery view; the fixture has no recovery.
     await evaluate(window, `document.querySelector('.refresh-button').click()`);
@@ -431,7 +470,7 @@ app.whenReady().then(async () => {
     await settleLayout(window);
     assert(await evaluate(window, `document.querySelector('.task-scroll .turn-process') && [...document.querySelectorAll('.task-scroll .turn-process')].every(el => !el.open)`), "Completed turn defaults to a folded process with final answer visible.");
     await fs.promises.writeFile(path.join(smokeRoot, 'compact-completed-turn.png'), (await window.webContents.capturePage()).toPNG());
-    assert(await evaluate(window, `!document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`), "Completion must not switch back to stale history.");
+    assert(await evaluate(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary') && document.querySelector('.task-scroll .conversation-round:last-child').innerText.includes('new-review-result-canary') && !document.querySelector('.task-scroll .conversation-round:last-child').innerText.includes('old-snake-result-canary')`), "Continuation preserves old rounds without attributing their answer to the new round.");
     await openTool(window, "子智能体");
     await waitFor(window, `document.querySelector('.review-pane .subagent-card')?.innerText.includes('本轮审查')`, "completed continuation keeps children");
     await clickText(window, "查看结果", ".review-pane summary");

@@ -3,6 +3,24 @@ import test from "node:test";
 import { resolveConfig } from "../src/config.js";
 import { refreshModelContext } from "../src/context.js";
 
+test("model response deadlines are independently configurable and bounded", () => {
+  const names = ["XIU_MODEL_FIRST_RESPONSE_SECONDS", "XIU_MODEL_STREAM_IDLE_SECONDS", "XIU_MODEL_COMPLETE_SECONDS"];
+  const saved = names.map((name) => process.env[name]);
+  try {
+    names.forEach((name) => delete process.env[name]);
+    const defaults = resolveConfig({});
+    assert.equal(defaults.modelFirstResponseTimeoutMs, 600_000);
+    assert.equal(defaults.modelStreamIdleTimeoutMs, 180_000);
+    assert.equal(defaults.modelCompleteTimeoutMs, 900_000);
+    process.env.XIU_MODEL_COMPLETE_SECONDS = "1200";
+    assert.equal(resolveConfig({}).modelCompleteTimeoutMs, 1_200_000);
+    for (const value of ["0", "bad", "86401"]) {
+      process.env.XIU_MODEL_COMPLETE_SECONDS = value;
+      assert.throws(() => resolveConfig({}), /XIU_MODEL_COMPLETE_SECONDS/);
+    }
+  } finally { names.forEach((name, index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; }); }
+});
+
 test("Agnes preset selects its compatible endpoint and model", () => {
   const config = resolveConfig({ provider: "agnes" });
   assert.equal(config.provider, "agnes");

@@ -14,15 +14,15 @@ export function TaskOverview({ hidden, task, events, history, review, workspace,
   workspace?: { name: string; path?: string }; agents?: RuntimeSubagentCard[];
   live: boolean; collapsed: boolean; onOpen: (tab: DesktopReviewTab) => void;
 }) {
-  const data = taskOverview(history?.events ?? events, history, review, workspace?.path);
-  const goal = data.goal ?? (!history ? task?.taskPreview : undefined);
-  const summary = data.summary ?? (!history ? task?.result : undefined);
+  const data = taskOverview(history?.events ?? events, history, review, workspace?.path, task);
+  const goal = data.goal;
+  const summary = data.summary;
   if (hidden) return null;
   const row = (text: string, tab: DesktopReviewTab, meta?: string) => <button className="overview-row" key={text} title={text} onClick={() => onOpen(tab)}><span>{text}</span>{meta && <small>{meta}</small>}</button>;
   return <section className="task-overview" aria-label="任务概览">
     <header><strong>{history ? "历史任务概览" : "任务概览"}</strong></header>
     {!hidden && <details className="overview-content" open={collapsed}><summary>查看环境与任务活动</summary><div>
-      {goal && <Group title="任务摘要"><p className="overview-goal">{goal}</p>{summary && <p className="overview-excerpt" title={summary.slice(0, 1200)}>{summary.slice(0, 300)}</p>}{data.updatedAt && <small>更新于 {new Date(data.updatedAt).toLocaleTimeString()}</small>}</Group>}
+      {summary && <Group title={data.phase ?? "阶段摘要"}>{goal && <p className="overview-goal">{goal}</p>}<p className="overview-excerpt">{summary}</p>{data.updatedAt && <small>更新于 {new Date(data.updatedAt).toLocaleTimeString()}</small>}</Group>}
       <Group title={history ? "已保存环境" : "当前环境"}>
         <p>{history ? "历史快照 · 不混入实时工作区状态" : `${workspace?.name ?? "本地工作区"} · 本地执行`}</p>
         {!history && <p title={workspace?.path}>{workspace?.path}</p>}

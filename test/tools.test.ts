@@ -218,6 +218,23 @@ test("run_process launches npm portably without a Windows EINVAL wrapper failure
   assert.doesNotMatch(result, /EINVAL/);
 });
 
+test("run_process safely decodes double-encoded arrays but rejects command strings before approval", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-encoded-args-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;
+  let approvals = 0;
+  const context = { cwd, approve: async () => { approvals++; return true; } };
+  const values = ["$HOME", "a;b&c", "space value"];
+  const result = await executeTool(tool, { program: "node", args: JSON.stringify(["-e", "console.log(JSON.stringify(process.argv.slice(1)))", ...values]) }, context);
+  assert.deepEqual(JSON.parse(result.slice(result.indexOf("\n") + 1)), values);
+  assert.equal(approvals, 1);
+  for (const args of ["--version", null, undefined, JSON.stringify([42]), ["x".repeat(20001)], Array(101).fill("a")]) {
+    const rejected = await executeTool(tool, { program: "node", args }, context);
+    assert.match(rejected, /args must be an array/);
+    assert.match(rejected, /No process was started/);
+  }
+  assert.equal(approvals, 1, "Malformed arguments never reach approval or execution");
+});
+
 test("run_process rejects shell wrappers and escaped workspace programs before approval", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-direct-boundary-"));
   const tool = builtinTools.find((candidate) => candidate.name === "run_process")!;

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
-import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ToolCall, ToolDefinition } from "./types.js";
+import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ModelStreamProgress, ToolCall, ToolDefinition } from "./types.js";
 import { SafeRequestCache } from "./request-cache.js";
 import { createTrustedDispatcher } from "./trusted-dispatcher.js";
 
@@ -151,6 +151,8 @@ class OpenAIProvider implements ModelProvider {
     const dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new OpenAI({
       apiKey: apiKey || "xiu-local",
+      maxRetries: 0,
+      timeout: Math.max(config.modelFirstResponseTimeoutMs ?? 600_000, config.modelCompleteTimeoutMs ?? 900_000),
       baseURL: config.baseURL,
       fetchOptions: dispatcher ? { dispatcher } : undefined,
     });
@@ -177,6 +179,7 @@ class OpenAIProvider implements ModelProvider {
       toolCalls,
       raw: openAIAssistantMessage(text, toolCalls),
       finishReason,
+      ...(finishReason === "unknown" ? { protocolIssue: choice.finish_reason ? "unsupported_finish_reason" as const : "missing_finish_reason" as const } : {}),
       usage: openAIUsage(response.usage),
     };
   }
@@ -225,7 +228,7 @@ class OpenAIProvider implements ModelProvider {
     return request("auto");
   }
 
-  async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
+  async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal, onProgress?: (progress?: ModelStreamProgress) => void): Promise<AssistantTurn> {
     const formattedTools = this.formatTools(tools);
     const response = await this.client.chat.completions.create({
       model: this.config.model,
@@ -237,12 +240,15 @@ class OpenAIProvider implements ModelProvider {
     }, { signal });
     let text = "";
     let finishReason: NonNullable<AssistantTurn["finishReason"]> = "unknown";
+    let sawFinishReason = false;
+    let chunks = 0;
     let usage: ReturnType<typeof openAIUsage>;
     const pending = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const chunk of response) {
+      chunks++;
       if (chunk.usage) usage = openAIUsage(chunk.usage);
-      const choice = chunk.choices[0];
-      if (choice?.finish_reason) finishReason = openAIFinishReason(choice.finish_reason);
+      const choice = chunk.choices.find((item) => item.index === 0) ?? (chunk.choices.length === 1 && chunk.choices[0]?.index === undefined ? chunk.choices[0] : undefined);
+      if (choice?.finish_reason) { sawFinishReason = true; finishReason = openAIFinishReason(choice.finish_reason); }
       const delta = choice?.delta;
       const visibleText = delta?.content || delta?.refusal;
       if (visibleText) {
@@ -256,6 +262,7 @@ class OpenAIProvider implements ModelProvider {
         if (call.function?.arguments) current.arguments += call.function.arguments;
         pending.set(call.index, current);
       }
+      onProgress?.({ chunks, textCharacters: text.length, argumentCharacters: [...pending.values()].reduce((total, call) => total + call.arguments.length, 0) });
     }
     // A truncated stream can end halfway through JSON, or after a valid-looking
     // first call in an unfinished batch. Neither is permission to execute it.
@@ -264,7 +271,9 @@ class OpenAIProvider implements ModelProvider {
         id: call.id, name: call.name, input: parseToolInput(call.arguments, call.name),
       }))
       : [];
-    return { text, toolCalls, raw: openAIAssistantMessage(text, toolCalls), usage, finishReason };
+    return { text, toolCalls, raw: openAIAssistantMessage(text, toolCalls), usage, finishReason,
+      protocolDiagnostics: { chunks, pendingCalls: pending.size, argumentCharacters: [...pending.values()].reduce((total, call) => total + call.arguments.length, 0) },
+      ...(finishReason === "unknown" ? { protocolIssue: sawFinishReason ? "unsupported_finish_reason" as const : "missing_finish_reason" as const } : {}) };
   }
 
   private formatMessages(system: string, messages: ConversationMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
@@ -300,6 +309,8 @@ class AnthropicProvider implements ModelProvider {
     const dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new Anthropic({
       apiKey,
+      maxRetries: 0,
+      timeout: Math.max(config.modelFirstResponseTimeoutMs ?? 600_000, config.modelCompleteTimeoutMs ?? 900_000),
       baseURL: config.baseURL,
       fetchOptions: dispatcher ? { dispatcher } : undefined,
     });
@@ -345,7 +356,7 @@ class AnthropicProvider implements ModelProvider {
     return response.content.some((block) => block.type === "tool_use" && block.name === name);
   }
 
-  async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal): Promise<AssistantTurn> {
+  async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal, onProgress?: (progress?: ModelStreamProgress) => void): Promise<AssistantTurn> {
     const stream = this.client.messages.stream({
       model: this.config.model,
       max_tokens: 8192,
@@ -354,7 +365,36 @@ class AnthropicProvider implements ModelProvider {
       tools: this.formatTools(tools),
     }, { signal });
     stream.on("text", (text) => onTextDelta(text));
-    return this.parseResponse(await stream.finalMessage());
+    let chunks = 0, textCharacters = 0, argumentCharacters = 0;
+    const argumentBlocks = new Map<number, { name: string; json: string }>();
+    stream.on("streamEvent", (event) => {
+      chunks++;
+      if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+        argumentBlocks.set(event.index, { name: event.content_block.name, json: "" });
+      }
+      if (event.type === "content_block_delta") {
+        if (event.delta.type === "text_delta") textCharacters += event.delta.text.length;
+        if (event.delta.type === "input_json_delta") {
+          argumentCharacters += event.delta.partial_json.length;
+          const block = argumentBlocks.get(event.index);
+          if (block) block.json += event.delta.partial_json;
+        }
+      }
+      onProgress?.({ chunks, textCharacters, argumentCharacters });
+    });
+    try {
+      const message = await stream.finalMessage();
+      // The SDK's incremental parser tolerates/repairs partial JSON for its
+      // preview. That is not sufficient evidence to execute a finished tool.
+      if (finishedToolArguments(anthropicFinishReason(message.stop_reason))) {
+        for (const block of argumentBlocks.values()) if (block.json) parseToolInput(block.json, block.name);
+      }
+      return this.parseResponse(message);
+    }
+    catch (error) {
+      if (error instanceof SyntaxError) throw new Error("Invalid tool arguments from model: Anthropic stream contained incomplete or malformed JSON. No unfinished tool was executed.");
+      throw error;
+    }
   }
 
   private formatMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {

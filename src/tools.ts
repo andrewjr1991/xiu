@@ -37,9 +37,14 @@ function optionalStringArray(input: Record<string, unknown>, name: string): stri
 }
 
 function processArgs(input: Record<string, unknown>): string[] {
-  const value = input.args;
+  let value = input.args;
+  // Some compatible providers double-encode array parameters. Decode only JSON
+  // arrays; never split command strings or introduce shell interpretation.
+  if (typeof value === "string" && value.length <= 110_000) {
+    try { value = JSON.parse(value); } catch { /* Report the contract below. */ }
+  }
   if (!Array.isArray(value) || value.length > 100 || value.some((item) => typeof item !== "string" || item.length > 20_000)) {
-    throw new Error("args must be an array of at most 100 strings, each no longer than 20000 characters");
+    throw new Error('args must be an array of at most 100 strings, each no longer than 20000 characters. Example: {"program":"node","args":["--version"]}. Use [] for no arguments. Put long source code in a workspace file and run that file; do not pass a whole command as args. No process was started.');
   }
   const args = value as string[];
   if (args.reduce((total, item) => total + item.length, 0) > 100_000) throw new Error("combined args must not exceed 100000 characters");
@@ -287,7 +292,7 @@ function applyExactPatches(content: string, patches: Array<{ old_text: string; n
   let updated = content;
   for (const [index, patch] of patches.entries()) {
     const first = updated.indexOf(patch.old_text);
-    if (first < 0) throw new Error(`patches[${index}].old_text was not found`);
+    if (first < 0) throw new Error(`patches[${index}].old_text was not found; no changes from this batch were written. Read the current file and rebuild a smaller patch using exact current text; do not retry stale old_text.`);
     if (updated.indexOf(patch.old_text, first + patch.old_text.length) >= 0) {
       throw new Error(`patches[${index}].old_text is not unique; provide more context`);
     }
@@ -378,7 +383,7 @@ export const builtinTools: AgentTool[] = [
   {
     name: "verify_output",
     risk: "read",
-    description: "Deterministically verify a generated UTF-8 text artifact with substring and byte-size expectations, or explicitly assert a removed artifact is absent with exists:false. Any unmet condition returns Verification failed. This is bounded artifact validation, not a project test suite.",
+    description: "Deterministically verify ONE REGULAR UTF-8 FILE (not a directory or workspace root) with substring and byte-size expectations, or explicitly assert a removed artifact is absent with exists:false. Any unmet condition returns Verification failed. This is bounded artifact validation, not a project test suite. Wait for the author to create the artifact before final validation; use list_files to inspect directories.",
     inputSchema: {
       type: "object",
       properties: {
@@ -566,7 +571,7 @@ export const builtinTools: AgentTool[] = [
       type: "object",
       properties: {
         program: { type: "string", description: "Executable name from PATH or a workspace-relative executable path. Do not include arguments here." },
-        args: { type: "array", items: { type: "string" }, maxItems: 100, description: "Exact argument values. They are passed directly and are never parsed by PowerShell." },
+        args: { type: "array", items: { type: "string", maxLength: 20_000 }, maxItems: 100, description: 'Exact argument values, e.g. ["--version"] or ["--test", "game.test.js"]. Use [] for none. Maximum 20000 characters per argument and 100000 combined. Write large code to a file first. Never pass a command string.' },
         timeout_ms: { type: "integer", minimum: 1000, maximum: 300000 },
       },
       required: ["program", "args"],

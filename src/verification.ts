@@ -116,6 +116,11 @@ export class VerificationLedger {
   }
   get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every((value) => value.passed); }
   get failed(): boolean { return [...this.checks.values()].some((value) => !value.passed); }
+  /** Concrete pending obligations for the model; never infer success from prose. */
+  pendingChecks(): Array<{ tool: string; input: Record<string, unknown> }> {
+    return [...this.checks.values()].flatMap((value) => !value.passed && value.name && value.input
+      ? [{ tool: value.name, input: structuredClone(value.input) }] : []);
+  }
   evidenceChecks(): VerificationEvidence["checks"] {
     if (!this.passed || this.checks.size > 64) return [];
     return [...this.checks.values()].flatMap(({ name, input }) => name

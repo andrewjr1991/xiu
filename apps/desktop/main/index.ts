@@ -258,9 +258,6 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return serializeWriterStart(async () => {
       const workspace = controller.trustedWorkspacePath();
-      const snapshot = await controller.snapshot();
-      const selected = snapshot.tasks.find((item) => item.id === request?.taskId);
-      if (!selected) throw new Error("任务不存在或已经删除。");
       if (request?.confirmed !== true) throw new Error("删除任务需要明确确认。");
       await taskController.deleteTask(workspace, request, request.confirmed);
       return emitSnapshot(await controller.snapshot());

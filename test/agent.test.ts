@@ -32,6 +32,125 @@ class ScriptedProvider implements ModelProvider {
   }
 }
 
+test("empty stream headers retain first-body deadline instead of starting short idle deadline", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-empty-stream-header-"));
+  const provider: ModelProvider = {
+    async complete() { throw new Error("unexpected fallback"); },
+    async stream(_system, _messages, _tools, delta, _signal, progress) {
+      progress?.({ chunks: 1, textCharacters: 0, argumentCharacters: 0 });
+      delta("");
+      await new Promise(resolve => setTimeout(resolve, 35));
+      delta("公开回复\n");
+      return { text: "公开回复", toolCalls: [], raw: {}, finishReason: "stop" };
+    },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+    modelFirstResponseTimeoutMs: 150, modelStreamIdleTimeoutMs: 10 }, provider, [], async () => false,
+    { onDraftPreview: () => undefined });
+  await agent.run("回答即可");
+  assert.equal(agent.status().outcome, "completed");
+});
+
+test("model phase deadlines stop once and never claim a response was received", async () => {
+  for (const stream of [false, true]) {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-phase-timeout-"));
+    let requests = 0;
+    const pending = async () => { requests++; return await new Promise<AssistantTurn>(() => undefined); };
+    const provider: ModelProvider = { complete: pending, ...(stream ? { stream: pending } : {}) };
+    const ends: Array<boolean | undefined> = [];
+    const agent = new Agent({ provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+      modelFirstResponseTimeoutMs: 20, modelStreamIdleTimeoutMs: 5, modelCompleteTimeoutMs: 20 }, provider, [], async () => false,
+      { onDraftPreview: () => undefined, onModelEnd: (received) => ends.push(received) });
+    await assert.rejects(agent.run("检查工作区"), stream ? /首个公开正文或工具参数/ : /完整模型响应/);
+    assert.equal(requests, 1);
+    assert.deepEqual(ends, [false]);
+    assert.equal(agent.status().outcome, "failed");
+  }
+});
+
+test("stream silence records counters only and manual restored continuation uses complete response", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-stream-timeout-"));
+  const config: AgentConfig = { provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+    modelFirstResponseTimeoutMs: 100, modelStreamIdleTimeoutMs: 15 };
+  let streams = 0, completions = 0;
+  const provider: ModelProvider = {
+    async stream(_system, _messages, _tools, delta, _signal, progress) {
+      streams++;
+      delta(""); // An empty text callback is not first-body progress.
+      progress?.({ chunks: 1, textCharacters: 0, argumentCharacters: 7 });
+      return await new Promise<AssistantTurn>(() => undefined);
+    },
+    async complete() { completions++; return { text: "done", raw: {}, toolCalls: [], finishReason: "stop" }; },
+  };
+  await assert.rejects(new Agent({ ...config }, provider, [], async () => false, { onDraftPreview: () => undefined }).run("Inspect"), /7 个参数字符/);
+  assert.equal(streams, 1); assert.equal(completions, 0);
+  const restored = await loadSession(cwd);
+  assert.equal(restored.lastStreamTimedOut, true);
+  const records = (await fs.readFile(restored.file, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  const timeout = records.find(row => row.type === "model_timeout");
+  assert.deepEqual(Object.keys(timeout).sort(), ["timestamp", "type", "transport", "phase", "timeoutMs", "chunks", "textCharacters", "argumentCharacters"].sort());
+  assert.equal(timeout.argumentCharacters, 7);
+  const continued = new Agent({ ...config }, provider, [], async () => false, { onDraftPreview: () => undefined }, restored);
+  assert.equal(await continued.run("Continue"), "done");
+  assert.equal(streams, 1); assert.equal(completions, 1);
+});
+
+test("incomplete provider response gives specific guidance without executing its calls", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-missing-finish-"));
+  const provider: ModelProvider = { async complete() { return {
+    text: "partial", raw: {}, finishReason: "unknown", protocolIssue: "missing_finish_reason",
+    toolCalls: [{ id: "unsafe", name: "write_file", input: { path: "should-not-exist.txt", content: "partial" } }],
+  }; } };
+  let approvals = 0;
+  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools, async () => { approvals++; return true; });
+  const result = await agent.run("Create the file");
+  assert.match(result, /no finish marker/);
+  assert.match(result, /not a turn limit or confirmed output limit/);
+  assert.equal(approvals, 0);
+  await assert.rejects(fs.stat(path.join(cwd, "should-not-exist.txt")), /ENOENT/);
+  assert.equal(agent.status().outcome, "failed");
+});
+
+test("missing streamed finish marker switches only the next user continuation to non-streaming", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-stream-compat-"));
+  let streams = 0, completions = 0, approvals = 0;
+  const provider: ModelProvider = {
+    async stream() { streams++; return { text: "partial", raw: {}, finishReason: "unknown", protocolIssue: "missing_finish_reason",
+      toolCalls: [{ id: "partial", name: "write_file", input: { path: "must-not-execute.txt", content: "partial" } }] }; },
+    async complete() { completions++; return { text: "Inspection complete.", raw: {}, finishReason: "stop", toolCalls: [] }; },
+  };
+  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools,
+    async () => { approvals++; return true; }, { onDraftPreview: () => undefined });
+  const result = await agent.run("Inspect this workspace");
+  assert.match(result, /No automatic retry/);
+  assert.equal(streams, 1);
+  assert.equal(completions, 0);
+  await fs.writeFile(path.join(cwd, "keep.txt"), "already completed");
+  const continued = await agent.run("Continue inspecting, preserving existing files");
+  assert.match(continued, /Inspection complete/);
+  assert.equal(streams, 1);
+  assert.equal(completions, 1);
+  assert.equal(approvals, 0);
+  await assert.rejects(fs.stat(path.join(cwd, "must-not-execute.txt")), /ENOENT/);
+  assert.equal(await fs.readFile(path.join(cwd, "keep.txt"), "utf8"), "already completed");
+});
+
+test("restoring a failed session retains non-streaming compatibility without replaying calls", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-restored-stream-"));
+  const config: AgentConfig = { provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true };
+  const failed: ModelProvider = { async complete() { throw new Error("unexpected"); },
+    async stream() { return { text: "", raw: {}, toolCalls: [], finishReason: "unknown", protocolIssue: "missing_finish_reason" }; } };
+  await new Agent({ ...config }, failed, [], async () => true, { onDraftPreview: () => undefined }).run("Inspect");
+  const restored = await loadSession(cwd);
+  assert.equal(restored.lastResponseProtocolIssue, "missing_finish_reason");
+  let completed = 0;
+  const compatible: ModelProvider = { async stream() { throw new Error("must not stream"); },
+    async complete() { completed++; return { text: "done", toolCalls: [], finishReason: "stop", raw: {} }; } };
+  const agent = new Agent({ ...config }, compatible, [], async () => true, { onDraftPreview: () => undefined }, restored);
+  assert.equal(await agent.run("Continue inspection"), "done");
+  assert.equal(completed, 1);
+});
+
 test("agent executes tools and continues until the model finishes", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-"));
   const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
@@ -693,7 +812,7 @@ test("a malformed redundant tool call cannot override successful verification in
           text: "Verifying the artifact.",
           toolCalls: [
             { id: "verify", name: "verify_output", input: { path: "video.mp4", min_bytes: 8, required_substrings: ["mp4"] } },
-            { id: "redundant", name: "run_process", input: { program: "node", args: "[\"--version\"]" } },
+            { id: "redundant", name: "run_process", input: { program: "node", args: "[not-valid-json]" } },
           ],
           raw: {},
         };

@@ -200,14 +200,70 @@ test("OpenAI streaming preserves finish reasons through a final usage-only chunk
   for (const reason of ["stop", "tool_calls", "length", "content_filter", null]) {
     await withProvider("openai-compatible", openAIStream(reason), async (provider) => {
       const chunks: string[] = [];
-      const result = await provider.stream!("system", [{ role: "user", content: "hello" }], [], (text) => chunks.push(text));
+      let progress = 0;
+      const result = await provider.stream!("system", [{ role: "user", content: "hello" }], [], (text) => chunks.push(text), undefined, () => { progress++; });
+      assert.ok(progress >= 2, "Protocol chunks, including tool arguments, report progress");
       assert.equal(result.finishReason, reason ?? "unknown");
+      assert.equal(result.protocolIssue, reason === null ? "missing_finish_reason" : undefined);
       assert.equal(chunks.join(""), "visible answer");
       assert.deepEqual(result.toolCalls, reason === "stop" || reason === "tool_calls" ? [calls[0]] : []);
       assert.equal(result.usage?.totalTokens, 12);
       assert.doesNotMatch(JSON.stringify(result), /hidden-canary|reasoning_content/);
     });
   }
+});
+
+test("stream progress exposes only bounded numeric counters, never argument or reasoning content", async () => {
+  await withProvider("openai-compatible", openAIStream("tool_calls"), async (provider) => {
+    const updates: unknown[] = [];
+    await provider.stream!("system", [], [], () => {}, undefined, details => updates.push(details));
+    assert.deepEqual(updates.at(-1), { chunks: 4, textCharacters: 14, argumentCharacters: '{"path":"src/index.ts"}'.length });
+    assert.doesNotMatch(JSON.stringify(updates), /hidden-canary|src\/index|reasoning|path/);
+  });
+});
+
+test("Anthropic malformed tool JSON stops without leaking raw argument diagnostics", async () => {
+  const events = [
+    { type: "message_start", message: { id: "msg", type: "message", role: "assistant", model: "offline-model", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call", name: "read_file", input: {} } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"private-argument-canary" BROKEN}' } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 3 } },
+    { type: "message_stop" },
+  ];
+  await withProvider("anthropic", events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), async provider => {
+    await assert.rejects(provider.stream!("system", [], [], () => {}), (error: Error) => {
+      assert.match(error.message, /Invalid tool arguments/);
+      assert.doesNotMatch(error.message, /private-argument-canary|BROKEN/);
+      return true;
+    });
+  });
+});
+
+test("unsupported finish markers remain non-executable and have bounded diagnostic metadata", async () => {
+  await withProvider("openai-compatible", openAIStream("unexpected-private-canary"), async (provider) => {
+    const result = await provider.stream!("system", [], [], () => {});
+    assert.equal(result.finishReason, "unknown");
+    assert.equal(result.protocolIssue, "unsupported_finish_reason");
+    assert.deepEqual(result.toolCalls, []);
+    assert.doesNotMatch(JSON.stringify(result), /unexpected-private-canary/);
+  });
+});
+
+test("stream parsing follows choice index zero even when choices arrive out of order", async () => {
+  const events = [
+    { choices: [{ index: 1, delta: { content: "wrong-choice-canary" }, finish_reason: "stop" },
+      { index: 0, delta: { tool_calls: [{ index: 0, id: "call-read", type: "function", function: { name: "read_file", arguments: '{"path":"src/index.ts"}' } }] }, finish_reason: null }] },
+    { choices: [{ index: 1, delta: {}, finish_reason: null }, { index: 0, delta: {}, finish_reason: "tool_calls" }] },
+  ];
+  const stream = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n";
+  await withProvider("openai-compatible", stream, async (provider) => {
+    const response = await provider.stream!("system", [], [], () => {});
+    assert.equal(response.finishReason, "tool_calls");
+    assert.deepEqual(response.toolCalls, [calls[0]]);
+    assert.deepEqual(response.protocolDiagnostics, { chunks: 2, pendingCalls: 1, argumentCharacters: 23 });
+    assert.doesNotMatch(JSON.stringify(response), /wrong-choice-canary/);
+  });
 });
 
 test("truncated tool JSON is discarded without hiding the output-limit reason", async () => {

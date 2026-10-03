@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.5 — Release candidate (2026-10-03)
+
+- Preserve task continuation and model-switch context; remove model-invented child budgets while retaining explicit host limits.
+- Separate first-body, stream-idle and complete-response deadlines; show safe public output and numeric transport progress. Only explicit continuation changes transport after a stream failure.
+- Validate complete tool JSON, retain exact verification obligations, and avoid false loop detection during healthy child waits.
+- Make stale task deletion idempotent without deleting project files.
+- Follow growing output, pause on upward navigation, fold bounded error details, diversify vector avatars and generate stage-based summaries.
+- Reduce nested blue cards and heavy process headings; compact headers and history titles while preserving controls and logs.
+- Preserve trust, Plan, approval, checkpoints and ephemeral Full Access. Windows installer remains unsigned; upstream stalls and browser play are not certified by UI tests.
+
 ## 0.20.4 — GitHub Release (2026-10-03; npm publication pending)
 
 - Add chronological child-agent status, consistent role avatars, inspectable results and independently confirmed cancellation without expanding permissions.
