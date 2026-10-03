@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.3-preview.13 — Local Skill import candidate (unreleased)
+
+- Desktop local Skill preview now accepts folders, a standalone SKILL.md, or ZIP packages; single-file imports exclude unrelated siblings.
+- Bound archive input/extraction, reject unsafe paths, aliases, links, encryption and unsupported compression, and verify actual sizes and CRC before confirmation.
+- Retain permission preview, immutable staging, cancellation, single-use confirmation, Plan/trust enforcement and no-overwrite behavior. No bundled scripts run; remote commands and store management remain deferred.
+- Replace fast-glob/braces with bounded tinyglobby searches, preserving ordinary brace/range matching and workspace/symlink guards; upgrade desktop build-time sharp to 0.35.5.
+- Maintainer Skill import, real OS IME and external-device acceptance passed. CLI and both production dependency audits are clean; desktop development audit still reports the unpatched http-cache-semantics chain in electron-builder. Exact-commit CI and release authorization remain pending.
+
 ## 0.20.3-preview.12 — Local test candidate (unreleased)
 
 - Desktop search reuses CLI lazy device enrollment and short-lived token renewal. Managed and custom search are explicit UI choices; saving does not enroll or test a service.

@@ -337,13 +337,16 @@ function registerIpc(): void {
     assertTrustedSender(event);
     return taskController.managementSnapshot(controller.trustedWorkspacePath());
   });
-  ipcMain.handle(desktopChannels.skillPrepare, async (event) => serializeWriterStart(async () => {
+  ipcMain.handle(desktopChannels.skillPrepare, async (event, sourceKind: unknown = "directory") => serializeWriterStart(async () => {
     assertTrustedSender(event);
+    if (sourceKind !== "directory" && sourceKind !== "file") throw new Error("无效的技能导入方式。");
     const workspace = controller.trustedWorkspacePath();
     if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端。");
     return taskController.prepareSkillInstallation(workspace, async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return undefined;
-      const result = await dialog.showOpenDialog(mainWindow, { title: "选择本地 Skill 包目录", properties: ["openDirectory"] });
+      const result = await dialog.showOpenDialog(mainWindow, sourceKind === "directory"
+        ? { title: "选择本地 Skill 包目录", properties: ["openDirectory"] }
+        : { title: "选择 SKILL.md 或 ZIP 技能包", properties: ["openFile"], filters: [{ name: "Skill 文件与压缩包", extensions: ["md", "zip"] }] });
       return result.canceled ? undefined : result.filePaths[0];
     });
   }));

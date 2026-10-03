@@ -25,9 +25,9 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
     setKeyEnv(next.web.apiKeyEnv ?? "");
     setWebMode(next.web.managed ? "managed" : "custom");
   };
-  const perform = async (action: () => Promise<unknown>) => {
+  const perform = async (action: () => Promise<unknown>, failureMessage?: string) => {
     setBusy(true); setError("");
-    try { await action(); } catch { setError("操作失败或配置已变化。请刷新后重试，配置修改要求任务和终端空闲。"); }
+    try { await action(); } catch { setError(failureMessage ?? "操作失败或配置已变化。请刷新后重试，配置修改要求任务和终端空闲。"); }
     finally { setBusy(false); }
   };
   useEffect(() => { void perform(refresh); }, []);
@@ -35,6 +35,10 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
   useEffect(() => { if (!busy) closeRef.current?.focus(); }, [busy]);
   const save = (request: WorkspaceManagementRequest) => void perform(async () => { onConnection(await window.xiuDesktop.changeManagement(request)); await refresh(); });
   const unavailable = disabled || busy || !data;
+  const prepareSkill = (kind: "directory" | "file") => void perform(async () => {
+    setSkillPreview(undefined);
+    setSkillPreview(await window.xiuDesktop.prepareSkillInstallation(kind));
+  }, "无法预览技能包。任务和终端须空闲；请选择未安装的文件夹、SKILL.md 或 ZIP，包须无链接、无重复技能、权限声明有效，大小不超过 20 MB、条目不超过 1000。");
   return <div className="dialog-backdrop"><section className="mcp-panel management-panel" role="dialog" aria-modal="true" aria-label="工具与运行设置" onKeyDown={(event) => {
     if (event.key === "Escape" && !busy && !document.querySelector('.xiu-select-menu')) { event.preventDefault(); onClose(); }
     if (event.key === "Tab") {
@@ -62,7 +66,9 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
       <h3>备用渠道顺序</h3><Select aria-label="主渠道" value={primary} onChange={(event) => { setPrimary(event.target.value); setChain(data.providers.find((item) => item.id === event.target.value)?.fallback ?? []); }}><option value="">选择主渠道</option>{data.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>
       <ol>{chain.map((id) => <li key={id}>{data.providers.find((item) => item.id === id)?.name ?? id}<button onClick={() => setChain(chain.filter((value) => value !== id))}>移除</button></li>)}</ol>
       <Select aria-label="备用渠道" value={fallback} onChange={(event) => setFallback(event.target.value)}><option value="">选择备用渠道</option>{data.providers.filter((item) => item.id !== primary && !chain.includes(item.id)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><button disabled={!fallback || chain.length >= 8} onClick={() => { setChain([...chain, fallback]); setFallback(""); }}>添加到末尾</button><button disabled={unavailable || !primary} onClick={() => save({ action: "fallback", revision: data.revision, providerId: primary, chain })}>保存顺序</button></>}
-    {tab === "skills" && <><p>Skills 是外部指令，不代替任务审批。安装只复制本地技能包，不执行包内脚本。</p><button disabled={unavailable} onClick={() => void perform(async () => setSkillPreview(await window.xiuDesktop.prepareSkillInstallation()))}>选择本地技能包并预览</button>
+    {tab === "skills" && <><p>Skills 是外部指令，不代替任务审批。安装只复制本地技能包，不执行包内脚本。</p>
+      <p>单个 SKILL.md 只导入该文件；包含引用、素材或脚本时请选择文件夹或 ZIP。ZIP 须包含 1–100 个 SKILL.md，不支持加密、链接或隐式覆盖。</p>
+      <div><button disabled={unavailable} onClick={() => prepareSkill("directory")}>选择文件夹并预览</button>{" "}<button disabled={unavailable} onClick={() => prepareSkill("file")}>选择 SKILL.md / ZIP 并预览</button></div>
       {skillPreview && <article aria-label="技能安装预览"><h3>确认安装</h3><p>将添加以下全局 Skills；不会覆盖已有技能。声明权限不替代任务审批，Plan 仍只读。</p><ul>{skillPreview.skills.map((skill) => <li key={skill.name}>{skill.name}：{skill.permissions.join("、")}</li>)}</ul><p>包摘要：{skillPreview.digest}</p><p>预览有效期：{skillPreview.expiresAt}</p><button disabled={busy} onClick={() => void perform(async () => { await window.xiuDesktop.cancelSkillInstallation(); setSkillPreview(undefined); })}>取消预览</button><button disabled={unavailable} onClick={() => void perform(async () => { const preview = skillPreview; setSkillPreview(undefined); onConnection(await window.xiuDesktop.changeManagement({ action: "skill-install", token: preview.token, revision: preview.revision, confirmed: true })); await refresh(); })}>确认安装并接受所列声明权限</button></article>}
       {!data?.skills.length && <p>没有已发现的 Skills。</p>}{data?.skills.map((item) => <details key={item.name}><summary>{item.name} · {item.scope}</summary><p>{item.description}</p><p>声明权限：{item.permissions.join("、")}</p>{item.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>)}<p>远程 Git、替换及卸载继续使用 CLI；桌面不提供隐式覆盖。</p></>}
     {tab === "report" && (report ? <><h3>执行报告</h3><pre>{report.report}</pre><h3>运行诊断</h3><pre>{report.diagnostics}</pre><p>本机有界摘要，不上传、不包含源码 Diff。</p></> : <p>尚无报告。</p>)}

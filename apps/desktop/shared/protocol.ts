@@ -276,7 +276,7 @@ export interface RemoveRecentWorkspaceRequest {
 
 export interface XiuDesktopBridge {
   managementSnapshot(): Promise<import("../../../src/runtime/workspace-management.js").WorkspaceManagementSnapshot>;
-  prepareSkillInstallation(): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
+  prepareSkillInstallation(sourceKind?: "directory" | "file"): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
   cancelSkillInstallation(): Promise<void>;
   changeManagement(request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest): Promise<DesktopRuntimeConnection>;
   taskDiagnostics(): Promise<{ report: string; diagnostics: string }>;

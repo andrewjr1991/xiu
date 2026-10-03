@@ -66,7 +66,7 @@ const bridge = {
     }
     approvalMode = "ask"; return runtime();
   },
-  prepareSkillInstallation: async () => ({ revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", skills: [{ name: "new-fixture", permissions: ["instructions:load"] }] }),
+  prepareSkillInstallation: async (kind) => { calls.push(`skill-prepare:${kind}`); return { revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", skills: [{ name: "new-fixture", permissions: ["instructions:load"] }] }; },
   cancelSkillInstallation: async () => { calls.push("skill:cancel"); },
   taskDiagnostics: async () => ({ report: "本机执行报告 fixture", diagnostics: "本机诊断 fixture" }),
   approveMcp: async ({ name, fingerprint, confirmed }) => { const server=mcp.servers.find(s=>s.name===name); if (!confirmed || fingerprint !== server?.fingerprint) throw new Error("bad confirmation"); calls.push(`mcp:approve:${name}`); server.approved=true; server.added=[]; server.state="disconnected"; return mcpView(); },

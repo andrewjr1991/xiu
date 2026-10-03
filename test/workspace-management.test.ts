@@ -9,6 +9,7 @@ import { createProviderPolicy } from "../src/runtime/provider-policy.js";
 import { resolveConfig } from "../src/config.js";
 import type { ProviderProfile, ProviderRegistry } from "../src/provider-registry.js";
 import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT, XIU_BETA_SEARXNG_TOKEN_ENV, type XiuSettings } from "../src/settings.js";
+import { zipFixture } from "./helpers/skill-zip.js";
 
 function fixture(realSkills?: SkillRegistry, initial?: XiuSettings) {
   let settings: XiuSettings = initial ?? { webSearch: { enabled: false, provider: "searxng", baseURL: "https://search.example.test", blockedDomains: ["blocked.test"], timeoutMs: 4_000 } };
@@ -72,6 +73,57 @@ test("skill preview cancellation and wrong token leave installed directory untou
   await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: inert-canary-no-request\n---\nMetadata must not expose a known credential");
   const safe = await service.prepareSkill(source);
   assert.equal(JSON.stringify(safe).includes("inert-canary-no-request"), false);
+});
+
+test("ZIP and standalone skill previews install only staged bytes after explicit confirmation", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-import-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(root, "home"));
+  const installed = path.join(root, "installed");
+  const { service } = fixture(new SkillRegistry(root, installed));
+  t.after(() => service.close());
+  const source = path.join(root, "bundle.zip");
+  await fs.writeFile(source, zipFixture([{ name: "bundle/SKILL.md", data: "---\nname: zipped\n---\nOriginal bytes", method: 8 },
+    { name: "bundle/references/help.md", data: "Original resource" }]));
+  const preview = await service.prepareSkill(source);
+  assert.deepEqual(preview.skills.map((item) => item.name), ["zipped"]);
+  assert.equal(JSON.stringify(preview).includes(source), false);
+  await assert.rejects(fs.stat(installed));
+  await fs.writeFile(source, "changed archive after preview");
+  await assert.rejects(service.change({ action: "skill-install", token: preview.token, revision: preview.revision, confirmed: false as never }));
+  const freshSource = path.join(root, "single");
+  await fs.mkdir(freshSource);
+  await fs.writeFile(path.join(freshSource, "SKILL.md"), "---\nname: standalone\n---\nSelected file");
+  await fs.writeFile(path.join(freshSource, "private.txt"), "Do not import");
+  const single = await service.prepareSkill(path.join(freshSource, "SKILL.md"));
+  await service.change({ action: "skill-install", token: single.token, revision: single.revision, confirmed: true });
+  assert.deepEqual(await fs.readdir(path.join(installed, "standalone")), ["SKILL.md"]);
+  await fs.writeFile(source, zipFixture([{ name: "SKILL.md", data: "---\nname: zipped\n---\nOriginal bytes" },
+    { name: "references/help.md", data: "Original resource" }]));
+  const zip = await service.prepareSkill(source);
+  await fs.unlink(source);
+  await service.change({ action: "skill-install", token: zip.token, revision: zip.revision, confirmed: true });
+  assert.match(await fs.readFile(path.join(installed, "zipped/SKILL.md"), "utf8"), /Original bytes/);
+  assert.equal(await fs.readFile(path.join(installed, "zipped/references/help.md"), "utf8"), "Original resource");
+  await fs.writeFile(source, zipFixture([{ name: "SKILL.md", data: "---\nname: zipped\n---\nReplacement" }]));
+  await assert.rejects(service.prepareSkill(source), /already exists/);
+});
+
+test("invalid ZIP leaves no staged preview or installed files and permits retry", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-invalid-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { service } = fixture(new SkillRegistry(root, path.join(root, "installed")));
+  t.after(() => service.close());
+  const source = path.join(root, "bad.zip");
+  const before = new Set((await fs.readdir(os.tmpdir())).filter((name) => name.startsWith("xiu-skill-preview-")));
+  await fs.writeFile(source, zipFixture([{ name: "SKILL.md", data: "---\nname: safe\n---\nValid" }, { name: "../escape", data: "bad" }]));
+  await assert.rejects(service.prepareSkill(source));
+  assert.deepEqual(new Set((await fs.readdir(os.tmpdir())).filter((name) => name.startsWith("xiu-skill-preview-"))), before);
+  await assert.rejects(fs.stat(path.join(root, "installed")));
+  await fs.writeFile(source, zipFixture([{ name: "SKILL.md", data: "---\nname: safe\n---\nValid" }]));
+  const retry = await service.prepareSkill(source);
+  await service.cancelSkillPreview();
+  await assert.rejects(service.change({ action: "skill-install", token: retry.token, revision: retry.revision, confirmed: true }));
 });
 
 test("management snapshots contain bounded metadata, not known provider credentials or source paths", async () => {

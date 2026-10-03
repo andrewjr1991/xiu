@@ -88,10 +88,11 @@ export class DesktopTaskController {
     if (!host.management) throw new Error("管理服务不可用。");
     this.mcpBusy = true;
     try {
+      await host.management.cancelSkillPreview();
       const source = await choose();
       if (this.host !== host || this.workspace !== workspace || this.modeContextId !== contextId) throw new Error("上下文已变化。");
       return source ? await host.management.prepareSkill(source) : undefined;
-    } catch { throw new Error("无法预览此技能包。请选择未安装、无链接且权限声明有效的本地目录。"); }
+    } catch { throw new Error("无法预览此技能包。请选择文件夹、SKILL.md 或 ZIP；包须未安装、无链接、无重复技能且权限声明有效，大小不超过 20 MB、条目不超过 1000。"); }
     finally { this.mcpBusy = false; }
   }
 

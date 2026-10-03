@@ -131,8 +131,15 @@ app.whenReady().then(async () => {
       await waitFor(window, "Boolean(document.querySelector('.management-panel [aria-label=\"主渠道\"]'))", "routing fields ready");
       assert(await evaluate(window, "(() => {const r=document.querySelector('.management-panel').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()"), "Management dialog exceeds viewport.");
       await clickText(window, "Skills", '.management-panel nav button');
-      await clickText(window, "选择本地技能包并预览", '.management-panel button');
+      await waitFor(window, "[...document.querySelectorAll('.management-panel nav button')].some(el => el.textContent === 'Skills' && el.getAttribute('aria-pressed') === 'true')", "Skills tab selected");
+      await clickText(window, "选择文件夹并预览", '.management-panel button');
       await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能安装预览\"]'))", "skill permission preview");
+      await clickText(window, "取消预览", '.management-panel button');
+      await clickText(window, "选择 SKILL.md / ZIP 并预览", '.management-panel button');
+      await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能安装预览\"]'))", "skill file preview");
+      assert(await evaluate(window, "window.xiuSmoke.calls().includes('skill-prepare:directory') && window.xiuSmoke.calls().includes('skill-prepare:file')"), "Skill picker intent did not reach the bridge.");
+      await settleLayout(window);
+      await fs.promises.writeFile(path.join(smokeRoot, `skill-import-${label}.png`), (await window.webContents.capturePage()).toPNG());
       await clickText(window, "取消预览", '.management-panel button');
       await clickText(window, "报告与诊断", '.management-panel nav button');
       await waitFor(window, "document.querySelector('.management-panel').textContent.includes('本机执行报告 fixture')", "bounded local report");

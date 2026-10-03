@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import fg from "fast-glob";
+import fg from "./glob.js";
 import {
   analyzeSource,
   MAX_IMPORTS_PER_FILE,

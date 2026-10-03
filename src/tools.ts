@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import fg from "fast-glob";
+import fg from "./glob.js";
 import iconv from "iconv-lite";
 import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";

@@ -1,4 +1,4 @@
-> 当前开发：0.20.3-preview.12 桌面托管搜索修正候选。维护者已实测自动认证及搜索通过，授权提交推送，但未授权发布；不创建 tag 或发布 npm/GitHub Release，不覆盖已发布 preview.11。历史发布记录如下；本候选的本地类型/构建/专项与真实服务验收、后续精确提交 CI 必须分开记录，不继承历史绿灯。企业 ACL 策略不放宽。
+> 当前开发：0.20.3-preview.13 本地 Skill 导入与依赖加固候选。维护者确认 Skill 实测、真实输入法及外部设备验收通过，现已授权提交/推送核验 CI，无问题后正式发布。CLI 全依赖审计、CLI/桌面生产依赖审计均为 0；桌面开发依赖仍有 8 条 high 传播告警，均来自尚无补丁的 http-cache-semantics（GHSA-ch52-4w7c-c8xp）。保留 electron-builder 26.15.3 的解压安全保护，不以降级或抑制告警伪造全绿；普通下载默认未启用该 HTTP 响应缓存，仍不将其称为已修复。稳定发布前须完成精确提交 CI，并明确处理或接受该开发依赖残留风险；CI 全绿不代替告警修复。不覆盖已发布版本，不放宽企业 ACL 策略。
 
 2026-10-03 更新（覆盖以上候选状态）：[GitHub preview.11](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11) 已发布，精确 tag/产物源码为 `cc49096f987309fa38baa7947694ff2398f1ccff`，[CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003) 六作业全部通过。Windows 全量 890 项：883 通过、7 跳过、0 失败。资产直接从同一 CI 下载并逐项核验来源、版本、清洁工作树和 SHA256，上传后核验 GitHub digest 再公开草稿；包含未签名 NSIS、CLI tarball、两份 manifest 及 SHA256SUMS。npm 网页授权已完成，但保存登录状态 `.npmrc` 被系统拒绝，因此尚未发布 npm，需维护者在正常终端发布同一 CI tarball 至 preview 标签并回读版本/标签/完整性；不提升稳定 latest，不修改企业 ACL 策略。真实输入法/外部设备仍独立待验收。
 
