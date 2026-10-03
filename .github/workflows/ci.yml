@@ -57,7 +57,7 @@ jobs:
         id: provider_privacy
         if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
         timeout-minutes: 3
-        run: node --test --import tsx test/provider-windows-privacy.test.ts
+        run: node --test --import tsx test/provider-windows-privacy.test.ts test/provider-constrained-privacy.test.ts
       - name: Verify Windows cleanup and current-recovery regressions
         id: windows_regressions
         if: ${{ !cancelled() && matrix.platform == 'win32' && steps.provider_privacy.outcome == 'success' }}
