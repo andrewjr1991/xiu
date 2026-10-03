@@ -1,7 +1,40 @@
 import type { DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent } from "../../shared/protocol.js";
+import type { RuntimeTaskSnapshot } from "../../../../src/runtime/protocol.js";
+
+const excerpt = (text: string, limit: number) => {
+  const plain = text.replace(/```[\s\S]*?```/g, " ").replace(/[#*`>]/g, "").replace(/\s+/g, " ").trim();
+  return plain.length > limit ? `${plain.slice(0, limit)}…` : plain;
+};
+
+/** Stage snapshots, not a second copy of the request or every token/tool event. */
+export function stageSummary(round: RuntimeEvent[], snapshot?: RuntimeTaskSnapshot) {
+  const started = round.find(event => event.type === "task.started");
+  const request = started?.type === "task.started" ? started.payload.taskPreview : snapshot?.taskPreview;
+  const planEvent = [...round].reverse().find(event => event.type === "plan.updated");
+  const plan = planEvent?.type === "plan.updated" ? planEvent.payload.plan : snapshot?.plan;
+  const finished = [...round].reverse().find(event => event.type === "task.finished");
+  const reply = [...round].reverse().find(event => event.type === "assistant.message" && event.payload.text.trim() && event.payload.text.trim() !== request?.trim());
+  const terminal = snapshot && ["completed", "failed", "cancelled", "unverified", "paused"].includes(snapshot.state) ? snapshot : undefined;
+  const state = finished?.type === "task.finished" ? finished.payload.state : terminal?.state;
+  const goal = plan?.goal && plan.goal.trim() !== request?.trim() ? excerpt(plan.goal, 120) : undefined;
+  if (state) {
+    const labels: Record<string, string> = { completed: "已完成", failed: "未完成", cancelled: "已取消", unverified: "待验证", paused: "已暂停" };
+    const result = finished?.type === "task.finished" ? finished.payload.error || finished.payload.result : terminal?.error || terminal?.result;
+    return { goal, phase: "结果摘要", summary: `${labels[state] ?? state}${result ? `：${excerpt(result, 300)}` : "，详情见任务记录。"}`, updatedAt: finished?.timestamp ?? terminal?.updatedAt };
+  }
+  if (plan) {
+    const completed = plan.steps.filter(step => step.status === "completed").length;
+    const current = plan.steps.find(step => step.status === "in_progress");
+    const note = reply?.type === "assistant.message" && (!planEvent || reply.timestamp >= planEvent.timestamp) ? excerpt(reply.payload.text, 120) : undefined;
+    const summary = `计划 ${completed}/${plan.steps.length} 步已完成${current ? `；当前：${excerpt(current.title, 140)}` : "；等待下一阶段"}。${note ? `进展：${note}` : ""}`;
+    return { goal, phase: "阶段摘要", summary, updatedAt: note ? reply?.timestamp : planEvent?.timestamp ?? snapshot?.updatedAt };
+  }
+  if (reply?.type === "assistant.message") return { goal: undefined, phase: "阶段摘要", summary: excerpt(reply.payload.text, 240), updatedAt: reply.timestamp };
+  return { goal: undefined, phase: undefined, summary: undefined, updatedAt: undefined };
+}
 
 /** Only the selected round contributes activity; workspace metadata is separately labelled. */
-export function taskOverview(events: RuntimeEvent[], history?: DesktopTaskHistorySnapshot, review?: DesktopReviewSnapshot, workspace?: string) {
+export function taskOverview(events: RuntimeEvent[], history?: DesktopTaskHistorySnapshot, review?: DesktopReviewSnapshot, workspace?: string, snapshot?: RuntimeTaskSnapshot) {
   const lastStart = [...events].reverse().find((event) => event.type === "task.started");
   const start = lastStart ? events.indexOf(lastStart) : -1;
   const round = start < 0 ? events : events.slice(start);
@@ -22,13 +55,9 @@ export function taskOverview(events: RuntimeEvent[], history?: DesktopTaskHistor
     if (name === "read_skill" || name.startsWith("mcp__")) skills.set(name + description, name === "read_skill" ? description.slice(0, 180) : name);
     if (/^(web_search|web_open|read_file|glob|grep|mcp__.*(?:read|fetch|get))/i.test(name)) sources.set(name + description, description.slice(0, 240));
   }
-  const goal = round.find((event) => event.type === "task.started");
-  const lastReply = [...round].reverse().find((event) => event.type === "assistant.message");
-  const finished = [...round].reverse().find((event) => event.type === "task.finished");
+  const summary = stageSummary(round, !history && (!taskId || taskId === snapshot?.id) ? snapshot : undefined);
   return {
-    goal: goal?.type === "task.started" ? goal.payload.taskPreview : history?.title,
-    summary: finished?.type === "task.finished" ? finished.payload.error || finished.payload.result : lastReply?.type === "assistant.message" ? lastReply.payload.text : undefined,
-    updatedAt: round.at(-1)?.timestamp ?? history?.updatedAt,
+    ...summary,
     branch: currentEnvironment ? review?.overview?.branch : undefined,
     changes, additions, deletions,
     skills: [...skills.values()].slice(-30), sources: [...sources.values()].slice(-30),

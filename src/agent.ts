@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { ModelRequestSilenceError, watchModelRequest } from "./model-request-watchdog.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
@@ -18,7 +19,7 @@ import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
 import { executeToolResult, formatProcessInvocation, looksLikeVerification } from "./tools.js";
-import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider, ToolResult } from "./types.js";
+import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider, ModelStreamProgress, ToolResult } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
 import { restoreTaskDiagnostics, TaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 import { sanitizeSecrets } from "./secret-redaction.js";
@@ -35,7 +36,8 @@ import { SafeDraftPreview } from "./stream-preview.js";
 
 export interface AgentEvents {
   onModelStart?: (turn: number) => void;
-  onModelEnd?: () => void;
+  onModelProgress?: (progress?: ModelStreamProgress) => void;
+  onModelEnd?: (responseReceived?: boolean) => void;
   onText?: (text: string) => void;
   onTextDelta?: (text: string) => void;
   onDraftPreview?: (text: string, receivedChars: number) => void;
@@ -245,6 +247,7 @@ export class Agent {
   private routingController?: ProviderRoutingController;
   private taskFailoverOriginProviderId?: string;
   private taskAttemptedProviders = new Set<string>();
+  private nonStreamingEndpoints = new Set<string>();
   private taskRoutingOrigin?: { config: AgentConfig; provider: ModelProvider; tools: AgentTool[] };
   private taskWasRouted = false;
   private taskRouteNotices = new Set<string>();
@@ -271,6 +274,7 @@ export class Agent {
       this.sessionId = restored.id;
       this.stats = restored.stats;
       if (restored.model) this.setModelInMemory(restored.model);
+      this.restoreTransportCompatibility(restored);
       this.planManager?.restore(restored.plan, restored.planMode);
       this.checkpointManager?.setSession(restored.id);
       this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
@@ -534,19 +538,24 @@ export class Agent {
         if (modelOperation) await this.taskRunJournal?.finishOperation(modelOperation, signal.aborted ? "cancelled" : "failed", error instanceof Error ? error.message : String(error));
         throw error;
       } finally {
-        this.events.onModelEnd?.();
+        this.events.onModelEnd?.(response !== undefined);
       }
       // An incomplete/filtered protocol turn is never an executable plan or a completion.
       if (response.finishReason && (["length", "content_filter", "unknown"].includes(response.finishReason)
         || (response.finishReason === "tool_calls" && response.toolCalls.length === 0))) {
         const reason = response.finishReason;
+        const guidance = reason === "unknown"
+          ? localize(this.config.language ?? "en-US",
+            response.protocolIssue === "unsupported_finish_reason" ? "渠道返回了不支持的结束标记；请检查该模型的工具调用协议兼容性，或切换渠道/模型后继续。" : response.transport === "stream" ? "流式响应缺少结束标记。没有自动重试；再次继续时，同一渠道和模型将改用非流式请求。本轮未完成工具不会重放，已完成文件保留。" : "非流式响应也缺少结束标记，请检查渠道协议或切换模型。这不是轮数限制，也不能确认是输出上限。",
+            response.protocolIssue === "unsupported_finish_reason" ? "The provider returned an unsupported finish marker. Check tool protocol compatibility or switch provider/model before continuing." : response.transport === "stream" ? "The stream has no finish marker. No automatic retry was made; your next continuation with this endpoint/model will use a non-streaming request. Incomplete calls are not replayed; completed files remain." : "The non-streaming response also has no finish marker. Check provider compatibility or switch models. This is not a turn limit or confirmed output limit.")
+          : localize(this.config.language ?? "en-US", "请检查输出上限或 Provider 配置后继续。", "Check the output limit or provider configuration before continuing.");
         const text = localize(this.config.language ?? "en-US",
-          `模型响应未完整结束（${reason}）；本轮工具未执行，任务未完成。请检查输出上限或 Provider 配置后继续。`,
-          `Model response did not finish normally (${reason}); no tools from this turn were executed and the task is incomplete. Check the output limit or provider configuration before continuing.`);
+          `模型响应未完整结束（${reason}）；本轮工具未执行，任务未完成。${guidance}`,
+          `Model response did not finish normally (${reason}); no tools from this turn were executed and the task is incomplete. ${guidance}`);
         this.recordUsage(response.usage, response.text);
         if (modelOperation) await this.taskRunJournal?.finishOperation(modelOperation, "failed", text);
         this.messages.push({ role: "assistant", content: text });
-        await this.log(sessionPath, { type: "assistant", turn, text, finishReason: reason, toolCalls: [] });
+        await this.log(sessionPath, { type: "assistant", turn, text, finishReason: reason, protocolIssue: response.protocolIssue, transport: response.transport, toolCalls: [] });
         this.events.onText?.(text);
         this.events.onAssistantTurn?.(text, false);
         this.lastRunOutcome = "failed";
@@ -693,7 +702,8 @@ export class Agent {
           verificationStamp = undefined;
         }
         if ((workspaceChanged || verificationAttempted) && !verifiedAfterChange && !completionReminderSent) {
-          const gate = `Completion gate: required checks are missing, failed, or stale after workspace changes${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. If verification remains impossible, report the limitation; Xiu will mark the task unverified rather than successful.`;
+          const pending = JSON.stringify(verification.pendingChecks()).slice(0, 12_000);
+          const gate = `Completion gate: required checks are missing, failed, or stale after workspace changes${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Outstanding check inputs (rerun these exact checks or strictly stronger checks for the same artifact): ${pending}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. Do not silently drop an older max_bytes, forbidden_substrings, or required_substrings constraint. If verification remains impossible, report the limitation; Xiu will not mark unproven completion successful.`;
           this.messages.push({ role: "user", content: gate });
           await this.log(sessionPath, { type: "completion_gate", turn, message: gate });
           this.events.onCompletionGate?.(gate);
@@ -765,7 +775,7 @@ export class Agent {
             risk,
           });
           const failureKey = `${call.name}:${JSON.stringify(call.input)}`;
-          const loop = loopGuard.observe(call.name, call.input);
+          const loop = loopGuard.observe(call.name, call.input, tool.isPendingWait?.(call.input) === true);
           abortForLoop = loop.abort;
           if (loop.blocked) {
             result = `Tool error: ${loop.reason}`;
@@ -1138,6 +1148,7 @@ export class Agent {
     this.toolEvidence = [];
     this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
     if (restored.model) this.setModelInMemory(restored.model);
+    this.restoreTransportCompatibility(restored);
     this.planManager?.restore(restored.plan, options.preservePlanMode ? this.planManager.mode() : restored.planMode);
     this.checkpointManager?.setSession(restored.id);
   }
@@ -1183,6 +1194,19 @@ export class Agent {
     if (this.config.capabilities) {
       this.config.capabilities.text = model;
       if (this.config.capabilities.vision === previous) this.config.capabilities.vision = model;
+    }
+  }
+
+  private transportEndpointKey(): string {
+    return JSON.stringify([this.config.provider, this.config.providerId, this.config.baseURL, this.config.model]);
+  }
+
+  private restoreTransportCompatibility(restored: RestoredSession): void {
+    // This is transport compatibility, never approval or a replay grant.
+    if ((restored.lastResponseProtocolIssue === "missing_finish_reason" || restored.lastStreamTimedOut)
+      && restored.model === this.config.model
+      && restored.providerId === (this.config.providerId ?? this.config.provider)) {
+      this.nonStreamingEndpoints.add(this.transportEndpointKey());
     }
   }
 
@@ -1449,6 +1473,8 @@ export class Agent {
     let attempt = 1;
     for (;;) {
       let emitted = false;
+      let requestWasStream = false;
+      let streamProgress = { chunks: 0, textCharacters: 0, argumentCharacters: 0 };
       const operation = operationOverride ?? `turn ${this.currentTurn}`;
       const estimatedInput = estimateConversationTokens(this.messages);
       this.taskDiagnostics?.beginModel(operation, attempt);
@@ -1457,27 +1483,69 @@ export class Agent {
         let streamed = false;
         const system = `${this.system!}\n\n${buildTemporalContext()}`;
         const modelTools = toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools);
-        if (allowStreaming && this.provider.stream && (this.events.onTextDelta || this.events.onDraftPreview)) {
+        const endpointKey = this.transportEndpointKey();
+        const useStream = allowStreaming && !this.nonStreamingEndpoints.has(endpointKey) && this.provider.stream && (this.events.onTextDelta || this.events.onDraftPreview);
+        requestWasStream = Boolean(useStream);
+        if (this.sessionPath) await this.log(this.sessionPath, { type: "model_request", transport: useStream ? "stream" : "complete",
+          firstResponseMs: this.config.modelFirstResponseTimeoutMs ?? 600_000,
+          streamIdleMs: this.config.modelStreamIdleTimeoutMs ?? 180_000,
+          completeMs: this.config.modelCompleteTimeoutMs ?? 900_000 });
+        if (useStream) {
           const preview = this.events.onDraftPreview ? new SafeDraftPreview(this.config.language ?? "en-US",
             [this.config.apiKey, readEnvironmentCredential(this.config.apiKeyEnv)].filter((value): value is string => Boolean(value))) : undefined;
           let visibleDraft = "";
-          response = await this.provider.stream(system, this.messages, modelTools, (delta) => {
+          let contentCharacters = 0;
+          response = await watchModelRequest(signal, (requestSignal, progress) => this.provider.stream!(system, this.messages, modelTools, (delta) => {
+            if (requestSignal.aborted || !delta.length) return;
             emitted = true;
+            streamProgress.textCharacters += delta.length;
+            progress();
             if (preview) {
               visibleDraft = preview.push(delta) ?? visibleDraft;
               this.events.onDraftPreview?.(visibleDraft, preview.receivedChars);
             } else this.events.onTextDelta?.(delta);
-          }, signal);
+          }, requestSignal, (details) => {
+            if (requestSignal.aborted) return;
+            emitted = true;
+            if (details) streamProgress = { chunks: details.chunks, textCharacters: details.textCharacters, argumentCharacters: details.argumentCharacters };
+            // Role/usage-only headers and repeated heartbeats are not body
+            // progress. In particular a buffering gateway must retain the
+            // longer first-body deadline after sending an empty role chunk.
+            const next = details ? details.textCharacters + details.argumentCharacters : undefined;
+            if (next === undefined || next > contentCharacters) progress();
+            if (next !== undefined) contentCharacters = next;
+            this.events.onModelProgress?.(details);
+          }), {
+            firstResponseMs: this.config.modelFirstResponseTimeoutMs ?? 600_000,
+            streamIdleMs: this.config.modelStreamIdleTimeoutMs ?? 180_000,
+          });
           preview?.finish();
           streamed = emitted && !preview;
         } else {
-          response = await this.provider.complete(system, this.messages, modelTools, signal);
+          response = await watchModelRequest(signal, (requestSignal) => this.provider.complete(system, this.messages, modelTools, requestSignal), {
+            firstResponseMs: this.config.modelFirstResponseTimeoutMs ?? 600_000,
+            streamIdleMs: this.config.modelStreamIdleTimeoutMs ?? 180_000,
+            completeMs: this.config.modelCompleteTimeoutMs ?? 900_000,
+          });
         }
+        response.transport = useStream ? "stream" : "complete";
+        if (useStream && response.protocolIssue === "missing_finish_reason") this.nonStreamingEndpoints.add(endpointKey);
+        if (this.sessionPath) await this.log(this.sessionPath, { type: "model_protocol", transport: response.transport,
+          finishReason: response.finishReason, protocolIssue: response.protocolIssue, diagnostics: response.protocolDiagnostics });
         this.taskDiagnostics?.finishModel(response.usage ?? { inputTokens: estimatedInput, outputTokens: Math.ceil(response.text.length / 4) }, true);
         await this.checkpointDiagnostics();
         return { response, streamed };
       } catch (error) {
-        const safeError = safeProviderErrorMessage(error, [this.config.apiKey ?? ""]);
+        if (error instanceof ModelRequestSilenceError && requestWasStream && !signal.aborted) {
+          // Only a future explicit user continuation uses this alternative.
+          // Never replay this request or execute its partial tools.
+          this.nonStreamingEndpoints.add(this.transportEndpointKey());
+          if (this.sessionPath) await this.log(this.sessionPath, { type: "model_timeout", transport: "stream",
+            phase: error.phase, timeoutMs: error.idleMs, ...streamProgress });
+        }
+        const safeError = error instanceof ModelRequestSilenceError
+          ? localize(this.config.language ?? "en-US", `${error.phase === "complete" ? "等待完整模型响应" : error.phase === "first-response" ? "等待首个公开正文或工具参数" : "接收响应后等待后续片段"}超过 ${error.idleMs / 1000} 秒，本次请求已停止；不能据此确认模型未生成或网络未传输。${requestWasStream ? `已接收 ${streamProgress.chunks} 个片段、${streamProgress.textCharacters} 个正文字符、${streamProgress.argumentCharacters} 个参数字符。手动继续此任务将改用完整响应模式。` : ""}未执行未完成的工具调用，可手动继续或切换模型。`, error.message)
+          : safeProviderErrorMessage(error, [this.config.apiKey ?? ""]);
         if (signal.aborted) {
           this.taskDiagnostics?.cancelActive();
           await this.checkpointDiagnostics();
@@ -1486,7 +1554,7 @@ export class Agent {
         this.taskDiagnostics?.finishModel(undefined, false, safeError);
         await this.checkpointDiagnostics();
         this.enforceBudget();
-        const transient = isTransientProviderError(error);
+        const transient = !(error instanceof ModelRequestSilenceError) && isTransientProviderError(error);
         const decision = retryDecision({
           operation: "model",
           error,

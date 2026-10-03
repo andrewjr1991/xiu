@@ -1,4 +1,5 @@
 import { Select } from "./Select.js";
+import { useOutputFollow } from "./use-output-follow.js";
 import { createComposerEnterGuard } from "./composer-enter-guard.js";
 import { BrowserPane } from "./BrowserPane.js";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -206,7 +207,7 @@ function eventText(event: RuntimeEvent): string | undefined {
 
 function activityText(event: RuntimeEvent): string | undefined {
   if (event.type === "model.started") return `第 ${event.payload.turn} 轮模型调用已开始`;
-  if (event.type === "model.finished") return "模型响应已接收，正在整理下一步";
+  if (event.type === "model.finished") return event.payload.responseReceived === false ? "模型请求已停止，未收到完整响应" : "模型响应已接收，正在整理下一步";
   if (event.type === "tool.started") return `运行 ${event.payload.name} · ${event.payload.description}`;
   if (event.type === "tool.progress") return `${event.payload.name} · ${event.payload.message}`;
   if (event.type === "tool.finished") return `${event.payload.name} · ${event.payload.summary}`;
@@ -218,12 +219,22 @@ function activityText(event: RuntimeEvent): string | undefined {
 
 type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: DesktopAttachment[]; expandProcesses?: boolean; taskStartedAt?: string };
 
+function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  const activity = currentRuntimeActivity(events, undefined, state, modelLabel);
+  const lastModel = [...events].reverse().find((event) => event.type === "model.started");
+  const waiting = activity?.label.startsWith("正在思考");
+  const seconds = lastModel ? Math.max(0, Math.floor((now - Date.parse(lastModel.timestamp)) / 1000)) : 0;
+  return <div className="active-task-status" role="status" aria-live="polite"><span className="pulse" /><strong>{waiting ? "正在等待模型响应" : activity?.label ?? "正在处理任务"}</strong><small>{waiting ? `已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒 · 长响应可能需要更久，可随时停止` : activity?.detail}</small></div>;
+}
+
 function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt }: TimelineProps) {
   const round = roundPresentation(events);
   const active = !round.finished && ["running", "waiting_approval", "stopping"].includes(state);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(active);
   const [now, setNow] = useState(Date.now());
-  useEffect(() => { if (!active) { setExpanded(false); return; } const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [active]);
+  useEffect(() => { setExpanded(active); if (!active) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [active]);
   const activity = currentRuntimeActivity(events, undefined, active ? state : "idle", modelLabel);
   const label = activity?.label.includes("wait_agents") ? "等待子智能体完成" : activity?.label.includes("web_search") ? "正在搜索网页" : activity?.label.includes("web_open") ? "正在读取网页" : activity?.label;
   const start = events.find((e) => e.type === "task.started")?.timestamp ?? taskStartedAt;
@@ -233,7 +244,16 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
       <summary><span className={active ? "pulse" : "turn-chevron"}>{active ? "" : "›"}</span><span>{active ? `${label ?? "正在处理"} · ` : ""}{turnElapsed(start, active ? new Date(now).toISOString() : round.finished?.timestamp ?? events.at(-1)?.timestamp)}</span><small>{round.operations} 次操作{round.agents > 0 ? ` · ${round.agents} 个子任务` : ""}</small></summary>
       {round.process.length > 0 && <DetailedTaskTimeline events={round.process} state="idle" modelLabel={modelLabel} expandProcesses />}
     </details>}
-    {round.alerts.length > 0 && <div className="turn-alerts" role="status">{round.alerts.map((event) => <article className="turn-alert" key={event.eventId}><strong>需要留意</strong><FormattedText text={event.type === "task.finished" ? event.payload.error ?? event.payload.result ?? stateLabels[event.payload.state] : event.type === "subagent.updated" ? `${event.payload.agent.title}：${event.payload.agent.error ?? event.payload.agent.progress ?? event.payload.agent.status}` : eventText(event) ?? "操作未完成，请查看过程详情。"} /></article>)}</div>}
+    {round.alerts.length > 0 && <details className="turn-alerts">
+      <summary><span>运行提醒 · {round.alerts.length} 项</span><small>展开查看，不影响继续跟踪进展</small></summary>
+      {round.alerts.map((event) => {
+        const text = event.type === "task.finished" ? event.payload.error ?? event.payload.result ?? stateLabels[event.payload.state] : event.type === "subagent.updated" ? `${event.payload.agent.title}：${event.payload.agent.error ?? event.payload.agent.progress ?? event.payload.agent.status}` : eventText(event) ?? "操作未完成，请查看过程详情。";
+        return <details className="turn-alert" key={event.eventId}>
+          <summary title={text.split(/\r?\n/, 1)[0]}>{text.split(/\r?\n/, 1)[0]}</summary>
+          <pre className="turn-alert-detail">{text}</pre>
+        </details>;
+      })}
+    </details>}
     {round.answer && <DetailedTaskTimeline events={[round.answer]} state="idle" modelLabel={modelLabel} />}
   </section>;
 }
@@ -250,7 +270,7 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
   if (!items.length && !draft && !pendingMessage && !activity) return <div className="task-welcome"><Logo /><h2>告诉 Xiu 你想完成什么</h2><p>Xiu 可以协助开发和本机软件排障；操作将遵循你选择的权限模式。</p></div>;
   return <div className="timeline">
     {items.map((item) => item.kind === "activity" ? <details className={`process-group ${item.active ? "active" : ""}`} open={item.active || expandProcesses} key={item.id}>
-      <summary><span className={item.active ? "pulse" : "process-icon"}>{item.active ? "" : "✓"}</span><strong>{item.active ? activity?.label ?? "正在处理" : `已处理 ${item.events.length} 项`}</strong><small>{item.active ? activity?.detail : "命令、工具与文件操作"}</small></summary>
+      <summary><span aria-hidden="true" className={item.active ? "pulse" : "process-icon"}>{item.active ? "" : "›"}</span><strong>{item.active ? activity?.label ?? "正在处理" : "运行记录"}</strong><small>{item.active ? activity?.detail : `${item.events.length} 条事件`}</small></summary>
       <div>{(() => { const progress = modelProgressSummary(item.events); return progress && <article className={`model-progress-summary ${progress.providerVisible ? "provider-visible" : "factual"}`}><header><strong>{progress.title}</strong><small>{progress.providerVisible ? "模型公开输出" : "可核验运行事实"}</small></header><p>{progress.text}</p></article>; })()}{activityRows(item.events).map(({ event, webText, evidence }) => (webText || activityText(event)) && <div key={event.eventId}><p className={`process-row process-${event.type.replace(".", "-")}`}><span>{event.type === "workspace.changed" ? "✎" : event.type.startsWith("tool.") ? "⌘" : event.type === "plan.updated" ? "☷" : "·"}</span><span>{webText ?? activityText(event)}</span><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></p>{evidence && <details className="web-result-details"><summary>查看检索结果详情</summary><FormattedText text={webEvidenceForDisplay(evidence)} /></details>}</div>)}</div>
     </details> : item.event.type === "subagent.updated" ? <SubagentActivity key={item.event.eventId} agent={item.event.payload.agent} /> : <article className={`event-card event-${item.event.type.replace(".", "-")}`} key={item.event.eventId}>
       {(() => { const event = item.event; return <>
@@ -648,14 +668,14 @@ export function App() {
   const [planOpen, setPlanOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<{ kind: "task" | "workspace"; id: string; name: string }>();
   const taskScrollRef = useRef<HTMLDivElement>(null);
-  const followOutputRef = useRef(true);
+  const outputFollow = useOutputFollow(taskScrollRef, workspace.trust);
 
   const refreshRuntime = async (afterSequence = 0) => {
     const next = await window.xiuDesktop.runtimeConnect({ afterSequence });
     setConnection(next);
     setRuntime(next.runtime.snapshot);
     runtimeRef.current = next.runtime.snapshot;
-    if (afterSequence === 0 || next.runtime.resyncRequired) setEvents(next.runtime.events.slice(-200));
+    if (afterSequence === 0 || next.runtime.resyncRequired) setEvents(next.runtime.events.slice(-1_000));
     else if (next.runtime.events.length) setEvents((old) => mergeRuntimeEvents(old, next.runtime.events));
   };
 
@@ -668,12 +688,11 @@ export function App() {
     void window.xiuDesktop.snapshot().then(setWorkspace).catch((reason) => setError(String(reason)));
     const offWorkspace = window.xiuDesktop.onSnapshot(setWorkspace);
     const offRuntime = window.xiuDesktop.onRuntimeEvent((event) => {
-      const replacingTask = event.type === "task.started" && runtimeRef.current?.task?.id !== event.taskId;
       if (event.type === "task.started" || event.type === "task.steered") setPendingMessage(undefined);
       if (event.type === "task.started") { setTaskCompletionChanges(undefined); setSelectedDiff(undefined); }
       if (event.type === "assistant.draft") setDraft(event.payload.text);
       if (event.type === "assistant.stream-end" || event.type === "assistant.message" || event.type === "task.finished") setDraft(undefined);
-      setEvents((old) => event.type === "assistant.draft" || event.type === "assistant.stream-end" ? old : replacingTask ? [event] : mergeRuntimeEvents(old, [event]));
+      setEvents((old) => event.type === "assistant.draft" || event.type === "assistant.stream-end" ? old : mergeRuntimeEvents(old, [event]));
       try {
         if (!runtimeRef.current) throw new Error("runtime unavailable");
         const next = applyRuntimeEvent(runtimeRef.current, event);
@@ -743,12 +762,6 @@ export function App() {
     return () => window.removeEventListener("keydown", close);
   }, [selectedDiff]);
 
-  useEffect(() => {
-    const element = taskScrollRef.current;
-    if (!element || !followOutputRef.current) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }, [events.length, draft, pendingMessage, runtime?.task?.state, runtime?.task?.pendingApproval?.id]);
-
   const runWorkspace = async (operation: () => Promise<DesktopWorkspaceSnapshot>) => {
     setBusy(true); setError(undefined);
     try { setWorkspace(await operation()); }
@@ -772,7 +785,7 @@ export function App() {
     setPendingMessage({ text: visibleText, timestamp: new Date().toISOString(), steering, attachments });
     setSubmittedAttachments(attachments);
     setAttachments([]);
-    followOutputRef.current = true;
+    outputFollow.resume();
     setBusy(true); setError(undefined);
     try {
       if (steering) {
@@ -781,7 +794,7 @@ export function App() {
         const next = continuedHistory
           ? await window.xiuDesktop.continueTask({ taskId: continuedHistory.taskId, text })
           : await window.xiuDesktop.createTask({ text });
-        setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-200));
+        setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000));
       }
       setPendingMessage(undefined);
     } catch (reason) {
@@ -797,7 +810,7 @@ export function App() {
       const next = await window.xiuDesktop.newConversation();
       setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot;
       setEvents([]); setDraft(undefined); setPendingMessage(undefined); setHistoryView(undefined); setTaskCompletionChanges(undefined); setSelectedDiff(undefined); setInput(""); setAttachments([]); setSubmittedAttachments([]);
-      followOutputRef.current = true;
+      outputFollow.resume();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
@@ -932,7 +945,7 @@ export function App() {
     setBusy(true); setError(undefined);
     try {
       const next = await window.xiuDesktop.recoverTask({ runId });
-      setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-200));
+      setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000));
       await refreshReview();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
@@ -1035,7 +1048,7 @@ export function App() {
 
   const applyProviderMutation = (next: Awaited<ReturnType<typeof window.xiuDesktop.selectProvider>>) => {
     setProviderSettings(next.settings); setConnection(next.connection); setRuntime(next.connection.runtime.snapshot);
-    runtimeRef.current = next.connection.runtime.snapshot; setEvents(next.connection.runtime.events.slice(-200));
+    runtimeRef.current = next.connection.runtime.snapshot; setEvents(next.connection.runtime.events.slice(-1_000));
   };
 
   const selectProvider = async (providerId: string, model: string, capability?: DesktopProviderCapability) => {
@@ -1102,15 +1115,20 @@ export function App() {
   const historyPlan = useMemo(() => latestPlan(historyView?.events ?? []), [historyView]);
   const eventPlan = useMemo(() => latestPlan(currentTaskEvents), [currentTaskEvents]);
   const plan = historyView && !isActive ? historyPlan : runtime?.task?.plan ?? eventPlan;
+  // Change the default only at round boundaries, not on each progress update.
+  // A user's manual collapse remains in effect for the current running round.
+  useEffect(() => { setPlanOpen(isActive); }, [isActive, runtime?.task?.id]);
   const planDone = plan?.steps.filter((step) => step.status === "completed").length ?? 0;
   const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? "全部步骤完成" : "等待下一步");
-  const timelineEvents = pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents;
-  const taskView = selectedTaskView(historyView, isActive, Boolean(pendingMessage || draft), timelineEvents, runtime?.task?.subagents);
+  // The conversation spans rounds; only task-scoped inspector facts are
+  // filtered to the current execution. Never replace the transcript on follow-up.
+  const timelineEvents = events;
+  const taskView = selectedTaskView(historyView, isActive, Boolean(pendingMessage || draft), pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents, runtime?.task?.subagents);
   const activeConversationId = historyView?.taskId ?? connection?.conversationId;
   const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <main className="app-shell">
-    {managementOpen && <ManagementPanel disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClose={() => setManagementOpen(false)} onConnection={(next) => { setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-200)); setDraft(undefined); }} />}
+    {managementOpen && <ManagementPanel disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClose={() => setManagementOpen(false)} onConnection={(next) => { setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000)); setDraft(undefined); }} />}
     <header className="titlebar"><div className="brand"><Logo /><span>Xiu</span></div><div className="titlebar-context">{workspace.workspace?.name ?? "本地优先桌面工作台"}</div><div className="preview-badge">v0.20 · 预览</div></header>
     <aside className="sidebar">
       <button className="primary-button new-task-button" disabled={busy || isActive || workspace.trust !== "trusted"} onClick={() => void newConversation()}>＋ 新建任务</button>
@@ -1130,10 +1148,12 @@ export function App() {
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
         {workspace.trust === "trusted" && <ResizableTaskLayout>
           <section className="task-console">
-            <div className="task-scroll" ref={taskScrollRef} onScroll={(event) => { const element = event.currentTarget; followOutputRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96; }}>{taskView.history && <HistoryTimeline history={taskView.history} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
+            <div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline history={taskView.history} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={openDiff} />}
               {approval && <section className={`approval-card risk-${approval.risk}`}><header><div><span className="eyebrow">需要你的批准</span><h2>{approval.description}</h2></div><span className="risk-chip">{approval.risk}</span></header>{approval.preview && <pre>{approval.preview}</pre>}<dl><div><dt>权限范围</dt><dd>{approval.sessionScope && approval.risk !== "dangerous" ? "可仅允许一次，或记住这一类操作直至退出 Xiu" : "仅本次操作"}</dd></div><div><dt>可能影响</dt><dd>{approval.effects.join("；")}</dd></div><div><dt>恢复方式</dt><dd>{approval.recovery}</dd></div></dl>{approval.risk === "dangerous" && <label className="danger-check"><input type="checkbox" checked={dangerConfirmed} onChange={(event) => setDangerConfirmed(event.target.checked)} />我理解该操作可能不可逆，并确认继续</label>}<footer><button className="secondary-button" disabled={busy} onClick={() => void decide(false)}>拒绝</button><button className="secondary-button" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true)}>仅本次允许</button>{approval.sessionScope && approval.risk !== "dangerous" && <button className="primary-button compact" disabled={busy} onClick={() => void decide(true, true)}>本次会话始终允许</button>}</footer></section>}
-            </div>
+            </div></div>
+            {outputFollow.paused && <button className="return-to-latest" onClick={outputFollow.resume}>↓ 回到最新进展</button>}
+            {isActive && <ActiveTaskStatus events={currentTaskEvents} state={status} modelLabel={modelLabel} />}
             <div className="composer-area">{!isActive && review?.recovery && <div className="writer-warning">有中断任务尚未处理。<button onClick={() => { setWorkbenchCollapsed(false); setReviewTab("evidence"); }}>查看并选择恢复或放弃</button></div>}{["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "") && <div className="writer-warning">{connection?.journalWarning ?? "另一个进程或窗口正在写入此工作区。请先在原任务中停止，随后重新打开工作区。"}</div>}{historyView && !isActive && <div className="history-resume-note">已载入历史上下文，可直接继续此任务。</div>}{planMode && <div className="plan-mode-note" role="status">Plan 只读：仅分析与规划，不执行写入或命令；完全访问也不例外。</div>}{plan && <details className="plan-strip" open={planOpen} onToggle={(event) => setPlanOpen(event.currentTarget.open)}><summary><span>{planDone} / {plan.steps.length} 步</span><div><i style={{ width: `${plan.steps.length ? planDone / plan.steps.length * 100: 0}%` }} /></div><span>{planCurrentTitle}</span><b>{planOpen ? "收起" : "展开"}</b></summary><div className="plan-details"><strong>{plan.goal}</strong><ol>{plan.steps.map((step) => <li className={step.status} key={step.id}><span>{step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"}</span>{step.title}</li>)}</ol></div></details>}<div className="composer" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => { event.preventDefault(); void importFiles([...event.dataTransfer.files]); }}>{attachments.length > 0 && <EditableAttachmentTiles attachments={attachments} onRemove={removeAttachment} />}<textarea value={input} disabled={providerRestartRequired || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onChange={(event) => setInput(event.target.value)} onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); void importFiles(files); } }} onCompositionStart={() => composerEnterGuard.compositionStart()} onCompositionEnd={() => composerEnterGuard.compositionEnd()} onBlur={() => composerEnterGuard.reset()} onKeyUp={() => composerEnterGuard.keyUp()} onKeyDown={(event) => { if (composerEnterGuard.shouldSubmit(event.nativeEvent)) { event.preventDefault(); void submit(); } }} placeholder={historyView && !isActive ? "继续这个任务…" : isActive ? "补充要求或调整方向…" : "描述你想完成的任务…"} /><div className="composer-footer"><div className="composer-tools"><button className={`plan-mode-selector${planMode ? " selected" : ""}`} aria-pressed={planMode} aria-label="Plan 只读模式" disabled={providerRestartRequired || busy || !connection?.modeContextId || isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} title={planMode ? "Plan 只读：仅分析与规划，完全访问也不能写入或执行；空闲时可切换" : "执行模式：按权限设置执行任务；点击切换为 Plan 只读"} onClick={() => void setPlanMode(!planMode)}>{planMode ? "Plan · 只读" : "执行"}</button><button className="attach-button" title="添加文件或图片" disabled={busy} onClick={() => void addAttachments("choose")}>＋</button><button className={`permission-selector mode-${approvalMode}`} disabled={!connection || isActive} title={approvalModeDetails[approvalMode].description} onClick={() => { setProviderOpen(false); setPermissionOpen((open) => !open); }}><span>{approvalModeDetails[approvalMode].icon}</span><strong>{approvalModeDetails[approvalMode].label}</strong><i>⌄</i></button><button className="model-selector" title={modelLabel} disabled={!connection} onClick={() => { setPermissionOpen(false); if (providerOpen) closeProviderPicker(); else void openProviderPicker("composer"); }}>{connection ? <><span className="model-provider">{connection.provider.label}</span><span className="model-divider">·</span><strong className="model-name">{connection.provider.model}</strong></> : <strong className="model-name">正在准备运行时</strong>}<span className="model-chevron">⌄</span></button></div><div>{isActive && <button className="stop-button" onClick={() => void stop()}>停止</button>}<button className="send-button" disabled={providerRestartRequired || busy || (!input.trim() && !attachments.length) || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClick={() => void submit()}>↑</button></div></div>{permissionOpen && <div className="permission-popover" role="menu" aria-label="权限模式"><header><strong>权限模式</strong><small>按所选模式执行；完全访问含危险操作</small></header>{(Object.keys(approvalModeDetails) as DesktopApprovalMode[]).map((mode) => <button key={mode} className={approvalMode === mode ? "selected" : ""} disabled={busy || isActive} onClick={() => void setApprovalMode(mode)}><span className={`permission-icon mode-${mode}`}>{approvalModeDetails[mode].icon}</span><span><strong>{approvalModeDetails[mode].label}</strong><small>{approvalModeDetails[mode].description}</small></span><i>{approvalMode === mode ? "✓" : ""}</i></button>)}</div>}{providerOpen && providerPlacement === "composer" && providerPicker}</div></div>
           </section>
           <ReviewInspector overviewHidden={overviewHidden} task={runtime?.task} workspace={workspace.workspace} collapsed={workbenchCollapsed} setCollapsed={setWorkbenchCollapsed} review={review} events={taskView.events} agents={taskView.agents} selectedPath={selectedDiff?.path} history={taskView.history} tab={reviewTab} changeView={changeView} preview={filePreview} previewMode={previewMode} active={isActive || busy} onTab={setReviewTab} onChangeView={(view) => void selectChangeView(view)} onPreview={(file) => void openPreview(file)} onDiff={openDiff} onPreviewMode={setPreviewMode} onRefresh={() => void refreshReview().catch((reason) => setError(String(reason)))} onRestore={(id) => void restoreCheckpoint(id)} onRecover={(id) => void recoverTask(id)} onAbandon={(id) => void abandonRecovery(id)} />

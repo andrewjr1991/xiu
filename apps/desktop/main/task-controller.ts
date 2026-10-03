@@ -233,7 +233,8 @@ export class DesktopTaskController {
     host.agent.restoreSession(restored, { preservePlanMode: true });
     this.modeContextId = randomUUID();
     await host.agent.setModel(host.provider.model);
-    host.runtime.resetConversation();
+    const history = await this.openTaskHistory(workspace, { taskId });
+    host.runtime.resetConversation(history.events);
     host.checkpointManager?.setSession(restored.id);
     this.completedTaskChanges = undefined;
     this.baseline = await captureTaskBaseline(workspace);
@@ -318,6 +319,19 @@ export class DesktopTaskController {
       const uniqueRun = runs.filter((candidate) => candidate.taskPreview === item.taskPreview).length === 1;
       return this.reconstructHistoryEvents(item, uniqueRun && matching.length === 1 ? matching[0]!.entries : []);
     }).map((event) => ({ ...event, sequence: ++sequence })).slice(-1_000);
+    if (!runs.length) {
+      // Legacy sessions may predate journals. Preserve attributable user and
+      // assistant messages without inventing execution or completion evidence.
+      for (const [index, turn] of turnEntries.entries()) {
+        const taskId = `${session.id}-round-${index + 1}`;
+        for (const [entryIndex, entry] of turn.entries.entries()) {
+          const type = entry.kind === "user" ? entryIndex === 0 ? "task.started" : "task.steered" : entry.kind === "assistant" ? "assistant.message" : undefined;
+          if (!type) continue;
+          historyEvents.push({ schemaVersion: 1, eventId: `${taskId}-${entryIndex}`, taskId, sequence: ++sequence, timestamp: session.updatedAt,
+            type, payload: type === "task.started" ? { taskPreview: entry.text } : type === "task.steered" ? { text: entry.text } : { text: entry.text, hasToolCalls: false } } as RuntimeEvent);
+        }
+      }
+    }
     let changes;
     const changeRounds = await Promise.all(runs.slice(-80).map(async (candidate) => ({ id: candidate.runId, startedAt: candidate.startedAt, report: await loadTaskChangeHistory(workspace, candidate.runId) })));
     for (const candidate of [...runs].reverse()) {
@@ -355,11 +369,14 @@ export class DesktopTaskController {
     try {
       await this.eventPersistence;
       const runs = await host.journal.recent(500);
-      const selectedRun = runs.find((run) => run.runId === request.taskId);
+      // Sidebar identity is a session ID; legacy callers may supply a run ID.
+      // Keep recognizing the conversation when its local session was removed.
+      const selectedRun = runs.find((run) => run.runId === request.taskId)
+        ?? runs.find((run) => run.sessionId === request.taskId);
       const sessionId = selectedRun?.sessionId ?? request.taskId;
       const relatedRuns = runs.filter((run) => run.sessionId === sessionId);
-      const sessionDeleted = await deleteSession(workspace, sessionId);
-      if (!selectedRun && !sessionDeleted) throw new Error("任务不存在或已经删除。");
+      await deleteSession(workspace, sessionId);
+      // Confirmed deletion is idempotent, including stale sidebar entries.
       for (const run of relatedRuns) {
         await deleteTaskChangeHistory(workspace, run.runId);
         await host.journal.delete(run.runId);
@@ -525,10 +542,23 @@ export class DesktopTaskController {
     await this.assertCanReconfigure(workspace);
     this.assertIdleContext(host, workspace, contextId);
     const planMode = host.runtime.snapshot().planMode === true;
+    const sessionId = host.agent?.status?.().sessionId;
+    const restored = sessionId ? await loadSession(workspace, sessionId) : undefined;
+    const history = host.runtime.connect(0).events;
+    this.assertIdleContext(host, workspace, contextId);
     this.detach(); // Always discard Full Access and the old host/context.
     // Reconfiguring the same open workspace must not silently leave read-only
     // mode. Apply it before the replacement host is visible to any caller.
     this.planModeOnCreate = { workspace, enabled: planMode };
+    const replacement = await this.ensure(workspace);
+    if (restored && replacement.agent) {
+      const replacementContext = this.modeContextId;
+      replacement.agent.restoreSession(restored, { preservePlanMode: true });
+      await replacement.agent.setModel(replacement.provider.model);
+      this.assertIdleContext(replacement, workspace, replacementContext);
+      replacement.checkpointManager?.setSession(restored.id);
+      replacement.runtime.resetConversation(history);
+    }
     return this.connect(workspace, 0);
   }
 
@@ -661,7 +691,7 @@ export class DesktopTaskController {
       .filter((event) => event && event.schemaVersion === 1)
       .map((event) => ({
         ...structuredClone(event),
-        taskId: run.sessionId,
+        taskId: run.runId,
         sequence: ++sequence,
       } as RuntimeEvent))).slice(-1_000);
   }

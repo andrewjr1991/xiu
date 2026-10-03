@@ -19,7 +19,7 @@ export function roundPresentation(events: RuntimeEvent[]) {
   const answer = finished?.type === "task.finished" && finished.payload.state === "completed" && finished.payload.result?.trim()
     ? finished : lastReply;
   const users = events.filter((e) => e.type === "task.started" || e.type === "task.steered");
-  const alerts = events.filter((e) => e.type === "runtime.notice" && e.payload.kind === "failure"
+  const candidates = events.filter((e) => e.type === "runtime.notice" && e.payload.kind === "failure"
     || e.type === "task.finished" && e.payload.state !== "completed"
     || e.type === "tool.finished" && ["failure", "denied", "cancelled"].includes(e.payload.result?.status ?? ""));
   const failedChildren = new Map<string, RuntimeEvent>();
@@ -27,8 +27,27 @@ export function roundPresentation(events: RuntimeEvent[]) {
     if (["failed", "blocked", "interrupted"].includes(event.payload.agent.status)) failedChildren.set(event.payload.agent.id, event);
     else failedChildren.delete(event.payload.agent.id);
   }
-  alerts.push(...failedChildren.values());
-  const excluded = new Set([...users, ...alerts, ...(answer ? [answer] : [])].map((e) => e.eventId));
+  candidates.push(...failedChildren.values());
+  const alertText = (e: RuntimeEvent) => e.type === "runtime.notice" ? e.payload.message
+    : e.type === "tool.finished" ? e.payload.summary
+    : e.type === "task.finished" ? e.payload.error ?? e.payload.result ?? ""
+    : e.type === "subagent.updated" ? `${e.payload.agent.title}: ${e.payload.agent.error ?? e.payload.agent.progress ?? e.payload.agent.status}` : "";
+  const normalize = (text: string) => text.replace(/^(?:模型请求失败：|Model request failed:\s*|[\w]+:\s*)?(?:Tool error:\s*)?/, "").trim();
+  const seen = new Set<string>();
+  const alerts = candidates.filter((e) => {
+    const text = normalize(alertText(e));
+    // Agent emits a short failure notice immediately before the full tool
+    // result. Keep the result once, rather than displaying two orange cards.
+    if (e.type === "runtime.notice" && candidates.some((other) => other.type === "tool.finished"
+      && Math.abs(Date.parse(other.timestamp) - Date.parse(e.timestamp)) <= 2_000
+      && normalize(alertText(other).split(/\r?\n/, 1)[0]!) === text)) return false;
+    const reply = answer?.type === "assistant.message" ? normalize(answer.payload.text) : "";
+    if (text && (seen.has(text) || text === reply)) return false;
+    if (text) seen.add(text);
+    return true;
+  });
+  // Duplicate notices remain in storage, but not twice in the conversation.
+  const excluded = new Set([...users, ...candidates, ...(answer ? [answer] : [])].map((e) => e.eventId));
   const process = events.filter((e) => !excluded.has(e.eventId) && e.type !== "task.finished"
     && !(e.type === "assistant.message" && answer?.type === "task.finished" && e.payload.text.trim() === answer.payload.result?.trim()));
   const operations = events.filter((e) => e.type === "tool.started").length;

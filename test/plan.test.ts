@@ -20,6 +20,7 @@ test("task plan validates and formats live step state", async () => {
   assert.match(manager.format(), /→ plan/);
   assert.match(manager.updateSummary(), /Task plan updated: 1\/2; now: Add plan mode/);
   assert.doesNotMatch(manager.updateSummary(), /Add streaming/);
+  assert.doesNotMatch(manager.updateSummary(), /\/tasks/);
   assert.throws(() => manager.update("bad", [
     { id: "a", title: "A", status: "in_progress" },
     { id: "b", title: "B", status: "in_progress" },

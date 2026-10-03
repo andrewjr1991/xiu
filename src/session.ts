@@ -23,6 +23,8 @@ export interface RestoredSession {
   updatedAt: string;
   model?: string;
   providerId?: string;
+  lastResponseProtocolIssue?: "missing_finish_reason" | "unsupported_finish_reason";
+  lastStreamTimedOut?: boolean;
   messages: ConversationMessage[];
   stats: SessionStats;
   plan?: TaskPlan;
@@ -123,10 +125,16 @@ export async function deleteSession(cwd: string, requested: string): Promise<boo
   const selected = (await listSessions(cwd)).filter((item) => item.id === requested);
   if (!selected.length) return false;
   for (const item of selected) {
-    const stat = await fs.lstat(item.file);
+    const stat = await fs.lstat(item.file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!stat) continue;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe session deletion target.");
   }
-  for (const item of selected) await fs.unlink(item.file);
+  for (const item of selected) await fs.unlink(item.file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
   return true;
 }
 
@@ -146,6 +154,8 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
   let stats = emptySessionStats();
   let model = selected.model;
   let providerId = selected.providerId;
+  let lastResponseProtocolIssue: RestoredSession["lastResponseProtocolIssue"];
+  let lastStreamTimedOut = false;
   let plan: TaskPlan | undefined;
   let planMode = false;
   let diagnostics: TaskDiagnosticSnapshot | undefined;
@@ -169,7 +179,14 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
         else if (typeof saved.provider === "string") providerId = saved.provider;
       }
     }
+    else if (event.type === "model_timeout" && event.transport === "stream") {
+      lastStreamTimedOut = true;
+    }
+    else if (event.type === "model_protocol") {
+      lastStreamTimedOut = false;
+    }
     else if (event.type === "assistant") {
+      lastResponseProtocolIssue = event.protocolIssue === "missing_finish_reason" || event.protocolIssue === "unsupported_finish_reason" ? event.protocolIssue : undefined;
       const text = String(event.text ?? "");
       messages.push({
         role: "assistant",
@@ -183,8 +200,9 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     else if (event.type === "completion_gate") messages.push({ role: "user", content: String(event.message ?? "") });
     else if (event.type === "compact") messages = [{ role: "user", content: String(event.context ?? event.summary ?? "") }];
     else if (event.type === "stats" && event.stats) stats = { ...stats, ...event.stats as Partial<SessionStats> };
-    else if (event.type === "model_changed" && typeof event.model === "string") model = event.model;
+    else if (event.type === "model_changed" && typeof event.model === "string") { model = event.model; lastStreamTimedOut = false; lastResponseProtocolIssue = undefined; }
     else if (event.type === "provider_changed") {
+      lastStreamTimedOut = false; lastResponseProtocolIssue = undefined;
       if (typeof event.providerId === "string") providerId = event.providerId;
       if (typeof event.model === "string") model = event.model;
     }
@@ -222,6 +240,8 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
     updatedAt: selected.updatedAt,
     model,
     providerId,
+    lastResponseProtocolIssue,
+    lastStreamTimedOut,
     messages,
     stats,
     plan,

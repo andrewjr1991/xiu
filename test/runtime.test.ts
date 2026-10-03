@@ -17,6 +17,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("failed completion retains the reply but explains program-observed verification rejection", async () => {
+  const runtime = new XiuRuntime();
+  runtime.attachDriver({ run: async () => "Model claims PASS", cancel: () => false, steer: () => false,
+    status: () => ({ outcome: "failed", failureReason: "verification_failed" }) });
+  await runtime.createTask("verify artifact");
+  assert.equal(runtime.snapshot().task?.state, "failed");
+  assert.match(runtime.snapshot().task?.error ?? "", /必需校验/);
+  assert.equal(runtime.snapshot().task?.result, "Model claims PASS");
+});
+
 class FakeDriver implements RuntimeTaskDriver {
   outcome: ReturnType<RuntimeTaskDriver["status"]>["outcome"] = "idle";
   readonly result = deferred<string>();
@@ -101,6 +111,39 @@ test("renderer reducer ignores duplicates and rejects event gaps", () => {
   const next = applyRuntimeEvent(initial, started);
   assert.equal(applyRuntimeEvent(next, started), next);
   assert.throws(() => applyRuntimeEvent(next, { ...started, eventId: "event-3", sequence: 3 }), /event gap/);
+});
+
+test("continuing seeds history without replaying approvals or prior task state", async () => {
+  const driver = new FakeDriver();
+  const runtime = new XiuRuntime();
+  runtime.attachDriver(driver);
+  const seen: RuntimeEvent[] = [];
+  runtime.subscribe((event) => seen.push(event));
+  const history = [{ schemaVersion: 1, eventId: "old-start", taskId: "old", sequence: 55, timestamp: "2026-01-01T00:00:00Z", type: "task.started", payload: { taskPreview: "old" } }] as RuntimeEvent[];
+  runtime.resetConversation(history);
+  assert.equal(seen.length, 0);
+  assert.equal(runtime.snapshot().task, undefined);
+  const next = runtime.createTask("follow up");
+  assert.equal(runtime.connect(0).events[0]?.eventId, "old-start");
+  assert.equal(seen[0]?.sequence, 2);
+  assert.notEqual(runtime.snapshot().task?.id, "old");
+  driver.outcome = "completed"; driver.result.resolve("new answer");
+  await next;
+  runtime.resetConversation();
+  assert.deepEqual(runtime.connect(0).events, []);
+});
+
+test("a long task resync returns retained events instead of an empty transcript", async () => {
+  const runtime = new XiuRuntime();
+  const driver = new FakeDriver(); runtime.attachDriver(driver);
+  const running = runtime.createTask("long task");
+  const events = runtime.agentEvents();
+  for (let turn = 1; turn <= 600; turn++) { events.onModelStart?.(turn); events.onModelEnd?.(); }
+  const replay = runtime.connect(0);
+  assert.equal(replay.resyncRequired, true);
+  assert.equal(replay.events.length, 1000);
+  assert.equal(replay.events.at(-1)?.sequence, replay.snapshot.sequence);
+  driver.outcome = "completed"; driver.result.resolve("done"); await running;
 });
 
 test("reconnect returns missed events or requires a fresh snapshot after retention", async () => {

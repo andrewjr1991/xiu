@@ -147,9 +147,12 @@ export function modelProgressSummary(events: RuntimeEvent[]): ModelProgressSumma
   if (changed) details.push(`已检测到 ${changed} 个文件变更`);
   const verified = events.filter((event) => event.type === "tool.finished" && event.payload.verification).length;
   if (verified) details.push(`已完成 ${verified} 项验证`);
+  // The individual event rows already expose request/response status. Do not
+  // add a repetitive empty-output explanation when there is no progress fact.
+  if (!details.length) return undefined;
   return {
     title: `模型进展 · 第 ${started.payload.turn} 轮`,
-    text: details.join("。") || "模型响应已接收；该轮没有返回可展示的文字说明，以下只呈现程序可核验的运行事实。",
+    text: details.join("。"),
     providerVisible: false,
   };
 }
@@ -175,7 +178,7 @@ export function visibleTimelineEvents(events: RuntimeEvent[]): RuntimeEvent[] {
 export function mergeRuntimeEvents(current: RuntimeEvent[], incoming: RuntimeEvent[]): RuntimeEvent[] {
   const merged = new Map(current.map((event) => [event.eventId, event]));
   for (const event of incoming) merged.set(event.eventId, event);
-  return [...merged.values()].sort((left, right) => left.sequence - right.sequence).slice(-200);
+  return [...merged.values()].sort((left, right) => left.sequence - right.sequence).slice(-1_000);
 }
 
 export function currentRuntimeActivity(
@@ -190,12 +193,19 @@ export function currentRuntimeActivity(
   if (draft?.trim()) return { label: "正在生成回复", detail: modelLabel };
 
   const event = [...events].reverse().find((candidate) => [
-    "task.started", "model.started", "model.finished", "assistant.message", "tool.started", "tool.progress",
+    "task.started", "model.started", "model.progress", "model.finished", "assistant.message", "tool.started", "tool.progress",
     "tool.finished", "plan.updated", "workspace.changed", "approval.decided", "runtime.notice",
   ].includes(candidate.type));
   if (!event || event.type === "task.started") return { label: "正在读取项目并准备上下文", detail: modelLabel };
   if (event.type === "model.started") return { label: `正在思考 · 第 ${event.payload.turn} 轮`, detail: modelLabel };
-  if (event.type === "model.finished") return { label: "正在整理模型响应", detail: modelLabel };
+  if (event.type === "model.progress") {
+    const { textCharacters = 0, argumentCharacters = 0, chunks = 0 } = event.payload;
+    return { label: argumentCharacters > 0 ? "正在生成工具参数" : "正在接收模型输出",
+      detail: argumentCharacters > 0 ? `已接收 ${argumentCharacters.toLocaleString()} 字符参数 · 完整校验后才执行`
+        : textCharacters > 0 ? `已接收 ${textCharacters.toLocaleString()} 字符公开回复 · 安全的完整行实时展示`
+        : `已接收 ${chunks} 个响应片段 · 暂无可展示的公开正文` };
+  }
+  if (event.type === "model.finished") return { label: event.payload.responseReceived === false ? "模型请求已停止" : "正在整理模型响应", detail: modelLabel };
   if (event.type === "tool.started") return { label: `正在运行 ${event.payload.name}`, detail: toolActionDescription(event.payload.name, event.payload.description) };
   if (event.type === "tool.progress") return { label: `正在运行 ${event.payload.name}`, detail: event.payload.message };
   if (event.type === "tool.finished") return { label: "正在读取工具结果", detail: event.payload.name };

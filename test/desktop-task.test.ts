@@ -418,6 +418,34 @@ test("desktop task deletion removes a whole conversation but preserves workspace
   assert.equal(await fs.readFile(path.join(workspace, "keep.txt"), "utf8"), "keep\n");
 });
 
+test("desktop deletes journal-only conversations by sidebar session ID and tolerates stale retries", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-orphan-task-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace);
+  await fs.writeFile(path.join(workspace, "keep.txt"), "untouched");
+  const journal = new TaskRunJournal(workspace, path.join(root, "journals"));
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    const run = await journal.begin({ sessionId: "manually-removed-session", task: "fixture", providerId: "test", model: "model" });
+    await journal.complete("failed");
+    await saveTaskChangeHistory(workspace, run.runId, historicalReport("keep.txt", "untouched"));
+    runs.push(run);
+  }
+  const unrelated = await journal.begin({ sessionId: "other-session", task: "keep", providerId: "test", model: "model" });
+  await journal.complete("completed");
+  const runtime = new XiuRuntime(); runtime.attachDriver(new FakeDriver());
+  const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, journal, provider: { id: "test", label: "test", model: "model" } }));
+  const request = { taskId: "manually-removed-session", confirmed: true };
+  await assert.rejects(controller.deleteTask(workspace, request, false));
+  assert.equal((await journal.recent()).length, 3);
+  await controller.deleteTask(workspace, request, true);
+  await controller.deleteTask(workspace, request, true);
+  assert.deepEqual((await journal.recent()).map((r) => r.runId), [unrelated.runId]);
+  for (const run of runs) assert.equal(await loadTaskChangeHistory(workspace, run.runId), undefined);
+  assert.equal(await fs.readFile(path.join(workspace, "keep.txt"), "utf8"), "untouched");
+});
+
 test("desktop approval mode is applied by the main-process controller and exposed to the renderer", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-approval-mode-"));
   const workspace = path.join(root, "workspace");
@@ -468,10 +496,34 @@ test("desktop can continue a historical session and start a genuinely fresh conv
   const continued = await controller.continueTask(workspace, "session-old", "继续补充测试");
   assert.equal(restoredId, "session-old");
   assert.equal(continued.runtime.snapshot.task?.taskPreview, "继续补充测试");
+  assert.ok(continued.runtime.events.some((event) => event.type === "assistant.message" && event.payload.text === "第一轮完成"));
   driver.outcome = "completed";
   driver.result.resolve("done");
   await new Promise((resolve) => setImmediate(resolve));
   const fresh = await controller.newConversation(workspace);
   assert.equal(cleared, 1);
   assert.equal(fresh.runtime.snapshot.task, undefined);
+});
+
+test("switching model preserves the same session but never restores Full Access", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-switch-history-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, ".xiu", "sessions"), { recursive: true });
+  await fs.writeFile(path.join(root, ".xiu", "sessions", "old.jsonl"), JSON.stringify({ type: "task", timestamp: "2026-09-29T01:00:00Z", task: "original goal" }) + "\n");
+  const models: string[] = [];
+  const sessions: string[] = [];
+  const modes: string[] = [];
+  let hosts = 0;
+  const controller = new DesktopTaskController(() => undefined, async () => {
+    const first = hosts++ === 0;
+    const runtime = new XiuRuntime(); runtime.attachDriver(new FakeDriver());
+    return { runtime, provider: { id: "fixture", label: "fixture", model: first ? "first" : "second" }, journal: new TaskRunJournal(root, path.join(root, "journals")),
+      setApprovalMode: (mode) => { modes.push(mode); },
+      agent: { status: () => ({ sessionId: first ? "old" : undefined }), restoreSession: (session: { id: string }) => sessions.push(session.id), setModel: async (model: string) => { models.push(model); } } as unknown as WorkspaceAgentHost["agent"] };
+  });
+  await controller.connect(root);
+  await controller.reload(root);
+  assert.deepEqual(sessions, ["old"]);
+  assert.deepEqual(models, ["second"]);
+  assert.ok(modes.every((mode) => mode === "ask"));
 });

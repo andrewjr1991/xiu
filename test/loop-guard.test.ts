@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { toolCallSignature, ToolLoopGuard } from "../src/loop-guard.js";
 
+test("host-confirmed active waits do not form a wait/list cycle; failures remain bounded", () => {
+  const guard = new ToolLoopGuard();
+  for (let index = 0; index < 12; index++) {
+    assert.equal(guard.observe("wait_agents", { run_id: "live" }, true).blocked, false);
+    guard.result("wait_agents", "success", undefined, "still running");
+    assert.equal(guard.observe("list_agents", { run_id: "live" }).blocked, false);
+  }
+  assert.equal(guard.observe("wait_agents", { run_id: "done" }).blocked, false);
+  assert.equal(guard.observe("wait_agents", { run_id: "done" }).blocked, false);
+  assert.equal(guard.observe("wait_agents", { run_id: "done" }).blocked, true);
+  for (let index = 0; index < 4; index++) guard.result("wait_agents", "failure", "NOT_FOUND", "missing");
+  assert.equal(guard.result("wait_agents", "failure", "NOT_FOUND", "missing").abort, true);
+});
+
 test("tool signatures are stable across object key order", () => {
   assert.equal(toolCallSignature("read_file", { line: 1, path: "a" }), toolCallSignature("read_file", { path: "a", line: 1 }));
 });

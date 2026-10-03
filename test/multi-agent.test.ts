@@ -14,6 +14,56 @@ import { createWorkspaceAgentHost } from "../src/runtime/workspace-agent-host.js
 const stats = { modelCalls: 1, toolCalls: 0, inputTokens: 10, outputTokens: 5, activeMs: 10 };
 const execFileAsync = promisify(execFile);
 
+test("model dispatch cannot invent a child turn budget", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-budget-"));
+  let budget: number | undefined = 99;
+  const coordinator = new MultiAgentCoordinator(cwd, async (task) => { budget = task.maxTurns; return { result: "done", stats }; });
+  try {
+    const spawn = createMultiAgentTools(coordinator).find((tool) => tool.name === "spawn_agents")!;
+    assert.doesNotMatch(JSON.stringify(spawn.inputSchema), /maxTurns/);
+    await spawn.execute({ goal: "review", tasks: [{ id: "review", title: "review", instructions: "review", role: "reviewer", maxTurns: 10 }] });
+    await coordinator.wait(coordinator.list()[0]!.id, 1000);
+    assert.equal(budget, undefined);
+  } finally { await fs.rm(cwd, { recursive: true, force: true }); }
+});
+
+test("model retry clears a persisted legacy budget but trusted coordinator retries retain it", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-retry-budget-"));
+  const budgets: Array<number | undefined> = [];
+  const coordinator = new MultiAgentCoordinator(cwd, async (task) => { budgets.push(task.maxTurns); throw new Error("fixture failed"); });
+  try {
+    const run = await coordinator.start("review", [{ id: "review", title: "review", instructions: "review", role: "reviewer", maxTurns: 10 }]);
+    await coordinator.wait(run.id, 1000);
+    await coordinator.retry(run.id, "review"); await coordinator.wait(run.id, 1000);
+    const retry = createMultiAgentTools(coordinator).find((tool) => tool.name === "retry_agent")!;
+    await retry.execute({ run_id: run.id, task_id: "review" }); await coordinator.wait(run.id, 1000);
+    assert.deepEqual(budgets, [10, 10, undefined]);
+  } finally { await fs.rm(cwd, { recursive: true, force: true }); }
+});
+
+test("desktop model-dispatched reviewer can complete beyond ten turns", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-child-long-review-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  await fs.writeFile(path.join(cwd, "source.txt"), Array.from({ length: 12 }, (_, index) => `source line ${index + 1}`).join("\n"));
+  let calls = 0;
+  const host = await createWorkspaceAgentHost(cwd, {
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    journalRoot: path.join(cwd, ".xiu", "journal"), backgroundRoot: path.join(cwd, ".xiu", "background"),
+    provider: { async complete(_system, messages) {
+      calls++;
+      const reads = messages.filter((message) => message.role === "tool").length;
+      return reads < 12 ? { text: "Inspecting", toolCalls: [{ id: `read-${reads}`, name: "read_file", input: { path: "source.txt", start_line: reads + 1, end_line: reads + 1 } }], raw: {} }
+        : { text: "VERDICT: PASS", toolCalls: [], raw: {} };
+    } },
+  });
+  t.after(() => host.close());
+  const spawn = createMultiAgentTools(host.coordinator!).find((tool) => tool.name === "spawn_agents")!;
+  await spawn.execute({ goal: "Review source", tasks: [{ id: "review", title: "Review source", instructions: "Review source", role: "reviewer", maxTurns: 10 }] });
+  const done = await host.coordinator!.wait(host.coordinator!.list()[0]!.id, 10_000);
+  assert.equal(done.tasks[0]?.status, "completed", done.tasks[0]?.error);
+  assert.equal(calls, 13);
+});
+
 test("a tester's prose-only PASS is never executed verification evidence", async () => {
   const createdAt = new Date().toISOString();
   const run = {

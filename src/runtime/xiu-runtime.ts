@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEvents, AgentRunOutcome } from "../agent.js";
+import type { AgentEvents, AgentRunOutcome, AgentFailureReason } from "../agent.js";
 import { redactSecrets, sanitizeSecrets } from "../secret-redaction.js";
 import type { ApprovalRequest, ToolResult } from "../types.js";
 import {
@@ -25,7 +25,7 @@ export interface RuntimeTaskDriver {
   run(task: string): Promise<string>;
   cancel(): boolean;
   steer(text: string): boolean;
-  status(): { outcome: AgentRunOutcome; planMode?: boolean };
+  status(): { outcome: AgentRunOutcome; planMode?: boolean; failureReason?: AgentFailureReason };
   setPlanMode?(enabled: boolean): Promise<void>;
 }
 
@@ -119,7 +119,7 @@ export class XiuRuntime {
     }
     if (afterSequence === this.sequence) return { snapshot, events: [], resyncRequired: false };
     const first = this.events[0]?.sequence ?? this.sequence + 1;
-    if (afterSequence + 1 < first) return { snapshot, events: [], resyncRequired: true };
+    if (afterSequence + 1 < first) return { snapshot, events: this.events.map((event) => structuredClone(event)), resyncRequired: true };
     return {
       snapshot,
       events: this.events.filter((event) => event.sequence > afterSequence).map((event) => structuredClone(event)),
@@ -132,7 +132,7 @@ export class XiuRuntime {
     return () => this.listeners.delete(listener);
   }
 
-  resetConversation(): void {
+  resetConversation(history: RuntimeEvent[] = []): void {
     if (this.changingPlanMode || (this.task && ["running", "waiting_approval", "stopping"].includes(this.task.state))) {
       throw new Error("Cannot reset the conversation while a task is active.");
     }
@@ -141,6 +141,9 @@ export class XiuRuntime {
     this.sessionApprovalScopes.clear();
     this.events.length = 0;
     this.sequence = 0;
+    // Seed only trusted, already-redacted history. Do not replay events to
+    // subscribers or restore approvals, tasks, grants, or recovery state.
+    for (const event of history.slice(-MAX_EVENTS)) this.events.push({ ...event, sequence: ++this.sequence });
     this.lastDraftAt = 0;
     this.lastDraftChars = 0;
   }
@@ -181,9 +184,16 @@ export class XiuRuntime {
 
     try {
       const result = await driver.run(normalized);
-      const state = terminalState(driver.status().outcome);
+      const status = driver.status();
+      const state = terminalState(status.outcome);
       const safeResult = this.clean(result, MAX_MESSAGE_TEXT);
-      this.finish(state, { result: safeResult });
+      const reasons: Partial<Record<AgentFailureReason, string>> = {
+        verification_failed: "尚有必需校验失败或在文件变更后失效；模型的完成声明不等于全部验证已通过。请继续补齐完成检查中列出的校验。",
+        plan_incomplete: "任务计划仍有未完成步骤；模型的完成声明未通过程序检查。",
+        tool_failed: "最后一次工具操作未成功；请检查运行提醒后继续。",
+      };
+      const error = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
+      this.finish(state, { result: safeResult, ...(error ? { error } : {}) });
       return result;
     } catch (error) {
       const state = terminalState(driver.status().outcome);
@@ -295,7 +305,19 @@ export class XiuRuntime {
     return {
       ...existing,
       onModelStart: (turn) => { existing.onModelStart?.(turn); this.emitIfActive("model.started", { turn }); },
-      onModelEnd: () => { existing.onModelEnd?.(); this.emitIfActive("model.finished", {}); },
+      onModelProgress: (() => {
+        let last = 0;
+        return (progress) => {
+          existing.onModelProgress?.(progress);
+          const now = this.now().getTime();
+          if (now - last >= 5_000) {
+            last = now;
+            const counters = Object.fromEntries(Object.entries(progress ?? {}).filter(([key, value]) => ["chunks", "textCharacters", "argumentCharacters"].includes(key) && Number.isSafeInteger(value) && value >= 0));
+            this.emitIfActive("model.progress", counters);
+          }
+        };
+      })(),
+      onModelEnd: (responseReceived) => { existing.onModelEnd?.(responseReceived); this.emitIfActive("model.finished", { responseReceived }); },
       onAssistantTurn: (text, hasToolCalls) => {
         existing.onAssistantTurn?.(text, hasToolCalls);
         this.emitIfActive("assistant.message", { text: this.clean(text, MAX_MESSAGE_TEXT), hasToolCalls });

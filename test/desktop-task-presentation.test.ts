@@ -118,3 +118,11 @@ test("desktop timeline keeps each empty-text model turn as a distinct factual pr
   assert.equal(groups.length, 2);
   assert.deepEqual(groups.map((item) => item.kind === "activity" ? modelProgressSummary(item.events)?.title : "event"), ["模型进展 · 第 1 轮", "模型进展 · 第 2 轮"]);
 });
+
+test("empty model status has no redundant summary but retains its event rows", () => {
+  const events = [event(1, "model.started", { turn: 1 }), event(2, "model.finished", {})];
+  assert.equal(modelProgressSummary(events), undefined);
+  const groups = groupedTimelineItems(events, "completed");
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0]?.kind === "activity" ? groups[0].events : [], events);
+});

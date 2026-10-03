@@ -5,6 +5,19 @@ import path from "node:path";
 import test from "node:test";
 import { captureVerificationStamp, isVerificationCommand, VerificationLedger, verificationCheckKey, verifyOutputSupersedes } from "../src/verification.js";
 
+test("pending checks expose exact stale obligations without accepting weaker success", () => {
+  const ledger = new VerificationLedger();
+  const strong = { path: "index.html", min_bytes: 50, max_bytes: 1000, forbidden_substrings: ["CDN"] };
+  ledger.recordTool("verify_output", strong, true);
+  ledger.invalidate();
+  ledger.recordTool("verify_output", { path: "index.html", min_bytes: 50 }, true);
+  assert.equal(ledger.passed, false);
+  assert.deepEqual(ledger.pendingChecks(), [{ tool: "verify_output", input: strong }]);
+  ledger.recordTool("verify_output", strong, true);
+  assert.equal(ledger.passed, true);
+  assert.deepEqual(ledger.pendingChecks(), []);
+});
+
 test("verification command classification rejects information-only variants and =value flags", () => {
   for (const command of [
     "tsc --all", "tsc --listFilesOnly", "tsc --showConfig", "tsc --init", "tsc -v", "tsc -help", "tsc -version", "tsc -all",

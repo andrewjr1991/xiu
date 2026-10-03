@@ -51,6 +51,9 @@ export interface AgentConfig {
   language?: UiLanguage;
   taskBudget?: TaskBudgetLimits;
   stallTimeoutMs?: number;
+  modelFirstResponseTimeoutMs?: number;
+  modelStreamIdleTimeoutMs?: number;
+  modelCompleteTimeoutMs?: number;
   /** Internal marker for a detached Xiu process that cannot answer interactive approvals. */
   backgroundMode?: boolean;
   /** Set only after the CLI has confirmed workspace trust. */
@@ -169,6 +172,11 @@ export function resolveConfig(options: {
   if (!Number.isFinite(warningPercent) || warningPercent < 1 || warningPercent >= 100) throw new Error("budget-warning-percent must be from 1 to 99");
   const stallTimeoutSeconds = optionalPositive(options.stallTimeoutSeconds ?? process.env.XIU_STALL_TIMEOUT_SECONDS, "stall-timeout-seconds") ?? 120;
   const budgetSeconds = optionalPositive(options.budgetSeconds ?? process.env.XIU_BUDGET_SECONDS, "budget-seconds");
+  const modelTimeout = (name: string, fallback: number) => {
+    const seconds = optionalPositive(process.env[name], name) ?? fallback;
+    if (seconds > 86_400) throw new Error(`${name} must not exceed 86400 seconds`);
+    return seconds * 1_000;
+  };
   const taskBudget: TaskBudgetLimits = {
     tokens: optionalPositive(options.budgetTokens ?? process.env.XIU_BUDGET_TOKENS, "budget-tokens"),
     modelCalls: optionalPositive(options.budgetModelCalls ?? process.env.XIU_BUDGET_MODEL_CALLS, "budget-model-calls"),
@@ -201,6 +209,9 @@ export function resolveConfig(options: {
     language,
     taskBudget,
     stallTimeoutMs: stallTimeoutSeconds * 1_000,
+    modelFirstResponseTimeoutMs: modelTimeout("XIU_MODEL_FIRST_RESPONSE_SECONDS", 600),
+    modelStreamIdleTimeoutMs: modelTimeout("XIU_MODEL_STREAM_IDLE_SECONDS", 180),
+    modelCompleteTimeoutMs: modelTimeout("XIU_MODEL_COMPLETE_SECONDS", 900),
     backgroundMode: process.env.XIU_DETACHED_BACKGROUND === "1",
   };
 }

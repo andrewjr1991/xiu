@@ -18,6 +18,9 @@ export interface AssistantTurn {
   raw: unknown;
   usage?: ModelUsage;
   finishReason?: "stop" | "tool_calls" | "length" | "content_filter" | "unknown";
+  protocolIssue?: "missing_finish_reason" | "unsupported_finish_reason";
+  transport?: "stream" | "complete";
+  protocolDiagnostics?: { chunks: number; pendingCalls: number; argumentCharacters: number };
 }
 
 export interface ModelUsage {
@@ -65,7 +68,15 @@ export interface ModelProvider {
     tools: ToolDefinition[],
     onTextDelta: (delta: string) => void,
     signal?: AbortSignal,
+    onProgress?: (progress?: ModelStreamProgress) => void,
   ): Promise<AssistantTurn>;
+}
+
+/** Safe transport counters only: never partial arguments or hidden reasoning. */
+export interface ModelStreamProgress {
+  chunks: number;
+  textCharacters: number;
+  argumentCharacters: number;
 }
 
 export type ToolRisk = "read" | "write" | "execute" | "dangerous";
@@ -112,6 +123,8 @@ export interface AgentTool extends ToolDefinition {
   preview?(input: Record<string, unknown>, context: ToolContext): Promise<string>;
   changesWorkspace?: boolean | ((input: Record<string, unknown>) => boolean);
   isVerification?(input: Record<string, unknown>, result: string): boolean;
+  /** Host-observed, active timed wait; repeated waits are not a tool-call loop. */
+  isPendingWait?(input: Record<string, unknown>): boolean;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<string>;
   /** Optional native result; legacy execute callers remain supported. */
   executeResult?(input: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
