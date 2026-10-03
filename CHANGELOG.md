@@ -4,7 +4,8 @@
 
 - Serialize background bootstrap claims, shell creation and cancellation; recover only proven-dead lifecycle lock owners.
 - Share CLI/desktop provider routing, expose read-only native search, local staged Skills installation and bounded local reports.
-- Add narrow-window and 125% zoom management UI coverage. npm stays paused; real OS IME and external-device acceptance remain pending.
+- Add narrow-window and 125% zoom management UI coverage. Real OS IME and external-device acceptance remain pending; preview publication is authorized, without promoting stable latest.
+- Synchronize the background output-cursor fixture explicitly before its second chunk; retain the incremental-output assertions instead of relying on a 500ms timing window.
 
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
 

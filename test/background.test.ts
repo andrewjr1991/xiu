@@ -179,7 +179,12 @@ test("background state and output cursors survive a new foreground manager", asy
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-resume-"));
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
-  const started = startBackgroundProcess("node -e \"console.log('first'); setTimeout(() => console.log('second'), 500); setTimeout(() => {}, 5000)\"", process.cwd());
+  // The foreground must read the first cursor before the worker emits the
+  // second chunk. A fixed delay lets a loaded CI runner consume both at once.
+  const signal = path.join(root, "emit-second");
+  const worker = `const fs=require('node:fs');console.log('first');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(signal)})){clearInterval(timer);console.log('second');}},50);setTimeout(()=>{clearInterval(timer);},60000);`;
+  const encoded = Buffer.from(worker).toString("base64");
+  const started = startBackgroundProcess(`node -e "eval(Buffer.from('${encoded}','base64').toString())"`, process.cwd());
   for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(started.id).includes("first"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const first = readBackgroundProcessOutput(started.id, 0);
   assert.match(first.text, /first/);
@@ -187,6 +192,7 @@ test("background state and output cursors survive a new foreground manager", asy
   // Reconfiguration simulates a fresh Xiu process discovering the same workspace store.
   configureBackgroundWorkspace(process.cwd(), root);
   assert.equal(listBackgroundProcesses().some((item) => item.id === started.id && item.running), true);
+  await fs.writeFile(signal, "ready");
   for (let attempt = 0; attempt < 300; attempt++) {
     const next = readBackgroundProcessOutput(started.id, first.nextCursor);
     if (next.text.includes("second")) { assert.equal(next.cursor, first.nextCursor); return; }
