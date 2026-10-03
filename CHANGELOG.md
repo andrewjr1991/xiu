@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.4 — Release candidate (2026-10-03)
+## 0.20.4 — GitHub Release (2026-10-03; npm publication pending)
 
 - Add chronological child-agent status, consistent role avatars, inspectable results and independently confirmed cancellation without expanding permissions.
 - Collapse intermediate activity into one elapsed-time entry per task round; keep final answers, failures, approval and recovery controls visible.
@@ -8,7 +8,7 @@
 - Preserve per-round history and current continuation results without borrowing stale task outputs or live workspace facts.
 - Deduplicate search progress, provide trusted current-date context, and retain inspectable web evidence.
 - Improve constrained-PowerShell privacy verification and explicit provider refresh without repairing existing unsafe ACLs automatically; bound transient Windows task-record rename retries without replaying tools.
-- Maintainer local acceptance passed; exact merged-source CI and artifact checks remain release gates. Windows installer remains unsigned; prior build-only HTTP-cache advisory acceptance remains disclosed. npm 0.20.3 is now confirmed published; 0.20.4 publication is pending.
+- Maintainer local acceptance passed. All six jobs passed for merged main source `c4113de2bf11ad1f2136464c6c6450c73d6f4f45` in CI 37112569209; Windows full tests: 969 total, 962 passed, 7 skipped, zero failed. GitHub assets are the original CI artifacts with verified upload digests. Windows installer remains unsigned; prior build-only HTTP-cache advisory acceptance remains disclosed. npm 0.20.3 is confirmed published; 0.20.4 is delegated to the maintainer using the same CI tarball.
 
 
 ## 0.20.3 — GitHub Release (npm publication pending)

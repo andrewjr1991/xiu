@@ -1,6 +1,33 @@
-## 0.20.4 正式发布流程（2026-10-03）
+## 0.20.4 正式发布记录（2026-10-03）
 
-维护者已确认本地测试通过，授权提交、推送、合并 main 后正式发布。CLI/桌面已统一升至 0.20.4，Registry latest 为 0.20.3，0.20.4 不存在。候选提交及合并后的精确提交须通过六作业 CI；GitHub Release 只使用该提交的原始 CI 制品与校验记录，不移动既有 tag 或覆盖旧资产。Windows x64 NSIS 继续未签名，保留既有构建期 HTTP-cache 风险披露。npm 本机 ENEEDAUTH，按此前选择将已核验 CI 包及命令交付维护者自行发布。下面“不提交/不发布”和旧 npm 待办是历史记录，不覆盖本节。
+已提交推送，经 [PR #5](https://github.com/andrewjr1991/xiu/pull/5) 合并 main，并发布 [GitHub 正式版 0.20.4](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.4)。正式 tag 与附件源码固定为 `c4113de2bf11ad1f2136464c6c6450c73d6f4f45`；[CI 37112569209](https://github.com/andrewjr1991/xiu/actions/runs/37112569209) 六作业全绿，Windows 全量 969 项中 962 通过、7 跳过、0 失败。两份原始 manifest、CLI tarball、Windows x64 NSIS 和 SHA256SUMS-0.20.4 共五个附件已逐项核对上传摘要；不移动正式 tag，也不因后续文档补记重新打包。Windows 安装器仍未签名，保留构建期 HTTP-cache 残留风险披露。
+
+本地企业 ConstrainedLanguage 后端专项通过；额外本地全量运行中的旧 .NET ACL 夹具受企业策略限制，运行后来停止，不能记作完整通过。发布使用上述精确源码 CI 的独立完整验证。下面“不提交/不发布”和旧 npm 待办是历史记录，不覆盖本节。
+
+### 固定目录与 npm 交接
+
+- 未打包程序：`D:\QoderWork Project\AGENT\apps\desktop\release\win-unpacked\Xiu.exe`（本地构建，源码树与正式合并提交一致）。
+- 正式 CI 安装器：`D:\QoderWork Project\AGENT\apps\desktop\release\Xiu-0.20.4-x64-c4113de2bf11ad1f2136464c6c6450c73d6f4f45-unsigned.exe`。
+- 安装器 SHA256：`fa7010eb9cc481679223d6af7b3e98fd45c5492ce3b995f451f8cbc782e25b07`。
+- 原始 CI tarball SHA256：`60503ccd95a789270faf82aee1534ce9d3daba119fa1a7f603f18ad0b7b7ee72`。
+
+本机 npm 未登录；按维护者选择，npm 0.20.4 由维护者自行发布。Registry latest 最近核实为 0.20.3，GitHub 发布不代表 npm 已更新。在正常 PowerShell 中执行：
+
+```powershell
+npm.cmd login
+npm.cmd view @xiu-ai/cli@0.20.4 version --registry=https://registry.npmjs.org/
+```
+
+仅当第二条明确返回该版本不存在的 E404 时继续；若已经存在，停止发布并核对来源，不覆盖。认证或网络错误不能视为版本不存在。先核对本地 tarball 摘要与上文一致，再发布原包：
+
+```powershell
+Get-FileHash -Algorithm SHA256 -LiteralPath 'D:\QoderWork Project\AGENT\apps\desktop\release\xiu-ai-cli-0.20.4-c4113de2bf11ad1f2136464c6c6450c73d6f4f45.tgz'
+npm.cmd publish 'D:\QoderWork Project\AGENT\apps\desktop\release\xiu-ai-cli-0.20.4-c4113de2bf11ad1f2136464c6c6450c73d6f4f45.tgz' --access public --tag latest --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.4 version dist.integrity --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org/
+```
+
+完成后确认版本 0.20.4、latest 指向 0.20.4，并核对 Registry tarball integrity 与原包；不要执行重新 npm pack 或移动 tag。
 
 > 当前正式版：0.20.3 两端一致，[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3) 已发布。精确源码 `2ad7891d8756d98001e8d6a23dc4603ccddd998d` 的 [CI 37099780173](https://github.com/andrewjr1991/xiu/actions/runs/37099780173) 六作业全绿；原始 CLI tarball、未签名 Windows NSIS、两份 manifest 和 SHA256SUMS 上传后摘要匹配。维护者确认 Skill、真实输入法和外部设备验收通过。npm 按最新选择由维护者自行发布同一 CI 包，目前待完成；GitHub 发布不代表 npm latest 已更新。CLI 全依赖及两端生产依赖审计为 0；桌面开发依赖仍有 8 条 high 传播项，共同根因 GHSA-ch52-4w7c-c8xp 无补丁，已明确风险接受并披露。不降级构建器、不抑制告警，普通下载未启用 HTTP 响应缓存，最终包不含该依赖。CI 全绿不表示漏洞修复。不覆盖已发布版本，不放宽企业 ACL。下方旧版本状态为历史记录。
 
