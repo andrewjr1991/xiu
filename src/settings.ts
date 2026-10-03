@@ -110,12 +110,11 @@ export class SettingsStore {
   async save(settings: XiuSettings): Promise<void> {
     await fs.mkdir(path.dirname(this.filename), { recursive: true });
     const temporary = `${this.filename}.${process.pid}.tmp`;
-    const implicitBetaSearch = settings.webSearch?.enabled === true && settings.webSearch.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
-      && (settings.webSearch.managedAuth === "xiu-device" || settings.webSearch.apiKeyEnv === XIU_BETA_SEARXNG_TOKEN_ENV)
-      && !settings.webSearch.proxy;
     const persisted = {
       ...(settings.language ? { language: settings.language } : {}),
-      ...(!implicitBetaSearch && settings.webSearch ? { webSearch: settings.webSearch } : {}),
+      // Persist explicit selections, including managed auth and domain controls.
+      // Omitting the beta preset could resurrect an old environment-token mode.
+      ...(settings.webSearch ? { webSearch: settings.webSearch } : {}),
       ...(settings.update?.notifications ? { update: { notifications: true } } : {}),
     };
     await fs.writeFile(temporary, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");

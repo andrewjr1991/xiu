@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.3-preview.12 — Local test candidate (unreleased)
+
+- Desktop search reuses CLI lazy device enrollment and short-lived token renewal. Managed and custom search are explicit UI choices; saving does not enroll or test a service.
+- Keep managed auth, independent proxy and domain/timeout policies when saving. Persist explicit selections so a legacy environment token cannot silently replace managed authentication.
+- Maintainer live-service acceptance passed: automatic authentication and search work. Commit/push is authorized; publication is not. The previous release's CI does not validate this patch.
+
 ## 0.20.3-preview.11 — GitHub pre-release (2026-10-03)
 
 - Exact source `cc49096f987309fa38baa7947694ff2398f1ccff` passed all six jobs in CI run `37094638003`. Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. Installer, CLI tarball and verification manifests are published from that exact CI run.

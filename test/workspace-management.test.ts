@@ -8,10 +8,10 @@ import { WorkspaceManagementService } from "../src/runtime/workspace-management.
 import { createProviderPolicy } from "../src/runtime/provider-policy.js";
 import { resolveConfig } from "../src/config.js";
 import type { ProviderProfile, ProviderRegistry } from "../src/provider-registry.js";
-import { SettingsStore, XIU_BETA_SEARXNG_ENDPOINT, XIU_BETA_SEARXNG_TOKEN_ENV, type XiuSettings } from "../src/settings.js";
+import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT, XIU_BETA_SEARXNG_TOKEN_ENV, type XiuSettings } from "../src/settings.js";
 
-function fixture(realSkills?: SkillRegistry) {
-  let settings: XiuSettings = { webSearch: { enabled: false, provider: "searxng", baseURL: "https://search.example.test", blockedDomains: ["blocked.test"], timeoutMs: 4_000 } };
+function fixture(realSkills?: SkillRegistry, initial?: XiuSettings) {
+  let settings: XiuSettings = initial ?? { webSearch: { enabled: false, provider: "searxng", baseURL: "https://search.example.test", blockedDomains: ["blocked.test"], timeoutMs: 4_000 } };
   let routing = { enabled: false, phases: {} as Record<string, string> };
   const chains: Record<string, string[]> = { primary: ["unsupported", "fallback"] };
   const profiles: ProviderProfile[] = ["primary", "unsupported", "fallback"].map((id) => ({ id, name: id, model: "fixture-model", kind: "openai", apiKey: "inert-canary-no-request", features: { text: true, tools: id !== "unsupported", vision: false, image: false, video: false } }));
@@ -111,6 +111,32 @@ test("explicit web configuration retains domain/timeout controls and refuses URL
   assert.deepEqual(settings().webSearch?.blockedDomains, ["blocked.test"]);
   assert.equal(settings().webSearch?.timeoutMs, 4_000);
   assert.equal(settings().webSearch?.managedAuth, undefined);
+});
+
+test("desktop explicitly selects pinned managed search without clearing domain/timeout/proxy policy", async () => {
+  const { service, settings } = fixture(undefined, { webSearch: { enabled: true, provider: "searxng", baseURL: XIU_BETA_SEARXNG_ENDPOINT,
+    apiKeyEnv: "SEARCH_MCP_TOKEN", blockedDomains: ["blocked.test"], timeoutMs: 4_000, proxy: "http://127.0.0.1:8888" } });
+  const request = { action: "web" as const, revision: (await service.snapshot()).revision, mode: "managed" as const,
+    enabled: true, provider: "searxng" as const, endpoint: XIU_BETA_SEARXNG_ENDPOINT };
+  await assert.rejects(service.change({ ...request, endpoint: "https://other.example.test" }), /固定/);
+  await assert.rejects(service.change({ ...request, apiKeyEnv: "SEARCH_MCP_TOKEN" }), /无需/);
+  await assert.rejects(service.change({ ...request, mode: "invalid" as never }), /Invalid/);
+  await service.change(request);
+  assert.deepEqual(settings().webSearch, { enabled: true, provider: "searxng", baseURL: `${XIU_BETA_SEARXNG_ENDPOINT}/`,
+    apiKeyEnv: undefined, managedAuth: "xiu-device", authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT,
+    blockedDomains: ["blocked.test"], timeoutMs: 4_000, proxy: "http://127.0.0.1:8888" });
+  assert.equal((await service.snapshot()).web.managed, true);
+  assert.doesNotMatch(JSON.stringify(await service.snapshot()), /deviceSecret|accessToken|authBaseURL/);
+  // Old clients can re-save/disable, but cannot silently replace managed auth.
+  const revision = (await service.snapshot()).revision;
+  await assert.rejects(service.change({ ...request, revision, mode: undefined, endpoint: "https://other.example.test" }), /明确/);
+  await service.change({ ...request, revision, mode: undefined, enabled: false });
+  assert.equal(settings().webSearch?.managedAuth, "xiu-device");
+  assert.equal(settings().webSearch?.enabled, false);
+  await service.change({ ...request, revision: (await service.snapshot()).revision, mode: "custom", endpoint: "https://custom.example.test", apiKeyEnv: "CUSTOM_SEARCH_KEY" });
+  assert.equal(settings().webSearch?.managedAuth, undefined);
+  assert.equal(settings().webSearch?.authBaseURL, undefined);
+  assert.equal(settings().webSearch?.apiKeyEnv, "CUSTOM_SEARCH_KEY");
 });
 
 test("shared policy skips unsupported or attempted fallback models and refuses oversized context", async () => {

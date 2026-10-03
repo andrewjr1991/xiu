@@ -1,5 +1,7 @@
 <div align="center">
 
+Candidate **0.20.3-preview.12** adds desktop managed-search authentication using the CLI's lazy device registration and short-lived tokens. In Tools & Runtime Settings → Web Search, choose **Xiu managed search** and save; custom services still accept environment-variable references, not secrets. No enrollment occurs on startup or save. The maintainer confirmed live authentication and search work and authorized commit/push; publication is not authorized, and this patch needs its own exact-commit CI.
+
 > **0.20.3-preview.11** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11), with an unsigned Windows x64 installer, CLI tarball and verification manifests from exact source `cc49096`. All six jobs passed in [CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003); Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. npm preview publication is authorized but blocked by local login-state persistence; stable latest remains 0.20.2. Real OS IME and external-device acceptance are pending.
 
 Local desktop UI corrections: compact bottom-aligned utility entries, consistent Execute/Plan controls, non-wrapping model action labels, a collapsible tool sidebar that retains tabs/terminal state, and a main-process-owned Xiu-styled Full Access confirmation. No permission or recovery policy is relaxed.

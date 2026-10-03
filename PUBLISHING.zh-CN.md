@@ -1,4 +1,4 @@
-> 当前开发：0.20.3-preview.11 收束候选。2026-10-03 维护者授权 GitHub 与 npm 预览发布；npm 使用 preview 标签，稳定 latest 保持 0.20.2。GitHub 已发布基线为 preview.10。发布前先修正文档提交 CI 37013624489 暴露的后台游标 fixture 时序问题并核验修正提交完整 CI；真实系统输入法与外部设备仍需独立验收，不能宣称稳定版通过。本地企业策略限制单独记录，不以绕过 ACL 解决。
+> 当前开发：0.20.3-preview.12 桌面托管搜索修正候选。维护者已实测自动认证及搜索通过，授权提交推送，但未授权发布；不创建 tag 或发布 npm/GitHub Release，不覆盖已发布 preview.11。历史发布记录如下；本候选的本地类型/构建/专项与真实服务验收、后续精确提交 CI 必须分开记录，不继承历史绿灯。企业 ACL 策略不放宽。
 
 2026-10-03 更新（覆盖以上候选状态）：[GitHub preview.11](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11) 已发布，精确 tag/产物源码为 `cc49096f987309fa38baa7947694ff2398f1ccff`，[CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003) 六作业全部通过。Windows 全量 890 项：883 通过、7 跳过、0 失败。资产直接从同一 CI 下载并逐项核验来源、版本、清洁工作树和 SHA256，上传后核验 GitHub digest 再公开草稿；包含未签名 NSIS、CLI tarball、两份 manifest 及 SHA256SUMS。npm 网页授权已完成，但保存登录状态 `.npmrc` 被系统拒绝，因此尚未发布 npm，需维护者在正常终端发布同一 CI tarball 至 preview 标签并回读版本/标签/完整性；不提升稳定 latest，不修改企业 ACL 策略。真实输入法/外部设备仍独立待验收。
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { stageLocalSkillPackage } from "../skills.js";
 import type { ProviderRegistry } from "../provider-registry.js";
 import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "../provider-routing.js";
-import { SettingsStore } from "../settings.js";
+import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT } from "../settings.js";
 import type { SkillRegistry } from "../skills.js";
 import { redactSecrets } from "../secret-redaction.js";
 import type { WebSearchConfig } from "../web-search.js";
@@ -22,7 +22,7 @@ export type WorkspaceManagementRequest =
   | { action: "routing"; revision: string; enabled: boolean }
   | { action: "stage"; revision: string; phase: ProviderRoutingPhase; providerId?: string }
   | { action: "fallback"; revision: string; providerId: string; chain: string[] }
-  | { action: "web"; revision: string; enabled: boolean; provider: "tavily" | "brave" | "searxng"; endpoint: string; apiKeyEnv?: string };
+  | { action: "web"; revision: string; enabled: boolean; mode?: "managed" | "custom"; provider: "tavily" | "brave" | "searxng"; endpoint: string; apiKeyEnv?: string };
 
 /** Only explicit non-secret configuration and bounded summaries cross the bridge. */
 export class WorkspaceManagementService {
@@ -143,7 +143,21 @@ export class WorkspaceManagementService {
         if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("请使用无凭据、无查询参数的 HTTPS 服务地址。");
         if (request.apiKeyEnv !== undefined && (typeof request.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(request.apiKeyEnv))) throw new Error("请输入环境变量名称，不要填写密钥。");
         const current = await this.settings.load();
-        const webSearch: WebSearchConfig = { ...current.webSearch, enabled: request.enabled, provider: request.provider, baseURL: url.toString(), apiKeyEnv: request.apiKeyEnv || undefined, managedAuth: undefined, authBaseURL: undefined };
+        if (request.mode !== undefined && request.mode !== "managed" && request.mode !== "custom") throw new Error("Invalid search authentication mode.");
+        // Older clients may re-save a managed configuration, but may not silently
+        // discard its authentication when changing endpoint or credential mode.
+        if (request.mode === undefined && current.webSearch?.managedAuth &&
+          (request.provider !== current.webSearch.provider || url.toString() !== new URL(current.webSearch.baseURL).toString() || request.apiKeyEnv)) {
+          throw new Error("请明确选择托管搜索或自定义服务。");
+        }
+        const managed = request.mode === "managed" || (request.mode === undefined && Boolean(current.webSearch?.managedAuth));
+        if (request.mode === "managed" && (request.provider !== "searxng" || url.toString() !== new URL(XIU_BETA_SEARXNG_ENDPOINT).toString() || request.apiKeyEnv)) {
+          throw new Error("Xiu 托管搜索使用固定服务地址，无需填写密钥。");
+        }
+        const webSearch: WebSearchConfig = { ...current.webSearch, enabled: request.enabled, provider: request.provider, baseURL: url.toString(),
+          apiKeyEnv: managed ? undefined : request.apiKeyEnv || undefined,
+          managedAuth: managed ? "xiu-device" : undefined,
+          authBaseURL: managed ? request.mode === "managed" ? XIU_BETA_SEARCH_AUTH_ENDPOINT : current.webSearch!.authBaseURL : undefined };
         await this.settings.save({ ...current, webSearch });
         return;
       }

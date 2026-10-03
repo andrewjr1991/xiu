@@ -116,6 +116,17 @@ app.whenReady().then(async () => {
     const checkManagement = async (label) => {
       await clickText(window, "工具与运行设置", '.sidebar-utilities button');
       await waitFor(window, "Boolean(document.querySelector('.management-panel'))", "management mounted");
+      await waitFor(window, "!document.querySelector('.management-panel [aria-label=\"检索认证方式\"]').disabled", "web settings ready");
+      await chooseOption(window, '.management-panel [aria-label="检索认证方式"]', "自定义服务");
+      assert(await evaluate(window, "document.querySelector('.management-panel').textContent.includes('密钥环境变量名')"), "Custom search credential reference field missing.");
+      await chooseOption(window, '.management-panel [aria-label="检索认证方式"]', "Xiu 托管搜索");
+      assert(await evaluate(window, "!document.querySelector('.management-panel').textContent.includes('密钥环境变量名') && document.querySelector('.management-panel').textContent.includes('首次检索时自动注册设备')"), "Managed mode must hide manual credentials and explain lazy enrollment.");
+      await clickText(window, "保存检索配置", '.management-panel button');
+      await waitFor(window, "!document.querySelector('.management-panel [aria-label=\"关闭管理面板\"]').disabled", "managed settings saved");
+      assert(await evaluate(window, "window.xiuSmoke.calls().includes('management:web:managed')"), "Managed configuration was not saved explicitly.");
+      await waitFor(window, "document.querySelector('.management-panel [aria-label=\"检索认证方式\"]').textContent.includes('Xiu 托管搜索') && !document.querySelector('.management-panel').textContent.includes('密钥环境变量名')", "managed selection survives reconfiguration");
+      await settleLayout(window);
+      await fs.promises.writeFile(path.join(smokeRoot, `managed-search-${label}.png`), (await window.webContents.capturePage()).toPNG());
       await clickText(window, "模型路由", '.management-panel nav button');
       await waitFor(window, "Boolean(document.querySelector('.management-panel [aria-label=\"主渠道\"]'))", "routing fields ready");
       assert(await evaluate(window, "(() => {const r=document.querySelector('.management-panel').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()"), "Management dialog exceeds viewport.");

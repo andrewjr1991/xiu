@@ -11,6 +11,7 @@ const workspace = {
 let sequence = 0;
 let task;
 let approvalMode = "ask";
+let managedWeb = false;
 let planMode = false;
 let modeContextRevision = 1;
 let activeProviderId = "openai";
@@ -55,8 +56,16 @@ const bridge = {
   browser: async (request) => { calls.push(`browser:${request.action}`); if (request.action === "layout") calls.push(`browser:visible:${request.visible}`); return { url: request.action === "navigate" ? request.url : "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; },
   onBrowserState: (listener) => { browserListeners.add(listener); return () => browserListeners.delete(listener); },
   mcpSnapshot: async () => mcpView(),
-  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: "https://search.example.test", managed: false }, skills: [{ name: "fixture-skill", description: "Local fixture", scope: "global", permissions: ["instructions:load"], warnings: [] }] }),
-  changeManagement: async (request) => { calls.push(`management:${request.action}`); approvalMode = "ask"; return runtime(); },
+  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: managedWeb ? "https://search.jingran.vip" : "https://search.example.test", managed: managedWeb }, skills: [{ name: "fixture-skill", description: "Local fixture", scope: "global", permissions: ["instructions:load"], warnings: [] }] }),
+  changeManagement: async (request) => {
+    calls.push(`management:${request.action}`);
+    if (request.action === "web") {
+      if (request.mode === "managed" && (request.endpoint !== "https://search.jingran.vip" || request.provider !== "searxng" || request.apiKeyEnv)) throw new Error("Invalid managed search request");
+      managedWeb = request.mode === "managed";
+      calls.push(`management:web:${request.mode}`);
+    }
+    approvalMode = "ask"; return runtime();
+  },
   prepareSkillInstallation: async () => ({ revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", skills: [{ name: "new-fixture", permissions: ["instructions:load"] }] }),
   cancelSkillInstallation: async () => { calls.push("skill:cancel"); },
   taskDiagnostics: async () => ({ report: "本机执行报告 fixture", diagnostics: "本机诊断 fixture" }),

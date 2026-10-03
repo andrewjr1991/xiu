@@ -20,7 +20,7 @@ import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
 import { MultiAgentCoordinator, createMultiAgentTools, requireCompletedSubagent, selectSubagentTools } from "../multi-agent.js";
 import { configureBackgroundRuntime, configureBackgroundWorkspace, listBackgroundProcesses } from "../background.js";
 import { resolveNodeRuntime } from "../node-runtime.js";
-import { createWebSearchTools } from "../web-search.js";
+import { createWorkspaceWebSearchTools } from "./workspace-web-search.js";
 import { createProviderPolicy } from "./provider-policy.js";
 import { WorkspaceManagementService } from "./workspace-management.js";
 
@@ -132,9 +132,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
     ...initialMediaTools,
-    // Managed device enrollment is intentionally not initiated by the desktop.
-    // Explicit public/env-key configurations use the exact CLI tools/gates.
-    ...createWebSearchTools(settings.webSearch?.managedAuth ? undefined : settings.webSearch),
+    ...createWorkspaceWebSearchTools(settings.webSearch),
   ];
 
   let provider: ModelProvider;
