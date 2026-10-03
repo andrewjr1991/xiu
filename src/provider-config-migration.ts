@@ -95,13 +95,26 @@ $ErrorActionPreference = 'Stop'
 if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
   $stage = 'identity'
   try {
+    function Get-XiuConstrainedDescriptor($acl, $currentSid, $currentAccount) {
+      $descriptor = $acl.Sddl
+      # SDDL may abbreviate the local built-in administrator as LA. Resolve it
+      # only when the OS-resolved owner account AND native current SID agree.
+      # A matching RID alone is insufficient (another domain can also use 500).
+      if ($descriptor -match '^O:LA(?=G:|D:)') {
+        if ($currentSid -notmatch '^S-1-5-21-[0-9]+-[0-9]+-[0-9]+-500$' -or $acl.Owner -ne $currentAccount) { throw 'Owner mismatch' }
+        $descriptor = $descriptor -replace '^O:LA', ('O:' + $currentSid)
+        $descriptor = $descriptor -replace ';;;LA\)', (';;;' + $currentSid + ')')
+      }
+      return $descriptor
+    }
     $identity = & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh
-    if ($LASTEXITCODE -ne 0 -or $identity -notmatch ',"(S-1-[0-9]+(?:-[0-9]+)+)"\s*$') { throw 'Identity unavailable' }
-    $sid = $Matches[1]
+    if ($LASTEXITCODE -ne 0 -or $identity -notmatch '^"([^"\r\n]+)","(S-1-[0-9]+(?:-[0-9]+)+)"\s*$') { throw 'Identity unavailable' }
+    $account = $Matches[1]
+    $sid = $Matches[2]
     $p = $env:XIU_PROVIDER_PRIVATE_TARGET
     $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
     $stage = 'verify-owner'
-    $sddl = (Get-Acl -LiteralPath $p).Sddl
+    $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
     if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:' -or $Matches[1] -ne $sid) { throw 'Owner mismatch' }
     if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
       # Only newly created empty objects reach initialization. Remove inherited
@@ -118,7 +131,7 @@ if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
       if ($LASTEXITCODE -ne 0) { throw 'Rule initialization failed' }
     }
     $stage = 'verify-read'
-    $sddl = (Get-Acl -LiteralPath $p).Sddl
+    $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
     $stage = 'verify-owner'
     if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:') { throw 'Owner unavailable' }
     if ($Matches[1] -ne $sid) { throw 'Owner mismatch' }

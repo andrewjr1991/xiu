@@ -20,6 +20,22 @@ test("constrained backend preserves strict ACL checks without forbidden method c
   assert.match(backend, /Get-Acl -LiteralPath \$p/);
 });
 
+test("constrained SDDL LA normalization requires both native SID and resolved owner account", { skip: process.platform !== "win32" }, async () => {
+  const start = script.indexOf("function Get-XiuConstrainedDescriptor");
+  const helper = script.slice(start, script.indexOf("\n    $identity =", start));
+  const sid = "S-1-5-21-123-456-789-500";
+  const descriptor = "O:LAG:BAD:PAI(A;OICI;FA;;;LA)";
+  const cases = [
+    { descriptor, sid, owner: "fixture\\admin", account: "FIXTURE\\ADMIN", expected: `O:${sid}G:BAD:PAI(A;OICI;FA;;;${sid})` },
+    { descriptor, sid, owner: "other\\admin", account: "fixture\\admin", expected: "rejected" },
+    { descriptor, sid: "S-1-5-21-123-456-789-1001", owner: "fixture\\admin", account: "fixture\\admin", expected: "rejected" },
+    { descriptor, sid: "S-1-5-32-500", owner: "fixture\\admin", account: "fixture\\admin", expected: "rejected" },
+    { descriptor: "O:BAG:BAD:P(A;;FA;;;BA)", sid, owner: "fixture\\admin", account: "fixture\\admin", expected: "O:BAG:BAD:P(A;;FA;;;BA)" },
+  ];
+  const result = await run(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoProfile", "-NonInteractive", "-Command", `${helper}\n$cases = ConvertFrom-Json $env:XIU_TEST_CASES; foreach ($case in $cases) { try { $actual = Get-XiuConstrainedDescriptor @{ Sddl=$case.descriptor; Owner=$case.owner } $case.sid $case.account } catch { $actual = 'rejected' }; if ($actual -cne $case.expected) { throw 'Descriptor fixture mismatch' } }; Write-Output 'ok'`], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, XIU_TEST_CASES: JSON.stringify(cases) }) });
+  assert.equal(result.stdout.trim(), "ok");
+});
+
 test("native constrained ACL backend initializes empty objects, verifies read-only and rejects expanded permissions", { skip: process.platform !== "win32", timeout: 120_000 }, async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clm-中文-' "));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
