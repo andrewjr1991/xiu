@@ -1,7 +1,8 @@
 import type { DesktopReviewSnapshot, RuntimeEvent } from "../../shared/protocol.js";
 import { useEffect, useState } from "react";
 import { AgentAvatar } from "./AgentAvatar.js";
-import { subagentElapsed, subagentLabels } from "./subagent-presentation.js";
+import { subagentCards, subagentElapsed, subagentLabels } from "./subagent-presentation.js";
+export { subagentCards } from "./subagent-presentation.js";
 import type { RuntimeSubagentCard } from "../../../../src/runtime/protocol.js";
 
 export function SubagentActivity({ agent }: { agent: RuntimeSubagentCard }) {
@@ -9,15 +10,6 @@ export function SubagentActivity({ agent }: { agent: RuntimeSubagentCard }) {
 }
 
 const labels: Record<string, string> = { pending: "等待中", planned: "计划中", started: "运行中", succeeded: "已完成", unknown: "待核验", running: "运行中", completed: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断", blocked: "已阻塞", explorer: "调查", implementer: "实现", reviewer: "审查", tester: "测试" };
-export function subagentCards(events: RuntimeEvent[], snapshot: RuntimeSubagentCard[] = []) {
-  const cards = new Map<string, Extract<RuntimeEvent, { type: "subagent.updated" }>["payload"]["agent"]>();
-  for (const event of events) {
-    if (event.type === "task.started") cards.clear();
-    if (event.type === "subagent.updated") cards.set(event.payload.agent.id, event.payload.agent);
-  }
-  for (const agent of snapshot) cards.set(agent.id, agent);
-  return [...cards.values()];
-}
 export function SubagentSummary({ events, snapshot, live, onOpen }: { events: RuntimeEvent[]; snapshot?: RuntimeSubagentCard[]; live: boolean; onOpen: () => void }) {
   const cards = subagentCards(events, snapshot).map((agent) => ({ ...agent, progress: /^(completed|succeeded|running|pending|cancelled|failed)[.!]?$/i.test(agent.progress?.trim() ?? "") ? undefined : agent.progress }));
   const [, tick] = useState(0);

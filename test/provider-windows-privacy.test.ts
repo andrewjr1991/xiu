@@ -71,12 +71,13 @@ test("Windows privacy preflight compares fresh and existing descriptors and requ
   // Keep identities inside PowerShell. Only a boolean metadata invariant and
   // the same bounded success/failure protocol leave the fixture process.
   const instrumented = PROVIDER_WINDOWS_PRIVACY_SCRIPT
-    .replace("$p = $env:XIU_PROVIDER_PRIVATE_TARGET", "$p = $env:XIU_PROVIDER_PRIVATE_TARGET; $beforeGroup = (Get-Acl -LiteralPath $p).GetGroup([System.Security.Principal.SecurityIdentifier])")
+    .replace("try {\n  $p = $env:XIU_PROVIDER_PRIVATE_TARGET", "try {\n  $p = $env:XIU_PROVIDER_PRIVATE_TARGET; $beforeGroup = (Get-Acl -LiteralPath $p).GetGroup([System.Security.Principal.SecurityIdentifier])")
     .replace("$stage = 'verify-protection'", "if ($beforeGroup -ne $acl.GetGroup([System.Security.Principal.SecurityIdentifier])) { throw [System.InvalidOperationException]::new('Fixture group changed') }; $stage = 'verify-protection'");
   const populated = instrumented.replace(freshDescriptor, `$acl = Get-Acl -LiteralPath $p
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($existing in $acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) { $acl.RemoveAccessRuleSpecific($existing) }
     if ($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]).Count -ne 0) { throw 'Fixture DACL not empty' }`);
+  assert.ok(instrumented.indexOf("$beforeGroup =") > instrumented.indexOf("function Get-XiuPrivacyFailureCategory"), "Group snapshot must instrument the FullLanguage branch, not the earlier constrained backend");
   const variants = [
     { name: "historical-fresh-set-acl", script: instrumented.replace(ownerAndAccessWrite, "Set-Acl -LiteralPath $p -AclObject $acl"), required: false },
     { name: "historical-existing-set-acl", script: populated.replace(ownerAndAccessWrite, "Set-Acl -LiteralPath $p -AclObject $acl"), required: false },

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectedTaskView, subagentElapsed, subagentLifecycleEvents } from "../apps/desktop/renderer/src/subagent-presentation.js";
+import { selectedTaskView, subagentCards, subagentElapsed, subagentLifecycleEvents } from "../apps/desktop/renderer/src/subagent-presentation.js";
 import { groupedTimelineItems } from "../apps/desktop/renderer/src/task-presentation.js";
-import { subagentCards } from "../apps/desktop/renderer/src/TaskDataPanel.js";
 import type { RuntimeEvent, RuntimeSubagentCard } from "../src/runtime/protocol.js";
 
 const agent: RuntimeSubagentCard = { id: "run:reviewer", runId: "run", taskId: "reviewer", title: "审查补丁", role: "reviewer", status: "pending" };

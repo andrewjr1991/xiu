@@ -1,6 +1,17 @@
 import type { RuntimeEvent } from "../../shared/protocol.js";
 import type { RuntimeSubagentCard } from "../../../../src/runtime/protocol.js";
 
+/** Pure task selection must remain usable without desktop/React dependencies. */
+export function subagentCards(events: RuntimeEvent[], snapshot: RuntimeSubagentCard[] = []) {
+  const cards = new Map<string, RuntimeSubagentCard>();
+  for (const event of events) {
+    if (event.type === "task.started") cards.clear();
+    if (event.type === "subagent.updated") cards.set(event.payload.agent.id, event.payload.agent);
+  }
+  for (const agent of snapshot) cards.set(agent.id, agent);
+  return [...cards.values()];
+}
+
 /** Both panes use the same conversation; history must never override an active task. */
 export function selectedTaskView<T extends { events: RuntimeEvent[] }>(history: T | undefined, active: boolean, pending: boolean, events: RuntimeEvent[], agents?: RuntimeSubagentCard[]) {
   const selectedHistory = !active && !pending ? history : undefined;
