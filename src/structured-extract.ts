@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import iconv from "iconv-lite";
 import type { AgentTool } from "./types.js";
-import { resolveWorkspacePath } from "./workspace-path.js";
+import { resolveToolPath } from "./workspace-path.js";
 
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
 const MAX_OUTPUT_CHARACTERS = 60_000;
@@ -57,8 +57,8 @@ function optionalClampedInteger(input: Record<string, unknown>, name: string, fa
   return Math.min(Number(value), maximum);
 }
 
-async function readStructuredFile(cwd: string, requested: string, requestedEncoding?: unknown): Promise<DecodedFile> {
-  const target = resolveWorkspacePath(cwd, requested);
+async function readStructuredFile(cwd: string, requested: string, requestedEncoding?: unknown, accessMode?: "workspace" | "full"): Promise<DecodedFile> {
+  const target = resolveToolPath({ cwd, accessMode }, requested);
   const stat = await fs.stat(target);
   if (!stat.isFile()) throw new Error(`Path is not a regular file: ${requested}`);
   if (stat.size > MAX_INPUT_BYTES) throw new Error(`Structured extraction is limited to ${MAX_INPUT_BYTES} bytes; ${requested} is ${stat.size} bytes`);
@@ -221,7 +221,7 @@ function htmlTool(): AgentTool {
       const selector = stringArg(input, "selector");
       const fields = htmlFields(input);
       const { offset, limit, maxValueCharacters } = pageOptions(input);
-      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding);
+      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding, context.accessMode);
       const { load: loadHtml } = await import("cheerio");
       const $ = loadHtml(file.text);
       let roots;
@@ -305,7 +305,7 @@ function jsonTool(): AgentTool {
       const pointer = typeof input.pointer === "string" ? input.pointer : "";
       const { offset, limit, maxValueCharacters } = pageOptions(input);
       const maximumDepth = optionalInteger(input, "max_depth", DEFAULT_MAX_DEPTH, 1, 10);
-      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding);
+      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding, context.accessMode);
       let root: unknown;
       try { root = JSON.parse(file.text); }
       catch (error) { throw new Error(`Invalid JSON in ${requestedPath}: ${error instanceof Error ? error.message : String(error)}`); }
@@ -422,7 +422,7 @@ function csvTool(): AgentTool {
     async execute(input, context) {
       const requestedPath = stringArg(input, "path");
       const { offset, limit, maxValueCharacters } = pageOptions(input);
-      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding);
+      const file = await readStructuredFile(context.cwd, requestedPath, input.encoding, context.accessMode);
       const delimiter = detectDelimiter(file.text, input.delimiter, requestedPath);
       let records: string[][];
       try {

@@ -1,4 +1,5 @@
 import type { RuntimeEvent, RuntimeTaskState } from "../../shared/protocol.js";
+import { subagentLifecycleEvents } from "./subagent-presentation.js";
 
 const timelineTypes = new Set<RuntimeEvent["type"]>([
   "task.started",
@@ -9,6 +10,7 @@ const timelineTypes = new Set<RuntimeEvent["type"]>([
   "workspace.changed",
   "runtime.notice",
   "task.finished",
+  "subagent.updated",
 ]);
 
 export interface RuntimeActivity {
@@ -31,8 +33,54 @@ const activityTypes = new Set<RuntimeEvent["type"]>([
   "plan.updated", "workspace.changed", "runtime.notice",
 ]);
 
+const webTools = new Set(["web_search", "web_open"]);
+
+/** Presentation only: never modify model-facing evidence or the stored events. */
+export function toolActionDescription(name: string, description: string): string {
+  if (!webTools.has(name)) return description || name;
+  const label = name === "web_search" ? "搜索网页" : "读取网页";
+  if (!description || description === name || description.startsWith("UNTRUSTED WEB CONTENT:")) return label;
+  return description.replace(/^search the web for /, "搜索：").replace(/^open web page /, "读取：").slice(0, 180);
+}
+
+export interface ActivityRow {
+  event: RuntimeEvent;
+  webText?: string;
+  evidence?: string;
+}
+
+/** Coalesce paired web start/result rows, not distinct calls or unrelated activity. */
+export function activityRows(events: RuntimeEvent[]): ActivityRow[] {
+  const rows: ActivityRow[] = [];
+  const pending = new Map<string, ActivityRow[]>();
+  for (const event of events) {
+    const row: ActivityRow = { event };
+    if (event.type === "tool.started" && webTools.has(event.payload.name)) {
+      row.webText = toolActionDescription(event.payload.name, event.payload.description);
+      const queue = pending.get(event.payload.name) ?? [];
+      queue.push(row);
+      pending.set(event.payload.name, queue);
+    } else if (event.type === "tool.finished" && webTools.has(event.payload.name)) {
+      const start = pending.get(event.payload.name)?.shift();
+      if (start) rows.splice(rows.indexOf(start), 1);
+      const action = start?.webText ?? toolActionDescription(event.payload.name, "");
+      const summary = event.payload.summary;
+      const count = summary.match(/\bResults \((\d+)\):/)?.[1];
+      const knownResult = summary.startsWith("UNTRUSTED WEB CONTENT:") && (count !== undefined || /\bCitation URL:/.test(summary));
+      const status = event.payload.result?.status;
+      const outcome = status === "cancelled" ? "已取消" : status === "denied" ? "已拒绝" : status === "failure" ? `失败：${summary.slice(0, 180)}`
+        : knownResult ? (count !== undefined ? `返回 ${count} 条结果` : "已读取网页") : summary.slice(0, 180);
+      row.webText = `${action} · ${outcome}`;
+      row.evidence = summary;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 /** Groups auditable runtime activity without exposing hidden model chain-of-thought. */
 export function groupedTimelineItems(events: RuntimeEvent[], state: RuntimeTaskState | "idle"): TimelineItem[] {
+  const subagentEntries = subagentLifecycleEvents(events);
   const items: TimelineItem[] = [];
   let activity: RuntimeEvent[] = [];
   const flush = () => {
@@ -42,6 +90,7 @@ export function groupedTimelineItems(events: RuntimeEvent[], state: RuntimeTaskS
   };
   let lastAssistant = "";
   for (const event of events) {
+    if (event.type === "subagent.updated" && !subagentEntries.has(event.eventId)) continue;
     if (activityTypes.has(event.type)) {
       if (event.type === "model.started" && activity.some((item) => item.type === "model.started")) flush();
       activity.push(event);
@@ -92,7 +141,7 @@ export function modelProgressSummary(events: RuntimeEvent[]): ModelProgressSumma
     details.push(current ? `当前计划：${current}` : `计划目标：${plan.payload.plan.goal}`);
   }
   const tools = events.filter((event): event is Extract<RuntimeEvent, { type: "tool.started" }> => event.type === "tool.started");
-  if (tools.length) details.push(`本轮选择执行：${tools.slice(0, 3).map((event) => event.payload.description || event.payload.name).join("；")}${tools.length > 3 ? `；另 ${tools.length - 3} 项` : ""}`);
+  if (tools.length) details.push(`本轮选择执行：${tools.slice(0, 3).map((event) => toolActionDescription(event.payload.name, event.payload.description)).join("；")}${tools.length > 3 ? `；另 ${tools.length - 3} 项` : ""}`);
   const changed = events.filter((event): event is Extract<RuntimeEvent, { type: "workspace.changed" }> => event.type === "workspace.changed")
     .reduce((sum, event) => sum + event.payload.change.files.length, 0);
   if (changed) details.push(`已检测到 ${changed} 个文件变更`);
@@ -147,7 +196,7 @@ export function currentRuntimeActivity(
   if (!event || event.type === "task.started") return { label: "正在读取项目并准备上下文", detail: modelLabel };
   if (event.type === "model.started") return { label: `正在思考 · 第 ${event.payload.turn} 轮`, detail: modelLabel };
   if (event.type === "model.finished") return { label: "正在整理模型响应", detail: modelLabel };
-  if (event.type === "tool.started") return { label: `正在运行 ${event.payload.name}`, detail: event.payload.description };
+  if (event.type === "tool.started") return { label: `正在运行 ${event.payload.name}`, detail: toolActionDescription(event.payload.name, event.payload.description) };
   if (event.type === "tool.progress") return { label: `正在运行 ${event.payload.name}`, detail: event.payload.message };
   if (event.type === "tool.finished") return { label: "正在读取工具结果", detail: event.payload.name };
   if (event.type === "plan.updated") return { label: "正在更新任务计划", detail: modelLabel };

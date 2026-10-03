@@ -4,14 +4,13 @@ on:
   push:
     branches: [main, "codex/**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+# Every push keeps its verification and candidates; newer commits do not cancel it.
+# Failed gates remain failed, but independent build/report steps still run.
 jobs:
   verify:
     name: Verify (${{ matrix.os }}, Node ${{ matrix.node }})
@@ -29,27 +28,90 @@ jobs:
             node: 20.18.1
             platform: darwin
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 35
+    env:
+      XIU_CI_PLATFORM: ${{ matrix.platform }}
+      XIU_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - id: checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - id: node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
-      - run: npm run check:docs
-      - run: npm run typecheck
+      - id: dependencies
+        run: npm ci
+      - id: python
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+      - id: docs
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run check:docs
+      - id: typecheck
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run typecheck
+      - name: Verify Windows provider privacy before the full suite
+        id: provider_privacy
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: node --test --import tsx test/provider-windows-privacy.test.ts test/provider-constrained-privacy.test.ts
+      - name: Verify Windows cleanup and current-recovery regressions
+        id: windows_regressions
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.provider_privacy.outcome == 'success' }}
+        timeout-minutes: 3
+        run: node --test --import tsx --test-name-pattern="workspace cleanup|rapid detached commands|CLI current action" test/background.test.ts test/provider-recovery-entry.test.ts
       - name: Run tests
+        id: tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || (steps.provider_privacy.outcome == 'success' && steps.windows_regressions.outcome == 'success')) }}
         run: npm run test:ci
-      - run: npm run build
+      - name: Run Python migration regressions
+        id: migration
+        if: ${{ !cancelled() && steps.python.outcome == 'success' }}
+        run: python test/xiu-search-auth-migration.test.py -v
+      - id: build
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: npm run build
       - name: Run deterministic evaluation smoke
+        id: evaluation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: npm run eval:smoke
-      - run: npm pack --dry-run --json
-      - run: npm run smoke:package
+      - id: pack_audit
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm pack --dry-run --json
+      - name: Prepare exact CLI candidate
+        id: candidate
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/ci-artifacts.mjs prepare cli
+      - id: package_smoke
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
+        run: npm run smoke:package
+        env:
+          XIU_PACKAGE_ARCHIVE: ${{ steps.candidate.outputs.archive }}
       - name: Run packaged platform acceptance
+        id: platform_smoke
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
         run: npm run smoke:platform
         env:
           XIU_EXPECTED_PLATFORM: ${{ matrix.platform }}
+          XIU_PACKAGE_ARCHIVE: ${{ steps.candidate.outputs.archive }}
+      - name: Record CLI progress and checksums
+        id: report
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        run: node scripts/ci-artifacts.mjs report cli
+        env:
+          XIU_CI_STEPS: ${{ toJSON(steps) }}
+      - name: Upload CLI candidate and verification record
+        if: ${{ always() && steps.report.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.report.outputs.artifact_name }}
+          path: ${{ steps.report.outputs.directory }}/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
 
   desktop:
     name: Desktop (${{ matrix.os }})
@@ -64,38 +126,151 @@ jobs:
           - os: macos-latest
             platform: darwin
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 45
+    env:
+      XIU_CI_PLATFORM: ${{ matrix.platform }}
+      XIU_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - id: checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - id: node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: |
             package-lock.json
             apps/desktop/package-lock.json
-      - run: npm ci
-      - run: npm --prefix apps/desktop ci
-      - run: npm run desktop:typecheck
-      - run: npm run desktop:build
-      - run: npm run desktop:smoke
-      - name: Run desktop UI smoke
-        if: matrix.platform != 'linux'
-        run: npm run desktop:smoke:ui
-      - name: Run desktop UI smoke under Xvfb
-        if: matrix.platform == 'linux'
-        run: xvfb-run --auto-servernum npm run desktop:smoke:ui
+      - id: dependencies
+        run: npm ci
+      - id: desktop_dependencies
+        run: npm --prefix apps/desktop ci
+      - id: typecheck
+        if: ${{ !cancelled() && steps.desktop_dependencies.outcome == 'success' }}
+        run: npm run desktop:typecheck
+      - id: build
+        if: ${{ !cancelled() && steps.desktop_dependencies.outcome == 'success' }}
+        run: npm run desktop:build
+      - id: smoke
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: npm run desktop:smoke
+      - name: Run desktop UI smoke (Xvfb on Linux)
+        id: ui
+        working-directory: apps/desktop
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum node node_modules/electron/cli.js scripts/ui-smoke-harness.cjs
+          else
+            node node_modules/electron/cli.js scripts/ui-smoke-harness.cjs
+          fi
+      - name: Verify synthetic UI screenshot evidence
+        id: ui_evidence
+        if: ${{ !cancelled() && steps.ui.outcome == 'success' }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { version } = require('./apps/desktop/package.json');
+          const files = [
+            'management-1366.png',
+            'management-900.png',
+            'management-zoom125.png',
+            'workbench-menu-1366.png',
+            'inspector-ui-1366.png',
+            'inspector-ui-900.png',
+            'workbench-data-1366.png',
+            'recovery-preview-1366.png',
+            'recovery-preview-900.png',
+          ];
+          for (const file of files) {
+            const stat = fs.statSync(`.desktop-build-temp/${file}`);
+            if (!stat.isFile() || stat.size === 0) throw new Error(`Missing UI evidence: ${file}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
+      - name: Preserve successful synthetic UI screenshots
+        id: ui_evidence_upload
+        if: ${{ !cancelled() && steps.ui.outcome == 'success' && steps.ui_evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xiu-ui-screenshots-${{ steps.ui_evidence.outputs.version }}-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
+          # Exact fixture outputs only: never upload the temporary profile or configuration.
+          path: |
+            .desktop-build-temp/management-1366.png
+            .desktop-build-temp/management-900.png
+            .desktop-build-temp/management-zoom125.png
+            .desktop-build-temp/workbench-menu-1366.png
+            .desktop-build-temp/inspector-ui-1366.png
+            .desktop-build-temp/inspector-ui-900.png
+            .desktop-build-temp/workbench-data-1366.png
+            .desktop-build-temp/recovery-preview-1366.png
+            .desktop-build-temp/recovery-preview-900.png
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Run Electron browser isolation smoke (Xvfb on Linux)
+        id: browser
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum npm --prefix apps/desktop run smoke:browser
+          else
+            npm --prefix apps/desktop run smoke:browser
+          fi
+      - name: Run isolated Full Access confirmation smoke
+        id: full_access
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum npm --prefix apps/desktop run smoke:full-access
+          else
+            npm --prefix apps/desktop run smoke:full-access
+          fi
+      - name: Build unsigned Windows x64 NSIS candidate
+        id: installer
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.build.outcome == 'success' }}
+        run: node apps/desktop/scripts/package-windows.mjs nsis
         env:
-          ELECTRON_DISABLE_SANDBOX: "1"
-      - name: Build and install Windows x64 candidate
-        if: matrix.platform == 'win32'
-        run: npm run desktop:installer:win
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Run Windows installer acceptance
-        if: matrix.platform == 'win32'
+        id: installer_smoke
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.installer.outcome == 'success' }}
         run: npm run desktop:smoke:installer:win
-      - name: Build Windows x64 MSIX candidate
-        if: matrix.platform == 'win32'
-        run: npm run desktop:installer:msix:win
-      - name: Validate Windows MSIX package
-        if: matrix.platform == 'win32'
-        run: npm run desktop:smoke:installer:msix:win
+      - name: Verify unsigned installer and prepare exact candidate
+        id: candidate
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $version = (Get-Content apps/desktop/package.json | ConvertFrom-Json).version
+          $signature = Get-AuthenticodeSignature "apps/desktop/release/Xiu-$version-x64.exe"
+          if ($signature.Status -ne 'NotSigned') { throw "Expected an unsigned NSIS candidate, got $($signature.Status)" }
+          node scripts/ci-artifacts.mjs prepare desktop
+      - name: Preserve synthetic UI failure diagnostics
+        id: ui_diagnostics
+        if: ${{ always() && steps.ui.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: xiu-ui-diagnostics-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
+          path: .desktop-build-temp/ui-smoke-failure.*
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record desktop progress and checksums
+        id: report
+        if: ${{ always() && steps.checkout.outcome == 'success' }}
+        run: node scripts/ci-artifacts.mjs report desktop
+        env:
+          XIU_CI_STEPS: ${{ toJSON(steps) }}
+      - name: Upload desktop candidate and verification record
+        if: ${{ always() && steps.report.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.report.outputs.artifact_name }}
+          path: ${{ steps.report.outputs.directory }}/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

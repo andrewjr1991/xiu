@@ -31,7 +31,7 @@ for (const document of documents) {
 }
 
 const expectedDesign = `V${manifest.version}_DESIGN.zh-CN.md`;
-const designFiles = readdirSync(workspace).filter((name) => /^V\d+\.\d+\.\d+_DESIGN\.zh-CN\.md$/.test(name));
+const designFiles = readdirSync(workspace).filter((name) => /^V\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?_DESIGN\.zh-CN\.md$/.test(name));
 if (designFiles.length !== 1 || designFiles[0] !== expectedDesign) {
   failures.push(`Expected only ${expectedDesign} at the repository root; found ${designFiles.join(", ") || "none"}`);
 }

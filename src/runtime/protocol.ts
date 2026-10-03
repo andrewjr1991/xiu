@@ -37,6 +37,7 @@ export interface RuntimeRecoverySnapshot {
 }
 
 export interface RuntimeTaskSnapshot {
+  subagents?: RuntimeSubagentCard[];
   id: string;
   state: RuntimeTaskState;
   taskPreview: string;
@@ -53,10 +54,13 @@ export interface XiuRuntimeSnapshot {
   schemaVersion: typeof XIU_RUNTIME_SCHEMA_VERSION;
   sequence: number;
   generatedAt: string;
+  /** Current execution policy; older snapshots default to execution mode. */
+  planMode?: boolean;
   task?: RuntimeTaskSnapshot;
 }
 
 export interface RuntimeEventPayloads {
+  "subagent.updated": { agent: RuntimeSubagentCard };
   "task.started": { taskPreview: string; resumedFrom?: string };
   "task.state": { state: RuntimeTaskState; reason?: string };
   "task.steered": { text: string };
@@ -79,6 +83,13 @@ export interface RuntimeEventPayloads {
 
 export type RuntimeEventType = keyof RuntimeEventPayloads;
 
+export interface RuntimeSubagentCard {
+  id: string; runId: string; title: string; role: string; status: string;
+  taskId?: string; mode?: "shared_readonly" | "worktree"; dependencies?: string[]; createdAt?: string;
+  startedAt?: string; completedAt?: string; durationMs?: number;
+  progress?: string; result?: string; error?: string;
+}
+
 export type RuntimeEvent<K extends RuntimeEventType = RuntimeEventType> = {
   [P in K]: {
     schemaVersion: typeof XIU_RUNTIME_SCHEMA_VERSION;
@@ -95,6 +106,7 @@ export type RuntimeCommand =
   | { type: "task.create"; task: string }
   | { type: "task.steer"; text: string }
   | { type: "task.stop" }
+  | { type: "plan.mode.set"; enabled: boolean }
   | { type: "approval.decide"; approvalId: string; allowed: boolean; rememberForSession?: true; confirmedRisk?: "dangerous" };
 
 export interface RuntimeConnection {
@@ -118,6 +130,7 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
       schemaVersion: XIU_RUNTIME_SCHEMA_VERSION,
       sequence: event.sequence,
       generatedAt: event.timestamp,
+      ...(snapshot.planMode !== undefined ? { planMode: snapshot.planMode } : {}),
       task: {
         id: event.taskId,
         state: "running",
@@ -157,6 +170,9 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
 
   next.task.updatedAt = event.timestamp;
   switch (event.type) {
+    case "subagent.updated":
+      next.task.subagents = [...(next.task.subagents ?? []).filter((agent) => agent.id !== event.payload.agent.id), event.payload.agent].slice(-80);
+      break;
     case "task.started":
       next.task.state = "running";
       next.task.taskPreview = event.payload.taskPreview;

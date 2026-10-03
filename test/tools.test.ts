@@ -337,3 +337,17 @@ test("run_command allows operators inside a quoted JavaScript program", async (t
   const result = await executeTool(tool, { command: "node -e \"console.log(true || false)\"" }, { cwd, approve: async () => true });
   assert.match(result, /true/);
 });
+
+
+test("verify_output checks explicit absence and rejects contradictory or binary assertions", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-verify-absence-"));
+  const tool = builtinTools.find((candidate) => candidate.name === "verify_output")!;
+  const context = { cwd, approve: async () => { throw new Error("read-only check requested execution"); } };
+  assert.match(await executeTool(tool, { path: "removed.txt", exists: false }, context), /^Verification passed:/);
+  await fs.writeFile(path.join(cwd, "removed.txt"), "still present");
+  assert.match(await executeTool(tool, { path: "removed.txt", exists: false }, context), /^Verification failed:/);
+  assert.match(await executeTool(tool, { path: "removed.txt", exists: false, required_substrings: ["present"] }, context), /^Tool error:/);
+  assert.match(await executeTool(tool, { path: "../outside.txt", exists: false }, context), /^Tool error:/);
+  await fs.writeFile(path.join(cwd, "binary.dat"), Buffer.from([0xff, 0xfe, 0x00]));
+  assert.match(await executeTool(tool, { path: "binary.dat", min_bytes: 1 }, context), /^Tool error:/);
+});

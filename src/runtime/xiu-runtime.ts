@@ -25,7 +25,8 @@ export interface RuntimeTaskDriver {
   run(task: string): Promise<string>;
   cancel(): boolean;
   steer(text: string): boolean;
-  status(): { outcome: AgentRunOutcome };
+  status(): { outcome: AgentRunOutcome; planMode?: boolean };
+  setPlanMode?(enabled: boolean): Promise<void>;
 }
 
 export interface XiuRuntimeOptions {
@@ -71,7 +72,14 @@ function boundedToolResult(result: ToolResult, clean: (value: string, maximum: n
 }
 
 export class XiuRuntime {
+  recordSubagent(agent: import("./protocol.js").RuntimeSubagentCard): void {
+    if (!this.task) return;
+    const safe = sanitizeSecrets({ ...agent, title: this.clean(agent.title, 240), progress: agent.progress ? this.clean(agent.progress, 2_000) : undefined, result: agent.result ? this.clean(agent.result, 16_000) : undefined, error: agent.error ? this.clean(agent.error, 2_000) : undefined });
+    this.task.subagents = [...(this.task.subagents ?? []).filter((item) => item.id !== safe.id), safe].slice(-80);
+    this.emit("subagent.updated", { agent: safe });
+  }
   private driver?: RuntimeTaskDriver;
+  private changingPlanMode = false;
   private sequence = 0;
   private task?: RuntimeTaskSnapshot;
   private readonly events: RuntimeEvent[] = [];
@@ -98,6 +106,7 @@ export class XiuRuntime {
       schemaVersion: XIU_RUNTIME_SCHEMA_VERSION,
       sequence: this.sequence,
       generatedAt: this.timestamp(),
+      planMode: this.driver?.status().planMode ?? false,
       ...(this.task ? { task: structuredClone(this.task) } : {}),
     });
   }
@@ -124,7 +133,7 @@ export class XiuRuntime {
   }
 
   resetConversation(): void {
-    if (this.task && ["running", "waiting_approval", "stopping"].includes(this.task.state)) {
+    if (this.changingPlanMode || (this.task && ["running", "waiting_approval", "stopping"].includes(this.task.state))) {
       throw new Error("Cannot reset the conversation while a task is active.");
     }
     this.task = undefined;
@@ -136,7 +145,21 @@ export class XiuRuntime {
     this.lastDraftChars = 0;
   }
 
+  /** The driver owns the same TaskPlanManager used by tool policy and completion gates. */
+  async setPlanMode(enabled: boolean): Promise<void> {
+    if (typeof enabled !== "boolean") throw new Error("Invalid Plan mode.");
+    if (this.changingPlanMode || (this.task && ["running", "waiting_approval", "stopping"].includes(this.task.state))) {
+      throw new Error("Cannot change Plan mode while a task or mode change is active.");
+    }
+    const driver = this.requireDriver();
+    if (!driver.setPlanMode) throw new Error("Plan mode is unavailable in this runtime.");
+    this.changingPlanMode = true;
+    try { await driver.setPlanMode(enabled); }
+    finally { this.changingPlanMode = false; }
+  }
+
   async createTask(task: string): Promise<string> {
+    if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
     const driver = this.requireDriver();
     const normalized = task.trim();
     if (!normalized) throw new Error("Task must not be empty.");

@@ -141,6 +141,20 @@ test("the managed beta proxy is persisted even when it originated from XIU_WEB_P
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+test("explicit managed choice survives legacy environment token and retains domain controls", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-explicit-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, "settings.json");
+  const store = new SettingsStore(filename, { [XIU_BETA_SEARXNG_TOKEN_ENV]: "must-not-resurrect-token" });
+  await store.save({ webSearch: { ...managedBetaSearch, blockedDomains: ["blocked.test"], timeoutMs: 4_000 } });
+  const result = (await store.load()).webSearch!;
+  assert.equal(result.managedAuth, "xiu-device");
+  assert.equal(result.apiKeyEnv, undefined);
+  assert.deepEqual(result.blockedDomains, ["blocked.test"]);
+  assert.equal(result.timeoutMs, 4_000);
+  assert.doesNotMatch(await fs.readFile(filename, "utf8"), /must-not-resurrect-token/);
+});
+
 test("update notifications are opt-in and persist only when enabled", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-update-settings-"));
   const filename = path.join(directory, "settings.json");

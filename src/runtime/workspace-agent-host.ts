@@ -5,7 +5,7 @@ import { defaultLanguage } from "../i18n.js";
 import { createMediaTools } from "../media-tools.js";
 import { TaskPlanManager, createPlanTools } from "../plan.js";
 import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
-import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "../provider-registry.js";
+import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "../provider-registry.js";
 import { createProvider } from "../providers.js";
 import { redactSecrets } from "../secret-redaction.js";
 import { SettingsStore } from "../settings.js";
@@ -16,26 +16,38 @@ import { builtinTools } from "../tools.js";
 import type { ApprovalRequest, ModelProvider } from "../types.js";
 import { AgentRuntimeAdapter } from "./agent-adapter.js";
 import { XiuRuntime } from "./xiu-runtime.js";
+import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
+import { MultiAgentCoordinator, createMultiAgentTools, requireCompletedSubagent, selectSubagentTools } from "../multi-agent.js";
+import { configureBackgroundRuntime, configureBackgroundWorkspace, listBackgroundProcesses } from "../background.js";
+import { resolveNodeRuntime } from "../node-runtime.js";
+import { createWorkspaceWebSearchTools } from "./workspace-web-search.js";
+import { createProviderPolicy } from "./provider-policy.js";
+import { WorkspaceManagementService } from "./workspace-management.js";
 
 export interface WorkspaceAgentHost {
+  providerConfigured?: boolean;
   runtime: XiuRuntime;
   provider: { id: string; label: string; model: string };
   journal: TaskRunJournal;
   agent?: Agent;
   checkpointManager?: CheckpointManager;
   projectIndex?: ProjectIndex;
+  management?: WorkspaceManagementService;
+  sanitize?: (value: string) => string;
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
+  mcp?: WorkspaceMcpService;
+  coordinator?: MultiAgentCoordinator;
+  background?: () => ReturnType<typeof listBackgroundProcesses>;
+  close?: () => Promise<void>;
 }
 
 export type WorkspaceApprovalMode = "ask" | "workspace" | "full";
 
 export function canAutomaticallyApprove(mode: WorkspaceApprovalMode, request: Pick<ApprovalRequest, "risk" | "sessionScope">): boolean {
-  if (request.risk === "dangerous") return false;
   if (mode === "full") return true;
+  if (request.risk === "dangerous") return false;
   if (mode !== "workspace") return false;
-  return request.sessionScope === "workspace-files:write"
-    || request.sessionScope === "workspace-files:edit"
-    || request.sessionScope === "project-verification";
+  return true; // Risk-classified non-dangerous requests; not an AI reviewer or OS sandbox.
 }
 
 export function createWorkspaceProviderConfig(profile: ProviderProfile, model: string, workspace: string, credentialRevision: number, language: "zh-CN" | "en-US") {
@@ -65,7 +77,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
  * Electron dependency, so the execution and approval authority remains in the
  * shared Node runtime rather than the renderer.
  */
-export async function createWorkspaceAgentHost(workspace: string): Promise<WorkspaceAgentHost> {
+export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; journalRoot?: string } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
   try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
@@ -75,8 +87,8 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
   await registry.load();
   const savedProviderId = registry.activeId();
   const requestedProviderId = resolveStartupProviderId(undefined, savedProviderId, process.env.XIU_PROVIDER);
-  const requestedProfile = registry.get(requestedProviderId);
-  const profile = requestedProfile ?? registry.get("openai")!;
+  const requestedProfile = startupProviderProfile(registry, requestedProviderId);
+  const profile = options.profile ?? requestedProfile ?? UNCONFIGURED_PROVIDER_PROFILE;
   const model = resolveStartupModel(
     undefined,
     requestedProfile && requestedProviderId === savedProviderId ? registry.activeModel(requestedProviderId) : undefined,
@@ -92,40 +104,84 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
   await Promise.all([projectIndex.initialize(), skillRegistry.refresh(true)]);
   const planManager = new TaskPlanManager(undefined, false, language);
   const checkpointManager = new CheckpointManager(workspace);
-  const journal = new TaskRunJournal(workspace);
-  const runtime = new XiuRuntime({
-    sanitize: (value) => redactSecrets(value, config.apiKey ? [config.apiKey] : []),
-  });
+  const journal = new TaskRunJournal(workspace, options.journalRoot);
+  const sanitize = (value: string) => redactSecrets(value, [config.apiKey, ...registry.list().map((item) => {
+    const target = registry.get(item.id);
+    return target?.apiKey ?? (target?.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined);
+  })].filter((key): key is string => Boolean(key)));
+  const runtime = new XiuRuntime({ sanitize });
   let approvalMode: WorkspaceApprovalMode = "ask";
+  let approvalTail: Promise<unknown> = Promise.resolve();
   const requestApproval = (request: ApprovalRequest): Promise<boolean> => {
     if (canAutomaticallyApprove(approvalMode, request)) {
       request.decisionSource = "automatic";
       return Promise.resolve(true);
     }
-    return runtime.requestApproval(request);
+    const next = approvalTail.then(() => runtime.snapshot().task?.state === "running" ? runtime.requestApproval(request) : false);
+    approvalTail = next.catch(() => false);
+    return next;
   };
   const desktopDeferredTools = new Set(["start_background_command", "list_background_commands", "read_background_output", "stop_background_command"]);
+  configureBackgroundWorkspace(workspace, options.backgroundRoot);
+  configureBackgroundRuntime(await resolveNodeRuntime().catch(() => undefined));
+  const initialMediaTools = createMediaTools(config);
+  const mediaNames = new Set(initialMediaTools.map((tool) => tool.name));
   const tools = [
-    ...builtinTools.filter((tool) => !desktopDeferredTools.has(tool.name)),
+    ...builtinTools,
     ...createProjectIndexTools(projectIndex),
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
-    ...createMediaTools(config),
+    ...initialMediaTools,
+    ...createWorkspaceWebSearchTools(settings.webSearch),
   ];
 
   let provider: ModelProvider;
-  try { provider = createProvider(config); }
+  try {
+    if (!requestedProfile && !options.provider) throw new Error("请先添加渠道 / Add a Provider first");
+    provider = options.provider ?? createProvider(config);
+  }
   catch (error) {
     const message = redactSecrets(error instanceof Error ? error.message : String(error), config.apiKey ? [config.apiKey] : []);
     provider = {
       async complete(): Promise<never> {
         throw new Error(language === "zh-CN"
-          ? `当前 Provider 尚未配置：${message}。请先在 CLI 中使用 /provider key 或 /providers 完成配置。`
-          : `The current provider is not configured: ${message}. Configure it in the CLI with /provider key or /providers.`);
+          ? `当前 Provider 尚未配置：${message}。请在设置与模型中新增或配置渠道。`
+          : `The current provider is not configured: ${message}. Add or configure a channel in Settings.`);
       },
     };
   }
 
+  const coordinator = new MultiAgentCoordinator(workspace, async (task, context) => {
+    const childConfig = { ...config, cwd: context.cwd, maxTurns: task.maxTurns ?? config.maxTurns, sessionNamespace: "agent-sessions" };
+    const childIndex = new ProjectIndex(context.cwd);
+    await childIndex.initialize();
+    const childPlan = new TaskPlanManager(undefined, task.mode === "shared_readonly", language);
+    const childTools = selectSubagentTools([...builtinTools.filter((tool) => !desktopDeferredTools.has(tool.name)), ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)], task.mode);
+    const child = new Agent(childConfig, options.provider ?? createProvider(childConfig), childTools, requestApproval, {
+      onModelStart: (turn) => context.reportProgress(`模型调用 · 第 ${turn} 轮`),
+      onToolStart: (name, description) => context.reportProgress(`${name} · ${description}`),
+      onToolProgress: (name, message) => context.reportProgress(`${name} · ${message}`),
+    }, undefined, childIndex, childPlan, new CheckpointManager(context.cwd));
+    // Children always remain workspace/worktree scoped, even under parent full access.
+    const cancel = () => child.cancel();
+    context.signal.addEventListener("abort", cancel, { once: true });
+    try {
+      if (context.signal.aborted) throw new Error("Subagent cancelled before execution.");
+      const guidance = task.role === "implementer" ? "Modify only your isolated Worktree and verify changes."
+        : task.role === "tester" ? "Do not modify files or execute commands. Use verify_output with meaningful deterministic expectations for every changed text artifact in the inherited Worktree. This is bounded artifact validation, not executed project tests. If it cannot verify the requested change, report the limitation and VERDICT: FAIL. Only end with VERDICT: PASS after concrete checks passed; prose-only PASS cannot authorize integration."
+        : "Do not modify files. Investigate the inherited workspace with available read-only tools. Reviewers must end with VERDICT: PASS only with concrete passing evidence, otherwise VERDICT: FAIL.";
+      const result = await child.run(`${task.title}\n${task.instructions}\n${guidance}\nReturn a concise result summary without raw diffs, credentials, or private reasoning.\nDependency results:\n${context.dependencyResults.map((item) => `[${item.id}] ${redactSecrets(item.result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000)}`).join("\n")}`);
+      const status = child.status();
+      requireCompletedSubagent(status);
+      return { result: redactSecrets(result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000), stats: status.stats, verification: await child.getVerificationEvidence() };
+    } finally { context.signal.removeEventListener("abort", cancel); }
+  }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, taskId: task.id, mode: task.mode, dependencies: task.dependencies, createdAt: task.createdAt, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
+  await coordinator.initialize();
+  tools.push(...createMultiAgentTools(coordinator).map((tool) => tool.name !== "integrate_agent" ? tool : { ...tool, execute: async (input: Record<string, unknown>, context: import("../types.js").ToolContext) => {
+    const allowed = await runtime.requestApproval({ risk: "dangerous", description: "将子智能体 Worktree 变更整合到主工作区（始终需要确认）", preview: await tool.preview!(input, context) });
+    if (!allowed) throw new Error("Worktree integration was denied.");
+    return tool.execute(input, context);
+  } }));
   const agent = new Agent(
     config,
     provider,
@@ -139,7 +195,29 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
     skillRegistry,
     journal,
   );
-  runtime.attachDriver(new AgentRuntimeAdapter(agent));
+  const adapter = new AgentRuntimeAdapter(agent);
+  runtime.attachDriver({
+    run: async (task) => { try { return await adapter.run(task); } finally { await coordinator.shutdown(); } },
+    cancel: () => { const cancelled = adapter.cancel(); void coordinator.shutdown(); return cancelled; },
+    steer: (text) => adapter.steer(text), status: () => adapter.status(),
+    setPlanMode: (enabled) => adapter.setPlanMode(enabled),
+  });
+  let mcpCredentials;
+  try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
+  catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
+  const mcpManager = createMcpManager(workspace, mcpCredentials);
+  const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name)), ...createMediaTools(next), ...mcpManager.tools()];
+  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)));
+  const policy = createProviderPolicy(registry, (target, targetModel) => {
+    const next = createWorkspaceProviderConfig(target, targetModel, workspace, registry.credentialRevision(target.id), language);
+    next.projectConfigurationTrusted = true;
+    next.autoApprove = false;
+    return next;
+  }, (next) => {
+    return currentTools(next);
+  }, language);
+  agent.setFailoverController(policy.failover);
+  agent.setRoutingController(policy.routing);
   const interrupted = await journal.interrupted();
   const latest = interrupted ?? await journal.latest();
   if (latest) checkpointManager.setSession(latest.sessionId);
@@ -152,8 +230,14 @@ export async function createWorkspaceAgentHost(workspace: string): Promise<Works
       recommendation: interrupted.recommendation,
     });
   }
+  const management = new WorkspaceManagementService(registry, skillRegistry);
   return {
-    runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
-    setApprovalMode: (mode) => { approvalMode = mode; },
+    providerConfigured: Boolean(requestedProfile || options.provider), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
+    setApprovalMode: (mode) => {
+      approvalMode = mode;
+      agent.setAccessMode(mode === "full" ? "full" : "workspace");
+    },
+    management, sanitize,
+    coordinator, background: () => listBackgroundProcesses().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
   };
 }

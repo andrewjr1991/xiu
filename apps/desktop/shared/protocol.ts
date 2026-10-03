@@ -5,6 +5,19 @@ export type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/re
 import type { RuntimeConnection, RuntimeEvent } from "../../../src/runtime/protocol.js";
 import type { TaskChangeReport } from "../../../src/task-changes.js";
 import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
+export type { WorkspaceMcpSnapshot, WorkspaceMcpDraft, WorkspaceMcpOAuthFlow } from "../../../src/runtime/mcp-service.js";
+import type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
+import type { WorkspaceMcpDraft } from "../../../src/runtime/mcp-service.js";
+import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "./provider-recovery.js";
+export type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "./provider-recovery.js";
+export interface DesktopMcpApproveRequest { name: string; fingerprint: string; confirmed: true }
+export type DesktopMcpManageRequest =
+  | { action: "save"; draft: WorkspaceMcpDraft }
+  | { action: "delete" | "logout"; name: string; fingerprint: string; confirmed: true }
+  | { action: "login"; name: string; fingerprint: string }
+  | { action: "oauth-decision"; flowId: string; allowed: boolean }
+  | { action: "oauth-cancel"; flowId: string };
+export interface DesktopMcpBrowseRequest { name: string; action: "resources" | "read" | "prompts" | "prompt"; value?: string; args?: Record<string, string> }
 
 export type WorkspaceTrustState = "none" | "required" | "trusted";
 
@@ -46,11 +59,16 @@ export interface DesktopRuntimeConnection {
   /** Stable conversation/session identity; runtime task ids change on follow-up. */
   conversationId?: string;
   provider: { id: string; label: string; model: string };
-  writer: "available" | "active-here" | "active-elsewhere";
+  writer: "available" | "active-here" | "active-elsewhere" | "recovery-required";
+  journalWarning?: string;
   approvalMode?: DesktopApprovalMode;
+  /** Opaque host/conversation revision for an idle-only mode change. */
+  modeContextId?: string;
 }
 
 export type DesktopApprovalMode = "ask" | "workspace" | "full";
+export interface DesktopPlanModeRequest { enabled: boolean; contextId: string }
+export interface DesktopSubagentCancelRequest { runId: string; taskId: string; parentTaskId: string }
 export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode }
 
 export interface DesktopProviderProfile {
@@ -97,6 +115,7 @@ export interface DesktopModelOption {
 }
 
 export interface DesktopProviderSnapshot {
+  templates?: DesktopProviderUpsertRequest[];
   activeProviderId: string;
   activeModel: string;
   profiles: DesktopProviderProfile[];
@@ -162,9 +181,16 @@ export interface DesktopTaskHistorySnapshot {
   events: RuntimeEvent[];
   fidelity: "exact" | "reconstructed";
   changes?: TaskChangeReport;
+  changeRounds?: DesktopChangeRound[];
+  tools?: DesktopReviewOperation[];
+  validations?: DesktopReviewOperation[];
 }
 
-export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence";
+export interface DesktopChangeRound { id: string; startedAt: string; report?: TaskChangeReport }
+
+export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence" | "agents" | "data" | "home" | "web";
+export interface DesktopBrowserState { url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
+export type DesktopBrowserRequest = { action: "navigate"; url: string } | { action: "back" | "forward" | "reload" | "close" | "snapshot" } | { action: "layout"; bounds: { x: number; y: number; width: number; height: number }; visible: boolean };
 export type DesktopChangeView = "task" | "workspace" | "staged";
 
 export interface DesktopReviewOperation {
@@ -198,6 +224,11 @@ export interface DesktopRecoveryEvidence {
 }
 
 export interface DesktopReviewSnapshot {
+  overview?: { workspace: string; taskId?: string; branch?: string; taskChanges?: TaskChangeReport };
+  artifacts?: Array<{ path: string; kind: string }>;
+  background?: Array<{ id: string; command: string; state: string; running: boolean; elapsedMs: number; outputBytes: number }>;
+  tools?: DesktopReviewOperation[];
+  changeRounds?: DesktopChangeRound[];
   generatedAt: string;
   changeView: DesktopChangeView;
   changes: TaskChangeReport;
@@ -247,6 +278,19 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  managementSnapshot(): Promise<import("../../../src/runtime/workspace-management.js").WorkspaceManagementSnapshot>;
+  prepareSkillInstallation(sourceKind?: "directory" | "file"): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
+  cancelSkillInstallation(): Promise<void>;
+  changeManagement(request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest): Promise<DesktopRuntimeConnection>;
+  taskDiagnostics(): Promise<{ report: string; diagnostics: string }>;
+  browser(request: DesktopBrowserRequest): Promise<DesktopBrowserState>;
+  onBrowserState(listener: (state: DesktopBrowserState) => void): () => void;
+  manageMcp(request: DesktopMcpManageRequest): Promise<WorkspaceMcpSnapshot>;
+  browseMcp(request: DesktopMcpBrowseRequest): Promise<unknown>;
+  mcpSnapshot(): Promise<WorkspaceMcpSnapshot>;
+  reloadMcp(): Promise<WorkspaceMcpSnapshot>;
+  disconnectMcp(): Promise<WorkspaceMcpSnapshot>;
+  approveMcp(request: DesktopMcpApproveRequest): Promise<WorkspaceMcpSnapshot>;
   snapshot(): Promise<DesktopWorkspaceSnapshot>;
   chooseWorkspace(): Promise<DesktopWorkspaceSnapshot>;
   closeWorkspace(): Promise<DesktopWorkspaceSnapshot>;
@@ -259,6 +303,8 @@ export interface XiuDesktopBridge {
   newConversation(): Promise<DesktopRuntimeConnection>;
   steerTask(request: RuntimeTaskRequest): Promise<boolean>;
   stopTask(): Promise<boolean>;
+  cancelSubagent(request: DesktopSubagentCancelRequest): Promise<DesktopRuntimeConnection>;
+  setPlanMode(request: DesktopPlanModeRequest): Promise<DesktopRuntimeConnection>;
   setApprovalMode(request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection>;
   decideApproval(request: RuntimeApprovalDecisionRequest): Promise<void>;
   openTaskHistory(request: DesktopTaskHistoryRequest): Promise<DesktopTaskHistorySnapshot>;
@@ -272,6 +318,7 @@ export interface XiuDesktopBridge {
   recoverTask(request: DesktopRecoveryRequest): Promise<DesktopRuntimeConnection>;
   abandonRecovery(request: DesktopRecoveryAbandonRequest): Promise<DesktopReviewSnapshot>;
   providerSnapshot(): Promise<DesktopProviderSnapshot>;
+  providerRecovery(request: DesktopProviderRecoveryRequest): Promise<DesktopProviderRecoverySnapshot>;
   discoverProviderModels(request: DesktopProviderModelsRequest): Promise<DesktopProviderSnapshot>;
   selectProvider(request: DesktopProviderSelectRequest): Promise<DesktopProviderMutationResult>;
   saveProviderCredential(request: DesktopProviderCredentialRequest): Promise<DesktopProviderMutationResult>;
@@ -289,6 +336,19 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  managementSnapshot: "management:snapshot",
+  skillPrepare: "skill:prepare",
+  skillCancel: "skill:cancel",
+  managementChange: "management:change",
+  taskDiagnostics: "task:diagnostics",
+  browser: "browser:control",
+  browserState: "browser:state",
+  mcpManage: "mcp:manage",
+  mcpBrowse: "mcp:browse",
+  mcpSnapshot: "mcp:snapshot",
+  mcpReload: "mcp:reload",
+  mcpDisconnect: "mcp:disconnect",
+  mcpApprove: "mcp:approve",
   snapshot: "desktop:snapshot",
   chooseWorkspace: "workspace:choose",
   closeWorkspace: "workspace:close",
@@ -302,6 +362,8 @@ export const desktopChannels = {
   conversationNew: "runtime:conversation-new",
   taskSteer: "runtime:task-steer",
   taskStop: "runtime:task-stop",
+  subagentCancel: "runtime:subagent-cancel",
+  planModeSet: "runtime:plan-mode-set",
   approvalModeSet: "runtime:approval-mode-set",
   approvalDecide: "runtime:approval-decide",
   taskHistoryOpen: "runtime:task-history-open",
@@ -316,6 +378,7 @@ export const desktopChannels = {
   recoveryResume: "recovery:resume",
   recoveryAbandon: "recovery:abandon",
   providerSnapshot: "provider:snapshot",
+  providerRecovery: "provider:configuration-recovery",
   providerModels: "provider:models",
   providerSelect: "provider:select",
   providerCredentialSave: "provider:credential-save",

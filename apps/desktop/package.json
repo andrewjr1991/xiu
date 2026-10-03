@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/desktop",
-  "version": "0.20.1",
+  "version": "0.20.4",
   "private": true,
   "description": "Xiu local-first desktop workbench.",
   "author": "Xiu",
@@ -22,10 +22,13 @@
     "installer:msix:win": "npm run build && node scripts/package-windows.mjs msix",
     "smoke": "node scripts/smoke.mjs",
     "smoke:ui": "npm run build && electron scripts/ui-smoke-harness.cjs",
+    "smoke:browser": "node scripts/browser-smoke.mjs",
+    "smoke:full-access": "electron scripts/full-access-dialog-smoke.cjs",
     "smoke:installer:win": "node scripts/windows-installer-smoke.mjs",
     "smoke:installer:msix:win": "node scripts/windows-msix-smoke.mjs"
   },
   "dependencies": {
+    "@xiu-ai/cli": "file:../..",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "node-pty": "^1.1.0",
@@ -41,7 +44,7 @@
     "electron": "44.4.5",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
-    "sharp": "0.34.5",
+    "sharp": "0.35.5",
     "vite": "8.3.1"
   },
   "build": {
@@ -49,6 +52,7 @@
     "productName": "Xiu",
     "asar": true,
     "asarUnpack": [
+      "dist/main/background-worker.mjs",
       "node_modules/node-pty/**"
     ],
     "npmRebuild": false,
@@ -57,7 +61,8 @@
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/@xiu-ai/cli{,/**/*}"
     ],
     "afterPack": "scripts/after-pack.cjs",
     "win": {

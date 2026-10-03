@@ -7,12 +7,14 @@ import process from "node:process";
 import chalk from "chalk";
 import { Command } from "commander";
 import { Agent, BackgroundApprovalRequiredError } from "./agent.js";
+import { createProviderPolicy } from "./runtime/provider-policy.js";
 import { configureBackgroundWorkspace, listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
 import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
 import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
+import { runProviderRecoveryCommand, type ProviderRecoveryCommand } from "./commands/provider-recovery.js";
 import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
@@ -22,12 +24,14 @@ import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, 
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
-import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, type ProviderProfile } from "./provider-registry.js";
+import { ProviderRegistry, providerTemplate, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
-import { McpAuthStore, type McpAuthSecretRecord } from "./mcp-auth-store.js";
+import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager, type McpOAuthConfig } from "./mcp.js";
-import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
+import { createMcpManager } from "./runtime/mcp-service.js";
+import { permissionFingerprint } from "./extension-permissions.js";
+import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, requireCompletedSubagent, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { persistentLiveOutput, readInteractiveInput, selectTerminalOption, type SlashCommand } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
@@ -106,7 +110,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/routing set", "为规划、实现或验证阶段指定 Provider", "Assign a provider to a planning, implementation, or verification stage"),
     item("/routing clear", "清除某个阶段的 Provider", "Clear the provider assigned to a stage"),
     item("/provider key", "为 Provider 保存本地 API Key", "Save a local API key for a provider"),
-    item("/provider add", "添加 OpenAI-compatible Provider", "Add an OpenAI-compatible provider"),
+    item("/provider add", "选择模板并添加 Provider", "Choose a template and add a provider"),
     item("/provider edit", "编辑自定义 Provider", "Edit a custom provider"),
     item("/provider remove", "删除自定义 Provider", "Remove a custom provider"),
     item("/language", "设置界面与会话语言", "Set interface and conversation language"),
@@ -215,6 +219,9 @@ const program = new Command()
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
   .option("--update-doctor", "run read-only update and installation diagnostics, then exit", false)
+  .option("--provider-config-diagnostics", "list safe Provider configuration diagnostics and recovery backups, then exit", false)
+  .option("--provider-config-preview <backup-id>", "preview Provider backup recovery (or current for dead-lock cleanup), then exit")
+  .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .showHelpAfterError()
   .parse();
@@ -305,6 +312,18 @@ async function chooseSession(workspace: string, language: UiLanguage) {
 
 async function main(): Promise<void> {
   const options = program.opts();
+  const recoveryOptions = [options.providerConfigDiagnostics, options.providerConfigPreview, options.providerConfigRecover].filter(Boolean);
+  if (recoveryOptions.length) {
+    if (recoveryOptions.length !== 1 || program.args.length) throw new Error("Choose one Provider configuration command without a task.");
+    const command: ProviderRecoveryCommand = options.providerConfigRecover ? { action: "recover", backupId: options.providerConfigRecover }
+      : options.providerConfigPreview ? { action: "preview", backupId: options.providerConfigPreview } : { action: "list" };
+    const result = await runProviderRecoveryCommand(new ProviderRegistry(), command, {
+      language: normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE) ?? "en-US",
+      interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY), write: (text) => console.log(text), ask: askQuestion,
+    });
+    process.exitCode = result.exitCode;
+    return;
+  }
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
   if (options.updateDoctor) {
@@ -328,7 +347,11 @@ async function main(): Promise<void> {
   try { mcpSystemCredentialStore = await createWindowsSystemCredentialStore("mcp-oauth-record"); }
   catch { /* OAuth remains usable through the compatibility store until explicitly migrated. */ }
   const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
-  await providerRegistry.load();
+  try { await providerRegistry.load(); }
+  catch (error) {
+    console.error("Provider configuration could not be loaded. Inspect it without starting a task: xiu --provider-config-diagnostics");
+    throw error;
+  }
   const pluginRegistry = new PluginRegistry(path.resolve(options.cwd ?? process.cwd()), undefined, packageJson.version);
   await pluginRegistry.refresh(false);
   const globalPluginContributions = await pluginRegistry.loadApprovedContributions();
@@ -367,8 +390,8 @@ async function main(): Promise<void> {
   };
   const savedProviderId = providerRegistry.activeId();
   const requestedProviderId = resolveStartupProviderId(options.provider, savedProviderId, process.env.XIU_PROVIDER);
-  const requestedStartupProfile = providerRegistry.get(requestedProviderId);
-  const startupProfile = requestedStartupProfile ?? providerRegistry.get("openai")!;
+  const requestedStartupProfile = startupProviderProfile(providerRegistry, requestedProviderId);
+  const startupProfile = requestedStartupProfile ?? UNCONFIGURED_PROVIDER_PROFILE;
   const startupModel = resolveStartupModel(
     options.model,
     requestedStartupProfile && requestedProviderId === savedProviderId ? providerRegistry.activeModel(requestedProviderId) : undefined,
@@ -393,7 +416,7 @@ async function main(): Promise<void> {
 
   const status = new StatusLine();
   const activities = new ActivityLog();
-  const mcpManager = new McpManager(config.cwd, undefined, new McpAuthStore(undefined, mcpSystemCredentialStore));
+  const mcpManager = createMcpManager(config.cwd, mcpSystemCredentialStore);
   let mcpStartup: Promise<ReturnType<McpManager["status"]>> | undefined;
   const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
     const storage = backend.backend === "environment"
@@ -862,13 +885,14 @@ async function main(): Promise<void> {
             : task.role === "reviewer"
               ? "Review the inherited implementation Worktree critically. Find correctness, safety, regression, and test gaps. Do not modify files. End with exactly VERDICT: PASS only when no blocking issue remains; otherwise end with VERDICT: FAIL."
               : task.role === "tester"
-                ? "Test the inherited implementation Worktree using only the tools available under your safety mode. Report exact commands, results, and limitations. End with exactly VERDICT: PASS only when required verification passed; otherwise end with VERDICT: FAIL."
+                ? "Inspect the inherited implementation Worktree using only available read-only tools. Use verify_output with meaningful deterministic expectations for every changed text artifact. This is bounded artifact validation, not executed project tests; command execution is unavailable in shared_readonly mode. If these checks cannot verify the requested change, report that limitation and VERDICT: FAIL. End with exactly VERDICT: PASS only after concrete checks passed. Prose-only PASS cannot authorize integration."
                 : "Implement the scoped change only inside your isolated Worktree. Run relevant verification and summarize every changed file.";
           const result = await childAgent.run(`You are the ${task.role} specialist for a parent Xiu agent.\nGoal: ${task.title}\n\n${task.instructions}\n\nRole requirements: ${roleGuidance}${dependencyContext}`);
           const childStatus = childAgent.status();
-          if (childStatus.outcome === "unverified") throw new Error(`Agent ${task.id} changed files but no verification passed.`);
+          requireCompletedSubagent(childStatus);
           return {
             result,
+            verification: await childAgent.getVerificationEvidence(),
             stats: {
               modelCalls: childStatus.stats.modelCalls,
               toolCalls: childStatus.stats.toolCalls,
@@ -919,6 +943,7 @@ async function main(): Promise<void> {
     let startupProviderError: Error | undefined;
     let provider: ModelProvider;
     try {
+      if (!requestedStartupProfile) throw new Error(localize(language, "尚未添加渠道。请使用 /provider add 添加。", "No Provider selected. Use /provider add to add one."));
       provider = createProvider(config);
     } catch (error) {
       startupProviderError = error instanceof Error ? error : new Error(String(error));
@@ -1201,82 +1226,9 @@ async function main(): Promise<void> {
         `工具 ${capabilityStateName(probe.tools)} / 视觉 ${capabilityStateName(probe.vision)}`,
         `tools ${capabilityStateName(probe.tools)} / vision ${capabilityStateName(probe.vision)}`);
     };
-    agent.setFailoverController({
-      resolve: async (request) => {
-        const chain = providerRegistry.failoverChain(request.originProviderId);
-        if (!chain.length) return { reason: localize(language, `主 Provider ${request.originProviderId} 未配置备用链`, `No failover chain is configured for primary provider ${request.originProviderId}`) };
-        const skipped: Array<{ providerId: string; reason: string }> = [];
-        for (const providerId of chain) {
-          if (request.attemptedProviderIds.includes(providerId)) {
-            skipped.push({ providerId, reason: localize(language, "本次任务已尝试", "already attempted in this task") });
-            continue;
-          }
-          const profile = providerRegistry.get(providerId);
-          if (!profile) {
-            skipped.push({ providerId, reason: localize(language, "配置不存在", "profile not found") });
-            continue;
-          }
-          const model = providerRegistry.activeModel(providerId) ?? profile.model;
-          const effective = runtimeProfile(profile, model);
-          if (request.requiresTools && !effective.features.tools) {
-            skipped.push({ providerId, reason: localize(language, "当前请求需要工具能力", "the current request requires tool support") });
-            continue;
-          }
-          const candidateConfig = profileConfig(profile, model);
-          const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
-          if (request.estimatedInputTokens >= safeInputLimit) {
-            skipped.push({ providerId, reason: localize(language, `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过安全输入线 ${safeInputLimit.toLocaleString()}`, `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the safe input limit ${safeInputLimit.toLocaleString()}`) });
-            continue;
-          }
-          return {
-            candidate: {
-              config: candidateConfig,
-              provider: createProvider(candidateConfig),
-              tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
-              label: profile.name,
-            },
-            skipped,
-          };
-        }
-        return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
-      },
-    });
-    agent.setRoutingController({
-      resolve: async (request) => {
-        const policy = providerRegistry.routingPolicy();
-        if (!policy.enabled) return {};
-        const targetProviderId = policy.phases[request.phase];
-        if (!targetProviderId) {
-          if (request.currentProviderId === request.defaultProviderId && request.currentModel === request.defaultModel) return {};
-          return { useDefault: true, targetProviderId: request.defaultProviderId, reason: localize(language, `当前阶段未绑定 Provider，恢复任务默认模型`, `no provider is assigned to this stage; restoring the task default model`) };
-        }
-        const profile = providerRegistry.get(targetProviderId);
-        if (!profile) return { targetProviderId, reason: localize(language, "目标 Provider 配置不存在", "the target provider profile does not exist") };
-        const model = providerRegistry.activeModel(targetProviderId) ?? profile.model;
-        const effective = runtimeProfile(profile, model);
-        if (request.requiresTools && !effective.features.tools) {
-          return { targetProviderId, reason: localize(language, "当前阶段需要工具能力，但目标模型不支持工具", "this stage requires tools, but the target model does not support tools") };
-        }
-        const candidateConfig = profileConfig(profile, model);
-        if (candidateConfig.providerId === request.currentProviderId && candidateConfig.model === request.currentModel) return {};
-        const safeInputLimit = candidateConfig.contextLimit ?? Math.floor((candidateConfig.contextWindow ?? 128_000) * 0.8);
-        if (request.estimatedInputTokens >= safeInputLimit) {
-          return { targetProviderId, reason: localize(language,
-            `当前上下文约 ${request.estimatedInputTokens.toLocaleString()} tokens，超过目标模型安全输入线 ${safeInputLimit.toLocaleString()}`,
-            `current context is about ${request.estimatedInputTokens.toLocaleString()} tokens, above the target model safe input limit ${safeInputLimit.toLocaleString()}`) };
-        }
-        return {
-          targetProviderId,
-          reason: localize(language, `用户已将 ${request.phase} 阶段绑定到 ${profile.name}`, `the user assigned the ${request.phase} stage to ${profile.name}`),
-          candidate: {
-            config: candidateConfig,
-            provider: createProvider(candidateConfig),
-            tools: [...buildBaseTools(candidateConfig), ...mcpManager.tools()],
-            label: profile.name,
-          },
-        };
-      },
-    });
+    const policy = createProviderPolicy(providerRegistry, profileConfig, (candidate) => [...buildBaseTools(candidate), ...mcpManager.tools()], language);
+    agent.setFailoverController(policy.failover);
+    agent.setRoutingController(policy.routing);
     const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
       status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
       try {
@@ -1326,6 +1278,10 @@ async function main(): Promise<void> {
 
     const configureStartupProvider = async (): Promise<void> => {
       if (!startupProviderError) return;
+      if (!providerRegistry.list().length) {
+        console.log(chalk.yellow(localize(language, "尚未添加任何渠道。请输入 /provider add，选择 Agnes、OpenAI、本地模型或兼容服务；无需先设置环境变量。\n", "No Providers added. Enter /provider add to choose Agnes, OpenAI, a local model, or a compatible service. Environment variables are optional.\n")));
+        return;
+      }
       console.log(chalk.yellow(localize(language,
         `当前 Provider ${config.providerLabel ?? config.providerId} 尚未配置（${startupProviderError.message}）。Xiu 已进入配置模式，不会退出。`,
         `The current provider ${config.providerLabel ?? config.providerId} is not configured (${startupProviderError.message}). Xiu is staying open in setup mode.`)));
@@ -1381,6 +1337,7 @@ async function main(): Promise<void> {
     };
 
     const runWithTaskBaseline = async (task: string, onStarted?: () => void): Promise<string> => {
+      if (!providerRegistry.get(config.providerId)) throw new Error(localize(language, "尚未配置渠道，请先使用 /provider add 或 /providers。", "No Provider configured. Use /provider add or /providers first."));
       const preparation = new AbortController();
       activeTaskPreparationController = preparation;
       latestTaskBaseline = undefined;
@@ -2066,6 +2023,8 @@ async function main(): Promise<void> {
           const reason = agent.status().failureReason;
           const message = reason === "verification_failed"
             ? localize(language, "仍有失败或已过期的必要验证，目标尚未完成。", "A required verification is still failed or stale, so the goal is incomplete.")
+            : reason === "plan_incomplete"
+              ? localize(language, "任务计划仍有未完成或受阻步骤，目标尚未完成。", "The task plan still has unfinished or blocked steps, so the goal is incomplete.")
             : reason === "web_evidence"
               ? localize(language, "联网证据不足或获取失败，目标尚未完成。", "Required web evidence was unavailable or insufficient, so the goal is incomplete.")
               : reason === "model_incomplete"
@@ -2366,22 +2325,28 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/provider add") {
-        console.log(chalk.cyan(localize(language, "添加 OpenAI-compatible Provider（Key 可保存在本机配置，也可使用环境变量）", "Add an OpenAI-compatible provider (save the key locally or use an environment variable)")));
+        console.log(chalk.cyan(localize(language, "添加 Provider（Key 可保存在本机配置，也可使用环境变量）", "Add a provider (save the key locally or use an environment variable)")));
         try {
+          const kind = await selectTerminalOption(localize(language, "渠道类型", "Provider type"), (["agnes", "openai", "anthropic", "ollama", "lmstudio", "vllm", "openai-compatible"] as const).map((value) => ({ label: value, value })), language);
+          if (!kind) continue;
+          const template = providerTemplate(kind);
           const id = (await askQuestion(localize(language, "Provider ID：", "Provider ID: "))).trim();
+          if (providerRegistry.get(id)) throw new Error(localize(language, "Provider ID 已存在。", "Provider ID already exists."));
           const name = (await askQuestion(localize(language, "显示名称：", "Display name: "))).trim() || id;
-          const baseURL = (await askQuestion(localize(language, "API Base URL（需包含 /v1）：", "API base URL (include /v1): "))).trim();
-          const model = (await askQuestion(localize(language, "默认模型 ID：", "Default model ID: "))).trim();
+          const baseURL = (await askQuestion(localize(language, `API Base URL [${template?.baseURL ?? "默认"}]：`, `API base URL [${template?.baseURL ?? "default"}]: `))).trim() || template?.baseURL;
+          const model = (await askQuestion(localize(language, `默认模型 ID [${template?.model ?? ""}]：`, `Default model ID [${template?.model ?? ""}]: `))).trim() || template?.model || "";
           const apiKeyEnv = (await askQuestion(localize(language, "密钥环境变量名（本地无认证可留空）：", "API-key environment variable (blank for unauthenticated local servers): "))).trim() || undefined;
           const apiKey = await askSecret(localize(language, "本地保存的 API Key（可留空，输入内容不会显示）：", "Locally saved API key (optional; input is hidden): ")) || undefined;
           const contextText = (await askQuestion(localize(language, "上下文窗口 Token 数（留空使用 128K）：", "Context-window tokens (blank for 128K): "))).trim();
           const visionText = (await askQuestion(localize(language, "该端点和模型确认支持视觉？[y/N]：", "Does this endpoint and model definitely support vision? [y/N]: "))).trim();
           const profile: ProviderProfile = {
-            id, name, kind: "openai-compatible", model, baseURL, apiKeyEnv, apiKey,
+            id, name, kind, model, baseURL, apiKeyEnv, apiKey,
             contextWindow: contextText ? Number(contextText) : undefined,
-            features: { text: true, tools: true, vision: /^(y|yes)$/i.test(visionText), image: false, video: false },
+            capabilityModels: template?.capabilityModels,
+            features: { ...(template?.features ?? { text: true, tools: true, image: false, video: false }), vision: /^(y|yes)$/i.test(visionText) },
           };
           await providerRegistry.upsert(profile);
+          if (!providerRegistry.activeId()) await providerRegistry.setActive(id, model);
           console.log(chalk.green(localize(language, `已保存 Provider ${id}。正在进行连接测试……`, `Saved provider ${id}. Testing the connection...`)));
           await switchProviderProfile(providerRegistry.get(id)!);
         } catch (error) {
@@ -2455,11 +2420,15 @@ async function main(): Promise<void> {
           console.log(chalk.dim(localize(language, "已取消删除。\n", "Removal cancelled.\n")));
           continue;
         }
-        if (selected === config.providerId) {
-          console.log(chalk.yellow(localize(language, "不能删除当前 Provider；请先切换到其他 Provider。\n", "The active provider cannot be removed; switch providers first.\n")));
-          continue;
-        }
+        const confirmed = await askQuestion(localize(language, `确认删除 ${selected} 的渠道配置和本机凭据？[y/N]：`, `Remove ${selected} and its local credential? [y/N]: `));
+        if (!/^(y|yes)$/i.test(confirmed.trim())) continue;
         await providerRegistry.remove(selected);
+        if (selected === config.providerId) {
+          const nextConfig = profileConfig(UNCONFIGURED_PROVIDER_PROFILE);
+          await agent.replaceProvider(nextConfig, { async complete(): Promise<never> { throw new Error(localize(language, "请使用 /provider add 或 /providers 配置渠道。", "Use /provider add or /providers to configure a Provider.")); } });
+          baseTools = buildBaseTools();
+          agent.replaceTools([...baseTools, ...mcpManager.tools()]);
+        }
         console.log(chalk.green(localize(language, `已删除 Provider ${selected}。\n`, `Removed provider ${selected}.\n`)));
         continue;
       }
@@ -3026,7 +2995,7 @@ async function main(): Promise<void> {
               `MCP ${selected} permissions:\n${manifest.permissions.map((permission) => `  • ${permission}`).join("\n")}\nSource: ${manifest.origin}\nApproval records the manifest only and cannot bypass tool approvals.`)));
             const answer = await askQuestion(chalk.yellow(localize(language, "确认此权限清单？[y/N] ", "Approve this permission manifest? [y/N] ")));
             if (!/^(y|yes)$/i.test(answer.trim())) { console.log(chalk.dim(localize(language, "已取消权限确认。\n", "Permission approval cancelled.\n"))); continue; }
-            await mcpManager.approvePermissions(selected, projectMcpTrusted);
+            await mcpManager.approvePermissions(selected, projectMcpTrusted, permissionFingerprint(manifest));
             await mcpManager.start(projectMcpTrusted);
             agent.replaceTools([...baseTools, ...mcpManager.tools()]);
             console.log(chalk.green(localize(language, `已确认 MCP ${selected} 权限并重新加载。\n`, `Approved MCP ${selected} permissions and reloaded it.\n`)));

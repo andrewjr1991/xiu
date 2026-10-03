@@ -8,5 +8,6 @@ export class AgentRuntimeAdapter implements RuntimeTaskDriver {
   run(task: string): Promise<string> { return this.agent.run(task); }
   cancel(): boolean { return this.agent.cancel(); }
   steer(text: string): boolean { return this.agent.steer(text); }
+  setPlanMode(enabled: boolean): Promise<void> { return this.agent.setPlanMode(enabled); }
   status(): ReturnType<Agent["status"]> { return this.agent.status(); }
 }

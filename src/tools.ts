@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import fg from "fast-glob";
+import fg from "./glob.js";
 import iconv from "iconv-lite";
 import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
@@ -11,7 +11,7 @@ import type { AgentTool, ToolContext, ToolRisk, ToolResult } from "./types.js";
 import { normalizeToolResult, toolResult, toolErrorCode } from "./tool-result.js";
 import { isVerificationCommand } from "./verification.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
-import { resolveWorkspacePath, validateWorkspaceGlob } from "./workspace-path.js";
+import { resolveWorkspacePath, resolveToolPath, validateWorkspaceGlob } from "./workspace-path.js";
 
 export { resolveWorkspacePath } from "./workspace-path.js";
 
@@ -96,8 +96,8 @@ export function classifyProcess(program: string, args: string[]): ToolRisk {
   return "execute";
 }
 
-function resolveProcessProgram(program: string, cwd: string): string {
-  if (program.includes("/") || program.includes("\\")) return resolveWorkspacePath(cwd, program);
+function resolveProcessProgram(program: string, cwd: string, accessMode?: "workspace" | "full"): string {
+  if (program.includes("/") || program.includes("\\")) return resolveToolPath({ cwd, accessMode }, program);
   if (process.platform === "win32" && ["npm", "npx", "pnpm", "yarn", "corepack"].includes(program.toLowerCase())) return `${program}.cmd`;
   return program;
 }
@@ -318,7 +318,7 @@ export const builtinTools: AgentTool[] = [
     describe: (input) => `list files matching ${String(input.pattern)}`,
     async execute(input, context) {
       const pattern = stringArg(input, "pattern");
-      validateWorkspaceGlob(pattern);
+      if (context.accessMode !== "full") validateWorkspaceGlob(pattern);
       const files = await fg(pattern, {
         cwd: context.cwd,
         onlyFiles: true,
@@ -347,7 +347,7 @@ export const builtinTools: AgentTool[] = [
     },
     describe: (input) => `read ${String(input.path)}`,
     async execute(input, context) {
-      const target = resolveWorkspacePath(context.cwd, stringArg(input, "path"));
+      const target = resolveToolPath(context, stringArg(input, "path"));
       const content = await fs.readFile(target, "utf8");
       const characterMode = typeof input.start_character === "number" || typeof input.max_characters === "number";
       if (characterMode) {
@@ -378,11 +378,12 @@ export const builtinTools: AgentTool[] = [
   {
     name: "verify_output",
     risk: "read",
-    description: "Deterministically verify a generated UTF-8 text artifact. Declare required and forbidden substrings and optional byte-size bounds. Any unmet condition returns Verification failed, so use this for HTML, JSON, Markdown, CSV, and other deliverables without a project test suite.",
+    description: "Deterministically verify a generated UTF-8 text artifact with substring and byte-size expectations, or explicitly assert a removed artifact is absent with exists:false. Any unmet condition returns Verification failed. This is bounded artifact validation, not a project test suite.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
+        exists: { type: "boolean", description: "Set false to verify absence; cannot combine false with content or size expectations." },
         required_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
         forbidden_substrings: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 50 },
         min_bytes: { type: "integer", minimum: 0 },
@@ -397,6 +398,11 @@ export const builtinTools: AgentTool[] = [
       const forbidden = optionalStringArray(input, "forbidden_substrings");
       const hasMinimum = typeof input.min_bytes === "number";
       const hasMaximum = typeof input.max_bytes === "number";
+      if (input.exists !== undefined && typeof input.exists !== "boolean") throw new Error("exists must be a boolean");
+      if (input.exists === false) {
+        if (required.length || forbidden.length || hasMinimum || hasMaximum) throw new Error("exists:false cannot be combined with content or size expectations");
+        return;
+      }
       if (!required.length && !forbidden.length && !hasMinimum && !hasMaximum) {
         throw new Error("verify_output requires at least one substring or byte-size expectation");
       }
@@ -407,9 +413,18 @@ export const builtinTools: AgentTool[] = [
     isVerification: (_input, result) => result.startsWith("Verification passed:"),
     async execute(input, context) {
       const requested = stringArg(input, "path");
-      const target = resolveWorkspacePath(context.cwd, requested);
-      const content = await fs.readFile(target, "utf8");
-      const bytes = Buffer.byteLength(content, "utf8");
+      const target = resolveToolPath(context, requested);
+      if (input.exists === false) {
+        try { await fs.lstat(target); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return `Verification passed: ${requested}\n- absent`;
+          throw error;
+        }
+        return `Verification failed: ${requested}\n- expected path to be absent`;
+      }
+      const data = await fs.readFile(target);
+      const content = new TextDecoder("utf-8", { fatal: true }).decode(data);
+      const bytes = data.byteLength;
       const required = optionalStringArray(input, "required_substrings");
       const forbidden = optionalStringArray(input, "forbidden_substrings");
       const missing = required.filter((value) => !content.includes(value));
@@ -439,14 +454,14 @@ export const builtinTools: AgentTool[] = [
     async execute(input, context) {
       const query = stringArg(input, "query");
       const pattern = typeof input.pattern === "string" ? input.pattern : "**/*";
-      validateWorkspaceGlob(pattern);
+      if (context.accessMode !== "full") validateWorkspaceGlob(pattern);
       let regex: RegExp;
       try { regex = new RegExp(query, "i"); } catch { throw new Error("query must be a valid regular expression"); }
       const files = await fg(pattern, { cwd: context.cwd, onlyFiles: true, dot: true, followSymbolicLinks: false, ignore: ["**/.git/**", "**/node_modules/**", "**/dist/**", "**/.xiu/**"] });
       const matches: string[] = [];
       for (const file of files.slice(0, 3000)) {
         let content: string;
-        try { content = await fs.readFile(resolveWorkspacePath(context.cwd, file), "utf8"); } catch { continue; }
+        try { content = await fs.readFile(resolveToolPath(context, file), "utf8"); } catch { continue; }
         for (const [index, line] of content.split(/\r?\n/).entries()) {
           if (regex.test(line)) matches.push(`${file}:${index + 1}:${line}`);
           regex.lastIndex = 0;
@@ -469,7 +484,7 @@ export const builtinTools: AgentTool[] = [
     },
     describe: (input) => `write ${String(input.path)}`,
     async execute(input, context) {
-      const target = resolveWorkspacePath(context.cwd, stringArg(input, "path"));
+      const target = resolveToolPath(context, stringArg(input, "path"));
       if (typeof input.content !== "string") throw new Error("content must be a string");
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, input.content, "utf8");
@@ -489,7 +504,7 @@ export const builtinTools: AgentTool[] = [
     },
     describe: (input) => `edit ${String(input.path)}`,
     async execute(input, context) {
-      const target = resolveWorkspacePath(context.cwd, stringArg(input, "path"));
+      const target = resolveToolPath(context, stringArg(input, "path"));
       const oldText = stringArg(input, "old_text");
       if (typeof input.new_text !== "string") throw new Error("new_text must be a string");
       const content = await fs.readFile(target, "utf8");
@@ -528,13 +543,13 @@ export const builtinTools: AgentTool[] = [
     validate(input) { patchArray(input); },
     async preview(input, context) {
       const file = stringArg(input, "path");
-      const content = await fs.readFile(resolveWorkspacePath(context.cwd, file), "utf8");
+      const content = await fs.readFile(resolveToolPath(context, file), "utf8");
       const patches = patchArray(input);
       applyExactPatches(content, patches);
       return patchPreview(file, patches);
     },
     async execute(input, context) {
-      const target = resolveWorkspacePath(context.cwd, stringArg(input, "path"));
+      const target = resolveToolPath(context, stringArg(input, "path"));
       const content = await fs.readFile(target, "utf8");
       const updated = applyExactPatches(content, patchArray(input));
       await fs.writeFile(target, updated, "utf8");
@@ -562,7 +577,7 @@ export const builtinTools: AgentTool[] = [
     validate: validateDirectProcess,
     async preview(input, context) {
       const program = processProgram(input);
-      const resolved = resolveProcessProgram(program, context.cwd);
+      const resolved = resolveProcessProgram(program, context.cwd, context.accessMode);
       return `Direct process (no shell parsing):\n${formatProcessInvocation(resolved, processArgs(input))}`;
     },
     async execute(input, context) { return (await this.executeResult!(input, context)).output; },
@@ -571,7 +586,7 @@ export const builtinTools: AgentTool[] = [
       const requestedArgs = processArgs(input);
       const evidenceNote = await projectScriptEvidenceNote(context.cwd, formatProcessInvocation(requestedProgram, requestedArgs));
       const nodePackageCli = await resolveWindowsNodePackageCli(requestedProgram);
-      const program = nodePackageCli ? process.execPath : resolveProcessProgram(requestedProgram, context.cwd);
+      const program = nodePackageCli ? process.execPath : resolveProcessProgram(requestedProgram, context.cwd, context.accessMode);
       const args = nodePackageCli ? [nodePackageCli, ...requestedArgs] : requestedArgs;
       const timeout = processTimeout(input);
       const outputEncoding = process.platform === "win32" ? await windowsConsoleEncoding() : "utf8";
@@ -780,7 +795,7 @@ export const builtinTools: AgentTool[] = [
     async execute(input, context) { return (await this.executeResult!(input, context)).output; },
     async executeResult(input, context) {
       const check = stringArg(input, "check");
-      const packageFile = resolveWorkspacePath(context.cwd, "package.json");
+      const packageFile = resolveToolPath(context, "package.json");
       const pkg = JSON.parse(await fs.readFile(packageFile, "utf8")) as { scripts?: Record<string, string> };
       if (!["typecheck", "lint", "test", "build"].includes(check) || !pkg.scripts?.[check]) return toolResult(`Verification unavailable: package.json has no ${check} script.`, "failure", { errorCode: "unavailable" });
       const nodePackageCli = await resolveWindowsNodePackageCli("npm");
@@ -834,7 +849,7 @@ export async function executeToolResult(tool: AgentTool, input: Record<string, u
   if (tool.name === "validate_project") {
     try {
       if (!["typecheck", "lint", "test", "build"].includes(String(input.check))) throw new Error("Unknown project check.");
-      packageFile = resolveWorkspacePath(context.cwd, "package.json");
+      packageFile = resolveToolPath(context, "package.json");
       scriptSnapshot = await fs.readFile(packageFile, "utf8");
       const scripts = (JSON.parse(scriptSnapshot) as { scripts?: Record<string, string> }).scripts ?? {};
       const check = String(input.check);

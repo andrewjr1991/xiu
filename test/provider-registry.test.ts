@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, resolveStartupModel, resolveStartupProviderId, validateProviderProfile } from "../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, providerTemplate, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile } from "../src/provider-registry.js";
 import { WindowsSystemCredentialStore } from "../src/system-credential-store.js";
 
 class FakeCredentialEntry {
@@ -27,10 +27,64 @@ function fakeSystemStore(): WindowsSystemCredentialStore<string, "provider-api-k
   return new WindowsSystemCredentialStore("provider-api-key", FakeCredentialEntry);
 }
 
-test("provider registry includes cloud and local built-in profiles", async () => {
+// Credential/routing fixtures explicitly add channels; production starts empty.
+async function loadFixture(registry: ProviderRegistry): Promise<void> {
+  await registry.load();
+  for (const profile of BUILTIN_PROVIDER_PROFILES) if (!registry.get(profile.id)) await registry.upsert({ ...profile, builtin: false });
+}
+
+test("fresh registration stays empty even with environment credentials, and template IDs are free", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-empty-providers-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const old = process.env.AGNES_API_KEY;
+  process.env.AGNES_API_KEY = "environment-canary-no-registration";
+  t.after(() => { if (old === undefined) delete process.env.AGNES_API_KEY; else process.env.AGNES_API_KEY = old; });
+  const filename = path.join(directory, "providers.json");
+  const fresh = new ProviderRegistry(filename);
+  await fresh.load();
+  assert.deepEqual(fresh.list(), []);
+  assert.deepEqual(fresh.credentialInfo(), []);
+  assert.equal(startupProviderProfile(fresh, resolveStartupProviderId()), undefined);
+  await fresh.upsert({ ...providerTemplate("agnes")!, apiKeyEnv: undefined });
+  await fresh.setActive("agnes", "agnes-user-model");
+  assert.equal(fresh.get("agnes")?.builtin, false);
+  assert.equal(startupProviderProfile(fresh, "unknown"), undefined, "unknown selections cannot silently choose another endpoint");
+  await fresh.remove("agnes");
+  const restarted = new ProviderRegistry(filename);
+  await restarted.load();
+  assert.deepEqual(restarted.list(), []);
+  assert.equal(restarted.activeId(), undefined);
+});
+
+test("legacy selected channels migrate once, retaining credentials, media and routing without seeding unused presets", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-legacy-providers-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, "providers.json");
+  await fs.writeFile(filename, JSON.stringify({ version: 4, profiles: [], active: "agnes",
+    credentials: { agnes: "legacy-canary" }, activeModels: { agnes: "chosen-chat" },
+    activeCapabilityModels: { agnes: { image: "chosen-image" } },
+    failoverChains: { agnes: ["openai"] }, routing: { enabled: true, phases: { verification: "openai" } },
+  }));
+  const migrated = new ProviderRegistry(filename);
+  await migrated.load();
+  assert.deepEqual(migrated.list().map((profile) => profile.id), ["agnes", "openai"]);
+  assert.equal(migrated.get("agnes")?.apiKey, "legacy-canary");
+  assert.equal(migrated.activeModel("agnes"), "chosen-chat");
+  assert.equal(migrated.activeCapabilityModel("agnes", "image"), "chosen-image");
+  assert.deepEqual(migrated.failoverChain("agnes"), ["openai"]);
+  assert.equal(migrated.routingPolicy().phases.verification, "openai");
+  await migrated.remove("agnes");
+  await migrated.remove("openai");
+  const restarted = new ProviderRegistry(filename);
+  await restarted.load();
+  assert.deepEqual(restarted.list(), []);
+  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 5);
+});
+
+test("explicitly added cloud and local templates remain registered", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-providers-"));
   const registry = new ProviderRegistry(path.join(directory, "providers.json"));
-  await registry.load();
+  await loadFixture(registry);
   assert.deepEqual(registry.list().map((profile) => profile.id), ["agnes", "openai", "anthropic", "ollama", "lmstudio", "vllm"]);
   assert.equal(registry.get("ollama")?.baseURL, "http://127.0.0.1:11434/v1");
   assert.equal(registry.get("lmstudio")?.baseURL, "http://127.0.0.1:1234/v1");
@@ -41,7 +95,7 @@ test("provider registry can persist a local credential separately from shareable
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-save-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.upsert({
     id: "office-gateway", name: "Office Gateway", kind: "openai-compatible", model: "coder",
     baseURL: "https://models.example.test/v1/", apiKeyEnv: "OFFICE_MODEL_KEY", apiKey: "saved-local-secret", contextWindow: 64_000,
@@ -92,7 +146,7 @@ test("approved plugin provider model selection survives loading before plugin di
   }), "utf8");
 
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   assert.equal(registry.activeId(), "plugin-gateway");
   assert.equal(registry.activeModel("plugin-gateway"), "coder-large");
   assert.equal(registry.activeModel("__proto__"), undefined);
@@ -110,7 +164,7 @@ test("saved credentials also work for built-in providers", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-key-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("agnes", "agnes-local-key");
   const restored = new ProviderRegistry(filename);
   await restored.load();
@@ -121,14 +175,14 @@ test("capability model selections persist for built-in providers without replaci
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-capability-model-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setCapabilityModel("agnes", "image", "agnes-image-next");
   await registry.setCapabilityModel("agnes", "video", "agnes-video-next");
 
   const saved = JSON.parse(await fs.readFile(filename, "utf8")) as { version: number; activeCapabilityModels?: Record<string, Record<string, string>>; profiles: unknown[] };
-  assert.equal(saved.version, 4);
+  assert.equal(saved.version, 5);
   assert.equal(saved.activeCapabilityModels?.agnes?.image, "agnes-image-next");
-  assert.deepEqual(saved.profiles, []);
+  assert.equal(saved.profiles.length, 6);
 
   const restored = new ProviderRegistry(filename);
   await restored.load();
@@ -155,19 +209,21 @@ test("provider validation rejects unsafe ids, URLs, and secret-shaped fields", (
   assert.ok(BUILTIN_PROVIDER_PROFILES.every((profile) => profile.builtin));
 });
 
-test("built-in provider profiles cannot be replaced or removed", async () => {
+test("template IDs can be edited and removed after explicit registration", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-builtins-"));
   const registry = new ProviderRegistry(path.join(directory, "providers.json"));
-  await registry.load();
-  await assert.rejects(registry.upsert({ ...BUILTIN_PROVIDER_PROFILES[0]!, name: "Fake" }), /cannot be replaced/);
-  await assert.rejects(registry.remove("openai"), /cannot be removed/);
+  await loadFixture(registry);
+  await registry.upsert({ ...BUILTIN_PROVIDER_PROFILES[0]!, name: "Edited" });
+  assert.equal(registry.get("agnes")?.name, "Edited");
+  await registry.remove("openai");
+  assert.equal(registry.get("openai"), undefined);
 });
 
 test("provider capability probes persist per model and configuration changes invalidate them", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-probes-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   const profile = {
     id: "gateway", name: "Gateway", kind: "openai-compatible" as const, model: "coder-a", baseURL: "https://one.example.test/v1",
     features: { text: true as const, tools: true, vision: true, image: false, video: false },
@@ -199,24 +255,24 @@ test("provider registry migrates version 1 settings and discards untrusted legac
     probes: [{ providerId: "legacy", model: "coder", checkedAt: "2026-08-10T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported" }],
   }), "utf8");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   assert.equal(registry.get("legacy")?.model, "coder");
   assert.equal(registry.capabilityProbe("legacy", "coder"), undefined);
-  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 4);
+  assert.equal(JSON.parse(await fs.readFile(filename, "utf8")).version, 5);
 });
 
 test("versioned capability cache is fingerprinted and invalidated when credentials change", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-fingerprint-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.upsert({
     id: "fingerprint", name: "Fingerprint", kind: "openai-compatible", model: "coder", baseURL: "https://cache.example/v1", apiKey: "first-key",
     features: { text: true, tools: true, vision: false, image: false, video: false },
   });
   await registry.setCapabilityProbe({ providerId: "fingerprint", model: "coder", checkedAt: "2026-08-11T00:00:00.000Z", text: "supported", tools: "supported", vision: "unsupported" });
   const stored = JSON.parse(await fs.readFile(filename, "utf8")) as { version: number; probes: Array<{ profileFingerprint?: string }> };
-  assert.equal(stored.version, 4);
+  assert.equal(stored.version, 5);
   assert.match(stored.probes[0]?.profileFingerprint ?? "", /^[a-f0-9]{24}$/);
   assert.equal(registry.capabilityProbe("fingerprint", "coder")?.tools, "supported");
   await registry.setApiKey("fingerprint", "second-key");
@@ -233,7 +289,7 @@ test("provider registry persists ordered failover chains and removes stale refer
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-failover-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.upsert({
     id: "backup-one", name: "Backup One", kind: "openai-compatible", model: "backup-model", baseURL: "http://127.0.0.1:9001/v1",
     features: { text: true, tools: true, vision: false, image: false, video: false },
@@ -251,7 +307,7 @@ test("provider registry serializes concurrent writes without corrupting the comp
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-concurrent-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await Promise.all(["one", "two"].map((id) => registry.upsert({
     id, name: id, kind: "openai-compatible", model: "coder", baseURL: `http://127.0.0.1:${id === "one" ? 9010 : 9020}/v1`,
     features: { text: true, tools: true, vision: false, image: false, video: false },
@@ -266,7 +322,7 @@ test("provider registry persists stage routing and removes stale targets", async
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-routing-"));
   const filename = path.join(directory, "providers.json");
   const registry = new ProviderRegistry(filename);
-  await registry.load();
+  await loadFixture(registry);
   await registry.upsert({
     id: "fast-planner", name: "Fast Planner", kind: "openai-compatible", model: "planner", baseURL: "http://127.0.0.1:9010/v1",
     features: { text: true, tools: true, vision: false, image: false, video: false },
@@ -288,7 +344,7 @@ test("provider API key migration verifies the system copy before switching and c
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "migrate-this-secret");
 
   const migrated = await registry.migrateApiKeysToSystem(["ollama"], store);
@@ -315,7 +371,7 @@ test("batch Provider migration rolls back every system write when one copy fails
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("agnes", "first-secret");
   await registry.setApiKey("openai", "second-secret");
   FakeCredentialEntry.failWriteFor = "provider:openai:api-key";
@@ -335,7 +391,7 @@ test("a system credential reference never silently falls back to retained plaint
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "retained-legacy-secret");
   await registry.migrateApiKeysToSystem(["ollama"], store);
 
@@ -351,7 +407,7 @@ test("forget removes both system and retained legacy Provider credentials", asyn
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("agnes", "forget-this-secret");
   await registry.migrateApiKeysToSystem(["agnes"], store);
   await registry.forgetLocalApiKey("agnes");
@@ -367,7 +423,7 @@ test("rollback atomically restores the retained legacy Provider credential", asy
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "rollback-secret");
   await registry.migrateApiKeysToSystem(["ollama"], store);
 
@@ -385,7 +441,7 @@ test("rollback can explicitly restore a cleaned legacy copy from the active syst
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "recover-after-cleanup");
   await registry.migrateApiKeysToSystem(["ollama"], store);
   await registry.cleanupLegacyApiKey("ollama");
@@ -405,7 +461,7 @@ test("rotating a migrated key updates its system revision and still permits lega
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "old-secret");
   await registry.migrateApiKeysToSystem(["ollama"], store);
   const previousRevision = registry.credentialRevision("ollama");
@@ -424,7 +480,7 @@ test("an interrupted migration keeps a non-secret intent and safely resumes", as
   const filename = path.join(directory, "providers.json");
   const store = fakeSystemStore();
   const registry = new ProviderRegistry(filename, store);
-  await registry.load();
+  await loadFixture(registry);
   await registry.setApiKey("ollama", "resume-secret");
   FakeCredentialEntry.failDeleteFor = "provider:ollama:api-key";
   class WriteThenThrowEntry extends FakeCredentialEntry {

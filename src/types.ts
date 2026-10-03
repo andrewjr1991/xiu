@@ -91,6 +91,8 @@ export interface ApprovalRequest {
 
 export interface ToolContext {
   cwd: string;
+  /** Trusted host authority, never a model-supplied tool argument. Defaults to workspace. */
+  accessMode?: "workspace" | "full";
   approve: (request: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
   reportProgress?: (message: string) => void;

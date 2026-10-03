@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 if (process.platform !== "win32") throw new Error("Windows installer smoke only runs on Windows.");
 const root = path.resolve(import.meta.dirname, "..");
 const version = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
-const installer = path.join(root, "release", `Xiu-${version}-x64.exe`);
+const installer = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, "release", `Xiu-${version}-x64.exe`);
 await access(installer);
 const temp = await mkdtemp(path.join(os.tmpdir(), "xiu-installer-smoke-"));
 const installDir = path.join(temp, "Xiu 验收 App");

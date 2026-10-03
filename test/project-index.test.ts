@@ -175,3 +175,163 @@ test("project index never follows directory links outside the workspace", async 
   assert.deepEqual(index.paths(), ["local.ts"]);
   assert.doesNotMatch(await index.search("externalSecretMarker"), /external\.ts/);
 });
+
+test("a long-lived Agent refreshes externally added changed deleted and renamed files at each task boundary", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-long-lived-"));
+  await fs.writeFile(path.join(cwd, "changed.ts"), "export const oldExternalMarker = true;\n");
+  await fs.writeFile(path.join(cwd, "deleted.ts"), "export const deletedExternalMarker = true;\n");
+  await fs.writeFile(path.join(cwd, "before-rename.ts"), "export const renamedExternalMarker = true;\n");
+  await fs.writeFile(path.join(cwd, "unchanged.ts"), "export const unchangedExternalMarker = true;\n");
+  const index = new ProjectIndex(cwd);
+  let context = "";
+  const agent = new Agent(
+    { provider: "openai", model: "test", cwd, autoApprove: false },
+    { async complete(_system, messages) {
+      context = messages.at(-1)?.content ?? "";
+      return { text: "Inspected.", toolCalls: [], raw: {} };
+    } }, [], async () => false, {}, undefined, index,
+  );
+  await agent.run("Find oldExternalMarker");
+  assert.match(context, /oldExternalMarker/);
+  await fs.writeFile(path.join(cwd, "changed.ts"), "export const updatedExternalMarker = true;\n");
+  await fs.writeFile(path.join(cwd, "added.ts"), "export const addedExternalMarker = true;\n");
+  await fs.rm(path.join(cwd, "deleted.ts"));
+  await fs.rename(path.join(cwd, "before-rename.ts"), path.join(cwd, "after-rename.ts"));
+  await agent.run("Find updatedExternalMarker addedExternalMarker renamedExternalMarker");
+  assert.deepEqual(index.paths().sort(), ["added.ts", "after-rename.ts", "changed.ts", "unchanged.ts"]);
+  assert.equal(index.status().added, 2);
+  assert.equal(index.status().updated, 1);
+  assert.equal(index.status().removed, 2);
+  assert.equal(index.status().reused, 1);
+  assert.match(context, /added\.ts/);
+  assert.match(await index.findSymbols({ query: "updatedExternalMarker" }), /changed\.ts/);
+  assert.doesNotMatch(await index.findSymbols({ query: "oldExternalMarker" }), /changed\.ts/);
+});
+
+test("index accesses recheck external files after a bounded interval without scanning on every access", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-freshness-"));
+  await fs.writeFile(path.join(cwd, "first.ts"), "export const firstExternal = true;\n");
+  let now = 1_000;
+  const index = new ProjectIndex(cwd, () => now);
+  const discover = t.mock.method(index as unknown as { discover(): Promise<unknown> }, "discover");
+  await index.initialize();
+  await fs.writeFile(path.join(cwd, "added.ts"), "export const nextExternal = true;\n");
+  await index.initialize();
+  await index.search("firstExternal");
+  await index.repositoryMap({});
+  await index.findSymbols({ query: "firstExternal" });
+  assert.equal(discover.mock.callCount(), 1);
+  now += 5_000;
+  await Promise.all([index.initialize(), index.search("nextExternal"), index.repositoryMap({})]);
+  assert.equal(discover.mock.callCount(), 2);
+  assert.deepEqual(index.paths().sort(), ["added.ts", "first.ts"]);
+  assert.equal(index.status().indexed, 1);
+  assert.equal(index.status().reused, 1);
+});
+
+test("index freshness notices equal-size external edits with preserved mtime and refreshes project checks", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-preserved-time-"));
+  const source = path.join(cwd, "feature.ts");
+  await fs.writeFile(source, "export const beforeMarker = true;\n");
+  // Use an exactly representable timestamp to avoid filesystem rounding being
+  // mistaken for the modification that this regression is meant to detect.
+  const mtime = new Date("2020-01-01T00:00:00.000Z");
+  await fs.utimes(source, mtime, mtime);
+  await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+  let now = 0;
+  const index = new ProjectIndex(cwd, () => now);
+  await index.initialize();
+  await fs.writeFile(source, "export const after_Marker = true;\n");
+  await fs.utimes(source, mtime, mtime);
+  await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { build: "tsc" } }));
+  now += 5_000;
+  const result = await index.findSymbols({ query: "after_Marker" });
+  assert.match(result, /feature\.ts/);
+  assert.doesNotMatch(await index.findSymbols({ query: "beforeMarker" }), /feature\.ts/);
+  assert.deepEqual(index.profile().checks, { build: "npm run build" });
+  assert.equal(index.status().updated, 2);
+});
+
+test("an invalidation during refresh survives and concurrent readers coalesce the follow-up scan", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-race-"));
+  await fs.writeFile(path.join(cwd, "first.ts"), "export const first = true;\n");
+  const index = new ProjectIndex(cwd);
+  const internal = index as unknown as { discover(): Promise<unknown> };
+  const originalDiscover = internal.discover.bind(index);
+  let discovered!: () => void;
+  const scanReady = new Promise<void>((resolve) => { discovered = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let scans = 0;
+  t.mock.method(internal, "discover", async () => {
+    const result = await originalDiscover();
+    if (++scans === 1) { discovered(); await gate; }
+    return result;
+  });
+  const initial = index.initialize();
+  await scanReady;
+  await fs.writeFile(path.join(cwd, "added-during-scan.ts"), "export const during = true;\n");
+  index.invalidate();
+  const readers = Promise.all([index.initialize(), index.initialize(), index.search("during")]);
+  release();
+  await Promise.all([initial, readers]);
+  assert.equal(scans, 2);
+  assert.equal(index.status().dirty, false);
+  assert.deepEqual(index.paths().sort(), ["added-during-scan.ts", "first.ts"]);
+});
+
+test("force and explicit invalidation bypass freshness while a clock rollback cannot freeze the index", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-refresh-bypass-"));
+  await fs.writeFile(path.join(cwd, "feature.ts"), "export const feature = true;\n");
+  let now = 10_000;
+  const index = new ProjectIndex(cwd, () => now);
+  const discover = t.mock.method(index as unknown as { discover(): Promise<unknown> }, "discover");
+  await index.initialize();
+  await index.initialize(true);
+  assert.equal(index.status().mode, "full");
+  index.invalidate();
+  await index.initialize();
+  assert.equal(index.status().mode, "cache");
+  now = 0;
+  await index.initialize();
+  assert.equal(discover.mock.callCount(), 4);
+  assert.equal(index.status().indexed, 0);
+});
+
+test("old index cache metadata is safely upgraded before reuse", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-cache-upgrade-"));
+  await fs.writeFile(path.join(cwd, "feature.ts"), "export const feature = true;\n");
+  await new ProjectIndex(cwd).initialize();
+  const cacheFile = path.join(cwd, ".xiu", "index.json");
+  const cache = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+  for (const file of cache.files) delete file.changedMs;
+  await fs.writeFile(cacheFile, JSON.stringify(cache));
+  const upgraded = new ProjectIndex(cwd);
+  await upgraded.initialize();
+  assert.equal(upgraded.status().indexed, 1);
+  const reused = new ProjectIndex(cwd);
+  await reused.initialize();
+  assert.equal(reused.status().indexed, 0);
+  assert.equal(reused.status().reused, 1);
+});
+
+test("find_relevant_code refreshes externally added and changed search terms after the freshness window", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-search-freshness-"));
+  await fs.writeFile(path.join(cwd, "existing.ts"), "export const oldSearchMarker = true;\n");
+  let now = 0;
+  const index = new ProjectIndex(cwd, () => now);
+  const discover = t.mock.method(index as unknown as { discover(): Promise<unknown> }, "discover");
+  const tool = createProjectIndexTools(index).find((candidate) => candidate.name === "find_relevant_code")!;
+  assert.match(await tool.execute({ query: "oldSearchMarker" }, { cwd }), /existing\.ts/);
+  await fs.writeFile(path.join(cwd, "existing.ts"), "export const changedSearchMarker = true;\n");
+  await fs.writeFile(path.join(cwd, "added.ts"), "export const addedSearchMarker = true;\n");
+  await tool.execute({ query: "addedSearchMarker" }, { cwd });
+  assert.equal(discover.mock.callCount(), 1);
+  now += 5_000;
+  // Exercise the actual tool entry point with no initialize/profile/symbol call
+  // to refresh the cache on its behalf.
+  assert.match(await tool.execute({ query: "addedSearchMarker" }, { cwd }), /added\.ts/);
+  assert.match(await tool.execute({ query: "changedSearchMarker" }, { cwd }), /existing\.ts/);
+  assert.equal(await tool.execute({ query: "oldSearchMarker" }, { cwd }), "No relevant files found.");
+  assert.equal(discover.mock.callCount(), 2);
+});

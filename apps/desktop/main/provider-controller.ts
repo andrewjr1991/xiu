@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
-import { ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
+import { ProviderConfigurationError } from "../../../src/provider-config-migration.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWindowsSystemCredentialStore } from "../../../src/system-credential-store.js";
@@ -23,7 +24,7 @@ import type {
 
 type ProviderRegistryLike = Pick<ProviderRegistry,
   "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
->;
+> & Partial<Pick<ProviderRegistry, "load">>;
 
 interface ProviderControllerDependencies {
   registry?: ProviderRegistryLike;
@@ -74,24 +75,22 @@ export class DesktopProviderController {
   }
 
   snapshot(providerId?: string, discoveryError?: string): DesktopProviderSnapshot {
+    const templates: DesktopProviderUpsertRequest[] = BUILTIN_PROVIDER_PROFILES.map((profile) => ({
+      id: profile.id, name: profile.name, kind: profile.kind, model: profile.model,
+      baseURL: profile.baseURL, capabilityModels: { ...profile.capabilityModels },
+      features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
+    }));
     const allProfiles = this.registry.list();
     const activeProviderId = this.registry.activeId() && this.registry.get(this.registry.activeId()!)
       ? this.registry.activeId()!
-      : "openai";
-    const activeProfile = this.registry.get(activeProviderId) ?? allProfiles[0]!;
+      : allProfiles[0]?.id ?? "";
+    const activeProfile = this.registry.get(activeProviderId);
+    if (!activeProfile) return { templates, activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {} };
     const activeModel = this.registry.activeModel(activeProfile.id) ?? activeProfile.model;
     const modelProfile = this.registry.get(providerId ?? activeProviderId) ?? activeProfile;
     const model = this.registry.activeModel(modelProfile.id) ?? modelProfile.model;
     const credentials = new Map(this.registry.credentialInfo().map((item) => [item.providerId, item]));
-    const profiles = allProfiles.filter((profile) => {
-      const source = credentials.get(profile.id)?.source ?? "missing";
-      const hasCredential = source !== "missing";
-      const hasDiscoveredModels = (this.discovered.get(profile.id)?.length ?? 0) > 0;
-      return profile.id === activeProviderId
-        || hasCredential
-        || hasDiscoveredModels
-        || (!profile.builtin && KEY_OPTIONAL.has(profile.kind));
-    }).sort((left, right) => left.id === activeProviderId ? -1 : right.id === activeProviderId ? 1 : left.name.localeCompare(right.name, "zh-CN"));
+    const profiles = allProfiles.sort((left, right) => left.id === activeProviderId ? -1 : right.id === activeProviderId ? 1 : left.name.localeCompare(right.name, "zh-CN"));
     const modelsByProvider = Object.fromEntries(profiles.map((profile) => {
       const selected = this.registry.activeModel(profile.id) ?? profile.model;
       return [profile.id, this.modelOptions(profile, selected)];
@@ -104,6 +103,7 @@ export class DesktopProviderController {
     }]));
     const models = modelsByProvider[modelProfile.id] ?? [];
     return {
+      templates,
       activeProviderId,
       activeModel,
       modelProviderId: modelProfile.id,
@@ -133,6 +133,12 @@ export class DesktopProviderController {
     };
   }
 
+  /** Explicit picker refresh reloads configuration; never retries a mutation or clears recovery locks. */
+  async refresh(): Promise<DesktopProviderSnapshot> {
+    try { await this.registry.load?.(); return this.snapshot(); }
+    catch (error) { throw new Error(providerConfigurationMessage(error) ?? "无法读取渠道配置，请查看配置诊断；配置未被重置。"); }
+  }
+
   async discover(workspace: string, request: DesktopProviderModelsRequest): Promise<DesktopProviderSnapshot> {
     const profile = this.profile(request?.providerId);
     const model = this.registry.activeModel(profile.id) ?? profile.model;
@@ -148,12 +154,14 @@ export class DesktopProviderController {
   async select(request: DesktopProviderSelectRequest): Promise<DesktopProviderSnapshot> {
     const profile = this.profile(request?.providerId);
     const model = this.model(request?.model);
-    if (request?.capability) {
-      if (!["vision", "image", "video", "audio"].includes(request.capability)) throw new Error("模型能力类型无效。");
-      await this.registry.setCapabilityModel(profile.id, request.capability, model);
-    } else {
-      await this.registry.setActive(profile.id, model);
-    }
+    try {
+      if (request?.capability) {
+        if (!["vision", "image", "video", "audio"].includes(request.capability)) throw new Error("模型能力类型无效。");
+        await this.registry.setCapabilityModel(profile.id, request.capability, model);
+      } else {
+        await this.registry.setActive(profile.id, model);
+      }
+    } catch (error) { throw new Error(providerConfigurationMessage(error) ?? this.safeError(error, profile)); }
     return this.snapshot(profile.id);
   }
 
@@ -225,6 +233,7 @@ export class DesktopProviderController {
     try {
       await this.registry.upsert(profile);
       if (request.apiKey) await this.saveCredential({ providerId: id, apiKey: request.apiKey });
+      if (!this.registry.activeId()) await this.registry.setActive(id, model);
     } catch (error) {
       try { if (previous) await this.registry.upsert(previous); else await this.registry.remove(id); } catch { /* Keep the original safe failure. */ }
       throw new Error(this.safeError(error, previous ?? profile));
@@ -236,8 +245,9 @@ export class DesktopProviderController {
     if (request?.confirmed !== true) throw new Error("删除渠道需要明确确认。");
     const profile = this.profile(request?.providerId);
     if (profile.builtin) throw new Error("内置渠道不能删除。");
-    if (this.registry.activeId() === profile.id) throw new Error("请先切换到其他渠道，再删除当前渠道。");
     await this.registry.remove(profile.id);
+    const remaining = this.registry.list()[0];
+    if (!this.registry.activeId() && remaining) await this.registry.setActive(remaining.id, this.registry.activeModel(remaining.id) ?? remaining.model);
     this.discovered.delete(profile.id);
     await this.saveModelCache();
     return this.snapshot();
@@ -337,4 +347,17 @@ export class DesktopProviderController {
       await fs.unlink(temporary).catch(() => undefined);
     }
   }
+}
+
+export function providerConfigurationMessage(error: unknown): string | undefined {
+  if (!(error instanceof ProviderConfigurationError)) return undefined;
+  const messages: Record<string, string> = {
+    reload: "上次配置保存失败或配置已变化。请关闭并重新打开模型选择器，核对最新配置后再选择；未自动重试或恢复。",
+    restart: "Provider 配置已恢复，必须退出并重新打开 Xiu；重新读取不能解除此限制。",
+    changed: "渠道配置已被其他客户端修改。本次切换未提交，请重新打开模型选择器核对配置。",
+    busy: "渠道配置存在活动或中断写锁。请先关闭其他 Xiu 客户端；中断写锁只能通过配置诊断中的显式确认处理。",
+    io: "渠道配置保存失败，未自动重试或恢复。请检查文件占用或企业策略，再重新打开模型选择器核对实际配置；备份已保留。",
+    unsafe: "渠道配置存储未通过安全检查，本次操作已阻止；请查看配置诊断，不要降低文件权限。",
+  };
+  return messages[error.code] ?? "渠道配置检查失败，配置未被重置。请查看配置诊断。";
 }

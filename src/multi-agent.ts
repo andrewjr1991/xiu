@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentTool, ApprovalRequest } from "./types.js";
 import { WorktreeManager, type WorktreeInfo, type WorktreeMergeAnalysis } from "./worktree.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import { sanitizeSecrets } from "./secret-redaction.js";
+import { captureVerificationStamp, type VerificationEvidence } from "./verification.js";
 
 export type SubagentRole = "explorer" | "implementer" | "reviewer" | "tester";
 export type SubagentMode = "shared_readonly" | "worktree";
@@ -40,6 +42,15 @@ export interface SubagentTask extends SubagentTaskInput {
   stats?: SubagentStats;
   worktree?: WorktreeInfo;
   integration?: SubagentIntegrationRecord;
+  inspection?: SubagentInspection;
+}
+
+export interface SubagentInspection {
+  targetTaskId: string;
+  baseCommit: string;
+  patchDigest: string;
+  observedAt: string;
+  verification?: VerificationEvidence;
 }
 
 export interface IntegrationEvidence {
@@ -88,9 +99,14 @@ export interface TaskExecutionContext {
 export interface TaskExecutionResult {
   result: string;
   stats: SubagentStats;
+  verification?: VerificationEvidence;
 }
 
 export type SubagentExecutor = (task: SubagentTask, context: TaskExecutionContext) => Promise<TaskExecutionResult>;
+
+export function requireCompletedSubagent(status: { outcome: string; failureReason?: string }): void {
+  if (status.outcome !== "completed") throw new Error(`Subagent outcome: ${status.outcome}${status.failureReason ? ` (${status.failureReason})` : ""}`);
+}
 
 export function selectSubagentTools(tools: AgentTool[], mode: SubagentMode): AgentTool[] {
   return mode === "shared_readonly" ? tools.filter((tool) => tool.risk === "read") : [...tools];
@@ -116,11 +132,14 @@ function safeId(value: string, label: string): string {
 
 export function validateTaskGraph(tasks: SubagentTaskInput[]): void {
   if (!tasks.length) throw new Error("At least one agent task is required.");
+  if (tasks.length > 80) throw new Error("At most 80 agent tasks are allowed in one run.");
   const ids = new Set<string>();
   for (const task of tasks) {
     const id = safeId(task.id, "task id");
     if (ids.has(id)) throw new Error(`Duplicate agent task id: ${id}`);
     if (!task.title.trim() || !task.instructions.trim()) throw new Error(`Agent task ${id} needs a title and instructions.`);
+    if (task.title.length > 240 || task.instructions.length > 16_000) throw new Error(`Agent task ${id} exceeds text limits.`);
+    if (!["explorer", "implementer", "reviewer", "tester"].includes(task.role) || task.mode !== undefined && !["shared_readonly", "worktree"].includes(task.mode)) throw new Error(`Agent task ${id} has an invalid role or mode.`);
     if (task.maxTurns !== undefined && (!Number.isInteger(task.maxTurns) || task.maxTurns < 1 || task.maxTurns > 100)) {
       throw new Error(`Agent task ${id} maxTurns must be an integer from 1 to 100.`);
     }
@@ -169,13 +188,53 @@ function evidencePassed(result: string | undefined): boolean {
   return /^VERDICT\s*:\s*PASS\.?$/i.test(finalLine) || /^(?:结论|审查|测试|验证)\s*[:：]\s*(?:通过|合格)[。.]?$/u.test(finalLine);
 }
 
-export function collectIntegrationEvidence(run: SubagentRun, targetId: string): IntegrationEvidence {
+function patchDigest(patch: string): string { return createHash("sha256").update(patch).digest("hex"); }
+
+function pathIdentity(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export async function collectIntegrationEvidence(run: SubagentRun, targetId: string, current?: Pick<WorktreeMergeAnalysis, "patch" | "changedFiles">): Promise<IntegrationEvidence> {
+  const target = run.tasks.find((task) => task.id === targetId);
+  const digest = current ? patchDigest(current.patch) : undefined;
   const related = run.tasks.filter((task) => dependsOn(run, task, targetId));
-  const reviewers = related.filter((task) => task.role === "reviewer" && task.mode === "shared_readonly" && task.status === "completed" && evidencePassed(task.result)).map((task) => task.id);
-  const testers = related.filter((task) => task.role === "tester" && task.mode === "shared_readonly" && task.status === "completed" && evidencePassed(task.result)).map((task) => task.id);
+  const inspected = related.filter((task) => task.mode === "shared_readonly" && task.status === "completed" && evidencePassed(task.result)
+    && digest && task.inspection?.targetTaskId === targetId && task.inspection.patchDigest === digest
+    && task.inspection.baseCommit === target?.worktree?.baseCommit);
+  const reviewers = inspected.filter((task) => task.role === "reviewer").map((task) => task.id);
+  const testers: string[] = [];
+  for (const task of inspected.filter((candidate) => candidate.role === "tester")) {
+    const evidence = task.inspection?.verification;
+    if (!evidence || evidence.version !== 1 || !target?.worktree || !current?.changedFiles.length
+      || !Array.isArray(evidence.checks) || !evidence.checks.length || evidence.checks.length > 64
+      || !Array.isArray(evidence.explicitPaths) || !evidence.explicitPaths.length || evidence.explicitPaths.length > 64) continue;
+    try {
+      const root = await fs.realpath(target.worktree.path);
+      if (pathIdentity(evidence.cwd) !== pathIdentity(root)) continue;
+      const observed = Date.parse(evidence.observedAt);
+      const started = Date.parse(task.startedAt ?? ""), completed = Date.parse(task.completedAt ?? "");
+      if (![observed, started, completed].every(Number.isFinite) || observed < started || observed > completed) continue;
+      // shared_readonly does not acquire command execution. Its concrete evidence
+      // is bounded artifact validation and must cover every file in this patch.
+      const verifiedFiles = new Set<string>();
+      let valid = true;
+      for (const check of evidence.checks) {
+        if (check.toolName !== "verify_output" || typeof check.path !== "string" || check.path.length > 4096) { valid = false; break; }
+        const relative = path.relative(root, path.resolve(root, check.path));
+        if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)
+          || !evidence.explicitPaths.includes(check.path)) { valid = false; break; }
+        verifiedFiles.add(pathIdentity(path.join(root, relative)));
+      }
+      if (!valid || !current.changedFiles.every((file) => verifiedFiles.has(pathIdentity(path.resolve(root, file))))) continue;
+      if (evidence.workspaceStamp !== await captureVerificationStamp(root, evidence.explicitPaths)) continue;
+      testers.push(task.id);
+    } catch { /* Missing, unsafe, malformed, or stale evidence fails closed. */ }
+  }
   const blockers: string[] = [];
-  if (!reviewers.length) blockers.push("A completed reviewer dependency with VERDICT: PASS is required.");
-  if (!testers.length) blockers.push("A completed tester dependency with VERDICT: PASS is required.");
+  if (current && current.changedFiles.length > 64) blockers.push("Bounded artifact verification supports at most 64 changed files per implementation task; split this patch into smaller tasks.");
+  if (!reviewers.length) blockers.push("A completed reviewer dependency with VERDICT: PASS bound to the current patch is required.");
+  if (!testers.length) blockers.push("A completed tester dependency with fresh program-observed verify_output evidence for every changed file and VERDICT: PASS is required. Text-only PASS is not verification; shared_readonly cannot execute tests.");
   return { reviewers, testers, blockers };
 }
 
@@ -208,6 +267,7 @@ export class MultiAgentCoordinator {
     private readonly executor: SubagentExecutor,
     private readonly events: MultiAgentEvents = {},
     private readonly defaultConcurrency = 3,
+    private readonly secrets: readonly string[] = [],
   ) {
     this.worktrees = new WorktreeManager(cwd);
   }
@@ -222,6 +282,9 @@ export class MultiAgentCoordinator {
         const run = JSON.parse(await fs.readFile(path.join(this.directory(), name), "utf8")) as SubagentRun;
         let changed = false;
         for (const task of run.tasks) {
+          // Persisted JSON is display/history, not proof of program execution in
+          // this coordinator. Re-run specialists to establish fresh receipts.
+          task.inspection = undefined;
           if (task.status === "running") {
             task.status = "interrupted";
             task.error = "Xiu exited while this agent was running. Retry it to continue.";
@@ -259,16 +322,26 @@ export class MultiAgentCoordinator {
         mode: task.mode ?? defaultMode(task.role),
         status: "pending",
         createdAt,
+        inspection: undefined,
       })),
     };
     this.runs.set(id, run);
     await this.persist(run);
+    for (const task of run.tasks) this.events.onTaskUpdate?.(cloneRun(run), structuredClone(task));
     this.launchDriver(run);
     return cloneRun(run);
   }
 
   list(): SubagentRun[] {
     return [...this.runs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(cloneRun);
+  }
+
+  /** No child may outlive a detached desktop host or its parent task. */
+  async shutdown(): Promise<void> {
+    for (const run of this.list()) for (const task of run.tasks) {
+      if (["pending", "running"].includes(task.status)) await this.cancel(run.id, task.id);
+    }
+    await Promise.allSettled([...this.drivers.values()]);
   }
 
   get(runId: string): SubagentRun {
@@ -304,7 +377,8 @@ export class MultiAgentCoordinator {
   async retry(runId: string, taskId: string): Promise<SubagentRun> {
     const run = this.resolveRun(runId);
     const task = this.resolveTask(run, taskId);
-    if (!retryableStatuses.has(task.status)) throw new Error(`Agent task ${task.id} is ${task.status}, not retryable.`);
+    const repeatInspection = task.status === "completed" && task.mode === "shared_readonly" && ["reviewer", "tester"].includes(task.role);
+    if (!retryableStatuses.has(task.status) && !repeatInspection) throw new Error(`Agent task ${task.id} is ${task.status}, not retryable.`);
     task.status = "pending";
     task.error = undefined;
     task.result = undefined;
@@ -312,6 +386,7 @@ export class MultiAgentCoordinator {
     task.startedAt = undefined;
     task.completedAt = undefined;
     task.stats = undefined;
+    task.inspection = undefined;
     run.status = "running";
     run.updatedAt = now();
     await this.persist(run);
@@ -331,7 +406,7 @@ export class MultiAgentCoordinator {
     if (task.status !== "completed") throw new Error(`Only completed agent tasks can be integrated; ${task.id} is ${task.status}.`);
     if (!task.worktree) throw new Error(`Agent task ${task.id} has no Worktree.`);
     const analysis = await this.worktrees.analyze(task.worktree);
-    const evidence = collectIntegrationEvidence(run, task.id);
+    const evidence = await collectIntegrationEvidence(run, task.id, analysis);
     const blockers = [
       ...analysis.conflicts.map((conflict) => `${conflict.kind}: ${conflict.detail}`),
       ...evidence.blockers,
@@ -357,7 +432,7 @@ export class MultiAgentCoordinator {
     const plan = await this.analyzeIntegration(run.id, task.id);
     if (!plan.canIntegrate) throw new Error(`Agent patch was not applied: ${plan.blockers.join(" ")}`);
     try {
-      const result = await this.worktrees.integrate(task.worktree!);
+      const result = await this.worktrees.integrate(task.worktree!, plan.analysis.patch);
       task.integration = { ...task.integration!, status: "applied", updatedAt: now() };
       run.updatedAt = now();
       await this.persist(run);
@@ -433,6 +508,8 @@ export class MultiAgentCoordinator {
     task.completedAt = undefined;
     task.error = undefined;
     let taskCwd = this.cwd;
+    let inspectionTarget: SubagentTask | undefined;
+    let beforePatch: string | undefined;
     try {
       if (task.mode === "worktree") {
         task.progress = "Creating isolated Git Worktree";
@@ -441,7 +518,12 @@ export class MultiAgentCoordinator {
         taskCwd = task.worktree.path;
       } else if (task.role === "reviewer" || task.role === "tester") {
         const inherited = inheritedWorktree(run, task);
-        if (inherited) taskCwd = inherited.path;
+        if (inherited) {
+          taskCwd = inherited.path;
+          inspectionTarget = run.tasks.find((candidate) => candidate.role === "implementer" && candidate.worktree
+            && pathIdentity(candidate.worktree.path) === pathIdentity(inherited.path) && dependsOn(run, task, candidate.id));
+          if (inspectionTarget) beforePatch = patchDigest(await this.worktrees.diff(inherited));
+        }
       }
       await this.changed(run, task);
       const dependencies = task.dependencies.map((id) => this.resolveTask(run, id));
@@ -457,6 +539,13 @@ export class MultiAgentCoordinator {
         },
       });
       if (controller.signal.aborted) return;
+      if (inspectionTarget?.worktree && beforePatch === patchDigest(await this.worktrees.diff(inspectionTarget.worktree))) {
+        task.inspection = {
+          targetTaskId: inspectionTarget.id, baseCommit: inspectionTarget.worktree.baseCommit,
+          patchDigest: beforePatch!, observedAt: now(),
+          ...(task.role === "tester" && execution.verification ? { verification: structuredClone(execution.verification) } : {}),
+        };
+      }
       task.status = "completed";
       task.result = execution.result;
       task.stats = execution.stats;
@@ -478,7 +567,15 @@ export class MultiAgentCoordinator {
   }
 
   private async persist(run: SubagentRun): Promise<void> {
-    const snapshot = JSON.stringify(run, null, 2);
+    const safe = sanitizeSecrets(run, this.secrets);
+    safe.goal = safe.goal.slice(0, 4_000);
+    for (const task of safe.tasks) {
+      task.instructions = task.instructions.slice(0, 16_000);
+      if (task.result) task.result = task.result.slice(0, 16_000);
+      if (task.progress) task.progress = task.progress.slice(0, 2_000);
+      if (task.error) task.error = task.error.slice(0, 2_000);
+    }
+    const snapshot = JSON.stringify(safe, null, 2);
     const file = this.file(run.id);
     const temporary = `${file}.tmp`;
     this.persistQueue = this.persistQueue.then(async () => {
@@ -537,9 +634,11 @@ export function formatIntegrationPlan(plan: AgentIntegrationPlan, language: UiLa
       if (conflict.kind === "symbol") return localize(language, `双方同时修改了符号：${conflict.symbols?.join(", ") ?? ""}`, conflict.detail);
       return localize(language, `Git 补丁预检失败：${conflict.detail}`, `Git patch preflight failed: ${conflict.detail}`);
     }),
-    ...plan.evidence.blockers.map((blocker) => blocker.startsWith("A completed reviewer")
-      ? localize(language, "缺少以 VERDICT: PASS 结束的 Reviewer 审查证据。", blocker)
-      : localize(language, "缺少以 VERDICT: PASS 结束的 Tester 测试证据。", blocker)),
+    ...plan.evidence.blockers.map((blocker) => blocker.startsWith("Bounded artifact")
+      ? localize(language, "单个实现任务最多验证 64 个变更文件；请拆分为更小的任务。", blocker)
+      : blocker.startsWith("A completed reviewer")
+      ? localize(language, "缺少绑定当前补丁且以 VERDICT: PASS 结束的 Reviewer 审查证据。", blocker)
+      : localize(language, "缺少绑定当前补丁的 Tester 程序验证证据：须通过 verify_output 验证全部变更文件并以 VERDICT: PASS 结束。纯文本 PASS 不算验证；只读子任务不能执行测试命令。", blocker)),
   ];
   const blockerList = displayedBlockers.length ? displayedBlockers.map((item) => `  - ${item}`).join("\n") : localize(language, "  无", "  none");
   return [
@@ -621,7 +720,7 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
     },
     {
       name: "retry_agent",
-      description: "Retry one failed, cancelled, interrupted, or blocked agent task.",
+      description: "Retry a failed, cancelled, interrupted, or blocked task, or re-run a completed read-only reviewer/tester to refresh integration evidence.",
       risk: "execute",
       replaySafety: "side-effecting",
       maxAttempts: 1,
@@ -635,7 +734,7 @@ export function createMultiAgentTools(coordinator: MultiAgentCoordinator): Agent
     {
       name: "integrate_agent",
       description: "Apply a completed Worktree agent's patch to the main workspace after conflict checking. Review the preview and run verification afterward.",
-      risk: "write",
+      risk: "dangerous",
       changesWorkspace: true,
       inputSchema: { type: "object", properties: { run_id: { type: "string" }, task_id: { type: "string" } }, required: ["run_id", "task_id"], additionalProperties: false },
       describe: (input) => `integrate agent ${String(input.task_id ?? "")} changes`,

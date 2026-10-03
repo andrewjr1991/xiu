@@ -42,13 +42,14 @@ class FakeDriver implements RuntimeTaskDriver {
   status() { return { outcome: this.outcome }; }
 }
 
-test("desktop approval modes never auto-approve dangerous actions and keep workspace automation scoped", () => {
+test("desktop approval modes keep danger confirmation except in explicitly enabled full access", () => {
   assert.equal(canAutomaticallyApprove("ask", { risk: "write", sessionScope: "workspace-files:write" }), false);
   assert.equal(canAutomaticallyApprove("workspace", { risk: "write", sessionScope: "workspace-files:write" }), true);
   assert.equal(canAutomaticallyApprove("workspace", { risk: "execute", sessionScope: "project-verification" }), true);
-  assert.equal(canAutomaticallyApprove("workspace", { risk: "execute", sessionScope: "run-process:publish" }), false);
+  assert.equal(canAutomaticallyApprove("workspace", { risk: "execute", sessionScope: "run-process:publish" }), true);
+  assert.equal(canAutomaticallyApprove("workspace", { risk: "dangerous", sessionScope: "dangerous:delete" }), false);
   assert.equal(canAutomaticallyApprove("full", { risk: "execute", sessionScope: "run-process:test" }), true);
-  assert.equal(canAutomaticallyApprove("full", { risk: "dangerous", sessionScope: "dangerous:delete" }), false);
+  assert.equal(canAutomaticallyApprove("full", { risk: "dangerous", sessionScope: "dangerous:delete" }), true);
 });
 
 test("runtime emits a monotonic task stream and preserves one active task", async () => {

@@ -43,7 +43,7 @@ function uniqueFiles(values: string[]): string[] {
   return [...new Set(values.map(normalizedFile).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
-function parseFileList(value: string): string[] { return uniqueFiles(value.split(/\r?\n/)); }
+function parseFileList(value: string): string[] { return uniqueFiles(value.split("\0")); }
 
 function isDependencyFile(file: string): boolean { return dependencyFiles.has(path.posix.basename(normalizedFile(file)).toLowerCase()); }
 
@@ -70,7 +70,7 @@ function safeSegment(value: string): string {
 async function git(cwd: string, args: string[], maxBuffer = 4 * 1024 * 1024): Promise<string> {
   try {
     const result = await execFileAsync("git", args, { cwd, windowsHide: true, timeout: 60_000, maxBuffer, encoding: "utf8" });
-    return result.stdout.trim();
+    return args.includes("-z") ? result.stdout : result.stdout.trim();
   } catch (error) {
     const failure = error as Error & { stderr?: string };
     throw new Error((failure.stderr || failure.message).trim());
@@ -129,7 +129,7 @@ export class WorktreeManager {
   async diff(info: WorktreeInfo): Promise<string> {
     this.validateTarget(info.path);
     const tracked = await git(info.path, ["diff", "--binary", info.baseCommit, "--"]);
-    const untracked = (await git(info.path, ["ls-files", "--others", "--exclude-standard"])).split(/\r?\n/).filter(Boolean);
+    const untracked = (await git(info.path, ["ls-files", "-z", "--others", "--exclude-standard"])).split("\0").filter(Boolean);
     const additions: string[] = [];
     for (const file of untracked) {
       const full = path.resolve(info.path, file);
@@ -143,15 +143,15 @@ export class WorktreeManager {
   }
 
   private async filesChangedFrom(cwd: string, baseCommit: string): Promise<string[]> {
-    const tracked = parseFileList(await git(cwd, ["diff", "--name-only", baseCommit, "--"]));
-    const untracked = parseFileList(await git(cwd, ["ls-files", "--others", "--exclude-standard"]));
+    const tracked = parseFileList(await git(cwd, ["diff", "--name-only", "-z", baseCommit, "--"]));
+    const untracked = parseFileList(await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]));
     return uniqueFiles([...tracked, ...untracked]);
   }
 
   private async dirtyFiles(): Promise<string[]> {
-    const tracked = parseFileList(await git(this.cwd, ["diff", "--name-only", "HEAD", "--"]));
-    const staged = parseFileList(await git(this.cwd, ["diff", "--name-only", "--cached", "HEAD", "--"]));
-    const untracked = parseFileList(await git(this.cwd, ["ls-files", "--others", "--exclude-standard"]));
+    const tracked = parseFileList(await git(this.cwd, ["diff", "--name-only", "-z", "HEAD", "--"]));
+    const staged = parseFileList(await git(this.cwd, ["diff", "--name-only", "-z", "--cached", "HEAD", "--"]));
+    const untracked = parseFileList(await git(this.cwd, ["ls-files", "-z", "--others", "--exclude-standard"]));
     return uniqueFiles([...tracked, ...staged, ...untracked]);
   }
 
@@ -212,8 +212,11 @@ export class WorktreeManager {
     return { patch, patchFile, changedFiles, mainChangesSinceBase, dirtyMainFiles, conflicts, canIntegrate: conflicts.length === 0 };
   }
 
-  async integrate(info: WorktreeInfo): Promise<string> {
+  async integrate(info: WorktreeInfo, expectedPatch?: string): Promise<string> {
     const analysis = await this.analyze(info);
+    if (expectedPatch !== undefined && analysis.patch !== expectedPatch) {
+      throw new Error("Agent patch changed after its evidence was checked. Re-run review and verification before integration; the Worktree was preserved.");
+    }
     if (analysis.patch === "No changes in this Agent Worktree.") return analysis.patch;
     if (!analysis.canIntegrate || !analysis.patchFile) {
       const details = analysis.conflicts.map((conflict) => `${conflict.kind}: ${conflict.detail}`).join("; ");

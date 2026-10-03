@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import fg from "fast-glob";
+import fg from "./glob.js";
 import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool } from "./types.js";
+import { extractSkillArchive, readSkillImportFile } from "./skill-archive.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_SKILL_FILES = 300;
@@ -58,6 +59,11 @@ function safeName(value: string): string {
   return normalized;
 }
 
+function importFolderName(value: string): string {
+  // A Chinese Downloads/package name must not reject a skill with a valid manifest name.
+  try { return safeName(value); } catch { return "imported-skill"; }
+}
+
 function skillPermissions(meta: Record<string, string>): { permissions: ExtensionPermission[]; unknown: string[]; declared: boolean } {
   const declared = Object.hasOwn(meta, "permissions");
   const parsed = parseExtensionPermissions(meta.permissions);
@@ -98,10 +104,35 @@ async function copyTree(source: string, destination: string): Promise<void> {
         fileCount++;
         if (totalBytes > MAX_INSTALL_BYTES || fileCount > 1000) throw new Error("Skill package exceeds the 20 MB or 1000-file safety limit");
         await fs.copyFile(from, to);
-      }
+      } else throw new Error("Skill packages may only contain regular files and directories.");
     }
   }
   await copy(source, destination);
+}
+
+/** Prepare local packages without executing scripts or writing installed skills. */
+export async function stageLocalSkillPackage(source: string, destination: string): Promise<Array<{ name: string; permissions: ExtensionPermission[]; warnings: string[] }>> {
+  const root = await fs.lstat(source);
+  if (root.isSymbolicLink()) throw new Error("Skill sources may not be links.");
+  if (root.isDirectory()) await copyTree(source, destination);
+  else if (root.isFile() && path.basename(source).toLowerCase() === "skill.md") {
+    // Import only the selected file, not potentially unrelated siblings.
+    const target = path.join(destination, importFolderName(path.basename(path.dirname(source))));
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "SKILL.md"), await readSkillImportFile(source), { flag: "wx" });
+  } else if (root.isFile() && path.extname(source).toLowerCase() === ".zip") {
+    await extractSkillArchive(source, path.join(destination, importFolderName(path.basename(source, path.extname(source)))));
+  }
+  else throw new Error("Select a local directory, SKILL.md or ZIP package.");
+  const files = await fg("**/SKILL.md", { cwd: destination, absolute: true, onlyFiles: true, unique: true, ignore: ["**/.git/**"] });
+  if (!files.length || files.length > 100) throw new Error("Skill package must contain 1-100 SKILL.md files.");
+  const items = await Promise.all(files.map(async (file) => {
+    const meta = frontmatter(await fs.readFile(file, "utf8"));
+    const parsed = skillPermissions(meta);
+    return { name: safeName(meta.name || path.basename(path.dirname(file))), permissions: parsed.permissions, warnings: parsed.unknown };
+  }));
+  if (new Set(items.map((item) => item.name)).size !== items.length || items.some((item) => item.name.length > 128 || item.warnings.length)) throw new Error("Duplicate skills, oversized names or unknown permissions are not installable.");
+  return items;
 }
 
 export class SkillRegistry {

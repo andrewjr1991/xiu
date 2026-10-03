@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { captureTaskBaseline } from "./task-changes.js";
 import { toolCallSignature } from "./loop-guard.js";
-import { resolveWorkspacePath } from "./workspace-path.js";
+import { resolveToolPath } from "./workspace-path.js";
 
 export function isVerificationCommand(command: string): boolean {
   // Do not infer evidence from text printed by shell snippets or informational modes.
@@ -69,6 +69,7 @@ function normalizedVerificationPath(value: unknown): string | undefined {
 export function verifyOutputSupersedes(current: Record<string, unknown>, previous: Record<string, unknown>): boolean {
   const currentPath = normalizedVerificationPath(current.path);
   if (!currentPath || currentPath !== normalizedVerificationPath(previous.path)) return false;
+  if (current.exists === false || previous.exists === false) return current.exists === false && previous.exists === false;
   const currentRequired = stringExpectations(current, "required_substrings");
   const currentForbidden = stringExpectations(current, "forbidden_substrings");
   // Requiring a longer string also proves every substring within it exists.
@@ -84,6 +85,16 @@ export function verifyOutputSupersedes(current: Record<string, unknown>, previou
   const currentMaximum = typeof current.max_bytes === "number" ? current.max_bytes : Number.POSITIVE_INFINITY;
   const previousMaximum = typeof previous.max_bytes === "number" ? previous.max_bytes : Number.POSITIVE_INFINITY;
   return currentMaximum <= previousMaximum;
+}
+
+/** Program-observed checks only. No model text, command arguments, or artifact contents. */
+export interface VerificationEvidence {
+  version: 1;
+  cwd: string;
+  observedAt: string;
+  workspaceStamp: string;
+  explicitPaths: string[];
+  checks: Array<{ toolName: string; path?: string }>;
 }
 
 export class VerificationLedger {
@@ -105,6 +116,12 @@ export class VerificationLedger {
   }
   get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every((value) => value.passed); }
   get failed(): boolean { return [...this.checks.values()].some((value) => !value.passed); }
+  evidenceChecks(): VerificationEvidence["checks"] {
+    if (!this.passed || this.checks.size > 64) return [];
+    return [...this.checks.values()].flatMap(({ name, input }) => name
+      ? [{ toolName: name, ...(name === "verify_output" && typeof input?.path === "string" ? { path: input.path } : {}) }]
+      : []);
+  }
   snapshot(): { revision: number; checks: Array<{ check: string; passed: boolean }> } {
     return { revision: this.revision, checks: [...this.checks].map(([check, value]) => ({ check, passed: value.passed })) };
   }
@@ -113,10 +130,10 @@ export class VerificationLedger {
 const MAX_EXPLICIT_PATHS = 64;
 const MAX_EXPLICIT_BYTES = 256 * 1024;
 
-async function explicitFileStamp(root: string, requested: string): Promise<unknown[]> {
+async function explicitFileStamp(root: string, requested: string, accessMode?: "workspace" | "full"): Promise<unknown[]> {
   // Unlike the general coding diff, an explicitly verified artifact may be Git
   // ignored. Read only its digest; never retain text or bypass real-path checks.
-  const target = resolveWorkspacePath(root, requested);
+  const target = resolveToolPath({ cwd: root, accessMode }, requested);
   const relative = path.relative(root, target).replace(/\\/g, "/");
   if (!relative) throw new Error("Explicit verification target must be a file.");
   try {
@@ -129,7 +146,7 @@ async function explicitFileStamp(root: string, requested: string): Promise<unkno
     if (!before.isFile()) throw new Error("Explicit verification target is not a regular file.");
     const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
-      resolveWorkspacePath(root, requested);
+      resolveToolPath({ cwd: root, accessMode }, requested);
       const opened = await handle.stat();
       if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) throw new Error("Explicit verification target changed while opening.");
       const data = Buffer.alloc(Math.min(before.size, MAX_EXPLICIT_BYTES));
@@ -157,13 +174,13 @@ async function explicitFileStamp(root: string, requested: string): Promise<unkno
 /** Bounded freshness evidence, not an exhaustive repository proof. Explicit
  * artifacts include ignored files; large artifacts use a 256 KiB prefix plus
  * size/mtime/ctime. Unsafe/unreadable explicit paths fail closed. */
-export async function captureVerificationStamp(cwd: string, explicitPaths: readonly string[] = []): Promise<string> {
+export async function captureVerificationStamp(cwd: string, explicitPaths: readonly string[] = [], accessMode?: "workspace" | "full"): Promise<string> {
   const snapshot = await captureTaskBaseline(cwd);
   const files = [...snapshot.files].sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) =>
     [name, file.state, file.digest, file.bytes, file.digest ? undefined : file.modifiedAt, file.mode, file.omitted]);
   const paths = [...new Set(explicitPaths)].sort();
   if (paths.length > MAX_EXPLICIT_PATHS) throw new Error("Explicit verification target limit exceeded.");
   const explicit = [];
-  for (const target of paths) explicit.push(await explicitFileStamp(snapshot.root, target));
+  for (const target of paths) explicit.push(await explicitFileStamp(snapshot.root, target, accessMode));
   return createHash("sha256").update(JSON.stringify([snapshot.head, snapshot.complete, files, explicit])).digest("hex");
 }

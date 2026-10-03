@@ -98,3 +98,15 @@ test("different dependency manifests changed on each side still block integratio
   const dependency = analysis.conflicts.find((conflict) => conflict.kind === "dependency");
   assert.deepEqual(dependency?.files, ["package-lock.json", "package.json"]);
 });
+
+
+test("integration rejects a patch changed after evidence analysis", async () => {
+  const cwd = await repository();
+  const manager = new WorktreeManager(cwd);
+  const info = await manager.create("run-evidence", "changed");
+  await fs.writeFile(path.join(info.path, "added.txt"), "reviewed\n");
+  const expected = (await manager.analyze(info)).patch;
+  await fs.writeFile(path.join(info.path, "added.txt"), "changed\n");
+  await assert.rejects(manager.integrate(info, expected), /patch changed after its evidence/);
+  await assert.rejects(fs.access(path.join(cwd, "added.txt")));
+});

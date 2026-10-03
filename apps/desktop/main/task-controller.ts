@@ -1,16 +1,24 @@
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
+import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
+import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-management.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
 import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.js";
 import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
 import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
-import { recoveryContinuation, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
-import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
+import { recoveryContinuation, safeTaskPreview, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
+import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
 
 export type WorkspaceAgentHostFactory = (workspace: string) => Promise<WorkspaceAgentHost>;
 
 export class DesktopTaskController {
+  private disposing: Promise<void> = Promise.resolve();
+  private mcpBusy = false;
   private workspace?: string;
   private host?: WorkspaceAgentHost;
   private creating?: Promise<WorkspaceAgentHost>;
@@ -21,6 +29,12 @@ export class DesktopTaskController {
   private readonly runtimeEventBuffers = new Map<string, RuntimeEvent[]>();
   private eventPersistence: Promise<void> = Promise.resolve();
   private approvalMode: DesktopApprovalMode = "ask";
+  private fullAccessWorkspace?: string;
+  private permissionBusy = false;
+  private conversationBusy = false;
+  private modeContextId = randomUUID();
+  private planModeOnCreate?: { workspace: string; enabled: boolean };
+  private openingGeneration = 0;
 
   constructor(
     private readonly emit: (event: RuntimeEvent) => void,
@@ -36,27 +50,170 @@ export class DesktopTaskController {
       runtime: host.runtime.connect(afterSequence),
       ...(conversationId ? { conversationId } : {}),
       provider: { ...host.provider },
-      writer: activeHere ? "active-here" : lock?.active && lock.live ? "active-elsewhere" : "available",
+      writer: activeHere ? "active-here" : host.journal.persistenceFailure() ? "recovery-required" : lock?.active && lock.live ? (lock.ownedHere ? "recovery-required" : "active-elsewhere") : "available",
+      ...(host.journal.persistenceFailure() ? { journalWarning: `任务记录保存失败（${host.journal.persistenceFailure()}）。任务已停止，请检查文件权限或占用后退出并重新启动 Xiu，再确认恢复或放弃中断任务；不会自动重跑已执行操作。` }
+        : lock?.ownedHere && !activeHere ? { journalWarning: "本窗口的任务已结束，但运行记录或写锁尚未完成收尾。请退出并重新启动 Xiu，再确认恢复或放弃中断任务。" } : {}),
       approvalMode: this.approvalMode,
+      modeContextId: this.modeContextId,
     };
   }
 
-  async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection> {
+  async mcpSnapshot(workspace: string) {
+    const host = await this.ensure(workspace);
+    if (!host.mcp) throw new Error("当前运行时不支持 MCP。");
+    try { return await host.mcp.snapshot(); }
+    catch { throw new Error("MCP 配置无法读取，请检查用户或项目 .xiu/mcp.json（错误详情不含凭据）。"); }
+  }
+
+  async managementSnapshot(workspace: string) {
+    const host = await this.ensure(workspace);
+    if (!host.management) throw new Error("管理服务不可用。");
+    return host.management.snapshot();
+  }
+
+  async changeManagement(workspace: string, request: WorkspaceManagementRequest) {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
+    await this.assertCanReconfigure(workspace);
+    this.assertIdleContext(host, workspace, contextId);
+    if (!host.management) throw new Error("管理服务不可用。");
+    this.mcpBusy = true;
+    try { await host.management.change(request); }
+    catch { throw new Error("配置保存失败或已变化，请刷新后重试。"); }
+    finally { this.mcpBusy = false; }
+    return this.reload(workspace);
+  }
+
+  async prepareSkillInstallation(workspace: string, choose: () => Promise<string | undefined>) {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
+    await this.assertCanReconfigure(workspace);
+    this.assertIdleContext(host, workspace, contextId);
+    if (!host.management) throw new Error("管理服务不可用。");
+    this.mcpBusy = true;
+    try {
+      await host.management.cancelSkillPreview();
+      const source = await choose();
+      if (this.host !== host || this.workspace !== workspace || this.modeContextId !== contextId) throw new Error("上下文已变化。");
+      return source ? await host.management.prepareSkill(source) : undefined;
+    } catch { throw new Error("无法预览此技能包。请选择文件夹、SKILL.md 或 ZIP；包须未安装、无链接、无重复技能且权限声明有效，大小不超过 20 MB、条目不超过 1000。"); }
+    finally { this.mcpBusy = false; }
+  }
+
+  async cancelSkillInstallation(workspace: string) {
+    const host = await this.ensure(workspace);
+    await host.management?.cancelSkillPreview();
+  }
+
+  async taskDiagnostics(workspace: string) {
+    const host = await this.ensure(workspace);
+    const run = await host.journal.latest();
+    const clean = (value: string) => (host.sanitize?.(value) ?? redactSecrets(value)).slice(0, 60_000);
+    return { report: clean(run ? formatExecutionReport(buildExecutionReport({ cwd: workspace, run }), "zh-CN") : "尚无任务报告。"),
+      diagnostics: clean(formatTaskDiagnostics(host.agent?.status().diagnostics, "zh-CN")) };
+  }
+
+  async changeMcp(workspace: string, action: "reload" | "disconnect" | "approve", request?: import("../shared/protocol.js").DesktopMcpApproveRequest) {
+    await this.assertCanReconfigure(workspace);
+    const host = await this.ensure(workspace);
+    if (!host.mcp) throw new Error("当前运行时不支持 MCP。");
+    this.mcpBusy = true;
+    try {
+      if (action === "approve") {
+        if (request?.confirmed !== true) throw new Error("confirmation required");
+        return await host.mcp.approve(request.name, request.fingerprint);
+      }
+      if (action === "reload") return await host.mcp.reload();
+      await host.mcp.close();
+      return await host.mcp.snapshot();
+    } catch {
+      throw new Error("MCP 操作未完成。请刷新并重新核对权限和配置。未自动重试，工具权限没有降级。");
+    } finally { this.mcpBusy = false; }
+  }
+
+  async manageMcp(workspace: string, request: import("../shared/protocol.js").DesktopMcpManageRequest) {
+    const host = await this.ensure(workspace);
+    if (!host.mcp || !request || !["save", "delete", "login", "logout", "oauth-decision", "oauth-cancel"].includes(request.action)) throw new Error("无效的 MCP 管理请求。");
+    try {
+      if (request.action === "oauth-decision") { host.mcp.decideLogin(request.flowId, request.allowed); return await host.mcp.snapshot(); }
+      if (request.action === "oauth-cancel") { host.mcp.cancelLogin(request.flowId); return await host.mcp.snapshot(); }
+      await this.assertCanReconfigure(workspace);
+      this.mcpBusy = true;
+      if (request.action === "save") return await host.mcp.save(request.draft);
+      if (request.action === "delete") return await host.mcp.remove(request.name, request.fingerprint, request.confirmed === true);
+      if (request.action === "logout") return await host.mcp.logout(request.name, request.fingerprint, request.confirmed === true);
+      if (request.action === "login") return await host.mcp.startLogin(request.name, request.fingerprint);
+      throw new Error("unknown action");
+    } catch {
+      throw new Error("MCP 管理未完成：请刷新配置，核对字段、权限清单及当前授权状态。含明文凭据或高级配置不可在此编辑；不会覆盖变化的配置或自动重试。");
+    } finally { this.mcpBusy = false; }
+  }
+
+  async browseMcp(workspace: string, request: import("../shared/protocol.js").DesktopMcpBrowseRequest) {
+    await this.assertCanReconfigure(workspace);
+    const host = await this.ensure(workspace);
+    if (!host.mcp || !request || !/^[A-Za-z0-9_-]{1,64}$/.test(request.name) || !["resources", "read", "prompts", "prompt"].includes(request.action)) throw new Error("无效的 MCP 浏览请求。");
+    this.mcpBusy = true;
+    try { return await host.mcp.browse(request.name, request.action, request.value, request.args); }
+    catch { throw new Error("MCP 内容未读取。请检查连接、权限与输入；不会自动重试或将外部内容执行为指令。"); }
+    finally { this.mcpBusy = false; }
+  }
+
+  async setPlanMode(workspace: string, request: DesktopPlanModeRequest): Promise<DesktopRuntimeConnection> {
+    if (!request || typeof request.enabled !== "boolean" || typeof request.contextId !== "string") throw new Error("Invalid Plan mode request.");
+    const host = this.host;
+    const assertContext = () => {
+      if (!host || this.host !== host || this.workspace !== workspace || this.modeContextId !== request.contextId) {
+        throw new Error("Plan 模式上下文已经变化，请刷新后重新选择。");
+      }
+      if (this.active(host)) throw new Error("任务或配置操作期间不能切换 Plan 模式。请等待结束。");
+    };
+    assertContext();
+    const lock = await host!.journal.lockStatus();
+    assertContext();
+    if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程运行任务，暂不能切换 Plan 模式。");
+    this.permissionBusy = true;
+    try {
+      await host!.runtime.setPlanMode(request.enabled);
+      this.modeContextId = randomUUID();
+    } finally { this.permissionBusy = false; }
+    return this.connect(workspace, 0);
+  }
+
+  async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest, confirmFullAccess?: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
     if (!request || !["ask", "workspace", "full"].includes(request.mode)) throw new Error("Invalid approval mode.");
     const host = await this.ensure(workspace);
     if (this.active(host)) throw new Error("任务运行期间不能切换权限模式。请先停止任务并等待结束。");
-    this.approvalMode = request.mode;
+    let newlyConfirmed = false;
+    if (request.mode === "full" && this.fullAccessWorkspace !== workspace) {
+      if (!confirmFullAccess) throw new Error("完全访问需要主进程首次确认。");
+      this.permissionBusy = true;
+      let confirmed = false;
+      try { confirmed = await confirmFullAccess(); }
+      finally { this.permissionBusy = false; }
+      if (this.host !== host || this.workspace !== workspace || this.active(host)) throw new Error("权限上下文已经变化，请重新选择。");
+      if (!confirmed) return this.connect(workspace, 0);
+      newlyConfirmed = true;
+    }
+    if (request.mode === "full" && !host.setApprovalMode) throw new Error("当前运行时不支持完全访问。");
     host.setApprovalMode?.(request.mode);
+    this.approvalMode = request.mode;
+    if (newlyConfirmed) this.fullAccessWorkspace = workspace;
     return this.connect(workspace, 0);
   }
 
   async createTask(workspace: string, text: string): Promise<DesktopRuntimeConnection> {
+    if (this.mcpBusy || this.permissionBusy) throw new Error("配置或权限正在确认，请等待完成后再启动任务。");
     const normalized = this.taskText(text);
     const host = await this.ensure(workspace);
+    if (host.mcp?.busy) throw new Error("请先完成或取消 MCP 登录，再启动任务。");
+    if (this.active(host)) throw new Error("已有任务正在运行，不能重复启动任务。");
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live && !this.active(host)) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
     this.completedTaskChanges = undefined;
     this.baseline = await captureTaskBaseline(workspace);
+    this.modeContextId = randomUUID();
     void host.runtime.createTask(normalized).catch(() => undefined);
     return this.connect(workspace, 0);
   }
@@ -65,6 +222,7 @@ export class DesktopTaskController {
     const normalized = this.taskText(text);
     if (!/^[A-Za-z0-9-]{1,160}$/.test(taskId)) throw new Error("Invalid task history request.");
     const host = await this.ensure(workspace);
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     if (this.active(host)) throw new Error("已有任务正在运行。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
@@ -72,22 +230,27 @@ export class DesktopTaskController {
     const runs = await host.journal.recent(500);
     const selectedRun = runs.find((run) => run.runId === taskId);
     const restored = await loadSession(workspace, selectedRun?.sessionId ?? taskId);
-    host.agent.restoreSession(restored);
+    host.agent.restoreSession(restored, { preservePlanMode: true });
+    this.modeContextId = randomUUID();
     await host.agent.setModel(host.provider.model);
     host.runtime.resetConversation();
     host.checkpointManager?.setSession(restored.id);
     this.completedTaskChanges = undefined;
     this.baseline = await captureTaskBaseline(workspace);
+    this.modeContextId = randomUUID();
     void host.runtime.createTask(normalized).catch(() => undefined);
     return this.connect(workspace, 0);
   }
 
   async newConversation(workspace: string): Promise<DesktopRuntimeConnection> {
     const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
     if (this.active(host)) throw new Error("任务运行期间不能新建对话。请先停止任务并等待结束。");
     const lock = await host.journal.lockStatus();
+    this.assertIdleContext(host, workspace, contextId);
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程写入，暂不能新建对话。");
-    host.agent?.clearConversation();
+    host.agent?.clearConversation({ preservePlanMode: true });
+    this.modeContextId = randomUUID();
     host.runtime.resetConversation();
     this.baseline = undefined;
     this.completedTaskChanges = undefined;
@@ -127,7 +290,9 @@ export class DesktopTaskController {
       const safe = clean(text);
       if (safe) entries.push({ id: `${session.id}-${entries.length + 1}`, kind, title, text: safe });
     };
+    const turnEntries: Array<{ preview: string; entries: DesktopTaskHistorySnapshot["entries"] }> = [];
     for (const turn of session.replay) {
+      const start = entries.length;
       push("user", turn.inputKind === "system" ? "系统续接" : "你", turn.task);
       for (const supplement of turn.supplements) push("user", "你 · 补充要求", supplement);
       for (const receipt of turn.receipts) push("activity", "运行记录", receipt);
@@ -135,6 +300,7 @@ export class DesktopTaskController {
       if (turn.response) push("assistant", "Xiu", turn.response);
       if (turn.question) push("assistant", "Xiu · 等待回答", turn.question);
       if (turn.completion && turn.completion.message !== turn.response) push("completion", turn.completion.success ? "已完成" : "未完成", turn.completion.message);
+      turnEntries.push({ preview: safeTaskPreview(turn.task, workspace), entries: entries.slice(start) });
     }
     if (!entries.length) {
       for (const message of session.messages) {
@@ -143,9 +309,17 @@ export class DesktopTaskController {
       }
     }
     const completeEventHistory = runs.length > 0 && runs.every((item) => (item.runtimeEvents?.length ?? 0) > 0);
-    const exactEvents = completeEventHistory ? this.combineHistoryEvents(runs) : [];
-    const reconstructed = exactEvents.length ? [] : runs.flatMap((item, index) => this.reconstructHistoryEvents(item, index === runs.length - 1 ? entries : []));
+    // A legacy round must not downgrade newer exact rounds or inherit another
+    // round's reply. Ambiguous legacy previews have no attributable reply.
+    let sequence = 0;
+    const historyEvents = runs.flatMap((item) => {
+      if (item.runtimeEvents?.length) return this.combineHistoryEvents([item]);
+      const matching = turnEntries.filter((turn) => turn.preview === item.taskPreview);
+      const uniqueRun = runs.filter((candidate) => candidate.taskPreview === item.taskPreview).length === 1;
+      return this.reconstructHistoryEvents(item, uniqueRun && matching.length === 1 ? matching[0]!.entries : []);
+    }).map((event) => ({ ...event, sequence: ++sequence })).slice(-1_000);
     let changes;
+    const changeRounds = await Promise.all(runs.slice(-80).map(async (candidate) => ({ id: candidate.runId, startedAt: candidate.startedAt, report: await loadTaskChangeHistory(workspace, candidate.runId) })));
     for (const candidate of [...runs].reverse()) {
       changes = await loadTaskChangeHistory(workspace, candidate.runId);
       if (changes) break;
@@ -158,9 +332,12 @@ export class DesktopTaskController {
       ...(run?.providerId ?? session.providerId ? { providerId: run?.providerId ?? session.providerId } : {}),
       ...(run?.model ?? session.model ? { model: run?.model ?? session.model } : {}),
       entries: entries.slice(-200),
-      events: exactEvents.length ? exactEvents.slice(-1_000) : reconstructed,
-      fidelity: exactEvents.length ? "exact" : "reconstructed",
+      events: historyEvents,
+      fidelity: completeEventHistory ? "exact" : "reconstructed",
+      changeRounds,
       ...(changes ? { changes } : {}),
+      tools: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "tool").map((operation) => this.operation(operation, "command"))).slice(-80),
+      validations: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "verification").map((operation) => this.operation(operation, "verification"))).slice(-80),
     };
   }
 
@@ -169,27 +346,33 @@ export class DesktopTaskController {
       throw new Error("删除任务需要主进程确认。");
     }
     const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
     if (this.active(host)) throw new Error("任务运行期间不能删除任务。请先停止任务并等待结束。");
     const lock = await host.journal.lockStatus();
+    this.assertIdleContext(host, workspace, contextId);
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程运行任务，暂不能删除任务。");
-    await this.eventPersistence;
-    const runs = await host.journal.recent(500);
-    const selectedRun = runs.find((run) => run.runId === request.taskId);
-    const sessionId = selectedRun?.sessionId ?? request.taskId;
-    const relatedRuns = runs.filter((run) => run.sessionId === sessionId);
-    const sessionDeleted = await deleteSession(workspace, sessionId);
-    if (!selectedRun && !sessionDeleted) throw new Error("任务不存在或已经删除。");
-    for (const run of relatedRuns) {
-      await deleteTaskChangeHistory(workspace, run.runId);
-      await host.journal.delete(run.runId);
-    }
-    if (host.agent?.status?.().sessionId === sessionId) {
-      host.agent.clearConversation();
-      host.runtime.resetConversation();
-      this.baseline = undefined;
-      this.completedTaskChanges = undefined;
-      this.taskBaselines.clear();
-    }
+    this.conversationBusy = true;
+    try {
+      await this.eventPersistence;
+      const runs = await host.journal.recent(500);
+      const selectedRun = runs.find((run) => run.runId === request.taskId);
+      const sessionId = selectedRun?.sessionId ?? request.taskId;
+      const relatedRuns = runs.filter((run) => run.sessionId === sessionId);
+      const sessionDeleted = await deleteSession(workspace, sessionId);
+      if (!selectedRun && !sessionDeleted) throw new Error("任务不存在或已经删除。");
+      for (const run of relatedRuns) {
+        await deleteTaskChangeHistory(workspace, run.runId);
+        await host.journal.delete(run.runId);
+      }
+      if (host.agent?.status?.().sessionId === sessionId) {
+        host.agent.clearConversation({ preservePlanMode: true });
+        this.modeContextId = randomUUID();
+        host.runtime.resetConversation();
+        this.baseline = undefined;
+        this.completedTaskChanges = undefined;
+        this.taskBaselines.clear();
+      }
+    } finally { this.conversationBusy = false; }
   }
 
   async reviewSnapshot(workspace: string, changeView: DesktopChangeView = "task"): Promise<DesktopReviewSnapshot> {
@@ -207,15 +390,23 @@ export class DesktopTaskController {
           : getWorkspaceDiff(workspace, changeView === "staged" ? "staged" : "workspace"),
       listReviewFiles(workspace),
       Promise.resolve(host.journal.currentRun()).then((run) => run ?? host.journal.latest()),
-      host.journal.interrupted(),
+      this.active(host) ? Promise.resolve(undefined) : host.journal.interrupted(),
       host.checkpointManager?.list() ?? Promise.resolve([]),
     ]);
     if (changeView === "task" && !this.baseline && this.completedTaskChanges?.taskId !== currentTaskId) changes.warnings = ["no-task-baseline: no in-memory baseline is available; showing current workspace changes.", ...changes.warnings];
     const operations = latest?.operations ?? [];
+    const taskReport = changeView === "task" && (this.baseline || completedReport) ? changes : this.baseline ? await inspectTaskChanges(workspace, this.baseline) : completedReport;
     const commands = operations.filter((operation) => operation.kind === "tool" && ["run_command", "run_process"].includes(operation.name)).map((operation) => this.operation(operation, "command"));
     const validations = operations.filter((operation) => operation.kind === "verification").map((operation) => this.operation(operation, "verification"));
+    const related = latest ? (await host.journal.recent(500)).filter((run) => run.sessionId === latest.sessionId).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).slice(-80) : [];
+    const changeRounds = await Promise.all(related.map(async (run) => ({ id: run.runId, startedAt: run.startedAt, report: await loadTaskChangeHistory(workspace, run.runId) })));
     return {
+      changeRounds,
+      overview: { workspace, taskId: currentTaskId, taskChanges: taskReport, branch: await promisify(execFile)("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: workspace, windowsHide: true, timeout: 2000, maxBuffer: 4096 }).then(({ stdout }) => redactSecrets(stdout.trim()).slice(0, 160)).catch(() => undefined) },
       generatedAt: new Date().toISOString(), changeView, changes, files,
+      artifacts: (taskReport?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })),
+      background: host.background?.().map((item) => ({ ...item, command: redactSecrets(item.command).slice(0, 240) })) ?? [],
+      tools: operations.filter((operation) => operation.kind === "tool").slice(-80).reverse().map((operation) => this.operation(operation, "command")),
       commands: commands.slice(-80).reverse(), validations: validations.slice(-80).reverse(),
       checkpoints: checkpoints.slice(0, 80).map((checkpoint) => structuredClone(checkpoint)),
       ...(latest ? { run: { id: latest.runId, status: latest.status, startedAt: latest.startedAt, updatedAt: latest.updatedAt, ...(latest.finishedAt ? { finishedAt: latest.finishedAt } : {}) } } : {}),
@@ -239,6 +430,27 @@ export class DesktopTaskController {
     return previewReviewFile(workspace, request.path);
   }
 
+  async cancelSubagent(workspace: string, request: import("../shared/protocol.js").DesktopSubagentCancelRequest, confirm: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
+    if (!request || [request.runId, request.taskId, request.parentTaskId].some((value) => typeof value !== "string" || !value || value.length > 160)) throw new Error("子任务取消请求无效。");
+    const host = await this.ensure(workspace);
+    const parent = host.runtime.snapshot().task;
+    const selected = parent?.subagents?.find((agent) => agent.runId === request.runId && agent.taskId === request.taskId);
+    if (!host.coordinator || parent?.id !== request.parentTaskId || !selected || !["running", "waiting_approval"].includes(parent.state) || !["pending", "running"].includes(selected.status)) throw new Error("子任务不存在、已结束或不属于当前任务。");
+    if (host.runtime.snapshot().planMode) throw new Error("Plan 只读模式不能取消子任务。");
+    if (this.permissionBusy || this.conversationBusy) throw new Error("请等待当前确认或会话切换完成。");
+    this.permissionBusy = true;
+    const generation = this.openingGeneration;
+    try {
+      if (!(await confirm())) return this.connect(workspace);
+      if (generation !== this.openingGeneration || this.host !== host || host.runtime.snapshot().task?.id !== request.parentTaskId || !["running", "waiting_approval"].includes(host.runtime.snapshot().task?.state ?? "") || host.runtime.snapshot().planMode) throw new Error("工作区或任务已经变化，取消操作未执行。");
+      const latest = host.coordinator.get(request.runId);
+      const child = latest.tasks.find((task) => task.id === request.taskId);
+      if (!child || !["pending", "running"].includes(child.status)) return this.connect(workspace);
+      await host.coordinator.cancel(request.runId, request.taskId);
+      return this.connect(workspace);
+    } finally { this.permissionBusy = false; }
+  }
+
   async restoreCheckpoint(workspace: string, request: DesktopCheckpointRestoreRequest, confirmed: boolean): Promise<DesktopReviewSnapshot> {
     if (!confirmed || !request || typeof request.checkpointId !== "string" || request.checkpointId.length > 160) throw new Error("恢复检查点需要主进程确认。");
     const host = await this.ensure(workspace);
@@ -255,13 +467,15 @@ export class DesktopTaskController {
   async recoverTask(workspace: string, request: DesktopRecoveryRequest, unknownSideEffectsConfirmed: boolean): Promise<DesktopRuntimeConnection> {
     if (!request || typeof request.runId !== "string" || request.runId.length > 100) throw new Error("Invalid recovery request.");
     const host = await this.ensure(workspace);
+    if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     if (this.active(host)) throw new Error("已有任务正在运行。");
     const interrupted = await host.journal.interrupted();
     if (!interrupted || interrupted.runId !== request.runId) throw new Error("恢复记录不存在、仍由其他进程持有或已经变化。");
     host.runtime.assertRecoveryConfirmed(request.runId, unknownSideEffectsConfirmed);
     if (!host.agent) throw new Error("当前运行时不支持任务恢复。");
     const restored = await loadSession(workspace, interrupted.sessionId);
-    host.agent.restoreSession(restored);
+    host.agent.restoreSession(restored, { preservePlanMode: true });
+    this.modeContextId = randomUUID();
     host.agent.setRecoverySource(interrupted);
     host.checkpointManager?.setSession(interrupted.sessionId);
     this.baseline = await captureTaskBaseline(workspace);
@@ -281,14 +495,19 @@ export class DesktopTaskController {
     return this.reviewSnapshot(workspace, "workspace");
   }
 
+  /** Read-only identity for native recovery previews, including failed host startup. */
+  recoveryContextId(): string { return this.modeContextId; }
+
   canChangeWorkspace(): boolean {
-    return !this.host || !this.active(this.host);
+    return !this.creating && !this.mcpBusy && !this.permissionBusy && (!this.host || !this.active(this.host));
   }
 
   async assertCanReconfigure(workspace: string): Promise<void> {
     const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
     if (this.active(host)) throw new Error("任务运行期间不能切换 Provider、模型或凭据。请先停止任务并等待结束。");
     const lock = await host.journal.lockStatus();
+    this.assertIdleContext(host, workspace, contextId);
     if (lock.active && lock.live) throw new Error("此工作区正由另一个 Xiu 进程运行任务，暂不能更改 Provider 配置。");
   }
 
@@ -301,17 +520,32 @@ export class DesktopTaskController {
   }
 
   async reload(workspace: string): Promise<DesktopRuntimeConnection> {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
     await this.assertCanReconfigure(workspace);
-    this.detach();
+    this.assertIdleContext(host, workspace, contextId);
+    const planMode = host.runtime.snapshot().planMode === true;
+    this.detach(); // Always discard Full Access and the old host/context.
+    // Reconfiguring the same open workspace must not silently leave read-only
+    // mode. Apply it before the replacement host is visible to any caller.
+    this.planModeOnCreate = { workspace, enabled: planMode };
     return this.connect(workspace, 0);
   }
 
   detach(): void {
     if (!this.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
+    const previous = this.host;
+    this.disposing = this.disposing.then(async () => { await previous?.close?.(); });
+    void this.disposing.catch(() => undefined); // Preserve failure for ensure(), avoid unhandled rejection on close.
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.workspace = undefined;
     this.host = undefined;
+    this.approvalMode = "ask";
+    this.planModeOnCreate = undefined;
+    this.openingGeneration++;
+    this.modeContextId = randomUUID();
+    this.fullAccessWorkspace = undefined;
     this.creating = undefined;
     this.baseline = undefined;
     this.completedTaskChanges = undefined;
@@ -320,10 +554,21 @@ export class DesktopTaskController {
 
   private async ensure(workspace: string): Promise<WorkspaceAgentHost> {
     if (this.workspace && this.workspace !== workspace) this.detach();
+    const generation = this.openingGeneration;
+    await this.disposing;
+    if (generation !== this.openingGeneration || (this.workspace && this.workspace !== workspace)) {
+      throw new Error("运行时工作区上下文已经变化，请重新连接。");
+    }
     if (this.host) return this.host;
     if (!this.creating) {
       this.workspace = workspace;
-      this.creating = this.factory(workspace).then((host) => {
+      this.creating = this.factory(workspace).then(async (host) => {
+        try {
+          if (this.planModeOnCreate?.workspace === workspace && this.planModeOnCreate.enabled) await host.runtime.setPlanMode(true);
+        } catch (error) {
+          await host.close?.();
+          throw error; // Fail closed rather than expose an executable replacement.
+        }
         this.host = host;
         host.setApprovalMode?.(this.approvalMode);
         this.unsubscribe = host.runtime.subscribe((event) => {
@@ -336,8 +581,21 @@ export class DesktopTaskController {
     return this.creating;
   }
 
+  private assertIdleContext(host: WorkspaceAgentHost, workspace: string, contextId: string): void {
+    if (this.host !== host || this.workspace !== workspace || this.modeContextId !== contextId) {
+      throw new Error("对话上下文已经变化，请刷新后重试。");
+    }
+    if (this.active(host)) throw new Error("任务或配置操作期间不能修改对话。请等待结束。");
+  }
+
   private active(host: WorkspaceAgentHost): boolean {
-    return ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
+    return this.mcpBusy || this.permissionBusy || this.conversationBusy || Boolean(host.mcp?.busy) || ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "");
+  }
+
+  async shutdown(): Promise<void> {
+    const host = this.host ?? await this.creating;
+    await host?.close?.();
+    await this.disposing;
   }
 
   private taskText(text: string): string {
@@ -431,7 +689,10 @@ export class DesktopTaskController {
         push("runtime.notice", { kind: "checkpoint", message: operation.evidence ?? "补充要求已记录" }, operation.finishedAt ?? operation.startedAt);
       } else {
         const verification = operation.kind === "verification";
-        push("tool.started", { name: operation.name, description: operation.evidence ?? operation.name, changesWorkspace: operation.sideEffect === "workspace", verification, risk: operation.risk ?? "read" }, operation.startedAt);
+        // Legacy web journals store result evidence, not the original query/action.
+        const description = operation.name === "web_search" || operation.name === "web_open"
+          ? operation.name : operation.evidence ?? operation.name;
+        push("tool.started", { name: operation.name, description, changesWorkspace: operation.sideEffect === "workspace", verification, risk: operation.risk ?? "read" }, operation.startedAt);
         if (operation.finishedAt) push("tool.finished", { name: operation.name, summary: operation.evidence ?? operation.status, verification }, operation.finishedAt);
       }
     }

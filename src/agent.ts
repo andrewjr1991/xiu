@@ -3,7 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentConfig } from "./config.js";
 import { refreshModelContext } from "./context.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { buildSystemPrompt, buildTemporalContext } from "./prompt.js";
+import { resolveWorkspacePath } from "./workspace-path.js";
 import { canonicalXiuIdentity, isXiuIdentityQuestion } from "./identity.js";
 import type { ProjectIndex } from "./project-index.js";
 import type { TaskPlan, TaskPlanManager } from "./plan.js";
@@ -29,7 +30,7 @@ import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, ty
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
-import { VerificationLedger, captureVerificationStamp } from "./verification.js";
+import { VerificationLedger, captureVerificationStamp, type VerificationEvidence } from "./verification.js";
 import { SafeDraftPreview } from "./stream-preview.js";
 
 export interface AgentEvents {
@@ -60,7 +61,7 @@ export interface AgentEvents {
 }
 
 export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
-export type AgentFailureReason = "model_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
+export type AgentFailureReason = "model_incomplete" | "plan_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
 
 export class BackgroundApprovalRequiredError extends Error {
   override readonly name = "BackgroundApprovalRequiredError";
@@ -237,6 +238,7 @@ export class Agent {
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private lastRunFailureReason?: AgentFailureReason;
+  private verificationEvidence?: VerificationEvidence;
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
   private failoverController?: ProviderFailoverController;
@@ -275,12 +277,23 @@ export class Agent {
     }
   }
 
+  private accessMode: "workspace" | "full" = "workspace";
+  private changingPlanMode = false;
+
+  setAccessMode(mode: "workspace" | "full"): void {
+    if (this.activeController) throw new Error("Cannot change access mode during a task");
+    this.accessMode = mode;
+    this.system = undefined;
+  }
+
   async run(task: string): Promise<string> {
+    if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
     const startedAt = Date.now();
     const controller = new AbortController();
     this.activeController = controller;
     this.lastRunOutcome = "running";
     this.lastRunFailureReason = undefined;
+    this.verificationEvidence = undefined;
     this.currentTurn = 0;
     this.repeatedFailures.clear();
     this.primaryTask = task.trim();
@@ -336,28 +349,41 @@ export class Agent {
       if (this.taskRunJournal?.currentRun()) await this.taskRunJournal.complete("failed");
       throw error;
     } finally {
-      this.stats.activeMs += Date.now() - startedAt;
-      this.stats.estimatedTokens = estimateConversationTokens(this.messages);
-      if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
-      await this.checkpointDiagnostics();
-      if (this.activeController === controller) this.activeController = undefined;
-      this.pendingSteering = [];
-      this.primaryTask = undefined;
-      this.steeringHistory = [];
-      this.taskFailoverOriginProviderId = undefined;
-      this.taskAttemptedProviders.clear();
-      if (this.taskWasRouted && this.taskRoutingOrigin) {
-        Object.assign(this.config, this.taskRoutingOrigin.config);
-        this.provider = this.taskRoutingOrigin.provider;
-        this.tools = [...this.taskRoutingOrigin.tools];
-        this.system = undefined;
-        this.events.onProviderRouteRestore?.({ providerId: this.config.providerId, model: this.config.model });
+      try {
+        this.stats.activeMs += Date.now() - startedAt;
+        this.stats.estimatedTokens = estimateConversationTokens(this.messages);
+        if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
+        await this.checkpointDiagnostics();
+      } catch (error) {
+        this.lastRunOutcome = "failed";
+        this.lastRunFailureReason = "runtime_error";
+        this.taskDiagnostics?.complete("failed");
+        throw error;
+      } finally {
+        // Persistence can fail after execution has ended. Never retain an active
+        // controller or task-scoped state that would permanently block recovery.
+        if (this.activeController === controller) this.activeController = undefined;
+        this.pendingSteering = [];
+        this.primaryTask = undefined;
+        this.steeringHistory = [];
+        this.taskFailoverOriginProviderId = undefined;
+        this.taskAttemptedProviders.clear();
+        try {
+          if (this.taskWasRouted && this.taskRoutingOrigin) {
+            Object.assign(this.config, this.taskRoutingOrigin.config);
+            this.provider = this.taskRoutingOrigin.provider;
+            this.tools = [...this.taskRoutingOrigin.tools];
+            this.system = undefined;
+            this.events.onProviderRouteRestore?.({ providerId: this.config.providerId, model: this.config.model });
+          }
+        } finally {
+          this.taskRoutingOrigin = undefined;
+          this.taskWasRouted = false;
+          this.taskRouteNotices.clear();
+          this.recoverySource = undefined;
+          this.blockedRecoveryOperations.clear();
+        }
       }
-      this.taskRoutingOrigin = undefined;
-      this.taskWasRouted = false;
-      this.taskRouteNotices.clear();
-      this.recoverySource = undefined;
-      this.blockedRecoveryOperations.clear();
     }
   }
 
@@ -414,6 +440,7 @@ export class Agent {
   private async runWithSignal(task: string, signal: AbortSignal): Promise<string> {
     const startedAt = Date.now();
     const identityQuestion = isXiuIdentityQuestion(task);
+    await this.projectIndex?.refreshForTask();
     const relevant = this.projectIndex ? await this.projectIndex.search(task, 6) : "No relevant files found.";
     const profile = this.projectIndex?.profile();
     const automaticContext = [
@@ -426,7 +453,7 @@ export class Agent {
     const prepared = [automaticContext ? `Automatically prepared project context:\n${automaticContext}` : "", planModeContext].filter(Boolean).join("\n\n");
     const contextualTask = prepared ? `${task}\n\n${prepared}` : task;
     this.messages.push({ role: "user", content: contextualTask });
-    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US", this.config.projectConfigurationTrusted === true);
+    this.system ??= await buildSystemPrompt(this.config.cwd, this.skillRegistry?.catalog(), this.config.language ?? "en-US", this.config.projectConfigurationTrusted === true, this.accessMode);
     this.ensureSession();
     const sessionPath = this.sessionPath!;
     this.checkpointManager?.setSession(this.sessionId!);
@@ -641,8 +668,10 @@ export class Agent {
           webEvidenceAuditSent = true;
           continue;
         }
-        const unfinishedPlan = this.planManager?.snapshot()?.steps.some((step) => step.status === "pending" || step.status === "in_progress");
-        if (unfinishedPlan && !this.planManager?.mode() && !planReminderSent) {
+        const planSteps = this.planManager?.snapshot()?.steps ?? [];
+        const unfinishedPlan = !this.planManager?.mode() && planSteps.some((step) => step.status !== "completed");
+        const actionablePlan = planSteps.some((step) => step.status === "pending" || step.status === "in_progress");
+        if (unfinishedPlan && actionablePlan && !planReminderSent) {
           const reminder = "Plan gate: the visible task plan still has pending or in-progress steps. Complete the work or update blocked steps with an explanation before finishing.";
           this.messages.push({ role: "user", content: reminder });
           await this.log(sessionPath, { type: "plan_gate", turn, message: reminder });
@@ -658,7 +687,7 @@ export class Agent {
           auditedSteeringCount = this.steeringHistory.length;
           continue;
         }
-        if (verificationStamp && verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths])) {
+        if (verificationStamp && verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode)) {
           verification.invalidate();
           verifiedAfterChange = false;
           verificationStamp = undefined;
@@ -673,13 +702,21 @@ export class Agent {
         }
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
-          : verification.failed || (lastToolFailed && !webAnswerVerified) ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
+          : verification.failed || (lastToolFailed && !webAnswerVerified) || unfinishedPlan ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
         const failureReason: AgentFailureReason | undefined = outcome !== "failed" ? undefined
           : webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0) ? "web_evidence"
           : verification.failed ? "verification_failed"
-          : "tool_failed";
+          : lastToolFailed && !webAnswerVerified ? "tool_failed"
+          : "plan_incomplete";
         this.lastRunOutcome = outcome;
         this.lastRunFailureReason = failureReason;
+        const checks = verification.evidenceChecks();
+        if (outcome === "completed" && verifiedAfterChange && verificationStamp && checks.length) {
+          this.verificationEvidence = {
+            version: 1, cwd: await fs.realpath(this.config.cwd), observedAt: new Date().toISOString(),
+            workspaceStamp: verificationStamp, explicitPaths: [...verificationPaths], checks,
+          };
+        }
         this.taskDiagnostics?.complete(outcome);
         await this.checkpointDiagnostics();
         this.events.onTaskComplete?.({
@@ -745,10 +782,10 @@ export class Agent {
           } else {
             taskOperationKind = this.isVerificationAttempt(call.name, call.input) ? "verification" : "tool";
             if (taskOperationKind === "verification" || tool.isVerification) {
-              beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+              beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
               if (verificationStamp && verificationStamp !== beforeVerificationStamp) verification.invalidate();
               if (call.name === "verify_output" && typeof call.input.path === "string" && !verificationPaths.has(call.input.path)) {
-                beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths, call.input.path]);
+                beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths, call.input.path], this.accessMode);
                 verificationPaths.add(call.input.path);
               }
             }
@@ -765,6 +802,7 @@ export class Agent {
             }
             structured = await executeToolResult(tool, call.input, {
               cwd: this.config.cwd,
+              accessMode: this.accessMode,
               approve: async (request) => {
                 this.taskDiagnostics?.beginApproval(request.description);
                 let approved: boolean | undefined;
@@ -774,7 +812,12 @@ export class Agent {
                   const checkpointOperation = await this.taskRunJournal?.beginOperation({ kind: "checkpoint", name: `before ${call.name}`, sideEffect: "none" });
                   let checkpoint: Awaited<ReturnType<CheckpointManager["capture"]>>;
                   try {
-                    checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
+                    const outsideWorkspace = this.accessMode === "full" && this.rawWorkspacePaths(call.input).some((value) => {
+                      try { resolveWorkspacePath(this.config.cwd, value); return false; } catch { return true; }
+                    });
+                    if (outsideWorkspace) {
+                      this.events.onToolProgress?.(call.name, "工作区外操作不会保存文件快照或显示在本任务 Diff 中，无法保证撤销。");
+                    } else checkpoint = await this.checkpointManager?.capture(call.name, call.input, tool.describe(call.input));
                     if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "succeeded", checkpoint ? `checkpoint ${checkpoint.id}` : "checkpoint not required");
                   } catch (error) {
                     if (checkpointOperation) await this.taskRunJournal?.finishOperation(checkpointOperation, "failed", error instanceof Error ? error.message : String(error));
@@ -820,7 +863,7 @@ export class Agent {
               let observedChange = true;
               if (verificationStamp) {
                 try {
-                  observedChange = verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+                  observedChange = verificationStamp !== await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
                 } catch { observedChange = true; }
               }
               if (observedChange) {
@@ -842,7 +885,7 @@ export class Agent {
           checkPassed = structured.status === "success" && Boolean(tool.isVerification?.(call.input, result));
           if (verificationCandidate || checkPassed) {
             verificationAttempted = true;
-            const currentStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths]);
+            const currentStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
             if (beforeVerificationStamp !== currentStamp) {
               verification.invalidate();
               checkPassed = false;
@@ -958,7 +1001,8 @@ export class Agent {
     }
   }
 
-  clearConversation(): void {
+  clearConversation(options: { preservePlanMode?: boolean } = {}): void {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot clear the conversation while a task or mode change is active.");
     this.messages = [];
     this.system = undefined;
     this.sessionPath = undefined;
@@ -972,7 +1016,7 @@ export class Agent {
     this.primaryTask = undefined;
     this.toolEvidence = [];
     this.taskDiagnostics = undefined;
-    this.planManager?.restore(undefined, false);
+    this.planManager?.restore(undefined, options.preservePlanMode ? this.planManager.mode() : false);
     this.checkpointManager?.clearSession();
   }
 
@@ -1014,6 +1058,16 @@ export class Agent {
       pendingSteering: this.pendingSteering.length,
       diagnostics: this.taskDiagnostics?.snapshot(),
     };
+  }
+
+  /** Never rebuild this receipt from model prose or restored session history. */
+  async getVerificationEvidence(): Promise<VerificationEvidence | undefined> {
+    const evidence = this.verificationEvidence;
+    if (this.activeController || this.lastRunOutcome !== "completed" || !evidence) return undefined;
+    try {
+      if (evidence.workspaceStamp !== await captureVerificationStamp(evidence.cwd, evidence.explicitPaths, this.accessMode)) return undefined;
+      return structuredClone(evidence);
+    } catch { return undefined; }
   }
 
   async markWaitingForUser(question: string): Promise<void> {
@@ -1068,8 +1122,8 @@ export class Agent {
     };
   }
 
-  restoreSession(restored: RestoredSession): void {
-    if (this.activeController) throw new Error("Cannot switch sessions while a task is running.");
+  restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot switch sessions while a task or mode change is active.");
     this.messages = restored.messages;
     this.sessionPath = restored.file;
     this.sessionId = restored.id;
@@ -1084,7 +1138,7 @@ export class Agent {
     this.toolEvidence = [];
     this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
     if (restored.model) this.setModelInMemory(restored.model);
-    this.planManager?.restore(restored.plan, restored.planMode);
+    this.planManager?.restore(restored.plan, options.preservePlanMode ? this.planManager.mode() : restored.planMode);
     this.checkpointManager?.setSession(restored.id);
   }
 
@@ -1097,9 +1151,15 @@ export class Agent {
   }
 
   async setPlanMode(enabled: boolean): Promise<void> {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot change Plan mode while a task is running or another mode change is pending.");
+    if (typeof enabled !== "boolean") throw new Error("Invalid Plan mode.");
     if (!this.planManager) throw new Error("Plan manager is unavailable.");
-    this.planManager.setMode(enabled);
-    if (this.sessionPath) await this.log(this.sessionPath, { type: "plan_mode", enabled });
+    this.changingPlanMode = true;
+    try {
+      // Do not report failure after silently changing the execution policy.
+      if (this.sessionPath) await this.log(this.sessionPath, { type: "plan_mode", enabled });
+      this.planManager.setMode(enabled);
+    } finally { this.changingPlanMode = false; }
   }
 
   plan(): string {
@@ -1160,6 +1220,13 @@ export class Agent {
   }
 
   private workspacePaths(input: Record<string, unknown>): string[] {
+    const values = this.rawWorkspacePaths(input);
+    if (this.accessMode !== "full") return values;
+    // Never copy external source or credentials into workspace change reports.
+    return values.filter((value) => { try { resolveWorkspacePath(this.config.cwd, value); return true; } catch { return false; } });
+  }
+
+  private rawWorkspacePaths(input: Record<string, unknown>): string[] {
     const values = [input.path, input.output_path, input.destination, input.file];
     if (Array.isArray(input.paths)) values.push(...input.paths);
     return [...new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))].slice(0, 6);
@@ -1388,12 +1455,13 @@ export class Agent {
       try {
         let response: Awaited<ReturnType<ModelProvider["complete"]>>;
         let streamed = false;
+        const system = `${this.system!}\n\n${buildTemporalContext()}`;
         const modelTools = toolOverride ?? (this.config.providerFeatures?.tools === false ? [] : this.tools);
         if (allowStreaming && this.provider.stream && (this.events.onTextDelta || this.events.onDraftPreview)) {
           const preview = this.events.onDraftPreview ? new SafeDraftPreview(this.config.language ?? "en-US",
             [this.config.apiKey, readEnvironmentCredential(this.config.apiKeyEnv)].filter((value): value is string => Boolean(value))) : undefined;
           let visibleDraft = "";
-          response = await this.provider.stream(this.system!, this.messages, modelTools, (delta) => {
+          response = await this.provider.stream(system, this.messages, modelTools, (delta) => {
             emitted = true;
             if (preview) {
               visibleDraft = preview.push(delta) ?? visibleDraft;
@@ -1403,7 +1471,7 @@ export class Agent {
           preview?.finish();
           streamed = emitted && !preview;
         } else {
-          response = await this.provider.complete(this.system!, this.messages, modelTools, signal);
+          response = await this.provider.complete(system, this.messages, modelTools, signal);
         }
         this.taskDiagnostics?.finishModel(response.usage ?? { inputTokens: estimatedInput, outputTokens: Math.ceil(response.text.length / 4) }, true);
         await this.checkpointDiagnostics();

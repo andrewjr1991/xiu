@@ -1,6 +1,146 @@
 # Changelog
 
+## 0.20.4 — Release candidate (2026-10-03)
+
+- Add chronological child-agent status, consistent role avatars, inspectable results and independently confirmed cancellation without expanding permissions.
+- Collapse intermediate activity into one elapsed-time entry per task round; keep final answers, failures, approval and recovery controls visible.
+- Expand the task overview and group workspace settings, overview, terminal and sidebar controls at the top right.
+- Preserve per-round history and current continuation results without borrowing stale task outputs or live workspace facts.
+- Deduplicate search progress, provide trusted current-date context, and retain inspectable web evidence.
+- Improve constrained-PowerShell privacy verification and explicit provider refresh without repairing existing unsafe ACLs automatically; bound transient Windows task-record rename retries without replaying tools.
+- Maintainer local acceptance passed; exact merged-source CI and artifact checks remain release gates. Windows installer remains unsigned; prior build-only HTTP-cache advisory acceptance remains disclosed. npm 0.20.3 is now confirmed published; 0.20.4 publication is pending.
+
+
+## 0.20.3 — GitHub Release (npm publication pending)
+
+- Combine desktop managed-search lazy device registration/token renewal with confirmed local folder, SKILL.md and ZIP Skill imports; preserve trust, Plan, credentials, immutable permission preview and no-overwrite enforcement.
+- Replace vulnerable fast-glob/braces matching with a bounded tinyglobby adapter and upgrade build-time sharp; CLI and both production audits are clean.
+- Retain the unpatched build-only http-cache-semantics advisory (GHSA-ch52-4w7c-c8xp) with explicit maintainer risk acceptance. Normal builder downloads do not enable its HTTP response cache; the dependency is absent from shipped CLI/desktop artifacts. Do not downgrade the builder or suppress audit warnings.
+- Manual Skill, real OS IME and external-device acceptance passed. All six jobs passed in CI 37099780173 for exact source `2ad7891d8756d98001e8d6a23dc4603ccddd998d`; GitHub Release assets and manifests were verified against their CI hashes before publication. npm publication is delegated to the maintainer using that unchanged CI tarball and is still pending. Desktop Windows x64 NSIS remains unsigned; other desktop platforms and Store signing are not newly claimed stable.
+
+## 0.20.3-preview.13 — Local Skill import candidate (unreleased)
+
+- Desktop local Skill preview now accepts folders, a standalone SKILL.md, or ZIP packages; single-file imports exclude unrelated siblings.
+- Bound archive input/extraction, reject unsafe paths, aliases, links, encryption and unsupported compression, and verify actual sizes and CRC before confirmation.
+- Retain permission preview, immutable staging, cancellation, single-use confirmation, Plan/trust enforcement and no-overwrite behavior. No bundled scripts run; remote commands and store management remain deferred.
+- Replace fast-glob/braces with bounded tinyglobby searches, preserving ordinary brace/range matching and workspace/symlink guards; upgrade desktop build-time sharp to 0.35.5.
+- Maintainer Skill import, real OS IME and external-device acceptance passed. CLI and both production dependency audits are clean; desktop development audit still reports the unpatched http-cache-semantics chain in electron-builder. Exact-commit CI and release authorization remain pending.
+
+## 0.20.3-preview.12 — Local test candidate (unreleased)
+
+- Desktop search reuses CLI lazy device enrollment and short-lived token renewal. Managed and custom search are explicit UI choices; saving does not enroll or test a service.
+- Keep managed auth, independent proxy and domain/timeout policies when saving. Persist explicit selections so a legacy environment token cannot silently replace managed authentication.
+- Maintainer live-service acceptance passed: automatic authentication and search work. Commit/push is authorized; publication is not. The previous release's CI does not validate this patch.
+
+## 0.20.3-preview.11 — GitHub pre-release (2026-10-03)
+
+- Exact source `cc49096f987309fa38baa7947694ff2398f1ccff` passed all six jobs in CI run `37094638003`. Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. Installer, CLI tarball and verification manifests are published from that exact CI run.
+- npm preview publication is authorized but not completed: browser authorization succeeded, while saving local login state was denied. Stable latest remains 0.20.2.
+
+- Serialize background bootstrap claims, shell creation and cancellation; recover only proven-dead lifecycle lock owners.
+- Share CLI/desktop provider routing, expose read-only native search, local staged Skills installation and bounded local reports.
+- Add narrow-window and 125% zoom management UI coverage. Real OS IME and external-device acceptance remain pending; preview publication is authorized, without promoting stable latest.
+- Synchronize the background output-cursor fixture explicitly before its second chunk; retain the incremental-output assertions instead of relying on a 500ms timing window.
+
 This file summarizes released behavior and the next unreleased change. Detailed implementation history remains available in Git and `PUBLISHING.zh-CN.md`.
+
+## 0.20.3-preview.10 — GitHub pre-release
+
+- Exact source `c6d6ec5` passed all six jobs in CI run `37005365523`; GitHub assets and tag are published. npm preview publication is still awaiting browser confirmation; stable latest remains 0.20.2.
+
+- Align sidebar utilities, Execute/Plan controls and model picker actions across wide and narrow windows.
+- Collapse MCP details by default and explain Provider configuration recovery without changing authorization or recovery behavior.
+- Add draggable/keyboard resizable split panes; fully hide the workbench on collapse and restore tabs, terminal state and pane ratio from a header control.
+- Use an isolated, main-process-owned Xiu-styled Full Access confirmation; Cancel, close and Escape never authorize.
+- Keep npm stable `latest` at 0.20.2; Windows x64 desktop installers remain unsigned previews.
+
+## 0.20.3-preview.9 — Prior candidate history
+
+- Require the focused Windows cleanup/current-recovery regressions after privacy preflight and before the full suite; preserve complete tests and record every gate in candidate metadata.
+
+- Target only two Windows CLI regressions: tolerate ENOENT disappearance during background directory enumeration, preserving type checks and all other errors; initialize recovery-test write-lock ownership like production without weakening ACL policy. Diagnosis and regression evidence remain pending.
+- Preview.8 CI 36993723905 finished with five of six jobs passing: Windows privacy preflight passed 9/9, while full Windows CLI had 859 passes, 7 skips and 2 failures out of 868 tests. Build/package/platform/eval checks passed; verified binaries do not make the candidate accepted.
+- Preview.9 local validation, exact-commit CI and artifacts remain pending. New features and managed-web authentication remain paused; existing visual-capture gaps and bootstrap claim/cancel race remain open.
+
+## 0.20.3-preview.8 — Unreleased candidate
+
+- Limit this follow-up to the Windows privacy gate: remove inherited PSModulePath case-insensitively from the Windows PowerShell child environment, without mutating its parent. Preserve Get-Acl readback, direct .NET Owner/DACL persistence, owner-only rules and fail-closed behavior; do not simultaneously rewrite the production read API.
+- Follow Microsoft's documented intermediate-process module-loading guidance; the historical root cause remains unconfirmed despite preview.8 passing the Windows privacy preflight. Add a fixed command-not-found category and correct the exception-wrapper fixture without changing outer-exception precedence.
+- Preview.8 local validation passed (853 passes, 15 skips, no failures); exact Windows privacy checks passed, but full Windows CLI had two failures. CI and verified artifact details are recorded in development progress; this candidate remains unaccepted.
+- Preserve the known bootstrap claim/cancel race and unsafe existing-recovery-directory limitation. Managed-web authentication remains paused.
+
+## 0.20.3-preview.7 — Unreleased candidate
+
+- Require validation/upload of six allowlisted synthetic UI PNGs after successful desktop runs on Windows, macOS and Linux, including wide/narrow recovery previews. Artifacts identify version/platform/full SHA/attempt and are retained 30 days; missing evidence cannot pass. Production UI is unchanged. Review of all 18 PNGs found Linux Chinese font gaps, a wrong macOS wide recovery capture, and menu captures without an open menu on all platforms; these are not a complete visual pass.
+
+- Persist only modified Windows Owner/DACL sections through direct .NET APIs instead of Set-Acl; preserve owner-only readback, repeated validation and fail-closed behavior. Add fixed exception categories and a validated absolute SystemRoot PowerShell path; no permissive fallback or raw exception disclosure.
+- Retry only background metadata replacement with bounded delays; never replay commands/output. Guard asynchronous output/state callbacks and retain write-once, fixed-code failure receipts when the main record is unavailable.
+- Keep terminal state behind confirmed shutdown/output closure. Use OS-helper paths for Windows cleanup; an unconfirmed foreground stop retains active/unknown evidence and returns an explicit error.
+- Preview.6 passed three desktop jobs and Linux/macOS CLI, but Windows privacy preflight failed with nonzero-exit at initialize-write (Set-Acl); full Windows CLI tests were skipped. Preview.5 Windows CLI was cancelled after 35 minutes with nine ACL failures and an outside-cwd background task interrupted after output. Neither candidate is accepted; the exact underlying historical errno/root cause is unproven.
+- Preview.7 CI 36983872073 passed five jobs but failed Windows privacy preflight after successful .NET directory persistence, at Get-Acl verify-read (unknown). Full Windows CLI tests were skipped; package/platform/eval checks passed. Verified binaries remain unaccepted. Preview.3 is the last fully green candidate; real OS IME, paid Providers and external devices remain separate acceptance work. Paused managed-web authentication is outside this change.
+
+## 0.20.3-preview.6 — Unreleased candidate
+
+- Add a required Windows provider-privacy preflight and fixed, secret-free ACL failure stages/process categories. Preserve owner-only checks; typed PowerShell constructors/enums and suppressed progress output need exact Windows validation.
+- Bound disposable CLI test shutdown and stop children before deleting their working directory; do not hide failed prompts or cleanup.
+- Keep visible macOS smoke windows larger than the runner screen when needed, retaining exact viewport and native keyboard assertions.
+- Preview.4 Windows CLI timed out with nine earlier ACL-check failures; preview.5 inherited that code. These candidates remain unaccepted for real channel configuration.
+
+## 0.20.3-preview.5 — Unreleased candidate
+
+- Give keyboard smoke a visible, focused BrowserWindow/WebContents and require an actual textarea focusin before exercising IME cleanup and native Shift+Enter. Preserve assertions and deadlines; production input logic is unchanged.
+- Add deterministic focus readiness tests, per-path cleanup diagnostics and strictly scoped hidden-path diagnostic artifact upload.
+- Preview.4 generated a verified unsigned installer but failed all three desktop UI jobs; exact candidate verification is required again.
+
+## 0.20.3-preview.4 — Unreleased candidate
+
+- Add a shared-runtime desktop Execute/Plan switch with idle/context guards, Full Access precedence, session-mode preservation and failure-safe logging/conversation boundaries.
+- Prevent IME candidate-confirmation Enter and same-tick duplicate events from submitting tasks or steering messages.
+- Protect provider schema upgrades with verified private backups, revision/transaction locks and explicit recovery in CLI and desktop, including malformed-startup diagnostics, native/typed confirmation and restart latches.
+- Validate private Windows ACLs and preserve credentials/backups after uncertain writes; unknown recovery lock ownership remains blocked.
+- Exact candidate CI, real Windows ACLs and synthetic Electron UI checks remain required; real OS IME and paid Provider acceptance are separate.
+
+## 0.20.3-preview.3 — Unreleased candidate
+
+- Resolve development worker loaders from the installation rather than caller working directory, preserve final pipe output before completion, and record bounded startup/spawn failures. Retain the immediate-launcher-exit regression and its existing deadline. Exact Windows CI verification remains required; no original root-cause claim yet.
+- Update direct Undici to 7.29.1 and the Cheerio transitive copy to 6.29.0. Keep runtime dependency audit and full regressions separate from product/security acceptance.
+- Preview.2 passed all three desktop jobs, including unsigned Windows installer lifecycle checks, but one Windows CLI background survival regression failed. Candidate remains unaccepted.
+
+## 0.20.3-preview.2 — Unreleased candidate
+
+- Make desktop UI smoke wait through rendering frames after viewport changes, preserving every assertion and timeout. Add deterministic ordering/late-size regressions and bounded layout/menu failure diagnostics.
+- Preview.1 passed all three CLI jobs and macOS desktop, but Windows/Linux UI smoke failed. Its Windows installer checks passed; it remains an unaccepted candidate. Preview.2 requires a fresh exact-commit CI run and packages.
+- No production UI behavior, permission policy, or dependency versions changed in this follow-up.
+
+## 0.20.3-preview.1 — Unreleased candidate
+
+Implementation and integrated verification are in progress. This entry describes the phase scope, not a passed release gate or an npm publication. Per-check status and the eventual exact commit/CI evidence are tracked in `docs/development-progress.md`.
+
+- Reject completion with an unfinished executable plan using `failed / plan_incomplete`; preserve planning-only completion in read-only Plan mode.
+- Refresh the shared project index at task boundaries and bound external-change rechecks to a five-second interval, including ctime changes while reusing unchanged ASTs.
+- Require structured program-generated artifact verification for multi-agent integration; plain-text PASS is insufficient. The current read-only Tester checks `verify_output` assertions over the patch, not an executable test-suite result.
+- Add Python migration and Electron browser-policy CI gates, with exact-commit CLI tarball and unsigned Windows x64 NSIS candidates, SHA-256 manifests, and per-job verification records. Failed or missing checks remain visible; later pushes do not cancel earlier runs.
+- Keep workspace trust, explicit ephemeral Full Access consent, Plan read-only enforcement, independent integration confirmation, and unknown-side-effect recovery guards unchanged.
+
+## 0.20.2 — 2026-10-02
+
+- Replace fixed inspector buttons with selectively opened, closable tool tabs and split/full view. Share keyboard-accessible dropdown menus, align empty-state typography and show compact expandable process/tool/source/evidence rows. Add an isolated, human-operated ephemeral HTTPS web tab (no login submission/downloads/task bridge), plus real Electron offline browser-policy/lifecycle coverage.
+
+- Polish inspector tabs and Diff controls: keep labels horizontal, keep split pane widths consistent across tool tabs, scroll only the tab list while add/refresh/full-view controls remain visible, style round/search inputs, preserve conversation width on narrow layouts, localize review warnings, inset Diff empty-state text from the divider, and tighten categorized-data spacing. Add wide/narrow visual-layout regressions.
+- Add an independent desktop Diff workbench with a searchable file tree, bounded insertion/deletion counts, line numbers, and saved execution-round selection; missing historical snapshots never substitute current workspace changes.
+- Wire the shared multi-agent coordinator into desktop tasks, with real child-task cards, elapsed time and bounded redacted results. Parent stop/exit cancels and drains children; Worktree integration retains independent confirmation and review evidence.
+- Separate background processes, tools, task artifacts, read sources and verification evidence. Enable the shared background tools using a separately unpacked Node worker, not the interactive PTY.
+- Resolve installed Node/npm for Electron MCP and background workers instead of launching Electron as Node. Add a backup-first user-PATH repair helper without modifying system PATH or user MCP configuration/grants.
+
+- Fix native MCP button borders and modal/titlebar alignment; simplify desktop MCP copy. Add explicitly confirmed, ephemeral desktop Full Access (including dangerous task-tool approval, external files and local diagnostics), preserving Plan/trust/credentials/MCP grants/recovery guards and keeping external source out of workspace checkpoints and task Diff. Approve for me uses risk classification, not a reviewer model or OS sandbox.
+
+- Start ordinary fresh installations with zero Providers in both CLI and desktop, even when environment keys exist. Vendor templates no longer register or reserve channel IDs.
+- Migrate explicitly referenced legacy presets into editable user profiles, retaining credential references, model selections and routing; do not seed unused presets or clear existing user settings.
+- Keep all user-added channels visible, add multi-vendor templates to both setup flows, support confirmed removal of the last channel, and block tasks until a channel is selected.
+- Document actual CLI/desktop capability differences and prioritize shared services and paired entrypoint regressions.
+- Share MCP manager composition between CLI and desktop. Add desktop configured-server connection, exact manifest confirmation, reconnect/disconnect and lifecycle cleanup.
+- Add desktop basic user MCP configuration creation/editing/confirmed deletion, OAuth origin/scope confirmation, browser fallback/cancellation/logout, and bounded redacted read-only Resource/Prompt browsing. Keep project/advanced/explicit-permission configurations read-only, separate saving from grants/connections, and keep external content out of task instructions and audit records.
+- Bind MCP permission confirmation to the previewed configuration fingerprint in both frontends, remove stale tools after failed reload, and inject MCP client metadata into the Electron bundle.
 
 ## 0.20.1 — 2026-09-30
 

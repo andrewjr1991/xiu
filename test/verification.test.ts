@@ -110,3 +110,25 @@ test("large explicit stamps retain bounded prefix and metadata evidence, and lim
   assert.notEqual(before, await captureVerificationStamp(root, ["large.bin"]));
   await assert.rejects(captureVerificationStamp(root, Array.from({ length: 65 }, (_, index) => `file-${index}.txt`)), /limit exceeded/);
 });
+
+
+test("absence and content checks cannot supersede each other", () => {
+  const absent = { path: "removed.txt", exists: false };
+  const present = { path: "removed.txt", required_substrings: ["present"] };
+  assert.equal(verifyOutputSupersedes(absent, present), false);
+  assert.equal(verifyOutputSupersedes(present, absent), false);
+  assert.equal(verifyOutputSupersedes(absent, { ...absent }), true);
+  const ledger = new VerificationLedger();
+  ledger.recordTool("verify_output", absent, false);
+  ledger.recordTool("verify_output", present, true);
+  assert.equal(ledger.passed, false);
+  assert.deepEqual(ledger.evidenceChecks(), []);
+});
+
+test("verification receipts expose bounded check identity without contents", () => {
+  const ledger = new VerificationLedger();
+  ledger.recordTool("verify_output", { path: "artifact.txt", required_substrings: ["private fixture content"] }, true);
+  assert.deepEqual(ledger.evidenceChecks(), [{ toolName: "verify_output", path: "artifact.txt" }]);
+  for (let index = 0; index < 65; index++) ledger.recordTool("verify_output", { path: `artifact-${index}.txt`, min_bytes: 1 }, true);
+  assert.deepEqual(ledger.evidenceChecks(), []);
+});
