@@ -1,6 +1,8 @@
 # Xiu 完整使用指南
 
-## preview.11 候选：工具与运行设置
+## preview.11 预览版：工具与运行设置
+
+Windows 安装器和 CLI tarball 已在 [GitHub 预发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11)提供；安装器未签名。npm preview 发布仍受本机登录状态保存限制，不能将 GitHub 发布视为 npm 已发布；稳定 latest 保持 0.20.2。
 
 侧栏“工具与运行设置”提供四个本机页面。联网检索只填写 HTTPS 服务地址与保存 Key 的环境变量名，不填写 Key 值；桌面不自动注册托管设备认证。模型路由可绑定分析/实现/验证渠道，并设置备用渠道顺序；更改要求任务及终端空闲，会撤销临时完全访问权限，保留 Plan。
 

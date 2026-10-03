@@ -1,6 +1,6 @@
 <div align="center">
 
-> Current development: 0.20.3-preview.11 candidate. Background lifecycle coordination and shared desktop search/routing/Skills/report management are under acceptance. Released GitHub baseline is preview.10; npm publication is paused and latest remains 0.20.2. Real OS IME and external-device acceptance are pending.
+> **0.20.3-preview.11** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11), with an unsigned Windows x64 installer, CLI tarball and verification manifests from exact source `cc49096`. All six jobs passed in [CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003); Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. npm preview publication is authorized but blocked by local login-state persistence; stable latest remains 0.20.2. Real OS IME and external-device acceptance are pending.
 
 Local desktop UI corrections: compact bottom-aligned utility entries, consistent Execute/Plan controls, non-wrapping model action labels, a collapsible tool sidebar that retains tabs/terminal state, and a main-process-owned Xiu-styled Full Access confirmation. No permission or recovery policy is relaxed.
 

@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.20.3-preview.11 (Unreleased candidate)
+## 0.20.3-preview.11 — GitHub pre-release (2026-10-03)
+
+- Exact source `cc49096f987309fa38baa7947694ff2398f1ccff` passed all six jobs in CI run `37094638003`. Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. Installer, CLI tarball and verification manifests are published from that exact CI run.
+- npm preview publication is authorized but not completed: browser authorization succeeded, while saving local login state was denied. Stable latest remains 0.20.2.
 
 - Serialize background bootstrap claims, shell creation and cancellation; recover only proven-dead lifecycle lock owners.
 - Share CLI/desktop provider routing, expose read-only native search, local staged Skills installation and bounded local reports.
