@@ -1,5 +1,7 @@
 # 0.20.6 桌面设置中心发布
 
+[GitHub 0.20.6 已发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.6)，包含未签名 Windows 安装器、CLI 包、本地验证清单及校验摘要；npm 尚未发布。
+
 新增外观、对话与运行、通知、模型与渠道、关于；深色主题覆盖顶栏、标签栏、弹层和头像。维护者于 2026-10-04 明确要求本次跳过远端 CI，采用本地构建及专项验证，不继承旧版 CI 绿灯。完整测试与跨平台验证未运行，安装器仍未签名；npm 缺少认证，latest 为 0.20.4。最新发布状态和同源附件见 [发布指南](./PUBLISHING.zh-CN.md)。以下为历史记录。
 
 已通过 [PR #6](https://github.com/andrewjr1991/xiu/pull/6) 合并 main，并发布 [GitHub 0.20.5 正式版](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5)。候选与独立 [main CI](https://github.com/andrewjr1991/xiu/actions/runs/37126166861) 各六作业全绿；Windows 全量 1004 项，997 通过、7 跳过、0 失败。正式附件直接取自该 main CI，并核验源码、大小与摘要。包含真实任务续接、分阶段摘要、安全公开回复预览、等待状态与超时分阶段诊断、折叠提醒、自动跟随和轻量桌面布局。权限与恢复边界不变；渠道停顿不能视为已彻底解决，浏览器实玩仍需人工验收。Windows 安装器未签名。npm 0.20.5 因缺少认证尚未发布，latest 为 0.20.4；同源 tarball 与登录发布命令见发布指南。下方旧版本记录仅供追溯。

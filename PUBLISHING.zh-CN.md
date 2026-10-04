@@ -1,4 +1,21 @@
-## 0.20.6 发布授权与本地验证（2026-10-04）
+## 0.20.6 已发布（2026-10-04，本版本 CI 豁免）
+
+[GitHub 0.20.6](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.6) 已公开，源码/tag 固定为 `98787fdbbb7cdedc012da9585e2193f31553e120`，五份附件大小与服务端 SHA256 均回读一致；全部保存在标准 `apps/desktop/release`。本地 25 项专项、两端类型检查/构建、宽窄 UI、深浅授权窗口、355 文件 dry-pack、发布 tarball 隔离安装、asar 14 文件匹配/无测试桥和最终安装器全新安装/启动/覆盖升级/中断重启/卸载通过。远端 CI 未启动，全量/跨平台测试未运行。安装器为 `NotSigned`。
+
+- CLI SHA256：`dfafa09e91acc956acf1775975d23aad669b8b9da3eb29834f2f3e6eb6a7d7c4`。
+- Windows SHA256：`97c815b6ecfd8e2ba66b2d21704f1948836012e6355f6a154a64907b75551fd9`。
+- npm integrity：`sha512-Dd2a3v586lq1WeA7fX6iwifCRwwLawuiNwwxYxCYtz2aa/WhCnhjKosZiyBrkKe7F4kuxwTksPyNtr1ZFEqCMQ==`。
+
+旧版 0.20.5 安装器摘要保持 `b5555d8f1cea0511f4a90972e4761226ecfbed6f790364f7ab75fa4a17a2caea`。本节后续文档提交不移动 tag、不替换附件。npm 未登录，0.20.6 尚未发布，latest 为 0.20.4；维护者登录后先查版本是否存在，再发布原 tarball 并验证：
+
+```powershell
+npm login --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli@0.20.6 version --registry=https://registry.npmjs.org
+# 仅在上一条明确返回版本不存在时继续；其他网络/权限错误不能视为未发布。
+npm publish "apps/desktop/release/xiu-ai-cli-0.20.6-98787fdbbb7cdedc012da9585e2193f31553e120.tgz" --access public --tag latest --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli@0.20.6 version dist.integrity --registry=https://registry.npmjs.org
+npm view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org
+```
 
 维护者明确授权提交、推送、发布，并因额度不足豁免本版本远端 CI。本次不修改工作流或保护分支；提交带 `[skip ci]`，使用精确清洁源码的本地 CLI tarball 与未签名 Windows x64 安装器，不继承历史 CI 绿灯，不覆盖旧 tag/附件/npm 版本。完整测试与跨平台验证未运行；本地专项、类型、构建、包及安装器验收按实际结果记录到附件 manifest。系统通知/声音仍待人工验收，构建期残留告警保留。
 

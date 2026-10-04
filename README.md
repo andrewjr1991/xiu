@@ -1,5 +1,7 @@
 <div align="center">
 
+[GitHub 0.20.6 is published](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.6) with the unsigned Windows installer, CLI tarball, local verification manifests and checksums. npm publication is still pending authentication.
+
 > 0.20.6 desktop settings release (2026-10-04): appearance and dark-surface fixes, font sizing, density, reduced motion, conversation preferences, optional background notifications and build information. The maintainer explicitly waived remote CI for this version; artifacts are built and checked locally, not inherited from previous CI. Windows remains unsigned; full-suite and cross-platform verification were not run. npm authentication is unavailable (latest: 0.20.4). Release status and exact-source asset records: [publishing guide](./PUBLISHING.zh-CN.md). Notes below are historical.
 
 Local dark-surface correction: workspace headers, inspector tabs, translucent popovers and attachment controls no longer retain light backgrounds. Six subagent avatar palettes use matte dark surfaces and coloured glyphs. Actual wide/narrow workbench screenshots and dark-surface regression checks supplement the settings-page checks.
