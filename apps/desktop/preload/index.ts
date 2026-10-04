@@ -42,6 +42,9 @@ import {
 } from "../shared/protocol.js";
 
 const bridge: XiuDesktopBridge = Object.freeze({
+  preferences: () => ipcRenderer.invoke(desktopChannels.preferences),
+  savePreferences: (value: import("../shared/preferences.js").DesktopPreferences) => ipcRenderer.invoke(desktopChannels.preferencesSave, value),
+  desktopAbout: () => ipcRenderer.invoke(desktopChannels.about),
   browser: (request: DesktopBrowserRequest) => ipcRenderer.invoke(desktopChannels.browser, request),
   onBrowserState: (listener: (state: DesktopBrowserState) => void) => { const handler = (_event: Electron.IpcRendererEvent, state: DesktopBrowserState) => listener(state); ipcRenderer.on(desktopChannels.browserState, handler); return () => { ipcRenderer.removeListener(desktopChannels.browserState, handler); }; },
   manageMcp: (request: DesktopMcpManageRequest) => ipcRenderer.invoke(desktopChannels.mcpManage, request),

@@ -1,5 +1,11 @@
 <div align="center">
 
+> 0.20.6 desktop settings release (2026-10-04): appearance and dark-surface fixes, font sizing, density, reduced motion, conversation preferences, optional background notifications and build information. The maintainer explicitly waived remote CI for this version; artifacts are built and checked locally, not inherited from previous CI. Windows remains unsigned; full-suite and cross-platform verification were not run. npm authentication is unavailable (latest: 0.20.4). Release status and exact-source asset records: [publishing guide](./PUBLISHING.zh-CN.md). Notes below are historical.
+
+Local dark-surface correction: workspace headers, inspector tabs, translucent popovers and attachment controls no longer retain light backgrounds. Six subagent avatar palettes use matte dark surfaces and coloured glyphs. Actual wide/narrow workbench screenshots and dark-surface regression checks supplement the settings-page checks.
+
+Local, unreleased desktop settings candidate (2026-10-04): system/light/dark appearance, UI/code sizing, layout density, reduced motion, conversation-follow/display preferences, send shortcut, opt-in background notifications, existing model management and build information. Preferences do not store credentials or execution grants. Timeout settings remain startup environment variables; automatic update checks are not implemented. The separately named local installer does not replace official 0.20.5 assets.
+
 > [0.20.5 GitHub release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5): desktop refinements, task continuation, staged summaries, compact warnings and safe live output. Candidate and independent main CI each passed all six jobs; release assets come from main CI. npm publication is pending authentication (latest: 0.20.4). Windows builds remain unsigned. Earlier local-only notes below are historical.
 
 Local desktop visual refinement: quieter event headings replace bold operation counts; factual progress is borderless and empty status summaries are omitted without deleting records. History titles stay on one line, neutral surfaces reduce nested-card clutter, the workspace header is shorter, and return-to-latest floats over output. Safety controls and complete logs remain available.

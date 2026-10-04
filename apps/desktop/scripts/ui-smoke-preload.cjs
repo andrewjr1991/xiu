@@ -59,6 +59,9 @@ const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, 
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
 const bridge = {
+  preferences: async () => ({ theme: "light", fontSize: 14, codeSize: 12, density: "comfortable", reducedMotion: false, autoFollow: true, processExpanded: true, alertsExpanded: false, sendKey: "enter", notifyComplete: false, notifyFailure: false, notifyApproval: false, sound: false }),
+  savePreferences: async (value) => { calls.push('preferences:save'); return { ...value }; },
+  desktopAbout: async () => ({ version: "0.20.6", packaged: false, notificationsSupported: true }),
   browser: async (request) => { calls.push(`browser:${request.action}`); if (request.action === "layout") calls.push(`browser:visible:${request.visible}`); return { url: request.action === "navigate" ? request.url : "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; },
   onBrowserState: (listener) => { browserListeners.add(listener); return () => browserListeners.delete(listener); },
   mcpSnapshot: async () => mcpView(),

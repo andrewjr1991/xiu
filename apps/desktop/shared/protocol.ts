@@ -278,6 +278,9 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  preferences(): Promise<import("./preferences.js").DesktopPreferences>;
+  savePreferences(value: import("./preferences.js").DesktopPreferences): Promise<import("./preferences.js").DesktopPreferences>;
+  desktopAbout(): Promise<{ version: string; packaged: boolean; notificationsSupported: boolean }>;
   managementSnapshot(): Promise<import("../../../src/runtime/workspace-management.js").WorkspaceManagementSnapshot>;
   prepareSkillInstallation(sourceKind?: "directory" | "file"): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
   cancelSkillInstallation(): Promise<void>;
@@ -336,6 +339,9 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  preferences: "desktop:preferences",
+  preferencesSave: "desktop:preferences-save",
+  about: "desktop:about",
   managementSnapshot: "management:snapshot",
   skillPrepare: "skill:prepare",
   skillCancel: "skill:cancel",

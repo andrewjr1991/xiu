@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, nativeTheme } from "electron";
 
 // A main-process-owned, isolated confirmation. The task renderer cannot resolve it.
 export async function confirmFullAccess(parent: BrowserWindow): Promise<boolean> {
@@ -13,7 +13,7 @@ async function confirmAction(parent: BrowserWindow, cancelling: boolean): Promis
   const window = new BrowserWindow({
     parent, modal: true, width: 560, height: 390, resizable: false, frame: false,
     minimizable: false, maximizable: false, show: false, autoHideMenuBar: true,
-    title: cancelling ? "Xiu · 取消子任务" : "Xiu · 完全访问权限", backgroundColor: "#ffffff",
+    title: cancelling ? "Xiu · 取消子任务" : "Xiu · 完全访问权限", backgroundColor: nativeTheme.shouldUseDarkColors ? "#202226" : "#ffffff",
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -29,6 +29,7 @@ async function confirmAction(parent: BrowserWindow, cancelling: boolean): Promis
       small{display:block;color:#7c899c;margin-top:12px}footer{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
       button{border:1px solid #dce5f0;border-radius:9px;padding:9px 16px;font:inherit;cursor:pointer;color:#526176;background:#f5f8fc}
       #accept{background:#187fe7;color:white;border-color:#187fe7}button:focus-visible{outline:2px solid #82b9ef;outline-offset:3px}
+      ${nativeTheme.shouldUseDarkColors ? "body{background:#202226;color:#e2e5e9;border-color:#3c4149}h1{color:#edf0f4}p,small{color:#bbc1ca}button,#close{background:#30343b;color:#e2e5e9;border-color:#484e59}.warning{background:#352b20;border-color:#665135;color:#edc38e}" : ""}
     </style><button id="close" aria-label="关闭">×</button><div class="icon">◇</div><h1>${cancelling ? "停止这个子智能体？" : "开启完全访问权限？"}</h1>
     <p>${cancelling ? "取消后，这个子任务将停止工作；依赖它的任务可能无法继续。" : "Xiu 将自动执行任务操作，包括危险操作，不再逐项请求批准。"}</p>
     <div class="warning">${cancelling ? "已产生的文件和结果会保留。取消不会撤销修改、删除 Worktree，也不会自动重新执行任务。" : "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。工作区外修改不保存源码快照，不能保证撤销。"}</div>

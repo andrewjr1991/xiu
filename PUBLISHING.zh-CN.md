@@ -1,3 +1,17 @@
+## 0.20.6 发布授权与本地验证（2026-10-04）
+
+维护者明确授权提交、推送、发布，并因额度不足豁免本版本远端 CI。本次不修改工作流或保护分支；提交带 `[skip ci]`，使用精确清洁源码的本地 CLI tarball 与未签名 Windows x64 安装器，不继承历史 CI 绿灯，不覆盖旧 tag/附件/npm 版本。完整测试与跨平台验证未运行；本地专项、类型、构建、包及安装器验收按实际结果记录到附件 manifest。系统通知/声音仍待人工验收，构建期残留告警保留。
+
+npm 当前 `ENEEDAUTH`，Registry latest 为 0.20.4。GitHub 发布不代表 npm 已更新；同源 tarball 交付到 `apps/desktop/release` 后，维护者登录并核对 0.20.6 未发布再执行 `npm publish <该同源包> --access public --tag latest`，回读版本、integrity 与 dist-tags。下方 0.20.5 设置候选和正式记录属于历史，不代表本次资产。
+
+## 本地设置中心候选（历史）
+
+后续深色表面补修已更新同名本地候选：清除顶栏、标签栏、半透明弹层等亮色遗漏，并收敛六组头像配色；新增工作台宽窄截图与样式回归、构建/文档检查通过。最新 SHA256：`e98fefdccdeaf4f66cdaf4cb0bde94f19c95fd6f5f071ec2ce6300fd23ff2b60`，包内 14 份 dist 匹配、无测试桥，`NotSigned`。此次纯样式补修未重复安装生命周期。下方 SHA256 与生命周期证据属于前一轮设置包，不代表此次补修安装器；正式资产不变。
+
+设置中心、深浅主题和非敏感偏好属于本地增量，不纳入已有 0.20.5 tag 或正式资产。测试包使用 `apps/desktop/release/Xiu-0.20.5-local-settings-x64.exe`，解包位置保持 `apps/desktop/release/win-unpacked`；仍未签名。未经新的发布授权，不推送、合并或发布，不覆盖 npm 已发布版本。图形化等待时限和自动更新尚未实现。
+
+验收：25 项专项、两端类型检查、桌面构建/文档、宽窄 UI 回归和深浅授权窗口通过；隔离全新安装、启动、覆盖升级、中断重启、卸载通过。包内 14 份 dist 文件与本地构建匹配，无测试桥。安装器 SHA256：`d2830af809120aecac7a625a912701653b82f4818ddb03b08aa5a43f6286c69b`，`NotSigned`。未重跑全量/远端 CI；系统通知与声音仍需人工验收。构建仍有大块体积告警和受限 PowerShell 的依赖收集 stderr，不把它们记作已解决。
+
 ## 0.20.5 正式发布记录（2026-10-03）
 
 经 [PR #6](https://github.com/andrewjr1991/xiu/pull/6) 合并 main，[GitHub 正式版](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5) 已公开，不覆盖 0.20.4。正式源码固定为 `386157f389d9d27ecdd443c024955f198f01ffa6`。[候选 CI](https://github.com/andrewjr1991/xiu/actions/runs/37125149946)、PR CI 37125160325 和独立 [main CI 37126166861](https://github.com/andrewjr1991/xiu/actions/runs/37126166861) 各六作业通过。Windows 全量 1004 项：997 通过、7 跳过、0 失败；Ubuntu/macOS 各 987 通过、17 跳过、0 失败。Windows 安装生命周期验收通过。

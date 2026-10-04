@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 /** Layout changes are not user scroll intent. Never animate a moving target. */
-export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: unknown) {
+export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: unknown, enabled = true) {
   const following = useRef(true);
   const [paused, setPaused] = useState(false);
   const resume = () => {
-    following.current = true;
-    setPaused(false);
+    following.current = enabled;
+    setPaused(!enabled);
     const element = ref.current;
     if (element) element.scrollTop = element.scrollHeight;
   };
   useEffect(() => {
+    following.current = enabled;
+    setPaused(!enabled);
     const element = ref.current;
     if (!element) return;
     let frame = 0;
@@ -25,7 +27,7 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
     };
     const scroll = () => {
       if (element.scrollHeight - element.scrollTop - element.clientHeight < 32) {
-        manualScroll = false; following.current = true; setPaused(false);
+        manualScroll = false; following.current = enabled; setPaused(!enabled);
       } else if (!manualScroll) pin();
     };
     const wheel = (event: WheelEvent) => { if (event.deltaY < 0) pause(); };
@@ -62,7 +64,7 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
       element.removeEventListener("touchstart", touchStart);
       element.removeEventListener("touchmove", touchMove);
     };
-  }, [ref, context]);
+  }, [ref, context, enabled]);
   useEffect(() => {
     if (following.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   });

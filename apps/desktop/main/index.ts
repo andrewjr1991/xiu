@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, session, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, Notification, net, protocol, session, type IpcMainInvokeEvent } from "electron";
+import { PreferencesStore } from "./preferences-store.js";
 import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
@@ -25,6 +26,13 @@ const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const rendererRoot = path.join(appRoot, "renderer");
 const controller = new DesktopWorkspaceController();
 let mainWindow: BrowserWindow | undefined;
+const preferencesStore = new PreferencesStore(path.join(app.getPath("userData"), "desktop-preferences.json"));
+function updateNativeAppearance(): void {
+  nativeTheme.themeSource = preferencesStore.value.theme;
+  const dark = nativeTheme.shouldUseDarkColors;
+  mainWindow?.setBackgroundColor(dark ? "#181a1d" : "#fafafa");
+  if (mainWindow && process.platform !== "darwin") mainWindow.setTitleBarOverlay({ color: dark ? "#181a1d" : "#fbfcfe", symbolColor: dark ? "#bbc1ca" : "#65758b" });
+}
 let browserController: DesktopBrowserController | undefined;
 const smokeLog = process.env.XIU_DESKTOP_SMOKE_LOG;
 function smokeMilestone(value: string): void {
@@ -34,6 +42,17 @@ function smokeMilestone(value: string): void {
 smokeMilestone("module-loaded");
 const taskController = new DesktopTaskController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.runtimeEvent, event);
+  const p = preferencesStore.value;
+  const body = event.type === "approval.requested" && p.notifyApproval ? "任务需要你的批准"
+    : event.type === "task.finished" && event.payload.state === "completed" && p.notifyComplete ? "任务已完成"
+    : event.type === "task.finished" && ["failed", "unverified"].includes(event.payload.state) && p.notifyFailure ? "任务未完成，请查看详情" : undefined;
+  if (body && mainWindow && !mainWindow.isFocused() && Notification.isSupported()) {
+    try {
+      const notification = new Notification({ title: "Xiu", body, silent: !p.sound });
+      notification.on("click", () => { if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } });
+      notification.show();
+    } catch { /* OS notifications cannot interrupt the task. */ }
+  }
 });
 const terminalController = new DesktopTerminalController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.terminalEvent, event);
@@ -112,6 +131,12 @@ function emitSnapshot(snapshot: DesktopWorkspaceSnapshot): DesktopWorkspaceSnaps
 }
 
 function registerIpc(): void {
+  ipcMain.handle(desktopChannels.preferences, (event) => { assertTrustedSender(event, true); return { ...preferencesStore.value }; });
+  ipcMain.handle(desktopChannels.preferencesSave, async (event, value: unknown) => {
+    assertTrustedSender(event, true);
+    const next = await preferencesStore.save(value); updateNativeAppearance(); return next;
+  });
+  ipcMain.handle(desktopChannels.about, (event) => { assertTrustedSender(event, true); return { version: app.getVersion(), packaged: app.isPackaged, notificationsSupported: Notification.isSupported() }; });
   ipcMain.handle(desktopChannels.providerRecovery, async (event, request: DesktopProviderRecoveryRequest) => {
     assertTrustedSender(event, true);
     return serializeWriterStart(() => providerRecoveryController.handle(request), true);
@@ -459,7 +484,7 @@ function createWindow(): BrowserWindow {
     minWidth: 840,
     minHeight: 600,
     show: !smokeTest && !smokeHold,
-    backgroundColor: "#f7f9fc",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#181a1d" : "#f7f9fc",
     title: "Xiu",
     autoHideMenuBar: true,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
@@ -505,12 +530,16 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus();
   });
   app.whenReady().then(async () => {
+    await preferencesStore.load();
+    nativeTheme.themeSource = preferencesStore.value.theme;
+    nativeTheme.on("updated", updateNativeAppearance);
     smokeMilestone("app-ready");
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     registerIpc();
     await registerLocalProtocol();
     mainWindow = createWindow();
+    updateNativeAppearance();
     smokeMilestone("window-created");
   }).catch((error) => {
     smokeMilestone(`startup-error ${error instanceof Error ? error.message : String(error)}`);

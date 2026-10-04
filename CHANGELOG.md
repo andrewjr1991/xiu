@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.6 — Desktop settings release (2026-10-04)
+
+- Add appearance, conversation/run, notification, model/channel and about settings with validated atomic persistence of non-sensitive preferences.
+- Support system/light/dark themes, UI/code font sizing, density, reduced motion, follow/display preferences and send shortcuts; retain IME and authorization boundaries.
+- Fix dark workspace headers, inspector tabs and translucent controls; use matte subagent avatar palettes.
+- Keep notifications opt-in with fixed background-only messages; never persist credentials, workspace trust or Full Access grants.
+- Maintainer explicitly waived remote CI for this version. Local builds and scoped checks only; full-suite/cross-platform checks were not run. Exact-source manifests accompany assets; no previous CI results are inherited. Windows remains unsigned and known build warnings remain disclosed. npm publication requires authentication (latest: 0.20.4).
+
 ## 0.20.5 — Released (2026-10-03)
 
 GitHub release published from verified main CI artifacts. npm publication remains pending authentication; npm latest is 0.20.4. Windows installer remains unsigned.
