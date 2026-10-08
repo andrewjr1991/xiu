@@ -98,11 +98,11 @@ export interface VerificationEvidence {
 }
 
 export class VerificationLedger {
-  private checks = new Map<string, { passed: boolean; name?: string; input?: Record<string, unknown> }>();
+  private checks = new Map<string, { passed: boolean; stale?: boolean; name?: string; input?: Record<string, unknown> }>();
   private revision = 0;
   invalidate(): void {
     this.revision++;
-    for (const [key, value] of this.checks) this.checks.set(key, { ...value, passed: false });
+    for (const [key, value] of this.checks) this.checks.set(key, { ...value, stale: value.passed || value.stale, passed: false });
   }
   record(check: string, passed: boolean): void { this.checks.set(check, { passed }); }
   recordTool(name: string, input: Record<string, unknown>, passed: boolean): void {
@@ -120,6 +120,18 @@ export class VerificationLedger {
   pendingChecks(): Array<{ tool: string; input: Record<string, unknown> }> {
     return [...this.checks.values()].flatMap((value) => !value.passed && value.name && value.input
       ? [{ tool: value.name, input: structuredClone(value.input) }] : []);
+  }
+  /** Fixed labels and numeric expectations only; never publish raw commands or assertion strings. */
+  pendingSummary(): string[] {
+    const groups = new Map<string, number>();
+    for (const value of this.checks.values()) {
+      if (value.passed) continue;
+      const tool = value.name === "verify_output" ? "文件校验 verify_output" : ["run_process", "run_command"].includes(value.name ?? "") ? "测试命令" : "其他校验";
+      const expectations = value.name === "verify_output" ? `（必需内容 ${stringExpectations(value.input ?? {}, "required_substrings").size} 项，禁止内容 ${stringExpectations(value.input ?? {}, "forbidden_substrings").size} 项）` : "";
+      const label = `${tool}${expectations}：${value.stale ? "文件修改后需重跑" : "执行未通过"}`;
+      groups.set(label, (groups.get(label) ?? 0) + 1);
+    }
+    return [...groups].slice(0, 12).map(([label, count]) => `${label} · ${count} 项`);
   }
   evidenceChecks(): VerificationEvidence["checks"] {
     if (!this.passed || this.checks.size > 64) return [];

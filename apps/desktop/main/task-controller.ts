@@ -10,6 +10,7 @@ import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.
 import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
 import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
+import { historyAttachmentReferences } from "./history-attachments.js";
 import { recoveryContinuation, safeTaskPreview, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
 import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
@@ -347,6 +348,7 @@ export class DesktopTaskController {
       ...(run?.model ?? session.model ? { model: run?.model ?? session.model } : {}),
       entries: entries.slice(-200),
       events: historyEvents,
+      attachmentReferences: historyAttachmentReferences(historyEvents, session.replay.flatMap(turn => [turn.task, ...turn.supplements]).map(text => redactSecrets(text))),
       fidelity: completeEventHistory ? "exact" : "reconstructed",
       changeRounds,
       ...(changes ? { changes } : {}),

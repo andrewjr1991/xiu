@@ -27,7 +27,7 @@ export function TaskOverview({ hidden, task, events, history, review, workspace,
         <p>{history ? "历史快照 · 不混入实时工作区状态" : `${workspace?.name ?? "本地工作区"} · 本地执行`}</p>
         {!history && <p title={workspace?.path}>{workspace?.path}</p>}
         {data.branch && <p title={data.branch}>分支：{data.branch}</p>}
-        {data.changes ? row(`${data.changes.changes.length} 个变更文件 · +${data.additions} −${data.deletions}`, "changes", "本任务有界预览，行数可能不完整") : <small>本轮变更快照尚未记录</small>}
+        {data.changes ? row(`${data.changes.changes.length} 个变更文件 · ${data.approximateCounts ? "范围估算 " : ""}+${data.additions} −${data.deletions}`, "changes", data.approximateCounts ? "非精确增删；旧记录仅保留变化范围" : "独立增删统计 · 完整 Diff 分页审查") : <small>本轮变更快照尚未记录</small>}
       </Group>
       <SubagentSummary events={history?.events ?? events} snapshot={history ? undefined : agents} live={!history && live} onOpen={() => onOpen("agents")} />
       {data.skills.length > 0 && <Group title="技能与 MCP · 本轮调用">{data.skills.map((text) => row(text, "data"))}</Group>}

@@ -10,6 +10,8 @@ const RUN_ID = /^[A-Za-z0-9-]{1,160}$/;
 const MAX_CHANGES = 500;
 const MAX_PREVIEW_BYTES = 16 * 1024;
 const MAX_HISTORY_BYTES = 1024 * 1024;
+const MAX_DIFF_BYTES = 2 * 1024 * 1024;
+const MAX_REVIEW_BYTES = 32 * 1024 * 1024;
 const MAX_PATH_BYTES = 1_024;
 const MAX_WARNINGS = 100;
 const MAX_LIMITATIONS = 20;
@@ -19,6 +21,8 @@ interface TaskChangeHistoryEnvelope {
   runId: string;
   savedAt: string;
   report: TaskChangeReport;
+  /** Dedicated review data, never copied into journals or generic audit logs. */
+  diffs?: Array<{ path: string; text: string }>;
 }
 
 function assertRunId(runId: string): void {
@@ -79,10 +83,13 @@ function sanitizeEntry(value: unknown, secrets: readonly string[]): TaskChangeEn
   }
   const limitations = item.limitations.slice(0, MAX_LIMITATIONS).map((entry) => boundedText(entry, 200, secrets));
   const preview = item.preview === undefined ? undefined : boundedText(item.preview, MAX_PREVIEW_BYTES, secrets);
+  if (item.stats !== undefined && (!item.stats || !Number.isSafeInteger(item.stats.additions) || item.stats.additions < 0
+    || item.stats.additions > 262_144 || !Number.isSafeInteger(item.stats.deletions) || item.stats.deletions < 0
+    || item.stats.deletions > 262_144 || typeof item.stats.exact !== "boolean")) throw new Error("Task change history contains invalid statistics.");
   return {
     path: safeRelativePath(item.path, secrets), kind: item.kind as TaskChangeEntry["kind"], source: "unknown",
     preExisting: item.preExisting, staged: item.staged,
-    ...(preview ? { preview } : {}), limitations,
+    ...(preview ? { preview } : {}), ...(item.stats ? { stats: { additions: item.stats.additions, deletions: item.stats.deletions, exact: item.stats.exact } } : {}), limitations,
   };
 }
 
@@ -158,6 +165,23 @@ function serializeBounded(runId: string, report: TaskChangeReport): string {
     serialized = `${JSON.stringify(envelope)}\n`;
   }
   if (Buffer.byteLength(serialized, "utf8") > MAX_HISTORY_BYTES) throw new Error("Task change history exceeds the 1 MiB storage limit.");
+  const diffs: NonNullable<TaskChangeHistoryEnvelope["diffs"]> = [];
+  let remaining = MAX_REVIEW_BYTES - 64 * 1024;
+  const secrets = runtimeSecrets();
+  for (const entry of envelope.report.changes) {
+    const original = report.changes.find(change => change.path === entry.path)?.fullDiff;
+    if (original === undefined) continue;
+    const text = redactSecrets(original, secrets);
+    const size = Buffer.byteLength(JSON.stringify({ path: entry.path, text }), "utf8") + 1;
+    if (Buffer.byteLength(text, "utf8") > MAX_DIFF_BYTES || size > remaining) {
+      entry.limitations.push("full-diff-size-limit");
+      continue;
+    }
+    remaining -= size;
+    diffs.push({ path: entry.path, text });
+  }
+  if (diffs.length) envelope.diffs = diffs;
+  serialized = `${JSON.stringify(envelope)}\n`;
   return serialized;
 }
 
@@ -190,12 +214,25 @@ export async function loadTaskChangeHistory(workspace: string, runId: string): P
     throw error;
   });
   if (!stat) return undefined;
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_HISTORY_BYTES) throw new Error("Unsafe or oversized task change history file.");
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_HISTORY_BYTES + MAX_REVIEW_BYTES) throw new Error("Unsafe or oversized task change history file.");
   const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<TaskChangeHistoryEnvelope>;
   if (parsed.schemaVersion !== TASK_CHANGE_HISTORY_SCHEMA_VERSION || parsed.runId !== runId || typeof parsed.savedAt !== "string") {
     throw new Error("Unsupported or corrupt task change history file.");
   }
-  return sanitizeReport(parsed.report, true);
+  const report = sanitizeReport(parsed.report, true);
+  if (parsed.diffs !== undefined) {
+    if (!Array.isArray(parsed.diffs) || parsed.diffs.length > MAX_CHANGES) throw new Error("Invalid full diff storage.");
+    const seen = new Set<string>();
+    for (const item of parsed.diffs) {
+      const file = safeRelativePath(item?.path);
+      if (seen.has(file) || typeof item.text !== "string" || Buffer.byteLength(item.text, "utf8") > MAX_DIFF_BYTES) throw new Error("Invalid full diff storage.");
+      seen.add(file);
+      const entry = report.changes.find(change => change.path === file);
+      if (!entry) throw new Error("Unattributed full diff storage.");
+      entry.fullDiff = redactSecrets(item.text, runtimeSecrets());
+    }
+  }
+  return report;
 }
 
 export async function deleteTaskChangeHistory(workspace: string, runId: string): Promise<boolean> {

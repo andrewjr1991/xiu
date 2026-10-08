@@ -20,10 +20,11 @@ function deferred<T>() {
 test("failed completion retains the reply but explains program-observed verification rejection", async () => {
   const runtime = new XiuRuntime();
   runtime.attachDriver({ run: async () => "Model claims PASS", cancel: () => false, steer: () => false,
-    status: () => ({ outcome: "failed", failureReason: "verification_failed" }) });
+    status: () => ({ outcome: "failed", failureReason: "verification_failed", completionIssues: ["文件校验 verify_output：执行未通过 · 1 项"] }) });
   await runtime.createTask("verify artifact");
   assert.equal(runtime.snapshot().task?.state, "failed");
   assert.match(runtime.snapshot().task?.error ?? "", /必需校验/);
+  assert.match(runtime.snapshot().task?.error ?? "", /verify_output：执行未通过/);
   assert.equal(runtime.snapshot().task?.result, "Model claims PASS");
 });
 

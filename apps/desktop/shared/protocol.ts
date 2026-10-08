@@ -152,6 +152,7 @@ export interface DesktopAttachment {
   bytes: number;
   kind: "image" | "file";
   previewDataUrl?: string;
+  unavailable?: boolean;
 }
 export interface DesktopAttachmentResult { insertText: string; attachments: DesktopAttachment[]; notice?: string }
 export interface DesktopAttachmentUploadRequest { files: Array<{ name: string; data: Uint8Array }> }
@@ -179,6 +180,8 @@ export interface DesktopTaskHistorySnapshot {
   model?: string;
   entries: DesktopTaskHistoryEntry[];
   events: RuntimeEvent[];
+  attachmentReferences?: Record<string, string[]>;
+  attachments?: Record<string, DesktopAttachment[]>;
   fidelity: "exact" | "reconstructed";
   changes?: TaskChangeReport;
   changeRounds?: DesktopChangeRound[];

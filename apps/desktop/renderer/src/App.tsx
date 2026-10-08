@@ -14,7 +14,8 @@ import { RecoveryPanel } from "./RecoveryPanel.js";
 import { ManagementPanel } from "./ManagementPanel.js";
 import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "../../shared/provider-recovery.js";
 import { ResizableTaskLayout } from "./ResizableTaskLayout.js";
-import { ChangesPanel } from "./ChangesPanel.js";
+import { ChangesPanel, DiffLines } from "./ChangesPanel.js";
+import { changeStats } from "./change-stats.js";
 import { SubagentActivity, SubagentCards, TaskDataPanel } from "./TaskDataPanel.js";
 import { TaskOverview } from "./TaskOverview.js";
 import { WorkspaceToolbar } from "./WorkspaceToolbar.js";
@@ -184,7 +185,7 @@ function AttachmentTiles({ attachments, compact = false }: { attachments: Deskto
   if (!attachments.length) return null;
   return <div className={`attachment-tiles ${compact ? "compact" : ""}`}>{attachments.map((attachment) => <div className={`attachment-tile ${attachment.kind}`} key={attachment.reference}>
     {attachment.previewDataUrl ? <img src={attachment.previewDataUrl} alt={attachment.name} /> : <span className="file-glyph">{attachment.kind === "image" ? "▧" : "◫"}</span>}
-    <span><strong>{attachment.name}</strong><small>{Math.max(1, Math.ceil(attachment.bytes / 1024))} KB</small></span>
+    <span><strong>{attachment.name}</strong><small>{attachment.unavailable ? "附件缺失或不可读取" : `${Math.max(1, Math.ceil(attachment.bytes / 1024))} KB`}</small></span>
   </div>)}</div>;
 }
 
@@ -199,7 +200,8 @@ function EditableAttachmentTiles({ attachments, onRemove }: { attachments: Deskt
 
 function eventText(event: RuntimeEvent): string | undefined {
   if (event.type === "task.started") return visibleMessageText(event.payload.taskPreview);
-  if (event.type === "assistant.message" || event.type === "task.steered") return event.payload.text;
+  if (event.type === "task.steered") return visibleMessageText(event.payload.text);
+  if (event.type === "assistant.message") return event.payload.text;
   if (event.type === "tool.started") return event.payload.description;
   if (event.type === "tool.progress" || event.type === "runtime.notice") return event.payload.message;
   if (event.type === "tool.finished") return event.payload.summary;
@@ -220,7 +222,7 @@ function activityText(event: RuntimeEvent): string | undefined {
   return undefined;
 }
 
-type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: DesktopAttachment[]; expandProcesses?: boolean; taskStartedAt?: string };
+type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: Record<string, DesktopAttachment[]>; expandProcesses?: boolean; taskStartedAt?: string };
 
 function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
   const [now, setNow] = useState(Date.now());
@@ -260,6 +262,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
         </details>;
       })}
     </details>}
+    {round.finished?.type === "task.finished" && round.finished.payload.state !== "completed" && <div className="review-warning" role="status">程序验收：{stateLabels[round.finished.payload.state]}。{round.finished.payload.error?.split("\n")[0] ?? "请查看运行提醒和证据。"}{round.answer ? " 以下是模型回复，不代表程序验收通过。" : ""}{round.finished.payload.error?.includes("\n") && <details><summary>查看未通过校验</summary><pre className="turn-alert-detail">{round.finished.payload.error.split("\n").slice(1).join("\n")}</pre></details>}</div>}
     {round.answer && <DetailedTaskTimeline events={[round.answer]} state="idle" modelLabel={modelLabel} />}
   </section>;
 }
@@ -270,7 +273,7 @@ function TaskTimeline(props: TimelineProps) {
   return <div className="timeline conversation-timeline">{rounds.map((round, index) => <ConversationRound taskStartedAt={index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
 }
 
-function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel, submittedAttachments = [], expandProcesses = false }: TimelineProps) {
+function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel, submittedAttachments = {}, expandProcesses = false }: TimelineProps) {
   const items = groupedTimelineItems(events, state);
   const activity = currentRuntimeActivity(events, draft, state, modelLabel);
   if (!items.length && !draft && !pendingMessage && !activity) return <div className="task-welcome"><Logo /><h2>告诉 Xiu 你想完成什么</h2><p>Xiu 可以协助开发和本机软件排障；操作将遵循你选择的权限模式。</p></div>;
@@ -282,7 +285,7 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
       {(() => { const event = item.event; return <>
       <header><span>{event.type === "assistant.message" && event.payload.hasToolCalls ? "Xiu · 公开思考摘要" : eventTitle(event)}</span><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
       {eventText(event) && <div className="event-text"><FormattedText text={eventText(event)!} /></div>}
-      {event.type === "task.started" && submittedAttachments.length > 0 && <AttachmentTiles attachments={submittedAttachments} compact />}
+      {(event.type === "task.started" || event.type === "task.steered") && submittedAttachments[event.eventId]?.length > 0 && <AttachmentTiles attachments={submittedAttachments[event.eventId]} compact />}
       </>; })()}
     </article>)}
     {pendingMessage && <article className="event-card event-task-started pending-message"><header><span>{pendingMessage.steering ? "你 · 补充要求" : "你"}</span><time>{new Date(pendingMessage.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>{pendingMessage.text && <div className="event-text">{pendingMessage.text}</div>}<AttachmentTiles attachments={pendingMessage.attachments} compact /></article>}
@@ -293,18 +296,9 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
 
 type ChangeEntry = DesktopReviewSnapshot["changes"]["changes"][number];
 
-function HistoryTimeline({ history, onClose, onDiff }: { history: DesktopTaskHistorySnapshot; onClose: () => void; onDiff: (change: ChangeEntry) => void }) {
-  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline events={history.events} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => <article className={`event-card history-${entry.kind}`} key={entry.id}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={visibleMessageText(entry.text)} /></div></article>)}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
-}
-
-function changeStats(change: ChangeEntry): { additions: number; deletions: number; approximate: boolean } {
-  let additions = 0;
-  let deletions = 0;
-  for (const line of change.preview?.replace(/\r/g, "").split("\n") ?? []) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-    if (line.startsWith("-") && !line.startsWith("---")) deletions++;
-  }
-  return { additions, deletions, approximate: !change.preview || change.limitations.length > 0 || change.preview.includes("preview truncated") };
+function HistoryTimeline({ history, submittedAttachments, onClose, onDiff }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void }) {
+  submittedAttachments = { ...submittedAttachments, ...history.attachments };
+  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => <article className={`event-card history-${entry.kind}`} key={entry.id}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={visibleMessageText(entry.text)} /></div></article>)}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
 }
 
 function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: DesktopReviewSnapshot["changes"]; legacy?: boolean; onDiff: (change: ChangeEntry) => void }) {
@@ -319,25 +313,17 @@ function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: Deskto
   const files = report.changes;
   if (!files.length) return null;
   return <details className="change-summary-card">
-    <summary><span className="change-summary-icon">±</span><span><strong>已编辑 {files.length} 个文件</strong><small><b className="added">+{additions}</b><b className="removed">-{deletions}</b>{approximate ? " · 基于有界预览，统计可能不完整" : legacy ? " · 已保存历史快照" : " · 本任务最终快照"}</small><em>{files.slice(0, 3).map((file) => file.path).join("、") || "没有检测到文件变化"}</em></span><i>{files.length > 3 ? `再显示 ${files.length - 3} 个文件` : "审查"}</i></summary>
+    <summary><span className="change-summary-icon">±</span><span><strong>已编辑 {files.length} 个文件</strong><small>{approximate && <span>范围估算：</span>}<b className="added">+{additions}</b><b className="removed">-{deletions}</b>{approximate ? " · 非精确增删统计" : legacy ? " · 已保存历史快照" : " · 本任务最终快照"}</small><em>{files.slice(0, 3).map((file) => file.path).join("、") || "没有检测到文件变化"}</em></span><i>{files.length > 3 ? `再显示 ${files.length - 3} 个文件` : "审查"}</i></summary>
     <div>{files.length === 0 ? <p>任务完成时没有检测到文件变化。</p> : files.map((file) => { const stats = changeStats(file); return <button key={file.path} onClick={() => onDiff(file)}><span className={`change-kind ${file.kind}`}>{file.kind === "created" ? "A" : file.kind === "deleted" ? "D" : file.kind === "unknown" ? "?" : "M"}</span><span>{file.path}</span><small><b className="added">+{stats.additions}</b><b className="removed">-{stats.deletions}</b></small></button>; })}</div>
   </details>;
 }
 
-function DiffPreview({ text }: { text: string }) {
-  return <pre className="diff-preview">{text.replace(/\r/g, "").split("\n").map((line, index) => {
-    const kind = line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "added" : line.startsWith("-") && !line.startsWith("---") ? "removed" : "context";
-    return <span className={`diff-line ${kind}`} key={`${index}-${line}`}>{line || " "}</span>;
-  })}</pre>;
-}
-
 function DiffDialog({ change, onClose }: { change: ChangeEntry; onClose: () => void }) {
   const stats = changeStats(change);
-  const text = change.preview ?? (change.limitations.join(" · ") || "该文件没有可展示的文本 Diff。可能是二进制、过大、不可读或快照详情受限。");
   return <div className="dialog-backdrop diff-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="diff-dialog" role="dialog" aria-modal="true" aria-label={`${change.path} Diff`}>
-      <header><div><strong>{change.path}</strong><small><b className="added">+{stats.additions}</b><b className="removed">-{stats.deletions}</b>{stats.approximate ? " · 有界预览" : ""}</small></div><button aria-label="关闭 Diff" onClick={onClose}>×</button></header>
-      <DiffPreview text={text} />
+      <header><div><strong>{change.path}</strong><small><b className="added">+{stats.additions}</b><b className="removed">-{stats.deletions}</b>{stats.approximate ? " · 范围估算，非实际增删" : ""}</small></div><button aria-label="关闭 Diff" onClick={onClose}>×</button></header>
+      <DiffLines entry={change} />
       {change.limitations.length > 0 && <footer>详情限制：{change.limitations.join(" · ")}</footer>}
     </section>
   </div>;
@@ -515,7 +501,8 @@ function ReviewInspector({ overviewHidden, task, workspace, review, history, eve
     {tab === "agents" && <section className="review-pane"><SubagentCards events={history?.events ?? events} snapshot={history ? undefined : agents} live={!history && active} onCancel={async (agent) => { const connection = await window.xiuDesktop.runtimeConnect(); await window.xiuDesktop.cancelSubagent({ runId: agent.runId, taskId: agent.taskId!, parentTaskId: connection.runtime.snapshot.task?.id ?? "" }); }} /></section>}
     {tab === "data" && <TaskDataPanel events={history?.events ?? events} review={history ? { ...review!, changes: history.changes ?? { view: "task", git: false, complete: false, changes: [], warnings: [], preExisting: [] }, artifacts: (history.changes?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })), tools: history.tools ?? [], validations: history.validations ?? [], background: [] } : review} />}
     {tab === "changes" && <section className="review-pane">
-      <div className="segmented">{(["task", "workspace", "staged"] as DesktopChangeView[]).map((view) => <button key={view} className={changeView === view ? "selected" : ""} onClick={() => onChangeView(view)}>{view === "task" ? "本任务" : view === "workspace" ? "工作区" : "已暂存"}</button>)}</div>
+      <div className="segmented">{(["task", "workspace", "staged"] as DesktopChangeView[]).map((view) => <button key={view} disabled={view !== "task" && review?.changes.git === false} title={view !== "task" && review?.changes.git === false ? "此目录不是 Git 仓库，请使用本任务比较" : undefined} className={changeView === view ? "selected" : ""} onClick={() => onChangeView(view)}>{view === "task" ? "本任务" : view === "workspace" ? "工作区" : "已暂存"}</button>)}</div>
+      {review?.changes.git === false && <p className="empty-note">此目录不是 Git 仓库。“本任务”比较任务起点与当前文件；“工作区 / 已暂存”需要 Git，不适用于此目录。</p>}
       {!displayedChanges && historicalTask && <p className="history-change-missing">该历史任务没有保存变更快照。为避免误导，这里不会显示当前工作区 Diff。</p>}
       {!displayedChanges && !historicalTask && <p className="muted padded">正在读取变更…</p>}
       <ChangesPanel report={displayedChanges} rounds={changeView === "task" ? history?.changeRounds ?? review?.changeRounds : []} selectedPath={selectedPath} onSelect={onDiff} warningLabel={reviewWarningLabel} />
@@ -642,7 +629,8 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const [historyView, setHistoryView] = useState<DesktopTaskHistorySnapshot>();
   const historyViewRef = useRef<DesktopTaskHistorySnapshot | undefined>(undefined);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
-  const [submittedAttachments, setSubmittedAttachments] = useState<DesktopAttachment[]>([]);
+  const [submittedAttachments, setSubmittedAttachments] = useState<Record<string, DesktopAttachment[]>>({});
+  const pendingAttachmentsRef = useRef<DesktopAttachment[] | undefined>(undefined);
   const [input, setInput] = useState("");
   const [composerEnterGuard] = useState(() => createComposerEnterGuard());
   const [busy, setBusy] = useState(false);
@@ -703,6 +691,11 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     void window.xiuDesktop.snapshot().then(setWorkspace).catch((reason) => setError(String(reason)));
     const offWorkspace = window.xiuDesktop.onSnapshot(setWorkspace);
     const offRuntime = window.xiuDesktop.onRuntimeEvent((event) => {
+      if ((event.type === "task.started" || event.type === "task.steered") && pendingAttachmentsRef.current) {
+        const owned = pendingAttachmentsRef.current;
+        setSubmittedAttachments(old => ({ ...old, [event.eventId]: owned }));
+        pendingAttachmentsRef.current = undefined;
+      }
       if (event.type === "task.started" || event.type === "task.steered") setPendingMessage(undefined);
       if (event.type === "task.started") { setTaskCompletionChanges(undefined); setSelectedDiff(undefined); }
       if (event.type === "assistant.draft") setDraft(event.payload.text);
@@ -798,7 +791,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     const steering = Boolean(runtime?.task && activeStates.has(runtime.task.state));
     setInput("");
     setPendingMessage({ text: visibleText, timestamp: new Date().toISOString(), steering, attachments });
-    setSubmittedAttachments(attachments);
+    pendingAttachmentsRef.current = attachments;
     setAttachments([]);
     outputFollow.resume();
     setBusy(true); setError(undefined);
@@ -810,13 +803,19 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
           ? await window.xiuDesktop.continueTask({ taskId: continuedHistory.taskId, text })
           : await window.xiuDesktop.createTask({ text });
         setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000));
+        const started = [...next.runtime.events].reverse().find(event => event.type === "task.started" && event.taskId === next.runtime.snapshot.task?.id);
+        if (started && pendingAttachmentsRef.current) {
+          const owned = pendingAttachmentsRef.current;
+          setSubmittedAttachments(old => ({ ...old, [started.eventId]: owned }));
+          pendingAttachmentsRef.current = undefined;
+        }
       }
       setPendingMessage(undefined);
     } catch (reason) {
       if (continuedHistory && runtimeRef.current?.task?.id === previousTaskId) { historyViewRef.current = continuedHistory; setHistoryView(continuedHistory); }
-      setPendingMessage(undefined); setSubmittedAttachments([]); setInput((current) => current || visibleText); setAttachments((current) => current.length ? current : attachments); setError(reason instanceof Error ? reason.message : String(reason));
+      setPendingMessage(undefined); setInput((current) => current || visibleText); setAttachments((current) => current.length ? current : attachments); setError(reason instanceof Error ? reason.message : String(reason));
     }
-    finally { submitPendingRef.current = false; setBusy(false); }
+    finally { pendingAttachmentsRef.current = undefined; submitPendingRef.current = false; setBusy(false); }
   };
 
   const newConversation = async () => {
@@ -824,7 +823,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     try {
       const next = await window.xiuDesktop.newConversation();
       setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot;
-      setEvents([]); setDraft(undefined); setPendingMessage(undefined); setHistoryView(undefined); setTaskCompletionChanges(undefined); setSelectedDiff(undefined); setInput(""); setAttachments([]); setSubmittedAttachments([]);
+      setEvents([]); setDraft(undefined); setPendingMessage(undefined); setHistoryView(undefined); setTaskCompletionChanges(undefined); setSelectedDiff(undefined); setInput(""); setAttachments([]); setSubmittedAttachments({});
       outputFollow.resume();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
@@ -876,7 +875,9 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const openTaskHistory = async (taskId: string) => {
     setBusy(true); setError(undefined);
     try {
-      setHistoryView(await window.xiuDesktop.openTaskHistory({ taskId }));
+      const history = await window.xiuDesktop.openTaskHistory({ taskId });
+      setHistoryView(history);
+      setSubmittedAttachments(current => ({ ...current, ...history.attachments }));
       setReviewTab("changes"); setChangeView("task"); changeViewRef.current = "task"; setFilePreview(undefined); setSelectedDiff(undefined);
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -1134,7 +1135,8 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   // A user's manual collapse remains in effect for the current running round.
   useEffect(() => { setPlanOpen(isActive); }, [isActive, runtime?.task?.id]);
   const planDone = plan?.steps.filter((step) => step.status === "completed").length ?? 0;
-  const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? "全部步骤完成" : "等待下一步");
+  const planState = historyView && !isActive ? historyView.status : status;
+  const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? planState === "failed" || planState === "unverified" ? "计划步骤已完成 · 验收未通过" : "全部步骤完成" : "等待下一步");
   // The conversation spans rounds; only task-scoped inspector facts are
   // filtered to the current execution. Never replace the transcript on follow-up.
   const timelineEvents = events;
@@ -1163,7 +1165,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
         {workspace.trust === "trusted" && <ResizableTaskLayout>
           <section className="task-console">
-            <div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline history={taskView.history} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
+            <div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline history={taskView.history} submittedAttachments={submittedAttachments} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={openDiff} />}
               {approval && <section className={`approval-card risk-${approval.risk}`}><header><div><span className="eyebrow">需要你的批准</span><h2>{approval.description}</h2></div><span className="risk-chip">{approval.risk}</span></header>{approval.preview && <pre>{approval.preview}</pre>}<dl><div><dt>权限范围</dt><dd>{approval.sessionScope && approval.risk !== "dangerous" ? "可仅允许一次，或记住这一类操作直至退出 Xiu" : "仅本次操作"}</dd></div><div><dt>可能影响</dt><dd>{approval.effects.join("；")}</dd></div><div><dt>恢复方式</dt><dd>{approval.recovery}</dd></div></dl>{approval.risk === "dangerous" && <label className="danger-check"><input type="checkbox" checked={dangerConfirmed} onChange={(event) => setDangerConfirmed(event.target.checked)} />我理解该操作可能不可逆，并确认继续</label>}<footer><button className="secondary-button" disabled={busy} onClick={() => void decide(false)}>拒绝</button><button className="secondary-button" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true)}>仅本次允许</button>{approval.sessionScope && approval.risk !== "dangerous" && <button className="primary-button compact" disabled={busy} onClick={() => void decide(true, true)}>本次会话始终允许</button>}</footer></section>}
             </div></div>

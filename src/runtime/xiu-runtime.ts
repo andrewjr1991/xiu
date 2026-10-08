@@ -25,7 +25,7 @@ export interface RuntimeTaskDriver {
   run(task: string): Promise<string>;
   cancel(): boolean;
   steer(text: string): boolean;
-  status(): { outcome: AgentRunOutcome; planMode?: boolean; failureReason?: AgentFailureReason };
+  status(): { outcome: AgentRunOutcome; planMode?: boolean; failureReason?: AgentFailureReason; completionIssues?: string[] };
   setPlanMode?(enabled: boolean): Promise<void>;
 }
 
@@ -192,7 +192,8 @@ export class XiuRuntime {
         plan_incomplete: "任务计划仍有未完成步骤；模型的完成声明未通过程序检查。",
         tool_failed: "最后一次工具操作未成功；请检查运行提醒后继续。",
       };
-      const error = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
+      const reason = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
+      const error = reason ? this.clean([reason, ...(status.completionIssues ?? []).slice(0, 12)].join("\n"), MAX_TOOL_TEXT) : undefined;
       this.finish(state, { result: safeResult, ...(error ? { error } : {}) });
       return result;
     } catch (error) {

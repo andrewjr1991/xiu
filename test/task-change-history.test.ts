@@ -28,6 +28,50 @@ test("task change history saves, reloads, redacts and deletes a bounded report",
   assert.equal(await loadTaskChangeHistory(workspace, runId), undefined);
 });
 
+test("complete diff survives history reload without preview or long-line clipping", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-full-review-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const value = report();
+  value.changes[0]!.fullDiff = "@@ -1,1 +1,1000 @@\n-old\n" + Array.from({ length: 1000 }, (_, i) => `+line-${i} ${"x".repeat(200)}`).join("\n") + "\n+Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n+review-tail-canary";
+  await saveTaskChangeHistory(workspace, "complete", value);
+  const loaded = (await loadTaskChangeHistory(workspace, "complete"))!.changes[0]!;
+  assert.ok(loaded.fullDiff!.length > 16 * 1024);
+  assert.match(loaded.fullDiff!, /line-999 x{200}/);
+  assert.match(loaded.fullDiff!, /review-tail-canary$/);
+  assert.doesNotMatch(loaded.fullDiff!, /abcdefghijklmnopqrstuvwxyz/);
+  assert.match(loaded.fullDiff!, /REDACTED/);
+});
+
+test("independent statistics survive save/reload and invalid counters fail closed", async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-history-stats-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const value = report();
+  value.changes[0]!.stats = { additions: 1059, deletions: 1042, exact: true };
+  await saveTaskChangeHistory(workspace, "stats", value);
+  assert.deepEqual((await loadTaskChangeHistory(workspace, "stats"))?.changes[0]?.stats, value.changes[0]!.stats);
+  value.changes[0]!.stats.additions = -1;
+  await assert.rejects(saveTaskChangeHistory(workspace, "invalid", value), /invalid statistics/);
+});
+
+test("full diff storage rejects unattributed paths and explicitly omits oversized content", async t => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-full-diff-bounds-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const value = report();
+  value.changes[0]!.fullDiff = "x".repeat(2 * 1024 * 1024 + 1);
+  await saveTaskChangeHistory(workspace, "bounds", value);
+  const loaded = (await loadTaskChangeHistory(workspace, "bounds"))!.changes[0]!;
+  assert.equal(loaded.fullDiff, undefined);
+  assert.ok(loaded.limitations.includes("full-diff-size-limit"));
+  const file = path.join(workspace, ".xiu", "task-change-history", "bounds.json");
+  const envelope = JSON.parse(await fs.readFile(file, "utf8"));
+  envelope.diffs = [{ path: "src/unrelated.ts", text: "+not-attributed" }];
+  await fs.writeFile(file, JSON.stringify(envelope));
+  await assert.rejects(loadTaskChangeHistory(workspace, "bounds"), /Unattributed/);
+  envelope.diffs[0].path = "../outside.ts";
+  await fs.writeFile(file, JSON.stringify(envelope));
+  await assert.rejects(loadTaskChangeHistory(workspace, "bounds"), /unsafe path/);
+});
+
 test("task change history enforces run IDs, safe source paths and schema versions", async (t) => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-change-history-validation-"));
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
@@ -46,7 +90,7 @@ test("task change history caps file count, preview size and total serialized byt
   const large = report();
   large.changes = Array.from({ length: 510 }, (_, index) => ({
     path: `src/file-${index}.ts`, kind: "modified" as const, source: "unknown" as const,
-    preExisting: false, staged: false, preview: `+ ${"x".repeat(20_000)}`, limitations: [],
+    preExisting: false, staged: false, preview: `+ ${"x".repeat(20_000)}`, stats: { additions: 1059, deletions: 1042, exact: true }, limitations: [],
   }));
   await saveTaskChangeHistory(workspace, "bounded-run", large);
   const file = path.join(workspace, ".xiu", "task-change-history", "bounded-run.json");
@@ -57,6 +101,8 @@ test("task change history caps file count, preview size and total serialized byt
   assert.equal(loaded?.complete, false);
   assert.ok(loaded?.warnings.some((warning) => warning.startsWith("history-file-limit:")));
   assert.ok(loaded?.changes.every((change) => !change.preview || Buffer.byteLength(change.preview, "utf8") <= 16 * 1024));
+  assert.ok(loaded?.changes.some(change => !change.preview));
+  assert.ok(loaded?.changes.every(change => change.stats?.additions === 1059 && change.stats.deletions === 1042));
 });
 
 test("task change history rejects a linked storage directory", async (t) => {
