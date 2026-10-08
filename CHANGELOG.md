@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.7 — Task review corrections (2026-10-08)
+
+- Compute bounded-work text diff statistics independently of preview truncation and persist them with task snapshots; retain both replacement sides in small hunks.
+- Bind live attachment cards to their exact user event rather than every conversation round.
+- Restore managed historical upload thumbnails on their original messages; retain missing-file placeholders and reject unsafe/link paths.
+- Persist complete redacted text Diffs separately from bounded preview metadata; paginate both review surfaces without clipping long lines. Label old preview-only records and estimated counts explicitly; preserve existing source-read limits.
+- Show program acceptance failures alongside model replies, distinguish failed/stale verification obligations, and avoid equating completed plan steps with acceptance.
+- Disable unavailable workspace/staged comparisons for non-Git directories without initializing Git or staging files.
+
 ## 0.20.6 — Desktop settings release (2026-10-04)
 
 - Add appearance, conversation/run, notification, model/channel and about settings with validated atomic persistence of non-sensitive preferences.

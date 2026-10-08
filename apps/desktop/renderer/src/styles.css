@@ -117,6 +117,11 @@ button, input, textarea { font: inherit; }
 .changes-diff > .empty-note { margin: 0; padding: 14px 16px; }
 .changes-diff > header { padding: 12px; display: flex; gap: 10px; overflow-wrap: anywhere; font-size: calc(12px * var(--ui-scale, 1)); }
 .diff-lines { overflow: auto; background: var(--tone-fbfcfe, #fbfcfe); font: 12px/1.65 Consolas, monospace; }
+.diff-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; }
+.diff-pagination button { padding: 5px 9px; border: 1px solid var(--tone-dfe5ed, #dfe5ed); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.diff-pagination button:disabled { opacity: .4; cursor: default; }
+.diff-dialog > .diff-lines { flex: 1; min-height: 0; }
+.diff-dialog > .diff-bounded-note { padding: 0 12px; }
 .diff-lines .diff-line { display: flex; width: max-content; min-width: 100%; margin: 0; padding: 0; }
 .diff-line > span { display: inline-block; width: 35px; flex-shrink: 0; text-align: right; padding-right: 8px; color: var(--tone-8190a7, #8190a7); user-select: none; }
 .diff-line code { white-space: pre; padding-right: 12px; }

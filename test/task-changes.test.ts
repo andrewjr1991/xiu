@@ -43,6 +43,7 @@ test("task diff separates dirty baseline from new, staged and deleted changes wi
     ["deleted.txt", "deleted", false], ["existing.txt", "modified", true], ["new.txt", "created", false],
   ]);
   assert.ok(result.changes.every((item) => item.source === "unknown"));
+  assert.deepEqual(result.changes.find(item => item.path === "existing.txt")?.stats, { additions: 1, deletions: 0, exact: true });
   assert.match(result.changes.find((item) => item.path === "existing.txt")!.preview!, /task edit/);
   assert.doesNotMatch(result.changes.find((item) => item.path === "existing.txt")!.preview!, /original/);
   assert.match(formatTaskChanges(result, "en"), /Source unknown/);
@@ -60,6 +61,7 @@ test("staging during a task is visible even when file content stays unchanged", 
   assert.equal(report.changes.length, 1);
   assert.equal(report.changes[0]!.kind, "index-only");
   assert.equal(report.changes[0]!.preExisting, true);
+  assert.deepEqual(report.changes[0]!.stats, { additions: 0, deletions: 0, exact: true });
 });
 
 test("workspace and staged views include untracked additions and staged deletions with distinct content", async () => {

@@ -1,5 +1,6 @@
 import type { DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent } from "../../shared/protocol.js";
 import type { RuntimeTaskSnapshot } from "../../../../src/runtime/protocol.js";
+import { changeStats } from "./change-stats.js";
 
 const excerpt = (text: string, limit: number) => {
   const plain = text.replace(/```[\s\S]*?```/g, " ").replace(/[#*`>]/g, "").replace(/\s+/g, " ").trim();
@@ -43,9 +44,9 @@ export function taskOverview(events: RuntimeEvent[], history?: DesktopTaskHistor
   const currentEnvironment = !history && review?.overview?.workspace === workspace;
   const changes = history?.changes ?? (matched ? review?.overview?.taskChanges : undefined);
   let additions = 0, deletions = 0;
-  for (const entry of changes?.changes ?? []) for (const line of entry.preview?.split("\n") ?? []) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-    if (line.startsWith("-") && !line.startsWith("---")) deletions++;
+  for (const entry of changes?.changes ?? []) {
+    const stats = changeStats(entry);
+    additions += stats.additions; deletions += stats.deletions;
   }
   const skills = new Map<string, string>();
   const sources = new Map<string, string>();
@@ -59,7 +60,7 @@ export function taskOverview(events: RuntimeEvent[], history?: DesktopTaskHistor
   return {
     ...summary,
     branch: currentEnvironment ? review?.overview?.branch : undefined,
-    changes, additions, deletions,
+    changes, additions, deletions, approximateCounts: changes ? !changes.complete || changes.changes.some(entry => changeStats(entry).approximate) : false,
     skills: [...skills.values()].slice(-30), sources: [...sources.values()].slice(-30),
     background: currentEnvironment ? (review?.background ?? []).slice(0, 20) : [],
     artifacts: (changes?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).slice(0, 30),

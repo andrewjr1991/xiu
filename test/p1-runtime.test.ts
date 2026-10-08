@@ -95,6 +95,8 @@ test("P1 a different passing check cannot erase a failed required check", async 
   assert.notEqual(agent.status().outcome, "completed");
   assert.equal(summary?.verified, false);
   assert.equal(summary?.failureReason, "verification_failed");
+  assert.match(agent.status().completionIssues?.join("\n") ?? "", /测试命令：执行未通过/);
+  assert.doesNotMatch(agent.status().completionIssues?.join("\n") ?? "", /calc.test|other.test/);
 });
 
 test("P1 an edit after a passing check expires verification until a fresh check runs", async () => {

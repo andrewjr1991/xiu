@@ -240,6 +240,7 @@ export class Agent {
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private lastRunFailureReason?: AgentFailureReason;
+  private lastCompletionIssues: string[] = [];
   private verificationEvidence?: VerificationEvidence;
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
@@ -720,6 +721,7 @@ export class Agent {
           : "plan_incomplete";
         this.lastRunOutcome = outcome;
         this.lastRunFailureReason = failureReason;
+        this.lastCompletionIssues = failureReason === "verification_failed" ? verification.pendingSummary() : [];
         const checks = verification.evidenceChecks();
         if (outcome === "completed" && verifiedAfterChange && verificationStamp && checks.length) {
           this.verificationEvidence = {
@@ -1049,7 +1051,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; failureReason?: AgentFailureReason; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; failureReason?: AgentFailureReason; completionIssues?: string[]; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
@@ -1063,6 +1065,7 @@ export class Agent {
       planMode: this.planManager?.mode() ?? false,
       outcome: this.lastRunOutcome,
       failureReason: this.lastRunFailureReason,
+      completionIssues: this.lastRunFailureReason === "verification_failed" ? [...this.lastCompletionIssues] : [],
       turn: this.currentTurn,
       maxTurns: this.config.maxTurns,
       pendingSteering: this.pendingSteering.length,

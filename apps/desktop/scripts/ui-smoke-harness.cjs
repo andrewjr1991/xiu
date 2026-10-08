@@ -266,6 +266,9 @@ app.whenReady().then(async () => {
     await waitFor(window, `!document.querySelector('.xiu-select-menu') && document.activeElement === document.querySelector('[aria-label="执行轮次"]')`, "Escape returns focus");
     await waitFor(window, `document.querySelector('.changes-tree').innerText.includes('example.ts') && document.querySelector('.changes-diff').innerText.includes('new')`, "Diff file tree and lines");
     assert(await evaluate(window, `getComputedStyle(document.querySelector('.diff-lines .diff-line')).display === 'flex'`), "Diff gutter/code alignment was overridden by old preview styles.");
+    assert(await evaluate(window, `document.querySelectorAll('.changes-diff .diff-line').length <= 250 && document.querySelector('.changes-diff').innerText.includes('完整 Diff')`), "Complete Diff must paginate rather than truncate or overgrow the DOM.");
+    await clickText(window, "末页", ".changes-diff button");
+    await waitFor(window, `[...document.querySelectorAll('.changes-diff code')].at(-1)?.textContent.endsWith('x'.repeat(400)) && document.querySelector('.changes-diff').innerText.includes('full-review-tail-canary')`, "full Diff last page and untruncated long line");
     await chooseOption(window, '[aria-label="执行轮次"]', '执行轮次 1');
     await waitFor(window, `document.querySelector('.changes-diff').innerText.includes('round-one-canary')`, "saved execution round Diff");
     await clickText(window, "example.ts", ".changes-tree button");
@@ -396,10 +399,13 @@ app.whenReady().then(async () => {
     await waitFor(window, `!document.querySelector('.turn-process').open`, "manually collapse running process");
     assert(await evaluate(window, `(() => { const status=document.querySelector('.active-task-status'); const composer=document.querySelector('.composer'); document.querySelector('.task-scroll').scrollTop=0; const bounds=status?.getBoundingClientRect(); return status && !status.closest('.task-scroll') && bounds.height > 0 && bounds.bottom <= composer.getBoundingClientRect().top; })()`), "Live status stays visible above the composer outside folded/scrolled process details.");
     await checkComposerIme(window, "active composer");
+    await evaluate(window, `document.querySelector('.attach-button').click()`);
+    await waitFor(window, `Boolean(document.querySelector('.attachment-tiles.editable'))`, "steering attachment queued");
     await setComposerText(window, "继续检查输入法验收");
     await evaluate(window, `(() => { const el=document.querySelector('.composer textarea'); for (let i=0;i<2;i++) el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true})); document.querySelector('.send-button').click(); return true; })()`);
     await waitFor(window, `window.xiuSmoke.calls().filter(call => call === 'task:steer').length === 1`, "normal Enter steers active task exactly once");
     assert(await evaluate(window, `window.xiuSmoke.calls().filter(call => call === 'task:create').length === 1`), "Active Enter must steer without creating another task.");
+    assert(await evaluate(window, `document.querySelectorAll('.event-task-steered .attachment-tile').length === 1 && !document.querySelector('.event-task-steered .event-text').innerText.includes('.xiu/attachments')`), "Steering attachment belongs to that message and internal references stay hidden.");
     await waitFor(window, `document.querySelector('.timeline .subagent-activity')?.textContent.includes('调查任务验收')`, "chronological conversation subagent status");
     assert(await evaluate(window, `!document.querySelector('.turn-process').open`), "Progress updates must not reopen a manually collapsed process.");
     await evaluate(window, `window.xiuSmoke.emitAlertFixture()`);
@@ -514,11 +520,14 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.historyFixture()`);
     await clickText(window, "历史续接验收", ".history-row");
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`, "old history fixture loaded");
+    assert(await evaluate(window, `document.querySelector('.task-scroll').innerText.includes('restored-history-image.png') && document.querySelector('.task-scroll').innerText.includes('附件缺失或不可读取') && Boolean(document.querySelector('.task-scroll .attachment-tile img'))`), "History must restore thumbnails and missing-upload placeholders.");
     await evaluate(window, `document.querySelector('.history-view h2').textContent='很长的历史任务需求，包含完整约束和验收条件。'.repeat(30)`);
     await settleLayout(window);
     assert(await evaluate(window, `(() => { const title=document.querySelector('.history-view h2'); return getComputedStyle(title).textOverflow === 'ellipsis' && title.getBoundingClientRect().height <= 24 && document.querySelector('.task-scroll').scrollWidth <= document.querySelector('.task-scroll').clientWidth; })()`), 'Long history titles stay on one line; full request remains in the conversation.');
     await fs.promises.writeFile(path.join(smokeRoot, 'quiet-history-1366.png'), (await window.webContents.capturePage()).toPNG());
     await setComposerText(window, "请重新安排只读审查");
+    await evaluate(window, `document.querySelector('.attach-button').click()`);
+    await waitFor(window, `document.querySelector('.attachment-tiles.editable')?.innerText.includes('round-two-image-canary')`, "round two attachment queued");
     // Opening history refreshes the recovery view; the fixture has no recovery.
     await evaluate(window, `document.querySelector('.refresh-button').click()`);
     await waitFor(window, `!document.querySelector('.writer-warning')`, "history fixture ready to continue");
@@ -526,6 +535,7 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('task:continue')`, "history continuation dispatched");
     await evaluate(window, `window.xiuSmoke.finishContinuation()`);
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('new-review-result-canary')`, "new continuation result retained");
+    assert(await evaluate(window, `(() => { const rounds=[...document.querySelectorAll('.conversation-round')]; return rounds.length === 2 && rounds[0].querySelectorAll('.attachment-tile').length === 2 && rounds[0].innerText.includes('restored-history-image.png') && !rounds[0].innerText.includes('round-two-image-canary') && rounds[1].querySelectorAll('.attachment-tile').length === 1 && rounds[1].innerText.includes('round-two-image-canary') && !rounds[1].innerText.includes('restored-history-image.png'); })()`), "Restored uploads persist through continuation; round two uploads never leak into the first round.");
     await settleLayout(window);
     assert(await evaluate(window, `document.querySelector('.task-scroll .turn-process') && [...document.querySelectorAll('.task-scroll .turn-process')].every(el => !el.open)`), "Completed turn defaults to a folded process with final answer visible.");
     await fs.promises.writeFile(path.join(smokeRoot, 'compact-completed-turn.png'), (await window.webContents.capturePage()).toPNG());
@@ -534,6 +544,18 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.querySelector('.review-pane .subagent-card')?.innerText.includes('本轮审查')`, "completed continuation keeps children");
     await clickText(window, "查看结果", ".review-pane summary");
     await waitFor(window, `document.querySelector('.review-pane').innerText.includes('new-child-result-canary')`, "completed child result remains inspectable");
+    await evaluate(window, `window.xiuSmoke.failContinuation()`);
+    await waitFor(window, `document.querySelector('.conversation-round:last-child [role="status"]')?.textContent.includes('程序验收：失败')`, "authoritative failed completion alongside model reply");
+    assert(await evaluate(window, `document.querySelector('.conversation-round:last-child').innerText.includes('模型声称全部通过-canary') && document.querySelector('.conversation-round:last-child [role="status"]').textContent.includes('文件修改后需重跑') && !document.querySelector('.conversation-round:last-child [role="status"] details').open`), "Failed acceptance retains model reply with folded pending verification details.");
+    await waitFor(window, `document.querySelector('.plan-pill')?.innerText.includes('验收未通过') || document.querySelector('.composer-area')?.innerText.includes('验收未通过')`, "plan completion is not acceptance success");
+    await openTool(window, "变更");
+    await evaluate(window, `window.xiuSmoke.nonGitFixture(true); document.querySelector('.refresh-button').click()`);
+    await waitFor(window, `[...document.querySelectorAll('.segmented button')].filter(button => button.disabled).length === 2`, "non-Git views are unavailable instead of empty");
+    assert(await evaluate(window, `document.querySelector('.review-pane').innerText.includes('需要 Git')`), "Non-Git workspace explains comparison semantics.");
+    await evaluate(window, `window.xiuSmoke.nonGitFixture(false); document.querySelector('.refresh-button').click()`);
+    await waitFor(window, `[...document.querySelectorAll('.segmented button')].every(button => !button.disabled)`, "Git views remain available");
+    assert(await evaluate(window, `document.querySelector('.changes-panel > header .added')?.textContent === '+1059' && document.querySelector('.changes-panel > header .removed')?.textContent === '-1042'`), "Diff totals must use independent statistics, not count the two displayed preview lines.");
+    console.log("UI smoke: round-scoped attachment, authoritative acceptance, and non-Git views ready");
     await evaluate(window, `window.xiuSmoke.freshProviders()`);
     await clickText(window, "设置", ".sidebar-footer");
     await clickText(window, "模型与渠道", ".settings-nav button");

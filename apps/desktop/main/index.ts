@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, Notifica
 import { PreferencesStore } from "./preferences-store.js";
 import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
+import { restoreHistoryAttachments } from "./history-attachments.js";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -277,7 +278,18 @@ function registerIpc(): void {
   });
   ipcMain.handle(desktopChannels.taskHistoryOpen, async (event, request: DesktopTaskHistoryRequest) => {
     assertTrustedSender(event);
-    return taskController.openTaskHistory(controller.trustedWorkspacePath(), request);
+    const workspace = controller.trustedWorkspacePath();
+    const history = await taskController.openTaskHistory(workspace, request);
+    const attachments = await restoreHistoryAttachments(workspace, history.attachmentReferences ?? {}, data => {
+      const image = nativeImage.createFromBuffer(data);
+      if (image.isEmpty()) return undefined;
+      const size = image.getSize();
+      const scale = Math.min(1, 180 / Math.max(1, size.width), 120 / Math.max(1, size.height));
+      return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
+    });
+    // Do not send results from a workspace closed/switched while files loaded.
+    if (controller.trustedWorkspacePath() !== workspace) throw new Error("Workspace changed while loading history.");
+    return { ...history, attachments };
   });
   ipcMain.handle(desktopChannels.taskDelete, async (event, request: DesktopTaskDeleteRequest) => {
     assertTrustedSender(event);

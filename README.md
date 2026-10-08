@@ -1,5 +1,9 @@
 <div align="center">
 
+0.20.7 release candidate: complete paginated text Diffs, independent addition/deletion counts, restored per-message historical uploads, authoritative acceptance diagnostics, and explicit non-Git view availability. Candidate and independent main CI must pass before official assets are published. Windows remains unsigned; npm publication requires authentication. Earlier release records below are historical.
+
+Unreleased local correction (2026-10-08): independently counted, persisted complete text Diffs with paginated review; managed upload thumbnails restored on their original history messages; explicit program acceptance diagnostics; and unavailable Git views for non-Git folders. Old preview-only records are clearly labelled and never reconstructed from current files. Existing source-read/security limits still apply. These changes are not included in published 0.20.6 assets; no official tag or installer has been replaced.
+
 [GitHub 0.20.6 is published](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.6) with the unsigned Windows installer, CLI tarball, local verification manifests and checksums. npm publication is still pending authentication.
 
 > 0.20.6 desktop settings release (2026-10-04): appearance and dark-surface fixes, font sizing, density, reduced motion, conversation preferences, optional background notifications and build information. The maintainer explicitly waived remote CI for this version; artifacts are built and checked locally, not inherited from previous CI. Windows remains unsigned; full-suite and cross-platform verification were not run. npm authentication is unavailable (latest: 0.20.4). Release status and exact-source asset records: [publishing guide](./PUBLISHING.zh-CN.md). Notes below are historical.

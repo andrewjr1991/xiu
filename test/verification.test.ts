@@ -5,6 +5,18 @@ import path from "node:path";
 import test from "node:test";
 import { captureVerificationStamp, isVerificationCommand, VerificationLedger, verificationCheckKey, verifyOutputSupersedes } from "../src/verification.js";
 
+test("completion diagnostics distinguish failed and stale checks without exposing inputs", () => {
+  const ledger = new VerificationLedger();
+  ledger.recordTool("verify_output", { path: "private-canary", required_substrings: ["secret-canary"], forbidden_substrings: ["token-canary"] }, true);
+  ledger.recordTool("run_process", { command: "command-secret-canary" }, false);
+  ledger.invalidate();
+  const summary = ledger.pendingSummary().join("\n");
+  assert.match(summary, /文件修改后需重跑/); assert.match(summary, /测试命令：执行未通过/);
+  assert.match(summary, /必需内容 1 项，禁止内容 1 项/);
+  assert.doesNotMatch(summary, /canary/);
+  assert.equal(ledger.passed, false);
+});
+
 test("pending checks expose exact stale obligations without accepting weaker success", () => {
   const ledger = new VerificationLedger();
   const strong = { path: "index.html", min_bytes: 50, max_bytes: 1000, forbidden_substrings: ["CDN"] };

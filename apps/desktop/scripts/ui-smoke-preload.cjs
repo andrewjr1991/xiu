@@ -50,7 +50,8 @@ const emit = (type, payload) => {
   if (task.id === "continued-task") continuationEvents.push(event);
   for (const listener of runtimeListeners) listener(event);
 };
-const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
+const report = { view: "workspace", git: true, capturedAt: now(), changes: [{ path: "src/example.ts", kind: "modified", source: "unknown", preExisting: false, staged: false, stats: { additions: 1059, deletions: 1042, exact: true }, preview: "@@ -1 +1 @@\n-old\n+new", limitations: [] }], preExisting: [], complete: true, warnings: [] };
+report.changes[0].fullDiff = "@@ -1,1 +1,600 @@\n-old\n" + Array.from({ length: 600 }, (_, i) => `+new-${i}`).join("\n") + "\n+full-review-tail-canary-" + "x".repeat(400);
 const compactReview = { tools: [{ id: "data-tool-1", name: "read_file", status: "succeeded", durationMs: 31, evidence: "compact-detail-canary\n" + "saved detail\n".repeat(50) }], validations: [{ id: "data-verify-1", name: "verify_output", status: "succeeded", evidence: "verification-canary" }], background: [{ id: "data-process-1", command: "node dev-server.mjs", state: "running", elapsedMs: 1200, outputBytes: 40 }], artifacts: [{ path: "src/example.ts", kind: "modified" }] };
 const review = () => ({ overview: { workspace: workspace.workspace.path, taskId: task?.id, branch: "smoke-overview-branch", taskChanges: report }, generatedAt: now(), changeView: "workspace", changes: report, files: [{ path: "src/example.ts", kind: "text", bytes: 8 }], commands: [], ...compactReview, checkpoints: [{ id: "checkpoint-1", createdAt: now(), tool: "write_file", description: "修改前恢复点", files: [{ path: "src/example.ts", existed: true }] }], ...(recoveryActive ? { recovery: { runId: "recovery-1", taskPreview: "异常中断任务", status: "recoverable", recommendation: "先核验未知副作用，再决定是否恢复。", unknownOperations: [{ id: "op-unknown", kind: "command", name: "external command", status: "unknown", sideEffect: "unknown", startedAt: now() }] } } : {}) });
 const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
@@ -104,7 +105,7 @@ const bridge = {
     calls.push("task:create");
     return runtime();
   },
-  openTaskHistory: async () => ({ taskId: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now(), fidelity: "reconstructed", entries: [{ id: "old", kind: "assistant", title: "Xiu", text: "old-snake-result-canary" }], events: oldHistoryEvents }),
+  openTaskHistory: async () => ({ taskId: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now(), fidelity: "reconstructed", entries: [{ id: "old", kind: "assistant", title: "Xiu", text: "old-snake-result-canary" }], events: oldHistoryEvents, attachments: { "old-start": [{ reference: "@.xiu/attachments/history-image.png", path: ".xiu/attachments/history-image.png", name: "restored-history-image.png", kind: "image", bytes: 42, previewDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=" }, { reference: "@.xiu/attachments/missing.png", path: ".xiu/attachments/missing.png", name: "missing.png", kind: "image", bytes: 0, unavailable: true }] } }),
   continueTask: async ({ text }) => {
     calls.push("task:continue");
     recoveryActive = false;
@@ -139,10 +140,10 @@ const bridge = {
     emit("subagent.updated", { agent: { id: "run:child", runId: "run", title: "调查任务验收", role: "explorer", status: "completed", startedAt: now(), completedAt: now(), durationMs: 1200, result: "child-result-canary" } });
   },
   deleteTask: async () => workspace,
-  chooseAttachments: async () => ({ insertText: "", attachments: [] }),
+  chooseAttachments: async () => ({ insertText: "", attachments: [{ reference: '@".xiu/attachments/round-two.png"', path: ".xiu/attachments/round-two.png", name: "round-two-image-canary.png", bytes: 100, kind: "image" }] }),
   pasteAttachments: async () => ({ insertText: "", attachments: [] }),
   importAttachments: async () => ({ insertText: "", attachments: [] }),
-  reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
+  reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], fullDiff: undefined, preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
   restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
   recoverTask: async () => runtime(),
@@ -188,6 +189,14 @@ const bridge = {
 
 contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
 contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls],
+  nonGitFixture: (enabled) => { report.git = !enabled; },
+  failContinuation: () => {
+    const error = "尚有必需校验未通过。\n文件校验 verify_output（必需内容 4 项，禁止内容 0 项）：文件修改后需重跑 · 1 项";
+    task = { ...task, state: "failed", error, updatedAt: now(), plan: { goal: "验收", steps: [{ id: "done", title: "实现", status: "completed" }] } };
+    emit("plan.updated", { plan: task.plan });
+    emit("assistant.message", { text: "模型声称全部通过-canary", hasToolCalls: false });
+    emit("task.finished", { state: "failed", error, result: "模型声称全部通过-canary" });
+  },
   historyFixture: () => {
     recoveryActive = false;
     workspace.tasks = [{ id: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now() }];

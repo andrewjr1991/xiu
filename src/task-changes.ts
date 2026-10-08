@@ -6,10 +6,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isSecretField, redactSecrets } from "./secret-redaction.js";
 import { resolveWorkspacePath } from "./workspace-path.js";
+import { textDiff } from "./text-diff.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_LIMITS = { maxFiles: 2_000, maxFileBytes: 256 * 1024, maxTotalBytes: 8 * 1024 * 1024 };
-const MAX_PREVIEW_BYTES = 16 * 1024;
 const EXCLUDED_DIRECTORIES = new Set([".git", ".xiu", "node_modules"]);
 
 export interface TaskChangeOptions {
@@ -50,6 +50,9 @@ export interface TaskChangeEntry {
   preExisting: boolean;
   staged: boolean;
   preview?: string;
+  /** Complete redacted line diff, independent of the compact CLI preview. */
+  fullDiff?: string;
+  stats?: { additions: number; deletions: number; exact: boolean };
   limitations: string[];
 }
 
@@ -272,39 +275,6 @@ export async function captureTaskBaseline(cwd: string, options: TaskChangeOption
   return capture(cwd, options);
 }
 
-function preview(before: TaskFileSnapshot | undefined, after: TaskFileSnapshot | undefined): string | undefined {
-  if ((before && before.state !== "missing" && before.content === undefined)
-    || (after && after.state !== "missing" && after.content === undefined)) return undefined;
-  const textLines = (content: string) => {
-    if (!content) return [];
-    const lines = content.split(/\r?\n/);
-    if (lines.at(-1) === "") lines.pop();
-    return lines;
-  };
-  const oldLines = textLines(before?.content ?? "");
-  const newLines = textLines(after?.content ?? "");
-  let start = 0;
-  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start++;
-  if (start === oldLines.length && start === newLines.length) return undefined;
-  let oldEnd = oldLines.length, newEnd = newLines.length;
-  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) { oldEnd--; newEnd--; }
-  const clip = (line: string) => line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").slice(0, 180);
-  const candidates = [`@@ -${oldLines.length ? start + 1 : 0},${oldEnd - start} +${newLines.length ? start + 1 : 0},${newEnd - start} @@ (preview)`,
-    ...oldLines.slice(start, oldEnd).map((line) => `- ${clip(line)}`),
-    ...newLines.slice(start, newEnd).map((line) => `+ ${clip(line)}`)];
-  const output: string[] = [];
-  let bytes = 0;
-  let truncated = false;
-  for (const line of candidates) {
-    const next = Buffer.byteLength(`${line}\n`, "utf8");
-    if (bytes + next > MAX_PREVIEW_BYTES - 32) { truncated = true; break; }
-    output.push(line);
-    bytes += next;
-  }
-  if (truncated) output.push("... (preview truncated)");
-  return output.join("\n");
-}
-
 function changed(before: TaskFileSnapshot | undefined, after: TaskFileSnapshot | undefined): boolean {
   if (!before && !after) return false;
   if (!before || !after) return before?.state !== "missing" || after?.state !== "missing";
@@ -317,8 +287,11 @@ function entry(file: string, before: TaskFileSnapshot | undefined, after: TaskFi
   const uncertain = incomplete || before?.state === "unavailable" || after?.state === "unavailable";
   const kind = uncertain ? "unknown" : (!before || before.state === "missing") ? "created"
     : (!after || after.state === "missing") ? "deleted" : "modified";
+  const readable = !uncertain && (!before || before.state === "missing" || before.content !== undefined)
+    && (!after || after.state === "missing" || after.content !== undefined);
+  const diff = readable ? textDiff(before?.content ?? "", after?.content ?? "") : undefined;
   return {
-    path: file, kind, source: "unknown", preExisting, staged, preview: preview(before, after),
+    path: file, kind, source: "unknown", preExisting, staged, ...diff,
     limitations: [...new Set([before?.omitted, after?.omitted].filter((value): value is NonNullable<typeof value> => !!value)), ...(incomplete ? ["incomplete-inventory"] : [])],
   };
 }
