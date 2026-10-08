@@ -2,6 +2,8 @@
 
 ## 0.20.7 — Task review corrections (2026-10-08)
 
+- Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.
+
 - Compute bounded-work text diff statistics independently of preview truncation and persist them with task snapshots; retain both replacement sides in small hunks.
 - Bind live attachment cards to their exact user event rather than every conversation round.
 - Restore managed historical upload thumbnails on their original messages; retain missing-file placeholders and reject unsafe/link paths.

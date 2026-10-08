@@ -1,6 +1,6 @@
-# 0.20.7 任务审查修复发布候选
+# 0.20.7 任务审查修复发布
 
-完整分页文本 Diff、独立增删统计、逐消息历史图片恢复、程序验收说明及非 Git 视图提示。本次必须候选与独立 main CI 全绿后发布同源制品；Windows 仍未签名，npm 待核验认证。下方 0.20.6 及更早记录均为历史，不适用本次 CI 豁免。见 [发布指南](./PUBLISHING.zh-CN.md)。
+0.20.7 已于 2026-10-08 [发布到 GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.7)，源提交 `34651d5081dc96fc135930c0b8be65fb97d67604`。main CI 37745693627 五作业通过，Windows CLI 全量测试 1010 通过、7 跳过、1 失败（后台临时 bootstrap 文件 lstat EPERM 竞态，尚未修复）；维护者明确接受该风险并授权发布。候选与 PR 各六作业通过。五个附件直接使用 main CI 制品，大小和 SHA256 已回读验证；CLI manifest 原样保留 failed/unaccepted-candidate。Windows 安装器未签名。npm 缺少认证，latest 仍为 0.20.4。
 
 ## 0.20.6 桌面设置中心发布（历史）
 

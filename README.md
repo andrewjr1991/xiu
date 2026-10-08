@@ -1,6 +1,6 @@
 <div align="center">
 
-0.20.7 release candidate: complete paginated text Diffs, independent addition/deletion counts, restored per-message historical uploads, authoritative acceptance diagnostics, and explicit non-Git view availability. Candidate and independent main CI must pass before official assets are published. Windows remains unsigned; npm publication requires authentication. Earlier release records below are historical.
+[0.20.7 is published on GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.7). Exact main-CI assets and five verified checksums are available. Five jobs passed; the maintainer explicitly accepted one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed). The original failed CLI manifest is retained. Windows is unsigned; npm publication remains pending authentication (latest 0.20.4). Older candidate notes below are historical.
 
 Unreleased local correction (2026-10-08): independently counted, persisted complete text Diffs with paginated review; managed upload thumbnails restored on their original history messages; explicit program acceptance diagnostics; and unavailable Git views for non-Git folders. Old preview-only records are clearly labelled and never reconstructed from current files. Existing source-read/security limits still apply. These changes are not included in published 0.20.6 assets; no official tag or installer has been replaced.
 
