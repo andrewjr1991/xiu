@@ -22,7 +22,7 @@ function deferred<T>() {
 
 class FakeDriver implements RuntimeTaskDriver {
   planMode = false;
-  setPlanMode(enabled: boolean): void { this.planMode = enabled; }
+  async setPlanMode(enabled: boolean): Promise<void> { this.planMode = enabled; }
   outcome: ReturnType<RuntimeTaskDriver["status"]>["outcome"] = "idle";
   result = deferred<string>();
   steering: string[] = [];
@@ -109,8 +109,8 @@ test("desktop management reload revokes Full Access and preserves Plan; active t
       setApprovalMode() {}, management: { change: async () => { changed++; } } as unknown as WorkspaceManagementService };
   });
   const initial = await controller.connect(workspace);
-  const planned = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId });
-  await controller.setApprovalMode(workspace, { mode: "full", contextId: planned.modeContextId }, async () => true);
+  const planned = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId! });
+  await controller.setApprovalMode(workspace, { mode: "full" }, async () => true);
   const reloaded = await controller.changeManagement(workspace, { action: "routing", revision: "fixture", enabled: true });
   assert.equal(changed, 1);
   assert.equal(reloaded.approvalMode, "ask");
@@ -436,7 +436,7 @@ test("desktop deletes journal-only conversations by sidebar session ID and toler
   await journal.complete("completed");
   const runtime = new XiuRuntime(); runtime.attachDriver(new FakeDriver());
   const controller = new DesktopTaskController(() => undefined, async () => ({ runtime, journal, provider: { id: "test", label: "test", model: "model" } }));
-  const request = { taskId: "manually-removed-session", confirmed: true };
+  const request = { taskId: "manually-removed-session", confirmed: true as const };
   await assert.rejects(controller.deleteTask(workspace, request, false));
   assert.equal((await journal.recent()).length, 3);
   await controller.deleteTask(workspace, request, true);

@@ -10,7 +10,7 @@ import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
 function config(cwd: string): AgentConfig {
-  return { provider: "openai", model: "test-model", cwd, maxTurns: 5, autoApprove: true, contextLimit: 60_000 };
+  return { provider: "openai", providerId: "openai", model: "test-model", cwd, maxTurns: 5, autoApprove: true, contextLimit: 60_000 };
 }
 
 test("a closed session can be loaded and continued in the same project", async () => {
@@ -159,7 +159,7 @@ test("legacy replay includes every task instead of only the latest twelve messag
     events.push({ timestamp: new Date(index * 2_000).toISOString(), type: "task", task: `任务 ${index}` });
     events.push({ timestamp: new Date(index * 2_000 + 1_000).toISOString(), type: "assistant", text: `回答 ${index}\n第二行`, toolCalls: [] });
   }
-  await fs.writeFile(path.join(directory, "legacy-all.jsonl"), events.map(JSON.stringify).join("\n") + "\n");
+  await fs.writeFile(path.join(directory, "legacy-all.jsonl"), events.map((event) => JSON.stringify(event)).join("\n") + "\n");
   const restored = await loadSession(cwd, "legacy-all");
   assert.equal(restored.replay.length, 15);
   assert.equal(restored.replay[0]?.task, "任务 0");
@@ -229,6 +229,7 @@ test("an active interactive agent can switch to a selected persisted session", a
     model: "restored-model",
     messages: [{ role: "user", content: "restored task context" }],
     stats: { modelCalls: 4, toolCalls: 7, inputTokens: 100, outputTokens: 20, estimatedTokens: 8, compactions: 1, activeMs: 5000 },
+    replay: [],
   });
   assert.equal(agent.status().sessionId, "chosen-session");
   assert.equal(agent.status().model, "restored-model");

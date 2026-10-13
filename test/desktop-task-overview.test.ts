@@ -5,7 +5,7 @@ import type { DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent } 
 const started = (taskId: string): RuntimeEvent => ({ schemaVersion: 1, eventId: taskId, sequence: 1, taskId, timestamp: "2026-10-03T01:00:00Z", type: "task.started", payload: { taskPreview: taskId } });
 const tool = (name: string, description: string): RuntimeEvent => ({ ...started("new"), type: "tool.started", payload: { name, description, changesWorkspace: false, verification: false, risk: "read" } });
 const changes = { view: "task" as const, git: true, complete: true, changes: [], warnings: [], preExisting: [] };
-const review = { overview: { workspace: "project", taskId: "new", branch: "main", taskChanges: changes }, background: [{ id: "worker", command: "worker", running: true }] } as DesktopReviewSnapshot;
+const review = { overview: { workspace: "project", taskId: "new", branch: "main", taskChanges: changes }, background: [{ id: "worker", command: "worker", running: true }] } as unknown as DesktopReviewSnapshot; // partial fake: only the fields taskOverview reads
 test("overview only includes selected round calls and never old replies", () => {
   const result = taskOverview([started("old"), { ...started("old"), type: "assistant.message", payload: { text: "old reply", hasToolCalls: false } }, started("new"), tool("read_skill", "load skill review"), tool("mcp__docs__read", "read docs"), tool("web_search", "search news")]);
   assert.equal(result.goal, undefined); assert.equal(result.summary, undefined);
@@ -13,7 +13,7 @@ test("overview only includes selected round calls and never old replies", () => 
 });
 
 test("long original input is not displayed as an initial task summary", () => {
-  const event = { ...started("new"), payload: { taskPreview: "用户详细需求".repeat(300) } };
+  const event: RuntimeEvent = { ...started("new"), type: "task.started", payload: { taskPreview: "用户详细需求".repeat(300) } };
   assert.equal(stageSummary([event]).summary, undefined);
   assert.equal(stageSummary([event]).goal, undefined);
 });

@@ -5,7 +5,11 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import { createProjectIndexTools, ProjectIndex } from "../src/project-index.js";
-import type { ModelProvider } from "../src/types.js";
+import type { ModelProvider, ToolContext } from "../src/types.js";
+
+function readOnlyContext(cwd: string): ToolContext {
+  return { cwd, approve: async () => { throw new Error("read tools must not request approval"); } };
+}
 
 test("project index detects stack, checks, and relevant source files", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-"));
@@ -36,7 +40,7 @@ test("project index detects stack, checks, and relevant source files", async () 
       return { text: "done", toolCalls: [], raw: {} };
     },
   };
-  await new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {}, undefined, index)
+  await new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {}, undefined, index)
     .run("fix authentication session token validation");
   assert.match(receivedContext, /Detected project: Node\.js, TypeScript, React, Vite/);
   assert.match(receivedContext, /src\/authentication\.ts/);
@@ -153,7 +157,7 @@ test("project profile tool lazily initializes an index", async () => {
   const index = new ProjectIndex(cwd);
   const tool = createProjectIndexTools(index).find((candidate) => candidate.name === "project_profile");
   assert.ok(tool);
-  const profile = JSON.parse(await tool.execute({}, { cwd })) as { stacks: string[]; checks: Record<string, string> };
+  const profile = JSON.parse(await tool.execute({}, readOnlyContext(cwd))) as { stacks: string[]; checks: Record<string, string> };
   assert.deepEqual(profile.stacks, ["Node.js", "TypeScript"]);
   assert.equal(profile.checks.build, "npm run build");
   assert.equal(index.status().mode, "full");
@@ -185,7 +189,7 @@ test("a long-lived Agent refreshes externally added changed deleted and renamed 
   const index = new ProjectIndex(cwd);
   let context = "";
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, autoApprove: false },
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
     { async complete(_system, messages) {
       context = messages.at(-1)?.content ?? "";
       return { text: "Inspected.", toolCalls: [], raw: {} };
@@ -322,16 +326,16 @@ test("find_relevant_code refreshes externally added and changed search terms aft
   const index = new ProjectIndex(cwd, () => now);
   const discover = t.mock.method(index as unknown as { discover(): Promise<unknown> }, "discover");
   const tool = createProjectIndexTools(index).find((candidate) => candidate.name === "find_relevant_code")!;
-  assert.match(await tool.execute({ query: "oldSearchMarker" }, { cwd }), /existing\.ts/);
+  assert.match(await tool.execute({ query: "oldSearchMarker" }, readOnlyContext(cwd)), /existing\.ts/);
   await fs.writeFile(path.join(cwd, "existing.ts"), "export const changedSearchMarker = true;\n");
   await fs.writeFile(path.join(cwd, "added.ts"), "export const addedSearchMarker = true;\n");
-  await tool.execute({ query: "addedSearchMarker" }, { cwd });
+  await tool.execute({ query: "addedSearchMarker" }, readOnlyContext(cwd));
   assert.equal(discover.mock.callCount(), 1);
   now += 5_000;
   // Exercise the actual tool entry point with no initialize/profile/symbol call
   // to refresh the cache on its behalf.
-  assert.match(await tool.execute({ query: "addedSearchMarker" }, { cwd }), /added\.ts/);
-  assert.match(await tool.execute({ query: "changedSearchMarker" }, { cwd }), /existing\.ts/);
-  assert.equal(await tool.execute({ query: "oldSearchMarker" }, { cwd }), "No relevant files found.");
+  assert.match(await tool.execute({ query: "addedSearchMarker" }, readOnlyContext(cwd)), /added\.ts/);
+  assert.match(await tool.execute({ query: "changedSearchMarker" }, readOnlyContext(cwd)), /existing\.ts/);
+  assert.equal(await tool.execute({ query: "oldSearchMarker" }, readOnlyContext(cwd)), "No relevant files found.");
   assert.equal(discover.mock.callCount(), 2);
 });

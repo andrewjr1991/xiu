@@ -51,7 +51,7 @@ async function fixture(): Promise<string> {
 }
 
 function createAgent(cwd: string, provider: ScriptedProvider, events: AgentEvents = {}, maxTurns = 12): Agent {
-  return new Agent({ provider: "openai", model: "offline-test", cwd, maxTurns, autoApprove: true, language: "en-US" }, provider, builtinTools, async () => true, events);
+  return new Agent({ provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns, autoApprove: true, language: "en-US" }, provider, builtinTools, async () => true, events);
 }
 
 const fix = () => action("replace_text", { path: "calc.mjs", old_text: "return a - b", new_text: "return a + b" });
@@ -289,7 +289,7 @@ test("P1 Chinese Agent streams only redacted draft previews and persists its fin
   const lifecycle: string[] = [];
   let livePreview = "";
   let ends = 0;
-  const agent = new Agent({ provider: "openai", model: "offline-test", apiKey: secret, cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "offline-test", apiKey: secret, cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
     onDraftPreview: (text, receivedChars) => {
       assert.ok(receivedChars > 0);
       previews.push(text);
@@ -329,7 +329,7 @@ test("P1 a failed streaming request still ends the preview and never replays vis
       throw new Error("ECONNRESET after visible output");
     },
   };
-  const agent = new Agent({ provider: "openai", model: "offline-test", cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
     onDraftPreview: (value) => { livePreview = value; },
     onModelEnd: () => { ended++; livePreview = ""; },
   });

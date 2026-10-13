@@ -262,7 +262,7 @@ test("persistent task progress remains bounded in a narrow terminal", () => {
       { id: "verify", title: "Verify narrow terminal rendering", status: "pending" },
     ],
   });
-  view.recordWorkspaceChange({ tool: "apply_patch", paths: ["src/interactive-ui.ts"], description: "patch UI" });
+  view.recordWorkspaceChange({ tool: "apply_patch", paths: ["src/interactive-ui.ts"], description: "patch UI", files: [] });
   const footer = formatRunningInputFooter(view, 0, 0, "Auto | model");
   const frame = editorFrameLines("xiu[working]> ", { value: "", cursor: 0 }, [], 0, footer, 38);
   assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 37));

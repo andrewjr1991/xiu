@@ -228,7 +228,7 @@ test("agent recovery never replays the exact unknown side-effect operation", asy
   const tool: AgentTool = {
     name: "write_once",
     description: "write once",
-    parameters: { type: "object", properties: {} },
+    inputSchema: { type: "object", properties: {} },
     risk: "write",
     changesWorkspace: true,
     describe: () => "write result",
@@ -237,8 +237,8 @@ test("agent recovery never replays the exact unknown side-effect operation", asy
   let turn = 0;
   const provider: ModelProvider = {
     complete: async () => turn++ === 0
-      ? { text: "", toolCalls: [{ id: "call-1", name: "write_once", input }] }
-      : { text: "Stopped after verifying the interrupted operation.", toolCalls: [] },
+      ? { text: "", toolCalls: [{ id: "call-1", name: "write_once", input }], raw: undefined }
+      : { text: "Stopped after verifying the interrupted operation.", toolCalls: [], raw: undefined },
   };
   const agent = new Agent(
     { provider: "openai", providerId: "p", model: "m", cwd: item.workspace, autoApprove: true },

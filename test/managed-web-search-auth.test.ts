@@ -26,7 +26,7 @@ test("managed search lazily registers once, caches the short token, and never pe
     return json({ error: "unexpected" }, 404);
   }, () => 1_000_000, async () => undefined);
 
-  assert.deepEqual(calls, [], "constructing managed search auth must not perform network I/O");
+  assert.deepEqual(calls, [] as string[], "constructing managed search auth must not perform network I/O");
   assert.equal(await auth.getBearerToken(), "short-lived-token");
   assert.equal(await auth.getBearerToken(), "short-lived-token");
   assert.equal(calls.filter((url) => url.endsWith("/v1/devices/register")).length, 1);

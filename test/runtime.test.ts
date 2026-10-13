@@ -372,7 +372,7 @@ test("Agent adapter runs a real Agent task through the shared runtime", async (t
   };
   const runtime = new XiuRuntime();
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, autoApprove: true },
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true },
     provider,
     [],
     (request) => runtime.requestApproval(request),

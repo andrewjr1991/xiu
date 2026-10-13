@@ -8,7 +8,7 @@ test("startup screen includes quick start, session details, and skill count", ()
   const original = console.log;
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 40);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 40);
   } finally {
     console.log = original;
   }
@@ -26,7 +26,7 @@ test("wide startup screen places branding and quick start on the same row", () =
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 120 });
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 3);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 3);
   } finally {
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
@@ -42,7 +42,7 @@ test("narrow startup screen falls back to stacked layout", () => {
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 70 });
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 0);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "C:\\project", maxTurns: 30, autoApprove: true }, "0.4.0", 0);
   } finally {
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
@@ -81,7 +81,7 @@ test("Chinese startup screen is localized and never reaches the terminal wrap co
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 120 });
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\中文项目", autoApprove: true, language: "zh-CN" }, "0.8.5", 14);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "D:\\中文项目", autoApprove: true, language: "zh-CN" }, "0.8.5", 14);
   } finally {
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
@@ -98,7 +98,7 @@ test("startup screen advertises right-click attachment paste", () => {
   const originalLog = console.log;
   console.log = (...values: unknown[]) => lines.push(values.join(" "));
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\project", language: "zh-CN" }, "0.9.1", 2);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "D:\\project", autoApprove: false, language: "zh-CN" }, "0.9.1", 2);
   } finally {
     console.log = originalLog;
   }
@@ -114,7 +114,7 @@ test("interactive welcome panel positions every mixed-language right border at o
   Object.defineProperty(process.stdout, "columns", { configurable: true, value: 120 });
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
   try {
-    renderWelcome({ provider: "agnes", model: "agnes-2.5-flash", cwd: "D:\\QoderWork Project\\a-very-long-project-name", autoApprove: true, language: "zh-CN" }, "0.8.7", 14);
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "D:\\QoderWork Project\\a-very-long-project-name", autoApprove: true, language: "zh-CN" }, "0.8.7", 14);
   } finally {
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });

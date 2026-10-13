@@ -53,7 +53,7 @@ test("long-running stale plans receive a bounded freshness reminder without inve
     if (calls <= 7) return { text: "", raw: {}, toolCalls: [{ id: `read-${calls}`, name: "fixture_read", input: { number: calls } }] };
     return { text: "USER_INPUT_REQUIRED: Continue?", raw: {}, toolCalls: [] };
   } };
-  const agent = new Agent({ provider: "openai", model: "fixture", cwd, language: "en-US", autoApprove: false }, provider,
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "fixture", cwd, language: "en-US", autoApprove: false }, provider,
     [...createPlanTools(plan), { name: "fixture_read", description: "read", risk: "read", inputSchema: {}, describe: () => "read", execute: async () => "observed" }], async () => false, {}, undefined, undefined, plan);
   await agent.run("inspect"); assert.equal(freshness, true);
   assert.equal(plan.snapshot()?.steps[0]?.status, "in_progress");

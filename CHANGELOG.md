@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Background jobs on Windows: replacing a job's state file now retries briefly when another process (such as a status poll) has it open, in the pre-loader bootstrap, the worker and the foreground manager alike. Previously a refused rename in the bootstrap could leave a failed launch stuck in `starting` until it was reported as `interrupted`, losing the real failure evidence. Only the metadata rename is retried; commands are never re-run.
+- Tests now type-check: `npm run typecheck:test` (`tsconfig.test.json`) covers `src/` and `test/`, and CI runs it on all three Verify platforms. Fixture fixes only; no runtime change.
 - Internal: slash-command groups moved out of `src/cli.ts` into `src/commands/`, the desktop `App.tsx` split into focused components, and the roadmap reduced to current state, priorities and next step (history in `docs/history/`). No behavior change.
 
 ## 0.20.8 — 2026-10-13

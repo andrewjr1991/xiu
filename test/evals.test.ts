@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadSuite, loadTask, redact, removeTemporaryDirectory, resultsRoot, safeWorkspacePath, summarize, validateAll, validateResult } from "../evals/lib/core.mjs";
+import { loadSuite, loadTask, redact, removeTemporaryDirectory, resultsRoot, safeWorkspacePath, summarize, validateAll, validateResult, type EvalTask } from "../evals/lib/core.mjs";
 import { createIsolation } from "../evals/lib/isolation.mjs";
 import { classifyFailure, enforceTrialBudget, forbiddenWriteAttemptCount, scrubSensitiveEnvironment, shouldStopAfterTrial, TaskAssertionError } from "../evals/lib/policy.mjs";
 import { RealEvaluationLedger, realConfirmationToken, validateRealConfig, validateSuiteBudget } from "../evals/lib/real-policy.mjs";
@@ -247,7 +247,7 @@ test("real evaluation resume preserves an exact trial prefix and rejects tamperi
 test("real evaluation global limits cover the conservative maximum of all pinned trials", async () => {
   const config = validateRealConfig(JSON.parse(await fs.readFile(path.resolve("evals/configs/agnes-enterprise-v0.17.0.json"), "utf8")));
   const suite = await loadSuite("baseline");
-  const tasks = [];
+  const tasks: EvalTask[] = [];
   for (const reference of suite.suite.tasks) tasks.push((await loadTask(reference.id, reference.revision)).task);
   const maximum = validateSuiteBudget(config, tasks);
   assert.ok(maximum.modelCalls <= config.globalBudget.modelCalls);

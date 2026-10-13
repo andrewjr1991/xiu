@@ -145,7 +145,7 @@ test("real Agent writes externally without workspace checkpoint/Diff; Plan still
       return { text: "Done", toolCalls: [], raw: {} };
     } };
     const checkpoints = new CheckpointManager(cwd);
-    const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {
+    const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {
       onToolEnd: (_name, result) => { outputs.push(result); },
       onWorkspaceChange: (change) => { changes.push(...change.paths); },
       onToolProgress: (_name, message) => { notices.push(message); },
@@ -174,7 +174,7 @@ test("full access preserves workspace checkpoints and refreshes its prompt after
     return { text: "Done", toolCalls: [], raw: {} };
   } };
   const checkpoints = new CheckpointManager(cwd);
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {}, undefined, undefined, undefined, checkpoints);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {}, undefined, undefined, undefined, checkpoints);
   agent.setAccessMode("full");
   await agent.run("Write inside workspace");
   const saved = await checkpoints.list();

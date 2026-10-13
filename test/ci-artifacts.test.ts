@@ -113,7 +113,7 @@ test("desktop candidates stay unaccepted when screenshot evidence is failed or m
     const env = { XIU_CI_PLATFORM: "win32", GITHUB_SHA: f.commit };
     const context = await artifactContext(f.root, "desktop", env);
     await mkdir(context.staging, { recursive: true });
-    await writeFile(path.join(context.staging, context.candidateName), "synthetic installer fixture");
+    await writeFile(path.join(context.staging, context.candidateName!), "synthetic installer fixture");
     for (const gate of ["ui_evidence", "ui_evidence_upload"]) {
       for (const outcome of ["failure", "skipped", undefined]) {
         const steps: Record<string, { outcome: string }> = {

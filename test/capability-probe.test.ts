@@ -20,7 +20,7 @@ test("capability probe single-flight key uses credential revision without derivi
 
 function provider(probe: () => Promise<boolean>): ModelProvider {
   return {
-    complete: async () => ({ text: "", toolCalls: [] }),
+    complete: async () => ({ text: "", toolCalls: [], raw: undefined }),
     probeToolSupport: probe,
   };
 }

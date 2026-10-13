@@ -36,6 +36,7 @@
     "eval:report": "node evals/report.mjs",
     "eval:compare": "node evals/compare.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "check:docs": "node scripts/check-docs.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
     "smoke:platform": "node scripts/platform-smoke.mjs",

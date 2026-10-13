@@ -6,10 +6,12 @@ import {
   LegacyCredentialStore,
   credentialRef,
   readEnvironmentCredential,
+  type CredentialStore,
 } from "../src/credential-store.js";
 
 test("environment credential store exposes only safe metadata and is read-only", () => {
-  const store = new EnvironmentCredentialStore({
+  // Typed as the store contract so the read-only refusal of set() is checked through the shared interface.
+  const store: CredentialStore<string> = new EnvironmentCredentialStore({
     kind: "provider-api-key", ids: ["OFFICE_KEY", "MISSING_KEY"], env: { OFFICE_KEY: "canary-secret" },
   });
   const ref = credentialRef("environment", "provider-api-key", "OFFICE_KEY");
