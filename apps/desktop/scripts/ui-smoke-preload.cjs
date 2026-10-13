@@ -37,10 +37,10 @@ const calls = [];
 const manualAcceptance = new Map();
 let onboardingSnapshot;
 let providerRecoveryConfirm = false;
-let providerRecoveryState = { contextId: "fixture-recovery-context", restartRequired: false,
+const providerRecoveryState = { contextId: "fixture-recovery-context", restartRequired: false,
   diagnostics: { supportedVersion: 5, sourceVersion: null, state: "invalid", backups: [{ id: "12345678-1234-1234-1234-123456789abc", sourceVersion: 4, reason: "upgrade", createdAt: "2026-10-01T00:00:00.000Z" }], issues: ["invalid-settings"], compatibilityNotice: "Upgrade CLI and desktop together." } };
 const providerRecoveryView = () => JSON.parse(JSON.stringify(providerRecoveryState));
-let mcp = { servers: [
+const mcp = { servers: [
   { name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" } },
   { name: "secure", origin: "user:secure", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true },
 ] };

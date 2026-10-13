@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import iconv from "iconv-lite";
 import type { AgentTool } from "./types.js";
 import { resolveToolPath } from "./workspace-path.js";

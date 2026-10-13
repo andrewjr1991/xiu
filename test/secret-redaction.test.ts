@@ -10,7 +10,7 @@ test("shared secret redaction covers provider, bearer, OAuth JSON, and URL forms
   const output = redactSecrets([
     `api_key=${secret}`,
     "Authorization: Bearer bearer-token-value",
-    '\"refresh_token\":\"refresh-value\"',
+    '"refresh_token":"refresh-value"',
     "https://example.test/callback?code=authorization-code&client_secret=client-value",
     "sk-example12345678",
     githubToken,

@@ -54,7 +54,7 @@ function changedSymbols(patch: string): string[] {
     if (!/^[+-](?![+-])/.test(line)) continue;
     const source = line.slice(1);
     const declaration = source.match(/\b(?:async\s+)?(?:function|class|interface|type|enum|const|let|var|def|func)\s+([A-Za-z_$][\w$]*)/);
-    const callable = source.match(/^\s*(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*(?:[A-Za-z_$][\w$<>\[\], |]*\s+)?([A-Za-z_$][\w$]*)\s*\(/);
+    const callable = source.match(/^\s*(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*(?:[A-Za-z_$][\w$<>[\], |]*\s+)?([A-Za-z_$][\w$]*)\s*\(/);
     const symbol = declaration?.[1] ?? callable?.[1];
     if (symbol && !reserved.has(symbol)) symbols.add(symbol);
   }

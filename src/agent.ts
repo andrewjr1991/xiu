@@ -181,7 +181,7 @@ function isoDate(year: number, month: number, day: number): string | undefined {
 
 function extractExplicitWebDates(text: string): string[] {
   const dates = new Set<string>();
-  const withoutUrls = text.replace(/https?:\/\/[^\s<>()\[\]{}"']+/giu, " ");
+  const withoutUrls = text.replace(/https?:\/\/[^\s<>()[\]{}"']+/giu, " ");
   const patterns = [
     /(?:日期|发布时间|发布日期|date|published|publication\s+date)[*_`\s]*[：:]\s*[*_`\s]*(\d{4})\s*(?:年|[-/.])\s*(\d{1,2})\s*(?:月|[-/.])\s*(\d{1,2})\s*日?/giu,
     /(?:^|[^\d])(\d{4})\s*(?:年|[-/.])\s*(\d{1,2})\s*(?:月|[-/.])\s*(\d{1,2})\s*日?(?=$|[^\d])/gmu,
@@ -390,6 +390,8 @@ export class Agent {
         this.lastRunOutcome = "failed";
         this.lastRunFailureReason = "runtime_error";
         this.taskDiagnostics?.complete("failed");
+        // A run whose evidence could not be persisted must not report success.
+        // eslint-disable-next-line no-unsafe-finally
         throw error;
       } finally {
         // Persistence can fail after execution has ended. Never retain an active

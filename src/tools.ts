@@ -7,7 +7,7 @@ import fg from "./glob.js";
 import iconv from "iconv-lite";
 import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
-import type { AgentTool, ToolContext, ToolRisk, ToolResult } from "./types.js";
+import type { AgentTool, ToolContext, ToolResult } from "./types.js";
 import { normalizeToolResult, toolResult, toolErrorCode } from "./tool-result.js";
 import { isVerificationCommand } from "./verification.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";

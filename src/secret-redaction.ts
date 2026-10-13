@@ -13,7 +13,7 @@ export function redactSecrets(value: string, sensitiveValues: readonly string[] 
   let result = value;
   for (const secret of sensitiveValues.filter((item) => item.length >= 4)) result = result.split(secret).join("[REDACTED]");
   return result
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]")
     .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "gh_[REDACTED]")
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "xox-[REDACTED]")

@@ -13,7 +13,7 @@ import { zipFixture } from "./helpers/skill-zip.js";
 
 function fixture(realSkills?: SkillRegistry, initial?: XiuSettings) {
   let settings: XiuSettings = initial ?? { webSearch: { enabled: false, provider: "searxng", baseURL: "https://search.example.test", blockedDomains: ["blocked.test"], timeoutMs: 4_000 } };
-  let routing = { enabled: false, phases: {} as Record<string, string> };
+  const routing = { enabled: false, phases: {} as Record<string, string> };
   const chains: Record<string, string[]> = { primary: ["unsupported", "fallback"] };
   const profiles: ProviderProfile[] = ["primary", "unsupported", "fallback"].map((id) => ({ id, name: id, model: "fixture-model", kind: "openai", apiKey: "inert-canary-no-request", features: { text: true, tools: id !== "unsupported", vision: false, image: false, video: false } }));
   const registry = {

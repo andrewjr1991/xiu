@@ -428,7 +428,7 @@ test("plugin installation never executes package scripts and corrupt rollback ca
   const marker = path.join(cwd, "dependency-confusion-ran.txt");
   await writePlugin(cwd, "source", manifest("matrix.plugin"), {
     "skills/review/SKILL.md": "# Version one\n",
-    "package.json": JSON.stringify({ name: "lookalike-package", scripts: { postinstall: `node -e \"require('fs').writeFileSync(${JSON.stringify(marker)},'ran')\"` } }),
+    "package.json": JSON.stringify({ name: "lookalike-package", scripts: { postinstall: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)},'ran')"` } }),
   });
   const registry = new PluginRegistry(cwd, globalRoot, "0.14.3", new PermissionGrantStore(path.join(cwd, "permissions.json")));
   await registry.refresh(true);

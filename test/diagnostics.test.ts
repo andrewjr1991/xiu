@@ -117,7 +117,7 @@ test("denied and cancelled tools are measured without becoming failures or progr
 });
 
 test("task and approval diagnostics redact credential values", () => {
-  let now = 5_000;
+  const now = 5_000;
   const diagnostics = new TaskDiagnostics("debug token=top-secret-value", () => now);
   diagnostics.beginTool("run_command", { command: "deploy", apiKey: "top-secret-value" });
   diagnostics.beginApproval("run deploy with top-secret-value");

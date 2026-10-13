@@ -221,6 +221,7 @@ Inside a session, type `/` to open the command palette. Useful starting points i
 npm ci
 npm run typecheck
 npm run typecheck:test
+npm run lint
 npm test
 npm run build
 npm run check:docs
