@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Background jobs on Windows: replacing a job's state file now retries briefly when another process (such as a status poll) has it open, in the pre-loader bootstrap, the worker and the foreground manager alike. Previously a refused rename in the bootstrap could leave a failed launch stuck in `starting` until it was reported as `interrupted`, losing the real failure evidence. Only the metadata rename is retried; commands are never re-run.
+- Internal: slash-command groups moved out of `src/cli.ts` into `src/commands/`, the desktop `App.tsx` split into focused components, and the roadmap reduced to current state, priorities and next step (history in `docs/history/`). No behavior change.
+
 ## 0.20.8 — 2026-10-13
 
 Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) from main `d36c488fc5706277562d3018a23907761440d124`; all nine exact-source CI jobs passed. Windows CLI: 1117 tests, 1109 passed, 8 skipped, no failures. Windows Computer Use preview, subagent tool details, waiting answers, inline channel management and individual/batch visual probes; command-chain approval/Plan hardening, task-bound computer allowances, process liveness fixes and MCP 2.3.1. Original CI assets and digests retained; Windows unsigned, paid-provider/enterprise validation pending. npm publication is a separate maintainer step. Older unpublished notes below describe development history.

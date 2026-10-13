@@ -42,6 +42,24 @@ export function lifecycleGate<T>(io: typeof fs, file: string, action: () => T): 
   finally { io.closeSync(descriptor); io.unlinkSync(lock); }
 }
 
+/**
+ * Replace a metadata file, retrying briefly when Windows refuses the rename
+ * because another process (for example a status poll) has the target open.
+ * Shared with the pre-loader bootstrap: no module state or external helpers.
+ */
+export function replaceFileWithRetry(io: typeof fs, from: string, to: string): void {
+  const delays = [10, 25, 50, 100, 200, 400];
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try { io.renameSync(from, to); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["EPERM", "EACCES", "EBUSY"].includes(code ?? "") || attempt >= delays.length) throw error;
+      Atomics.wait(sleeper, 0, 0, delays[attempt]);
+    }
+  }
+}
+
 export function withBackgroundLifecycle<T>(file: string, action: () => T): T {
   return lifecycleGate(fs, file, action);
 }
