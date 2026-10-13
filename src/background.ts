@@ -10,6 +10,7 @@ import { BACKGROUND_BOOTSTRAP_SOURCE } from "./background-bootstrap.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { withBackgroundLifecycle } from "./background-lifecycle.js";
 import { readLaunchMetadata } from "./background-metadata.js";
+import { processAlive } from "./process-liveness.js";
 
 const BACKGROUND_SCHEMA_VERSION = 1 as const;
 const MAX_PREVIEW = 240;
@@ -126,11 +127,6 @@ function readRecord(file: string): BackgroundProcessRecord | undefined {
   } catch { return undefined; }
 }
 
-function processAlive(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-}
 
 function backgroundRecordAlive(record: BackgroundProcessRecord): boolean {
   return knownProcessTargets(record).some(processAlive);

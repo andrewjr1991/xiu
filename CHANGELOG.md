@@ -22,6 +22,8 @@ Local unpublished Computer Use increment: separate per-round human acceptance fr
 
 Local unpublished fix: Security: classify shell commands per executed segment. Composed commands (`&&`, `||`, `&`, newlines, redirection, `$(...)`/backtick substitution) are never read-only, so a read-only prefix such as `git status && …` can no longer skip approval or Plan mode. `rm`-class programs are detected after control operators, inside `sh -c`/`cmd /c`/`powershell -Command`/`Invoke-Expression` scripts, behind wrappers (`sudo`, `env`, `xargs`, `timeout`, …) and in `find -delete`/`-exec`; uninspectable PowerShell `-EncodedCommand` and scripts piped into a shell are dangerous. `git -c`/`--config-env` and `--output` are no longer read-only, and read-only PowerShell pipelines require every element to be an allowlisted cmdlet.
 
+Local unpublished fix: Background stop and liveness checks on Linux no longer treat zombie processes as running. Where no init reaps orphans (for example a container without `--init`), stopping a background job previously never confirmed. If `/proc` is unreadable, the process is still treated as alive.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.
