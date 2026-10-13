@@ -3,9 +3,9 @@
  * It uses only Node built-ins so missing/broken worker imports leave durable,
  * non-secret failure evidence even after the launcher has exited.
  */
-import { lifecycleGate } from "./background-lifecycle.js";
+import { lifecycleGate, replaceFileWithRetry } from "./background-lifecycle.js";
 
-export const BACKGROUND_BOOTSTRAP_SOURCE = `const lifecycleGate = ${lifecycleGate.toString()};\n` + String.raw`
+export const BACKGROUND_BOOTSTRAP_SOURCE = `const lifecycleGate = ${lifecycleGate.toString()};\nconst replaceFileWithRetry = ${replaceFileWithRetry.toString()};\n` + String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
@@ -21,7 +21,7 @@ function writeRecord(record) {
   const temporary = request.recordFile + "." + process.pid + "." + randomUUID() + ".tmp";
   try {
     fs.writeFileSync(temporary, JSON.stringify(record) + "\n", { flag: "wx", mode: 0o600 });
-    fs.renameSync(temporary, request.recordFile);
+    replaceFileWithRetry(fs, temporary, request.recordFile);
   } finally { try { fs.unlinkSync(temporary); } catch {} }
 }
 function fail(error) {

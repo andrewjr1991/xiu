@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { BACKGROUND_BOOTSTRAP_SOURCE } from "./background-bootstrap.js";
 import { redactSecrets } from "./secret-redaction.js";
-import { withBackgroundLifecycle } from "./background-lifecycle.js";
+import { replaceFileWithRetry, withBackgroundLifecycle } from "./background-lifecycle.js";
 import { readLaunchMetadata } from "./background-metadata.js";
 import { processAlive } from "./process-liveness.js";
 
@@ -74,7 +74,7 @@ function atomicWrite(file: string, value: unknown): void {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, file);
+    replaceFileWithRetry(fs, temporary, file);
   } finally {
     try { fs.unlinkSync(temporary); } catch { /* already renamed */ }
   }
