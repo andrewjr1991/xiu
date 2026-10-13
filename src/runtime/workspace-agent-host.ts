@@ -3,6 +3,7 @@ import { CheckpointManager } from "../checkpoint.js";
 import { resolveConfig } from "../config.js";
 import { defaultLanguage } from "../i18n.js";
 import { createMediaTools } from "../media-tools.js";
+import { createComputerUseTools, computerVisionRoute, type ComputerUseHost } from "../computer-use-tools.js";
 import { TaskPlanManager, createPlanTools } from "../plan.js";
 import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "../provider-registry.js";
@@ -25,6 +26,7 @@ import { createProviderPolicy } from "./provider-policy.js";
 import { WorkspaceManagementService } from "./workspace-management.js";
 
 export interface WorkspaceAgentHost {
+  computerVisionRoute?: string;
   providerConfigured?: boolean;
   runtime: XiuRuntime;
   provider: { id: string; label: string; model: string };
@@ -77,7 +79,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
  * Electron dependency, so the execution and approval authority remains in the
  * shared Node runtime rather than the renderer.
  */
-export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; journalRoot?: string } = {}): Promise<WorkspaceAgentHost> {
+export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; journalRoot?: string; computerUse?: ComputerUseHost } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
   try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
@@ -125,6 +127,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   configureBackgroundWorkspace(workspace, options.backgroundRoot);
   configureBackgroundRuntime(await resolveNodeRuntime().catch(() => undefined));
   const initialMediaTools = createMediaTools(config);
+  const initialComputerTools = options.computerUse ? createComputerUseTools(config, options.computerUse) : [];
   const mediaNames = new Set(initialMediaTools.map((tool) => tool.name));
   const tools = [
     ...builtinTools,
@@ -132,6 +135,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
     ...initialMediaTools,
+    ...initialComputerTools,
     ...createWorkspaceWebSearchTools(settings.webSearch),
   ];
 
@@ -159,8 +163,8 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     const childTools = selectSubagentTools([...builtinTools.filter((tool) => !desktopDeferredTools.has(tool.name)), ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)], task.mode);
     const child = new Agent(childConfig, options.provider ?? createProvider(childConfig), childTools, requestApproval, {
       onModelStart: (turn) => context.reportProgress(`模型调用 · 第 ${turn} 轮`),
-      onToolStart: (name, description) => context.reportProgress(`${name} · ${description}`),
-      onToolProgress: (name, message) => context.reportProgress(`${name} · ${message}`),
+      onToolStart: (name) => { context.reportProgress(name); context.reportToolActivity(name, "started"); },
+      onToolEnd: (name, _output, details) => context.reportToolActivity(name, details?.result.status === "success" ? "completed" : details?.result.status === "cancelled" ? "interrupted" : "failed"),
     }, undefined, childIndex, childPlan, new CheckpointManager(context.cwd));
     // Children always remain workspace/worktree scoped, even under parent full access.
     const cancel = () => child.cancel();
@@ -175,7 +179,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       requireCompletedSubagent(status);
       return { result: redactSecrets(result, config.apiKey ? [config.apiKey] : []).slice(0, 16_000), stats: status.stats, verification: await child.getVerificationEvidence() };
     } finally { context.signal.removeEventListener("abort", cancel); }
-  }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, taskId: task.id, mode: task.mode, dependencies: task.dependencies, createdAt: task.createdAt, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
+  }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, taskId: task.id, mode: task.mode, dependencies: task.dependencies, createdAt: task.createdAt, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, activity: task.activity, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
   await coordinator.initialize();
   tools.push(...createMultiAgentTools(coordinator).map((tool) => tool.name !== "integrate_agent" ? tool : { ...tool, execute: async (input: Record<string, unknown>, context: import("../types.js").ToolContext) => {
     const allowed = await runtime.requestApproval({ risk: "dangerous", description: "将子智能体 Worktree 变更整合到主工作区（始终需要确认）", preview: await tool.preview!(input, context) });
@@ -206,7 +210,8 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
-  const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name)), ...createMediaTools(next), ...mcpManager.tools()];
+  const computerNames = new Set(initialComputerTools.map(tool => tool.name));
+  const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name) && !computerNames.has(tool.name)), ...createMediaTools(next), ...(options.computerUse ? createComputerUseTools(next, options.computerUse) : []), ...mcpManager.tools()];
   const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)));
   const policy = createProviderPolicy(registry, (target, targetModel) => {
     const next = createWorkspaceProviderConfig(target, targetModel, workspace, registry.credentialRevision(target.id), language);
@@ -232,6 +237,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   }
   const management = new WorkspaceManagementService(registry, skillRegistry);
   return {
+    computerVisionRoute: options.computerUse ? computerVisionRoute(config) : undefined,
     providerConfigured: Boolean(requestedProfile || options.provider), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
     setApprovalMode: (mode) => {
       approvalMode = mode;

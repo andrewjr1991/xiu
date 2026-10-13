@@ -463,6 +463,23 @@ app.whenReady().then(async () => {
     await waitFor(window, `Boolean(document.querySelector('.review-pane .subagent-card'))`, "status link opens synchronized child list");
     await openTool(window, "子智能体");
     await waitFor(window, `document.querySelector('.review-pane .subagent-card')?.innerText.includes('1.2 秒')`, "subagent duration and status");
+    assert(await evaluate(window, `document.querySelectorAll(".subagent-tools li").length === 2 && document.querySelector(".subagent-tools").textContent.includes("verify_output") && document.querySelector(".subagent-tools").textContent.includes("失败")`), "Child tool facts are independently visible with failure state.");
+    await evaluate(window, `document.querySelector(".subagent-tools").open = true`);
+    await settleLayout(window);
+    await evaluate(window, `document.querySelector(".subagent-tools").scrollIntoView({block: "center"})`);
+    await settleLayout(window);
+    await fs.promises.writeFile(path.join(smokeRoot, "subagent-tool-details.png"), (await window.webContents.capturePage()).toPNG());
+    await evaluate(window, `window.xiuSmoke.subagentToolFixture("running")`);
+    await waitFor(window, `document.querySelector(".subagent-tools")?.open && document.querySelector(".subagent-tools").textContent.includes("执行中")`, "running child automatically expands tool activity");
+    const firstElapsed = await evaluate(window, `document.querySelector(".subagent-tools li").textContent`);
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    assert(await evaluate(window, `document.querySelector(".subagent-tools li").textContent !== ${JSON.stringify(firstElapsed)}`), "Live child tool elapsed time ticks without fabricating events.");
+    await resizeViewport(window, 900, 768, "child tools narrow");
+    await settleLayout(window);
+    assert(await evaluate(window, `document.querySelector(".subagent-tools").getBoundingClientRect().width > 0`), "Child tools remain visible at narrow width.");
+    await fs.promises.writeFile(path.join(smokeRoot, "subagent-tool-details-900.png"), (await window.webContents.capturePage()).toPNG());
+    await resizeViewport(window, 1366, 768, "child tools restore");
+    await evaluate(window, `window.xiuSmoke.subagentToolFixture("completed")`);
     await clickText(window, "查看结果", ".review-pane summary");
     await waitFor(window, `document.querySelector('.review-pane .subagent-card').innerText.includes('child-result-canary')`, "subagent result");
     await openTool(window, "数据");
@@ -559,7 +576,6 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.freshProviders()`);
     await clickText(window, "设置", ".sidebar-footer");
     await clickText(window, "模型与渠道", ".settings-nav button");
-    await clickText(window, "管理模型与渠道");
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");
     await clickText(window, "新增渠道", ".provider-add");
     await waitFor(window, `Boolean(document.querySelector('.provider-form .xiu-select:not(:disabled)'))`, "provider form mounted");
@@ -573,7 +589,7 @@ app.whenReady().then(async () => {
     await clickText(window, "删除渠道", ".provider-delete-confirm button");
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道') && window.xiuSmoke.calls().includes('onboarding:delete:agnes')`, "return to zero-provider setup");
 
-    await evaluate(window, `document.querySelector('.provider-header-actions button[aria-label="关闭"]').click()`);
+    await evaluate(window, `document.querySelector('[aria-label="关闭设置"]').click()`);
     await waitFor(window, `!document.querySelector('.provider-popover')`, "provider picker closed before recovery");
     // Recovery must stay reachable even when no provider runtime/workspace loads.
     await evaluate(window, `window.xiuSmoke.recoveryWorkspace(false)`);

@@ -1,0 +1,56 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { TaskRunJournal } from "../src/task-run.js";
+import { DesktopTaskController } from "../apps/desktop/main/task-controller.js";
+import { XiuRuntime } from "../src/runtime/xiu-runtime.js";
+
+test("human computer acceptance preserves failed checks, program state and subsequent rounds", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-acceptance-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const journal = new TaskRunJournal(root, path.join(root, "journal"));
+  const run = await journal.begin({ sessionId: "session", task: "fixture", providerId: "p", model: "m" });
+  const input = await journal.beginOperation({ kind: "tool", name: "computer_input", sideEffect: "external" });
+  await journal.finishOperation(input, "succeeded");
+  const check = await journal.beginOperation({ kind: "verification", name: "verify_output" });
+  await journal.finishOperation(check, "failed", "required check failed");
+  await assert.rejects(journal.recordComputerAcceptance(run.runId, "passed", true), /finished/);
+  await journal.complete("failed");
+  const before = await journal.read(run.runId);
+  await assert.rejects(journal.recordComputerAcceptance(run.runId, "passed", false), /Explicit/);
+  await assert.rejects(journal.recordComputerAcceptance("../escape", "passed", true), /Explicit/);
+  await journal.recordComputerAcceptance(run.runId, "passed", true);
+  const after = await new TaskRunJournal(root, path.join(root, "journal")).read(run.runId);
+  assert.equal(after?.manualAcceptance?.decision, "passed");
+  const { manualAcceptance, ...unchanged } = after!;
+  assert.deepEqual(unchanged, before); assert.equal(manualAcceptance.scope, "computer-result");
+  const next = await journal.begin({ sessionId: "session", task: "next", providerId: "p", model: "m" });
+  assert.equal(next.manualAcceptance, undefined);
+  await journal.complete("unverified");
+  await assert.rejects(journal.recordComputerAcceptance(next.runId, "passed", true), /finished/);
+});
+
+test("desktop acceptance needs an exact round and independent confirmation, not model text", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-acceptance-host-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const journal = new TaskRunJournal(root, path.join(root, "journal"));
+  const run = await journal.begin({ sessionId: "session", task: "fixture", providerId: "p", model: "m" });
+  const input = await journal.beginOperation({ kind: "tool", name: "computer_input", sideEffect: "external" });
+  await journal.finishOperation(input, "succeeded"); await journal.complete("unverified");
+  const runtime = new XiuRuntime();
+  const controller = new DesktopTaskController(() => {}, async () => ({ runtime, journal, provider: { id: "p", label: "p", model: "m" } }));
+  await controller.connect(root);
+  assert.equal((await controller.computerAcceptance(root, { taskId: run.runId })).eligible, true);
+  assert.equal((await controller.computerAcceptance(root, { taskId: "session" })).eligible, false);
+  await assert.rejects(controller.computerAcceptance(root, { taskId: run.runId, decision: "passed" }), /验收/);
+  await controller.computerAcceptance(root, { taskId: run.runId, decision: "passed" }, async () => false);
+  assert.equal((await journal.read(run.runId))?.manualAcceptance, undefined);
+  assert.equal((await controller.computerAcceptance(root, { taskId: run.runId, decision: "passed" }, async () => true)).decision, "passed");
+  assert.equal((await journal.read(run.runId))?.status, "unverified");
+  const snapshot = runtime.snapshot.bind(runtime);
+  runtime.snapshot = () => ({ ...snapshot(), planMode: true });
+  await assert.rejects(controller.computerAcceptance(root, { taskId: run.runId, decision: "rejected" }, async () => true), /Plan/);
+  assert.equal((await journal.read(run.runId))?.manualAcceptance?.decision, "passed");
+});

@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 import { mkdir, rm, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import "./build-computer-bridge.mjs";
 
 const localPath = (relative) => fileURLToPath(new URL(relative, import.meta.url));
 const desktopVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;

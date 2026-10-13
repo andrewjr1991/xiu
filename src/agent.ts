@@ -15,6 +15,7 @@ import { ToolLoopGuard, toolCallSignature } from "./loop-guard.js";
 import type { AvailableModel } from "./types.js";
 import type { SkillRegistry } from "./skills.js";
 import { normalizeAssistantText } from "./language-output.js";
+import { parseAssistantInteraction } from "./assistant-interaction.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
 import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
@@ -62,7 +63,7 @@ export interface AgentEvents {
   onTaskComplete?: (summary: { turns: number; toolCalls: number; changed: boolean; verified: boolean; outcome: "completed" | "unverified" | "failed"; failureReason?: AgentFailureReason; durationMs: number; diagnostics?: TaskDiagnosticSnapshot }) => void;
 }
 
-export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused";
+export type AgentRunOutcome = "idle" | "running" | "completed" | "unverified" | "failed" | "cancelled" | "paused" | "waiting_user";
 export type AgentFailureReason = "model_incomplete" | "plan_incomplete" | "web_evidence" | "verification_failed" | "tool_failed" | "runtime_error";
 
 export class BackgroundApprovalRequiredError extends Error {
@@ -322,7 +323,7 @@ export class Agent {
       });
       const response = await this.runWithSignal(task, controller.signal);
       const terminalOutcome = this.lastRunOutcome as AgentRunOutcome;
-      await this.taskRunJournal?.complete(terminalOutcome === "unverified" ? "unverified" : terminalOutcome === "failed" ? "failed" : "completed");
+      await this.taskRunJournal?.complete(terminalOutcome === "waiting_user" ? "waiting_user" : terminalOutcome === "unverified" ? "unverified" : terminalOutcome === "failed" ? "failed" : "completed");
       return response;
     } catch (error) {
       if (controller.signal.aborted) {
@@ -490,6 +491,7 @@ export class Agent {
     let completionReminderSent = false;
     let auditedSteeringCount = 0;
     let planReminderSent = false;
+    let lastPlanUpdateTurn = 0;
     let toolCallCount = 0;
     let lastToolFailed = false;
     let webSearchAttempts = 0;
@@ -514,6 +516,11 @@ export class Agent {
       this.currentTurn = turn;
       if (signal.aborted) throw new Error("Task cancelled.");
       await this.applyPendingSteering(turn);
+      const visiblePlan = this.planManager?.snapshot();
+      if (visiblePlan?.steps.some(step => step.status === "in_progress") && turn - lastPlanUpdateTurn >= 6) {
+        this.messages.push({ role: "user", content: "Visible plan freshness check: several tool rounds have elapsed without a plan update. Compare the visible milestone with actual work. Update completed, active, or blocked milestones now if they changed; do not infer completion from tool counts or mark unverified work complete. If the milestone is still accurate, continue without a redundant update." });
+        lastPlanUpdateTurn = turn;
+      }
       if (estimateConversationTokens(this.messages) >= (this.config.contextLimit ?? 102_400)) {
         await this.compactWithSignal(signal, "automatic context limit");
         loopGuard.reset();
@@ -662,6 +669,13 @@ export class Agent {
 
       if (response.toolCalls.length === 0) {
         if (await this.applyPendingSteering(turn)) continue;
+        if (/^USER_INPUT_REQUIRED:/im.test(response.text) && parseAssistantInteraction(response.text, this.config.language ?? "en-US").question) {
+          this.lastRunOutcome = "waiting_user";
+          this.taskDiagnostics?.complete("waiting");
+          await this.checkpointDiagnostics();
+          if (response.text && !streamed) this.events.onText?.(response.text);
+          return response.text;
+        }
         if (webSearchAttempts > 0 && webSearchSuccesses === 0 && !webSearchIntegrityReminderSent && !webOpenBudgetFinalizationRequested) {
           const gate = "Web research integrity gate: every web_search attempt failed or returned no usable results. Do not claim current or latest facts from memory, an unrelated page, or inferred dates. Retry only with a materially different safe approach. If search still cannot recover, state plainly that search is unavailable and report the exact sanitized error instead of synthesizing results.";
           this.messages.push({ role: "user", content: gate });
@@ -858,6 +872,7 @@ export class Agent {
             this.events.onFailure?.(`${call.name}: ${result.split(/\r?\n/, 1)[0]}`);
           } else this.repeatedFailures.delete(failureKey);
           if (call.name === "update_task_plan" && !/^Tool error:/.test(result)) {
+            lastPlanUpdateTurn = turn;
             const plan = this.planManager?.snapshot();
             if (plan) await this.log(sessionPath, { type: "plan", plan });
             if (plan) this.events.onPlanUpdate?.(plan);

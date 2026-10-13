@@ -25,7 +25,8 @@ export interface DesktopTaskSummary {
   id: string;
   title: string;
   updatedAt: string;
-  status: "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned" | "session";
+  status: "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned" | "session" | "waiting_user";
+  manualAccepted?: boolean;
 }
 
 export interface DesktopRecentWorkspace {
@@ -108,6 +109,7 @@ export interface DesktopProviderDeleteRequest { providerId: string; confirmed: t
 
 export interface DesktopModelOption {
   id: string;
+  capabilityEvidence?: "declared" | "inferred" | "unknown";
   name?: string;
   description?: string;
   source: "api" | "builtin" | "current";
@@ -143,7 +145,7 @@ export interface DesktopProviderMutationResult {
 }
 
 export interface RuntimeConnectRequest { afterSequence?: number }
-export interface RuntimeTaskRequest { text: string }
+export interface RuntimeTaskRequest { text: string; answerTo?: { taskId: string; questionId: string } }
 export interface DesktopTaskContinueRequest extends RuntimeTaskRequest { taskId: string }
 export interface DesktopAttachment {
   reference: string;
@@ -164,6 +166,8 @@ export interface RuntimeApprovalDecisionRequest {
 }
 
 export interface DesktopTaskHistoryRequest { taskId: string }
+export interface DesktopComputerAcceptanceRequest { taskId: string; decision?: "passed" | "rejected" }
+export interface DesktopComputerAcceptanceState { eligible: boolean; decision?: "passed" | "rejected"; at?: string }
 export interface DesktopTaskDeleteRequest { taskId: string; confirmed: true }
 export interface DesktopTaskHistoryEntry {
   id: string;
@@ -187,11 +191,12 @@ export interface DesktopTaskHistorySnapshot {
   changeRounds?: DesktopChangeRound[];
   tools?: DesktopReviewOperation[];
   validations?: DesktopReviewOperation[];
+  manualAcceptance?: DesktopComputerAcceptanceState;
 }
 
 export interface DesktopChangeRound { id: string; startedAt: string; report?: TaskChangeReport }
 
-export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence" | "agents" | "data" | "home" | "web";
+export type DesktopReviewTab = "changes" | "files" | "terminal" | "evidence" | "agents" | "data" | "home" | "web" | "computer";
 export interface DesktopBrowserState { url: string; title: string; loading: boolean; canGoBack: boolean; canGoForward: boolean; error?: string }
 export type DesktopBrowserRequest = { action: "navigate"; url: string } | { action: "back" | "forward" | "reload" | "close" | "snapshot" } | { action: "layout"; bounds: { x: number; y: number; width: number; height: number }; visible: boolean };
 export type DesktopChangeView = "task" | "workspace" | "staged";
@@ -227,6 +232,7 @@ export interface DesktopRecoveryEvidence {
 }
 
 export interface DesktopReviewSnapshot {
+  manualAcceptance?: DesktopComputerAcceptanceState;
   overview?: { workspace: string; taskId?: string; branch?: string; taskChanges?: TaskChangeReport };
   artifacts?: Array<{ path: string; kind: string }>;
   background?: Array<{ id: string; command: string; state: string; running: boolean; elapsedMs: number; outputBytes: number }>;
@@ -281,6 +287,7 @@ export interface RemoveRecentWorkspaceRequest {
 }
 
 export interface XiuDesktopBridge {
+  computerUse(request: import("./computer-use.js").ComputerUseRequest): Promise<import("./computer-use.js").ComputerUseState>;
   preferences(): Promise<import("./preferences.js").DesktopPreferences>;
   savePreferences(value: import("./preferences.js").DesktopPreferences): Promise<import("./preferences.js").DesktopPreferences>;
   desktopAbout(): Promise<{ version: string; packaged: boolean; notificationsSupported: boolean }>;
@@ -314,6 +321,7 @@ export interface XiuDesktopBridge {
   setApprovalMode(request: DesktopApprovalModeRequest): Promise<DesktopRuntimeConnection>;
   decideApproval(request: RuntimeApprovalDecisionRequest): Promise<void>;
   openTaskHistory(request: DesktopTaskHistoryRequest): Promise<DesktopTaskHistorySnapshot>;
+  computerAcceptance(request: DesktopComputerAcceptanceRequest): Promise<DesktopComputerAcceptanceState>;
   deleteTask(request: DesktopTaskDeleteRequest): Promise<DesktopWorkspaceSnapshot>;
   chooseAttachments(): Promise<DesktopAttachmentResult>;
   pasteAttachments(): Promise<DesktopAttachmentResult>;
@@ -329,6 +337,9 @@ export interface XiuDesktopBridge {
   selectProvider(request: DesktopProviderSelectRequest): Promise<DesktopProviderMutationResult>;
   saveProviderCredential(request: DesktopProviderCredentialRequest): Promise<DesktopProviderMutationResult>;
   testProvider(request: DesktopProviderTestRequest): Promise<DesktopProviderTestResult>;
+  testVisionProvider(request: DesktopProviderSelectRequest & { allCandidates?: boolean }): Promise<{ status: "passed" | "failed" | "unknown" | "cancelled"; message: string; results?: Array<{ model: string; status: "passed" | "failed" | "unknown" | "cancelled"; message: string }> }>;
+  visionProbeProgress(): Promise<{ total: number; current?: string; results: Array<{ model: string; status: "passed" | "failed" | "unknown" | "cancelled"; message: string }> }>;
+  cancelVisionProbe(): Promise<void>;
   upsertProvider(request: DesktopProviderUpsertRequest): Promise<DesktopProviderMutationResult>;
   deleteProvider(request: DesktopProviderDeleteRequest): Promise<DesktopProviderMutationResult>;
   terminalSnapshot(): Promise<DesktopTerminalSnapshot>;
@@ -342,6 +353,7 @@ export interface XiuDesktopBridge {
 }
 
 export const desktopChannels = {
+  computerUse: "computer:control",
   preferences: "desktop:preferences",
   preferencesSave: "desktop:preferences-save",
   about: "desktop:about",
@@ -376,6 +388,7 @@ export const desktopChannels = {
   approvalModeSet: "runtime:approval-mode-set",
   approvalDecide: "runtime:approval-decide",
   taskHistoryOpen: "runtime:task-history-open",
+  computerAcceptance: "runtime:computer-acceptance",
   taskDelete: "runtime:task-delete",
   attachmentsChoose: "attachments:choose",
   attachmentsPaste: "attachments:paste",
@@ -392,6 +405,9 @@ export const desktopChannels = {
   providerSelect: "provider:select",
   providerCredentialSave: "provider:credential-save",
   providerTest: "provider:test",
+  providerVisionTest: "provider:vision-test",
+  providerVisionCancel: "provider:vision-cancel",
+  providerVisionProgress: "provider:vision-progress",
   providerUpsert: "provider:upsert",
   providerDelete: "provider:delete",
   terminalSnapshot: "terminal:snapshot",

@@ -62,6 +62,9 @@ test("desktop model-dispatched reviewer can complete beyond ten turns", async (t
   const done = await host.coordinator!.wait(host.coordinator!.list()[0]!.id, 10_000);
   assert.equal(done.tasks[0]?.status, "completed", done.tasks[0]?.error);
   assert.equal(calls, 13);
+  assert.equal(done.tasks[0]?.activity?.length, 12);
+  assert.ok(done.tasks[0]?.activity?.every((entry) => entry.name === "read_file" && entry.status === "completed" && entry.durationMs !== undefined));
+  assert.doesNotMatch(JSON.stringify(done.tasks[0]?.activity), /source line|Inspecting|start_line/);
 });
 
 test("a tester's prose-only PASS is never executed verification evidence", async () => {
@@ -232,11 +235,13 @@ test("reviewer and tester inspect the implementation Worktree before gated integ
 test("one agent can be cancelled without stopping another", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agents-cancel-"));
   const executor: SubagentExecutor = async (task, context) => {
+    context.reportToolActivity("read_file", "started");
     if (task.id === "slow") await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, 500);
       context.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
     });
     else await new Promise((resolve) => setTimeout(resolve, 30));
+    context.reportToolActivity("read_file", "completed");
     return { result: task.id, stats };
   };
   const coordinator = new MultiAgentCoordinator(cwd, executor, {}, 2);
@@ -249,6 +254,8 @@ test("one agent can be cancelled without stopping another", async () => {
   const completed = await coordinator.wait(run.id, 2_000);
   assert.equal(completed.tasks.find((task) => task.id === "slow")?.status, "cancelled");
   assert.equal(completed.tasks.find((task) => task.id === "fast")?.status, "completed");
+  assert.equal(completed.tasks.find((task) => task.id === "slow")?.activity?.[0].status, "interrupted");
+  assert.equal(completed.tasks.find((task) => task.id === "fast")?.activity?.[0].status, "completed");
 });
 
 test("persisted running agents recover as interrupted and can retry", async () => {
@@ -257,15 +264,17 @@ test("persisted running agents recover as interrupted and can retry", async () =
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "saved.json"), JSON.stringify({
     id: "saved", goal: "resume", status: "running", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), concurrency: 1,
-    tasks: [{ id: "task", title: "task", instructions: "task", role: "explorer", mode: "shared_readonly", dependencies: [], status: "running", createdAt: new Date().toISOString() }],
+    tasks: [{ id: "task", title: "task", instructions: "task", role: "explorer", mode: "shared_readonly", dependencies: [], status: "running", createdAt: new Date().toISOString(), activity: [{ id: "old-tool", name: "read_file", status: "running", startedAt: new Date().toISOString() }] }],
   }));
   const coordinator = new MultiAgentCoordinator(cwd, async () => ({ result: "retried", stats }));
   await coordinator.initialize();
   assert.equal(coordinator.get("saved").tasks[0]?.status, "interrupted");
+  assert.equal(coordinator.get("saved").tasks[0]?.activity?.[0].status, "interrupted");
   await coordinator.retry("saved", "task");
   const completed = await coordinator.wait("saved", 2_000);
   assert.equal(completed.status, "completed");
   assert.equal(completed.tasks[0]?.result, "retried");
+  assert.deepEqual(completed.tasks[0]?.activity, [], "retry must not present old calls as new work");
 });
 
 

@@ -151,6 +151,14 @@ export class DesktopProviderController {
     }
   }
 
+  visionProbeConfig(workspace: string, request: DesktopProviderSelectRequest) {
+    const profile = this.profile(request?.providerId);
+    const model = this.model(request?.model);
+    const config = createWorkspaceProviderConfig(profile, model, workspace, this.registry.credentialRevision(profile.id), "zh-CN");
+    config.capabilities = { text: config.model, ...config.capabilities, vision: model };
+    return config;
+  }
+
   async select(request: DesktopProviderSelectRequest): Promise<DesktopProviderSnapshot> {
     const profile = this.profile(request?.providerId);
     const model = this.model(request?.model);

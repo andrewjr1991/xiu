@@ -5,6 +5,9 @@ import { defaultPreferences, type DesktopPreferences } from "../../shared/prefer
 import { useOutputFollow } from "./use-output-follow.js";
 import { createComposerEnterGuard } from "./composer-enter-guard.js";
 import { BrowserPane } from "./BrowserPane.js";
+import { UserQuestion } from "./UserQuestion.js";
+import { ComputerUsePanel } from "./ComputerUsePanel.js";
+import { ComputerAcceptance } from "./ComputerAcceptance.js";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -63,6 +66,7 @@ function latestPlan(events: RuntimeEvent[]) {
 
 const activeStates = new Set(["running", "waiting_approval", "stopping"]);
 const stateLabels: Record<string, string> = {
+  waiting_user: "等待回答",
   idle: "就绪", running: "正在运行", waiting_approval: "等待审批", stopping: "正在停止",
   completed: "已完成", unverified: "未验证", failed: "失败", cancelled: "已停止", paused: "已暂停", recoverable: "可恢复",
   abandoned: "已放弃", session: "历史会话",
@@ -222,7 +226,7 @@ function activityText(event: RuntimeEvent): string | undefined {
   return undefined;
 }
 
-type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: Record<string, DesktopAttachment[]>; expandProcesses?: boolean; taskStartedAt?: string };
+type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: Record<string, DesktopAttachment[]>; expandProcesses?: boolean; taskStartedAt?: string; onAcceptance?: () => void };
 
 function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
   const [now, setNow] = useState(Date.now());
@@ -234,9 +238,10 @@ function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
   return <div className="active-task-status" role="status" aria-live="polite"><span className="pulse" /><strong>{waiting ? "正在等待模型响应" : activity?.label ?? "正在处理任务"}</strong><small>{waiting ? `已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒 · 长响应可能需要更久，可随时停止` : activity?.detail}</small></div>;
 }
 
-function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt }: TimelineProps) {
+function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt, onAcceptance }: TimelineProps) {
   const preferences = usePreferences();
   const round = roundPresentation(events);
+  const computerResult = events.some(event => (event.type === "tool.started" || event.type === "tool.finished") && event.payload.name === "computer_input");
   const active = !round.finished && ["running", "waiting_approval", "stopping"].includes(state);
   const [expanded, setExpanded] = useState(active && preferences.processExpanded);
   const [alertsExpanded, setAlertsExpanded] = useState(preferences.alertsExpanded);
@@ -262,7 +267,8 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
         </details>;
       })}
     </details>}
-    {round.finished?.type === "task.finished" && round.finished.payload.state !== "completed" && <div className="review-warning" role="status">程序验收：{stateLabels[round.finished.payload.state]}。{round.finished.payload.error?.split("\n")[0] ?? "请查看运行提醒和证据。"}{round.answer ? " 以下是模型回复，不代表程序验收通过。" : ""}{round.finished.payload.error?.includes("\n") && <details><summary>查看未通过校验</summary><pre className="turn-alert-detail">{round.finished.payload.error.split("\n").slice(1).join("\n")}</pre></details>}</div>}
+    {round.finished?.type === "task.finished" && !["completed", "waiting_user"].includes(round.finished.payload.state) && !(computerResult && round.finished.payload.state === "unverified") && <div className="review-warning" role="status">程序验收：{stateLabels[round.finished.payload.state]}。{round.finished.payload.error?.split("\n")[0] ?? "请查看运行提醒和证据。"}{round.answer ? " 以下是模型回复，不代表程序验收通过。" : ""}{round.finished.payload.error?.includes("\n") && <details><summary>查看未通过校验</summary><pre className="turn-alert-detail">{round.finished.payload.error.split("\n").slice(1).join("\n")}</pre></details>}</div>}
+    {computerResult && round.finished?.type === "task.finished" && ["completed", "failed", "unverified"].includes(round.finished.payload.state) && <ComputerAcceptance taskId={round.finished.taskId} programState={round.finished.payload.state} disabled={activeStates.has(state)} onChange={onAcceptance} />}
     {round.answer && <DetailedTaskTimeline events={[round.answer]} state="idle" modelLabel={modelLabel} />}
   </section>;
 }
@@ -270,7 +276,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
 function TaskTimeline(props: TimelineProps) {
   const rounds = conversationRounds(props.events);
   if (!rounds.length) return <DetailedTaskTimeline {...props} />;
-  return <div className="timeline conversation-timeline">{rounds.map((round, index) => <ConversationRound taskStartedAt={index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
+  return <div className="timeline conversation-timeline">{rounds.map((round, index) => <ConversationRound onAcceptance={props.onAcceptance} taskStartedAt={index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
 }
 
 function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel, submittedAttachments = {}, expandProcesses = false }: TimelineProps) {
@@ -296,9 +302,9 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
 
 type ChangeEntry = DesktopReviewSnapshot["changes"]["changes"][number];
 
-function HistoryTimeline({ history, submittedAttachments, onClose, onDiff }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void }) {
+function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
   submittedAttachments = { ...submittedAttachments, ...history.attachments };
-  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => <article className={`event-card history-${entry.kind}`} key={entry.id}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={visibleMessageText(entry.text)} /></div></article>)}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
+  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => <article className={`event-card history-${entry.kind}`} key={entry.id}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={visibleMessageText(entry.text)} /></div></article>)}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
 }
 
 function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: DesktopReviewSnapshot["changes"]; legacy?: boolean; onDiff: (change: ChangeEntry) => void }) {
@@ -447,7 +453,11 @@ function InteractiveTerminal({ visible, disabled }: { visible: boolean; disabled
   </section>;
 }
 
-function ReviewInspector({ overviewHidden, task, workspace, review, history, events, agents, tab, changeView, preview, previewMode, active, selectedPath, collapsed, setCollapsed, onTab, onChangeView, onPreview, onDiff, onPreviewMode, onRefresh, onRestore, onRecover, onAbandon }: {
+function ReviewInspector({ onComputerTask, onComputerEnable, computerAutomatic, computerDisabled, overviewHidden, task, workspace, review, history, events, agents, tab, changeView, preview, previewMode, active, selectedPath, collapsed, setCollapsed, onTab, onChangeView, onPreview, onDiff, onPreviewMode, onRefresh, onRestore, onRecover, onAbandon }: {
+  onComputerTask: (goal: string) => void;
+  onComputerEnable: () => void;
+  computerAutomatic: boolean;
+  computerDisabled: boolean;
   workspace?: { name: string; path?: string };
   overviewHidden: boolean;
   task?: import("../../../../src/runtime/protocol.js").RuntimeTaskSnapshot;
@@ -489,7 +499,7 @@ function ReviewInspector({ overviewHidden, task, workspace, review, history, eve
   };
   if (history && review) review = { ...review, commands: (history.tools ?? []).filter((tool) => ["run_command", "run_process"].includes(tool.name)), validations: history.validations ?? [], checkpoints: [], recovery: undefined };
   useEffect(() => { if (tab === "terminal") setTerminalMounted(true); }, [tab]);
-  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "终端"], ["agents", "子智能体"], ["data", "数据"], ["evidence", "证据"], ["web", "网页"]];
+  const tabs: Array<[DesktopReviewTab, string]> = [["changes", "变更"], ["files", "文件"], ["terminal", "终端"], ["agents", "子智能体"], ["data", "数据"], ["evidence", "证据"], ["web", "网页"], ["computer", "电脑操作"]];
   const historicalTask = Boolean(history && changeView === "task");
   const displayedChanges = historicalTask ? history?.changes : review?.changes;
   return <aside className={`inspector review-inspector ${fullView ? "workbench-full" : ""} ${collapsed ? "workbench-collapsed" : ""}`}>
@@ -499,6 +509,7 @@ function ReviewInspector({ overviewHidden, task, workspace, review, history, eve
     {openedTabs.includes("web") && <BrowserPane visible={tab === "web" && !launcher && !collapsed} />}
     {!review && <p className="muted padded">正在读取审查证据…</p>}
     {tab === "agents" && <section className="review-pane"><SubagentCards events={history?.events ?? events} snapshot={history ? undefined : agents} live={!history && active} onCancel={async (agent) => { const connection = await window.xiuDesktop.runtimeConnect(); await window.xiuDesktop.cancelSubagent({ runId: agent.runId, taskId: agent.taskId!, parentTaskId: connection.runtime.snapshot.task?.id ?? "" }); }} /></section>}
+    {tab === "computer" && !collapsed && <ComputerUsePanel onStart={onComputerTask} onEnable={onComputerEnable} automatic={computerAutomatic} disabled={computerDisabled} />}
     {tab === "data" && <TaskDataPanel events={history?.events ?? events} review={history ? { ...review!, changes: history.changes ?? { view: "task", git: false, complete: false, changes: [], warnings: [], preExisting: [] }, artifacts: (history.changes?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })), tools: history.tools ?? [], validations: history.validations ?? [], background: [] } : review} />}
     {tab === "changes" && <section className="review-pane">
       <div className="segmented">{(["task", "workspace", "staged"] as DesktopChangeView[]).map((view) => <button key={view} disabled={view !== "task" && review?.changes.git === false} title={view !== "task" && review?.changes.git === false ? "此目录不是 Git 仓库，请使用本任务比较" : undefined} className={changeView === view ? "selected" : ""} onClick={() => onChangeView(view)}>{view === "task" ? "本任务" : view === "workspace" ? "工作区" : "已暂存"}</button>)}</div>
@@ -521,11 +532,12 @@ function ReviewInspector({ overviewHidden, task, workspace, review, history, eve
   </aside>;
 }
 
-function ProviderPicker({ settings, selectedProviderId, busy, disabled, credentialEditing, apiKey, notice, onChooseProvider, onDiscover, onSelect, onEditCredential, onApiKey, onSaveCredential, onCancelCredential, onTest, onUpsert, onDelete, onClose }: {
+function ProviderPicker({ settings, selectedProviderId, busy, disabled, management, credentialEditing, apiKey, notice, onChooseProvider, onDiscover, onSelect, onEditCredential, onApiKey, onSaveCredential, onCancelCredential, onTest, onUpsert, onDelete, onClose }: {
   settings?: DesktopProviderSnapshot;
   selectedProviderId?: string;
   busy: boolean;
   disabled: boolean;
+  management: boolean;
   credentialEditing?: string;
   apiKey: string;
   notice?: string;
@@ -544,6 +556,28 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
   const blankProvider = (): DesktopProviderUpsertRequest => ({ id: "", name: "", kind: "openai-compatible", model: "", baseURL: "https://", apiKeyEnv: "", apiKey: "", contextWindow: 128000, capabilityModels: {}, features: { tools: true, vision: false, image: false, video: false, audio: false } });
   const [editing, setEditing] = useState<DesktopProviderUpsertRequest>();
   const [deleting, setDeleting] = useState<DesktopProviderProfile>();
+  const [visionTesting, setVisionTesting] = useState(false);
+  const [visionNotice, setVisionNotice] = useState<string>();
+  const [visionProgress, setVisionProgress] = useState<Awaited<ReturnType<typeof window.xiuDesktop.visionProbeProgress>>>({ total: 0, results: [] });
+  busy = busy || visionTesting;
+  const testVision = async (providerId: string, model: string, allCandidates = false) => {
+    setVisionTesting(true); setVisionNotice(undefined); setVisionProgress({ total: 0, results: [] });
+    try {
+      const result = await window.xiuDesktop.testVisionProvider({ providerId, model, allCandidates });
+      setVisionNotice(result.message);
+      if (result.results) setVisionProgress({ total: result.results.length, results: result.results });
+    }
+    catch { setVisionNotice("视觉测试无法完成，请检查工作区状态、Plan 模式或渠道配置。"); }
+    finally { setVisionTesting(false); }
+  };
+  useEffect(() => { setVisionNotice(undefined); setVisionProgress({ total: 0, results: [] }); }, [settings]);
+  useEffect(() => {
+    if (!visionTesting) return;
+    let live = true;
+    const timer = setInterval(() => { void window.xiuDesktop.visionProbeProgress().then(progress => { if (live) setVisionProgress(progress); }).catch(() => {}); }, 500);
+    return () => { live = false; clearInterval(timer); };
+  }, [visionTesting]);
+  useEffect(() => () => { void window.xiuDesktop.cancelVisionProbe(); }, []);
   const selected = settings?.profiles.find((profile) => profile.id === selectedProviderId) ?? settings?.profiles.find((profile) => profile.id === settings.activeProviderId);
   const credentialLabel = (profile: DesktopProviderProfile) => profile.credential.source === "system" ? "系统凭据" : profile.credential.source === "environment" ? "环境变量" : profile.credential.source === "legacy-file" ? "兼容凭据" : profile.credential.source === "not-required" ? "无需 Key" : "未配置";
   const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels }, features: { ...profile.features } });
@@ -557,13 +591,13 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
       name: current.name && !settings?.templates?.some((item) => item.name === current.name) ? current.name : template?.name ?? "" };
   });
   const updateCapabilityModel = (capability: "vision" | "image" | "video" | "audio", value: string) => setEditing((current) => current ? { ...current, capabilityModels: { ...current.capabilityModels, [capability]: value } } : current);
-  return <div className="provider-popover" role="dialog" aria-label="选择 Provider 和模型">
-    <header><div><strong>Provider 与模型</strong><small>选择模型，或管理自定义渠道</small></div><div className="provider-header-actions"><button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button><button onClick={onClose} aria-label="关闭">×</button></div></header>
+  return <div className={`provider-popover${management ? " provider-manager" : " provider-selection"}`} role={management ? "region" : "dialog"} aria-label={management ? "管理模型与渠道" : "选择 Provider 和模型"}>
+    <header><div><strong>{management ? "渠道配置" : "选择模型"}</strong><small>{management ? "管理渠道、凭据与模型能力" : "仅切换模型；配置请前往设置 → 模型与渠道"}</small></div><div className="provider-header-actions">{management && <button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button>}{!management && <button onClick={onClose} aria-label="关闭">×</button>}</div></header>
     {!settings && <p className="muted">正在读取 Provider 配置…</p>}
-    {settings?.profiles.length === 0 && !editing && <p className="provider-notice">尚未添加渠道。点击“新增渠道”，选择 Agnes、OpenAI、本地模型或兼容服务。模板不会自动添加渠道，环境变量不是必需项。</p>}
+    {settings?.profiles.length === 0 && !editing && <p className="provider-notice">{management ? "尚未添加渠道。点击“新增渠道”，选择 Agnes、OpenAI、本地模型或兼容服务。模板不会自动添加渠道，环境变量不是必需项。" : "尚未添加渠道，请前往设置 → 模型与渠道添加。"}</p>}
     {settings && <div className="provider-grid">
-      <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{!profile.builtin && <span><button title="编辑渠道" onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}</nav>
-      {editing ? <section className="provider-editor"><header><div><strong>{editing.existingId ? "编辑渠道" : "新增渠道"}</strong><small>凭据只保存在系统凭据库，不写入项目文件</small></div><button onClick={() => setEditing(undefined)}>取消</button></header><div className="provider-form">
+      <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{management && !profile.builtin && <span><button title="编辑渠道" disabled={busy || disabled} onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" disabled={busy || disabled} onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}</nav>
+      {management && editing ? <section className="provider-editor"><header><div><strong>{editing.existingId ? "编辑渠道" : "新增渠道"}</strong><small>凭据只保存在系统凭据库，不写入项目文件</small></div><button onClick={() => setEditing(undefined)}>取消</button></header><div className="provider-form">
         <label>名称<input value={editing.name} onChange={(event) => updateEditing("name", event.target.value)} placeholder="例如：公司网关" /></label>
         <label>{editing.existingId ? "标识（创建后不可修改）" : "标识"}<input value={editing.id} disabled={Boolean(editing.existingId)} title={editing.existingId ? "标识用于关联凭据，创建后不可修改" : undefined} onChange={(event) => updateEditing("id", event.target.value)} placeholder="company-gateway" /></label>
         <label>类型<Select value={editing.kind} onChange={(event) => chooseKind(event.target.value as DesktopProviderKind)}>{(["openai-compatible", "openai", "anthropic", "agnes", "ollama", "lmstudio", "vllm"] as DesktopProviderKind[]).map((kind) => <option key={kind}>{kind}</option>)}</Select></label>
@@ -573,31 +607,42 @@ function ProviderPicker({ settings, selectedProviderId, busy, disabled, credenti
         <label>上下文窗口<input type="number" min="1024" value={editing.contextWindow ?? ""} onChange={(event) => updateEditing("contextWindow", event.target.value ? Number(event.target.value) : undefined)} /></label>
         <label className="wide">API Key（可选）<input type="password" autoComplete="off" value={editing.apiKey ?? ""} onChange={(event) => updateEditing("apiKey", event.target.value)} placeholder={editing.existingId ? "留空表示不更改现有凭据" : "保存到系统凭据库"} /></label>
         <fieldset className="wide"><legend>能力</legend>{(["tools", "vision", "image", "video", "audio"] as const).map((feature) => <label key={feature}><input type="checkbox" checked={editing.features[feature]} onChange={(event) => updateEditing("features", { ...editing.features, [feature]: event.target.checked })} />{feature}</label>)}</fieldset>
+        {editing.existingId && <div className="vision-model-editor wide"><button disabled={busy || disabled || !(settings.capabilityModelsByProvider[editing.existingId]?.vision.length)} onClick={() => void testVision(editing.existingId!, editing.capabilityModels?.vision ?? editing.model, true)}>测试全部视觉候选（{settings.capabilityModelsByProvider[editing.existingId]?.vision.length ?? 0} 个，可能计费）</button><small>仅测试当前已保存渠道的全部视觉候选，含能力未知的对话模型；不跨渠道。请先刷新列表。</small></div>}
         {(["vision", "image", "video", "audio"] as const).filter((capability) => editing.features[capability]).map((capability) => {
           const options = settings?.capabilityModelsByProvider?.[editing.existingId ?? editing.id]?.[capability] ?? [];
           const labels = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
           const listId = `provider-${capability}-models`;
-          return <label key={capability} className={capability === "vision" ? undefined : "wide"}>{labels[capability]}<input list={listId} value={editing.capabilityModels?.[capability] ?? (capability === "vision" ? editing.model : "")} onChange={(event) => updateCapabilityModel(capability, event.target.value)} placeholder="输入或选择模型 ID" /><datalist id={listId}>{options.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>;
+          if (capability === "vision") {
+            const value = editing.capabilityModels?.vision ?? editing.model;
+            const evidenceLabel = (evidence?: string) => evidence === "declared" ? "接口声明支持视觉" : evidence === "inferred" ? "名称推测，未验证" : "能力未知，未验证";
+            return <div key={capability} className="vision-model-editor wide"><span>视觉模型</span><Select aria-label="视觉模型候选列表" value={options.some((model) => model.id === value) ? value : ""} disabled={busy || disabled || visionTesting} onChange={(event) => updateCapabilityModel("vision", event.target.value)}><option value="" disabled>浏览全部视觉候选（{options.length} 个）</option>{options.map((model) => <option key={model.id} value={model.id}>{model.id} · {evidenceLabel(model.capabilityEvidence)}</option>)}</Select><input aria-label="视觉模型 ID" value={value} disabled={busy || disabled || visionTesting} onChange={(event) => updateCapabilityModel("vision", event.target.value)} placeholder="也可手动填写模型 ID" /><small>包含能力未知的对话模型；接口声明和名称推测不等于实测通过。手动填写不受列表限制，实际看图仍由渠道决定。</small>{editing.existingId ? <><button type="button" disabled={busy || disabled || visionTesting} onClick={() => onDiscover(editing.existingId!)}>刷新已保存渠道的模型</button><button type="button" disabled={busy || disabled || visionTesting || !value.trim()} onClick={() => void testVision(editing.existingId!, value)}>测试视觉能力（可能计费）</button><small>测试此模型 ID，但使用已保存渠道的地址和凭据；修改地址或 Key 后请先保存。</small></> : <small>新渠道保存后可刷新模型列表并测试视觉能力。</small>}</div>;
+          }
+          return <label key={capability} className="wide">{labels[capability]}<input list={listId} value={editing.capabilityModels?.[capability] ?? ""} onChange={(event) => updateCapabilityModel(capability, event.target.value)} placeholder="输入或选择模型 ID" /><datalist id={listId}>{options.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>;
         })}
       </div><footer><button onClick={() => setEditing(undefined)}>取消</button><button className="primary-button compact" disabled={busy || disabled || !editing.id.trim() || !editing.name.trim() || !editing.model.trim()} onClick={() => void onUpsert(editing).then(() => setEditing(undefined))}>{busy ? "保存中…" : "保存渠道"}</button></footer></section>
-      : deleting ? <section className="provider-editor provider-delete-confirm"><span className="confirmation-icon danger">⌫</span><h3>删除“{deleting.name}”？</h3><p>将删除此渠道配置和模型缓存。已保存的系统凭据不会在此操作中导出或显示。</p><div><button onClick={() => setDeleting(undefined)}>取消</button><button className="danger-button" disabled={busy || disabled} onClick={() => void onDelete(deleting).then(() => setDeleting(undefined))}>删除渠道</button></div></section>
+      : management && deleting ? <section className="provider-editor provider-delete-confirm"><span className="confirmation-icon danger">⌫</span><h3>删除“{deleting.name}”？</h3><p>将删除此渠道配置和模型缓存。已保存的系统凭据不会在此操作中导出或显示。</p><div><button onClick={() => setDeleting(undefined)}>取消</button><button className="danger-button" disabled={busy || disabled} onClick={() => void onDelete(deleting).then(() => setDeleting(undefined))}>删除渠道</button></div></section>
       : selected && <section className="model-panel">
         <div className="provider-summary"><div><strong>{selected.name}</strong><small>{selected.id} · {selected.kind}</small></div><span className={selected.credential.configured ? "configured" : "missing"}>{credentialLabel(selected)}</span></div>
-        <div className="provider-actions"><button disabled={busy || disabled} onClick={() => onDiscover(selected.id)}>刷新模型</button><button disabled={busy || disabled} onClick={() => onTest(selected.id, selected.selectedModel)}>测试连接</button>{selected.credential.editable && <button disabled={busy || disabled} onClick={() => onEditCredential(selected.id)}>配置 Key</button>}{!selected.builtin && <button disabled={busy || disabled} onClick={() => editProfile(selected)}>编辑渠道</button>}</div>
+        {management && <><div className="provider-actions"><button disabled={busy || disabled} onClick={() => onDiscover(selected.id)}>刷新模型</button><button disabled={busy || disabled} onClick={() => onTest(selected.id, selected.selectedModel)}>测试连接</button>{selected.credential.editable && <button disabled={busy || disabled} onClick={() => onEditCredential(selected.id)}>配置 Key</button>}{!selected.builtin && <button disabled={busy || disabled} onClick={() => editProfile(selected)}>编辑渠道</button>}</div>
+        <div className="provider-actions"><button disabled={busy || disabled || visionTesting} onClick={() => void testVision(selected.id, selected.capabilityModels?.vision ?? selected.selectedModel)}>测试视觉能力（可能计费）</button></div>
+        <div className="provider-actions"><button disabled={busy || disabled || !settings.capabilityModelsByProvider[selected.id]?.vision.length} onClick={() => void testVision(selected.id, selected.capabilityModels?.vision ?? selected.selectedModel, true)}>测试全部视觉候选（{settings.capabilityModelsByProvider[selected.id]?.vision.length ?? 0} 个，可能计费）</button></div></>}
         {settings.discoveryError && settings.modelProviderId === selected.id && <p className="provider-warning">在线发现失败：{settings.discoveryError}</p>}
-        {credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
+        {management && credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
         <div className="model-groups">
           <section className="model-group"><h4>对话模型</h4><div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div></section>
           {(["vision", "image", "video", "audio"] as const).filter((capability) => selected.features[capability]).map((capability) => {
             const labels: Record<DesktopProviderCapability, string> = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
             const models = settings.capabilityModelsByProvider[selected.id]?.[capability] ?? [];
             const activeModel = selected.capabilityModels?.[capability];
-            return <section className="model-group capability-model-group" key={capability}><h4>{labels[capability]}<span>{models.length} 个</span></h4>{models.length ? <div className="model-list">{models.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">刷新模型后选择，或在自定义渠道中手动填写模型 ID。</p>}</section>;
+            return <section className="model-group capability-model-group" key={capability}><h4>{labels[capability]}<span>{models.length} 个</span></h4>{capability === "vision" && <p className="empty-note">包含能力未知的对话模型；候选不代表视觉实测通过。</p>}{models.length ? <div className="model-list">{models.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}{capability === "vision" && <small>{model.capabilityEvidence === "declared" ? "接口声明支持视觉" : model.capabilityEvidence === "inferred" ? "名称推测，未验证" : "能力未知，未验证"}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">刷新模型后选择，或在自定义渠道中手动填写模型 ID。</p>}</section>;
           })}
         </div>
       </section>}
     </div>}
     {notice && <p className="provider-notice">{notice}</p>}
+    {visionTesting && <p className="provider-notice" role="status">正在测试视觉能力… {visionProgress.total > 0 && <span>完成 {visionProgress.results.length}/{visionProgress.total} · {visionProgress.current ?? "等待确认"}</span>} <button onClick={() => void window.xiuDesktop.cancelVisionProbe()}>取消测试</button></p>}
+    {visionProgress.results.length > 0 && <div className="vision-probe-results" aria-label="批量视觉测试结果">{visionProgress.results.map(result => <div key={result.model}><strong>{result.model}</strong><span>{({ passed: "通过", failed: "未通过", unknown: "无法确认", cancelled: "已取消" })[result.status]}</span><small>{result.message}</small></div>)}</div>}
+    {visionNotice && <p className="provider-notice" role="status">{visionNotice}<small>仅本次测试结果，不保存为永久能力标记。</small></p>}
     {disabled && <p className="provider-warning">任务运行或其他 Xiu 进程占用工作区时不能修改 Provider 配置。</p>}
   </div>;
 }
@@ -685,6 +730,12 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const refreshReview = async (view = changeViewRef.current) => {
     const next = await window.xiuDesktop.reviewSnapshot({ changeView: view });
     setReview(next);
+  };
+  const refreshAcceptance = () => {
+    void window.xiuDesktop.snapshot().then(setWorkspace).catch(reason => setError(String(reason)));
+    void refreshReview().catch(reason => setError(String(reason)));
+    const history = historyViewRef.current;
+    if (history) void window.xiuDesktop.openTaskHistory({ taskId: history.taskId }).then(value => { if (historyViewRef.current === history) setHistoryView(value); }).catch(reason => setError(String(reason)));
   };
 
   useEffect(() => {
@@ -777,10 +828,10 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     finally { setBusy(false); }
   };
 
-  const submit = async () => {
+  const submit = async (answer?: string) => {
     if (providerRestartRequired || busy || submitPendingRef.current || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")) return;
     if (!isActive && review?.recovery) { setWorkbenchCollapsed(false); setReviewTab("evidence"); setError("请先确认恢复或放弃旧任务，再开始新任务。"); return; }
-    const visibleText = input.trim();
+    const visibleText = (answer ?? input).trim();
     if (!visibleText && !attachments.length) return;
     submitPendingRef.current = true;
     const continuedHistory = !isActive ? historyView : undefined;
@@ -801,7 +852,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
       } else {
         const next = continuedHistory
           ? await window.xiuDesktop.continueTask({ taskId: continuedHistory.taskId, text })
-          : await window.xiuDesktop.createTask({ text });
+          : await window.xiuDesktop.createTask({ text, ...(runtime?.task?.pendingQuestion ? { answerTo: { taskId: runtime.task.id, questionId: runtime.task.pendingQuestion.id } } : {}) });
         setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000));
         const started = [...next.runtime.events].reverse().find(event => event.type === "task.started" && event.taskId === next.runtime.snapshot.task?.id);
         if (started && pendingAttachmentsRef.current) {
@@ -1072,7 +1123,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     try {
       applyProviderMutation(await window.xiuDesktop.selectProvider({ providerId, model, ...(capability ? { capability } : {}) }));
       setProviderNotice(capability ? `已将 ${providerId} 的${capability}模型切换为 ${model}` : `已切换为 ${providerId} / ${model}`);
-      if (!capability) setProviderOpen(false);
+      if (!capability && providerPlacement === "composer") closeProviderPicker();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
@@ -1122,6 +1173,8 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   };
 
   const approval = runtime?.task?.pendingApproval;
+  const historyFinished = historyView?.events.filter(event => event.type === "task.finished").at(-1);
+  const question = historyView ? historyFinished?.type === "task.finished" ? historyFinished.payload.pendingQuestion : undefined : runtime?.task?.pendingQuestion;
   const isActive = Boolean(runtime?.task && activeStates.has(runtime.task.state));
   const status = runtime?.task?.state ?? "idle";
   const modelLabel = connection ? `${connection.provider.label} · ${connection.provider.model}` : "正在准备运行时";
@@ -1136,13 +1189,13 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   useEffect(() => { setPlanOpen(isActive); }, [isActive, runtime?.task?.id]);
   const planDone = plan?.steps.filter((step) => step.status === "completed").length ?? 0;
   const planState = historyView && !isActive ? historyView.status : status;
-  const planCurrentTitle = plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? planState === "failed" || planState === "unverified" ? "计划步骤已完成 · 验收未通过" : "全部步骤完成" : "等待下一步");
+  const planCurrentTitle = question ? "等待你的回答" : plan?.steps.find((step) => step.status === "in_progress")?.title ?? (plan && planDone === plan.steps.length ? planState === "failed" || planState === "unverified" ? "计划步骤已完成 · 验收未通过" : "全部步骤完成" : "等待下一步");
   // The conversation spans rounds; only task-scoped inspector facts are
   // filtered to the current execution. Never replace the transcript on follow-up.
   const timelineEvents = events;
   const taskView = selectedTaskView(historyView, isActive, Boolean(pendingMessage || draft), pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents, runtime?.task?.subagents);
   const activeConversationId = historyView?.taskId ?? connection?.conversationId;
-  const providerPicker = providerOpen ? <ProviderPicker settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
+  const providerPicker = providerOpen ? <ProviderPicker key={providerPlacement} management={providerPlacement === "settings"} settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <PreferencesContext.Provider value={preferences}><main className="app-shell">
     {managementOpen && <ManagementPanel disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClose={() => setManagementOpen(false)} onConnection={(next) => { setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000)); setDraft(undefined); }} />}
@@ -1154,7 +1207,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
       {workspace.trust === "trusted" && <section className="history"><h2>最近任务</h2>{workspace.tasks.slice(0, 7).map((task) => <div className="sidebar-item" key={task.id}><button className={`history-row ${activeConversationId === task.id ? "selected" : ""}`} disabled={busy || isActive} title={task.title} onClick={() => void openTaskHistory(task.id)}><span className={`task-dot ${task.status}`} /><span>{task.title}</span></button><button className="sidebar-delete" disabled={busy || isActive} title={`删除任务 ${task.title}`} aria-label={`删除任务 ${task.title}`} onClick={() => setConfirmation({ kind: "task", id: task.id, name: task.title })}>×</button></div>)}</section>}
       <div className="sidebar-utilities"><button className="sidebar-mcp" disabled={busy || workspace.trust !== "trusted"} onClick={() => { setMcpOpen(true); void refreshMcp(); }}>MCP 连接与权限</button>
       <button className="sidebar-mcp" disabled={busy} onClick={openProviderRecovery}>Provider 配置诊断与恢复</button>
-      <button className="sidebar-footer" onClick={() => setSettingsOpen(true)}>⚙ 设置</button></div>
+      <button className="sidebar-footer" onClick={() => { closeProviderPicker(); setSettingsOpen(true); }}>⚙ 设置</button></div>
     </aside>
     <section className="workspace-main">
       <header className="workspace-header"><div><h1>{workspace.workspace?.name ?? "欢迎使用 Xiu"}</h1><p>{workspace.workspace?.path ?? (workspace.trust === "required" ? "确认信任前不会读取项目内容" : "选择一个本地项目开始")}</p></div><div className="workspace-header-actions">{workspace.workspace && <span className={`status-chip ${workspace.trust}`}>{workspace.trust === "trusted" ? stateLabels[status] : "需要信任"}</span>}{workspace.trust === "trusted" && <WorkspaceToolbar overviewVisible={!overviewHidden} collapsed={workbenchCollapsed} terminalVisible={!workbenchCollapsed && reviewTab === "terminal"} disabled={busy} onSettings={() => setManagementOpen(true)} onOverview={() => setOverviewHidden((value) => !value)} onTerminal={() => { setWorkbenchCollapsed(false); setReviewTab("terminal"); }} onSidebar={() => setWorkbenchCollapsed((value) => !value)} />}</div></header>
@@ -1165,15 +1218,15 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
         {workspace.trust === "trusted" && <ResizableTaskLayout>
           <section className="task-console">
-            <div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline history={taskView.history} submittedAttachments={submittedAttachments} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
+            <div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline onAcceptance={refreshAcceptance} history={taskView.history} submittedAttachments={submittedAttachments} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline onAcceptance={refreshAcceptance} taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={openDiff} />}
               {approval && <section className={`approval-card risk-${approval.risk}`}><header><div><span className="eyebrow">需要你的批准</span><h2>{approval.description}</h2></div><span className="risk-chip">{approval.risk}</span></header>{approval.preview && <pre>{approval.preview}</pre>}<dl><div><dt>权限范围</dt><dd>{approval.sessionScope && approval.risk !== "dangerous" ? "可仅允许一次，或记住这一类操作直至退出 Xiu" : "仅本次操作"}</dd></div><div><dt>可能影响</dt><dd>{approval.effects.join("；")}</dd></div><div><dt>恢复方式</dt><dd>{approval.recovery}</dd></div></dl>{approval.risk === "dangerous" && <label className="danger-check"><input type="checkbox" checked={dangerConfirmed} onChange={(event) => setDangerConfirmed(event.target.checked)} />我理解该操作可能不可逆，并确认继续</label>}<footer><button className="secondary-button" disabled={busy} onClick={() => void decide(false)}>拒绝</button><button className="secondary-button" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true)}>仅本次允许</button>{approval.sessionScope && approval.risk !== "dangerous" && <button className="primary-button compact" disabled={busy} onClick={() => void decide(true, true)}>本次会话始终允许</button>}</footer></section>}
             </div></div>
             {outputFollow.paused && <button className="return-to-latest" onClick={outputFollow.resume}>↓ 回到最新进展</button>}
             {isActive && <ActiveTaskStatus events={currentTaskEvents} state={status} modelLabel={modelLabel} />}
-            <div className="composer-area">{!isActive && review?.recovery && <div className="writer-warning">有中断任务尚未处理。<button onClick={() => { setWorkbenchCollapsed(false); setReviewTab("evidence"); }}>查看并选择恢复或放弃</button></div>}{["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "") && <div className="writer-warning">{connection?.journalWarning ?? "另一个进程或窗口正在写入此工作区。请先在原任务中停止，随后重新打开工作区。"}</div>}{historyView && !isActive && <div className="history-resume-note">已载入历史上下文，可直接继续此任务。</div>}{planMode && <div className="plan-mode-note" role="status">Plan 只读：仅分析与规划，不执行写入或命令；完全访问也不例外。</div>}{plan && <details className="plan-strip" open={planOpen} onToggle={(event) => setPlanOpen(event.currentTarget.open)}><summary><span>{planDone} / {plan.steps.length} 步</span><div><i style={{ width: `${plan.steps.length ? planDone / plan.steps.length * 100: 0}%` }} /></div><span>{planCurrentTitle}</span><b>{planOpen ? "收起" : "展开"}</b></summary><div className="plan-details"><strong>{plan.goal}</strong><ol>{plan.steps.map((step) => <li className={step.status} key={step.id}><span>{step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"}</span>{step.title}</li>)}</ol></div></details>}<div className="composer" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => { event.preventDefault(); void importFiles([...event.dataTransfer.files]); }}>{attachments.length > 0 && <EditableAttachmentTiles attachments={attachments} onRemove={removeAttachment} />}<textarea value={input} disabled={providerRestartRequired || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onChange={(event) => setInput(event.target.value)} onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); void importFiles(files); } }} onCompositionStart={() => composerEnterGuard.compositionStart()} onCompositionEnd={() => composerEnterGuard.compositionEnd()} onBlur={() => composerEnterGuard.reset()} onKeyUp={() => composerEnterGuard.keyUp()} onKeyDown={(event) => { if (composerEnterGuard.shouldSubmit(event.nativeEvent) && (preferences.sendKey === "enter" || event.ctrlKey || event.metaKey)) { event.preventDefault(); void submit(); } }} placeholder={historyView && !isActive ? "继续这个任务…" : isActive ? "补充要求或调整方向…" : "描述你想完成的任务…"} /><div className="composer-footer"><div className="composer-tools"><button className={`plan-mode-selector${planMode ? " selected" : ""}`} aria-pressed={planMode} aria-label="Plan 只读模式" disabled={providerRestartRequired || busy || !connection?.modeContextId || isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} title={planMode ? "Plan 只读：仅分析与规划，完全访问也不能写入或执行；空闲时可切换" : "执行模式：按权限设置执行任务；点击切换为 Plan 只读"} onClick={() => void setPlanMode(!planMode)}>{planMode ? "Plan · 只读" : "执行"}</button><button className="attach-button" title="添加文件或图片" disabled={busy} onClick={() => void addAttachments("choose")}>＋</button><button className={`permission-selector mode-${approvalMode}`} disabled={!connection || isActive} title={approvalModeDetails[approvalMode].description} onClick={() => { setProviderOpen(false); setPermissionOpen((open) => !open); }}><span>{approvalModeDetails[approvalMode].icon}</span><strong>{approvalModeDetails[approvalMode].label}</strong><i>⌄</i></button><button className="model-selector" title={modelLabel} disabled={!connection} onClick={() => { setPermissionOpen(false); if (providerOpen) closeProviderPicker(); else void openProviderPicker("composer"); }}>{connection ? <><span className="model-provider">{connection.provider.label}</span><span className="model-divider">·</span><strong className="model-name">{connection.provider.model}</strong></> : <strong className="model-name">正在准备运行时</strong>}<span className="model-chevron">⌄</span></button></div><div>{isActive && <button className="stop-button" onClick={() => void stop()}>停止</button>}<button className="send-button" disabled={providerRestartRequired || busy || (!input.trim() && !attachments.length) || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClick={() => void submit()}>↑</button></div></div>{permissionOpen && <div className="permission-popover" role="menu" aria-label="权限模式"><header><strong>权限模式</strong><small>按所选模式执行；完全访问含危险操作</small></header>{(Object.keys(approvalModeDetails) as DesktopApprovalMode[]).map((mode) => <button key={mode} className={approvalMode === mode ? "selected" : ""} disabled={busy || isActive} onClick={() => void setApprovalMode(mode)}><span className={`permission-icon mode-${mode}`}>{approvalModeDetails[mode].icon}</span><span><strong>{approvalModeDetails[mode].label}</strong><small>{approvalModeDetails[mode].description}</small></span><i>{approvalMode === mode ? "✓" : ""}</i></button>)}</div>}{providerOpen && providerPlacement === "composer" && providerPicker}</div></div>
+            <div className="composer-area">{question && <UserQuestion key={question.id} question={question.question} busy={busy} onAnswer={submit} />}{!isActive && review?.recovery && <div className="writer-warning">有中断任务尚未处理。<button onClick={() => { setWorkbenchCollapsed(false); setReviewTab("evidence"); }}>查看并选择恢复或放弃</button></div>}{["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "") && <div className="writer-warning">{connection?.journalWarning ?? "另一个进程或窗口正在写入此工作区。请先在原任务中停止，随后重新打开工作区。"}</div>}{historyView && !isActive && <div className="history-resume-note">已载入历史上下文，可直接继续此任务。</div>}{planMode && <div className="plan-mode-note" role="status">Plan 只读：仅分析与规划，不执行写入或命令；完全访问也不例外。</div>}{plan && <details className="plan-strip" open={planOpen} onToggle={(event) => setPlanOpen(event.currentTarget.open)}><summary><span>{planDone} / {plan.steps.length} 步</span><div><i style={{ width: `${plan.steps.length ? planDone / plan.steps.length * 100: 0}%` }} /></div><span>{planCurrentTitle}</span><b>{planOpen ? "收起" : "展开"}</b></summary><div className="plan-details"><strong>{plan.goal}</strong><ol>{plan.steps.map((step) => <li className={step.status} key={step.id}><span>{step.status === "completed" ? "✓" : step.status === "in_progress" ? "●" : "○"}</span>{step.title}</li>)}</ol></div></details>}<div className="composer" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={(event) => { event.preventDefault(); void importFiles([...event.dataTransfer.files]); }}>{attachments.length > 0 && <EditableAttachmentTiles attachments={attachments} onRemove={removeAttachment} />}<textarea value={input} disabled={providerRestartRequired || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onChange={(event) => setInput(event.target.value)} onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); void importFiles(files); } }} onCompositionStart={() => composerEnterGuard.compositionStart()} onCompositionEnd={() => composerEnterGuard.compositionEnd()} onBlur={() => composerEnterGuard.reset()} onKeyUp={() => composerEnterGuard.keyUp()} onKeyDown={(event) => { if (composerEnterGuard.shouldSubmit(event.nativeEvent) && (preferences.sendKey === "enter" || event.ctrlKey || event.metaKey)) { event.preventDefault(); void submit(); } }} placeholder={historyView && !isActive ? "继续这个任务…" : isActive ? "补充要求或调整方向…" : "描述你想完成的任务…"} /><div className="composer-footer"><div className="composer-tools"><button className={`plan-mode-selector${planMode ? " selected" : ""}`} aria-pressed={planMode} aria-label="Plan 只读模式" disabled={providerRestartRequired || busy || !connection?.modeContextId || isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} title={planMode ? "Plan 只读：仅分析与规划，完全访问也不能写入或执行；空闲时可切换" : "执行模式：按权限设置执行任务；点击切换为 Plan 只读"} onClick={() => void setPlanMode(!planMode)}>{planMode ? "Plan · 只读" : "执行"}</button><button className="attach-button" title="添加文件或图片" disabled={busy} onClick={() => void addAttachments("choose")}>＋</button><button className={`permission-selector mode-${approvalMode}`} disabled={!connection || isActive} title={approvalModeDetails[approvalMode].description} onClick={() => { setProviderOpen(false); setPermissionOpen((open) => !open); }}><span>{approvalModeDetails[approvalMode].icon}</span><strong>{approvalModeDetails[approvalMode].label}</strong><i>⌄</i></button><button className="model-selector" title={modelLabel} disabled={!connection} onClick={() => { setPermissionOpen(false); if (providerOpen) closeProviderPicker(); else void openProviderPicker("composer"); }}>{connection ? <><span className="model-provider">{connection.provider.label}</span><span className="model-divider">·</span><strong className="model-name">{connection.provider.model}</strong></> : <strong className="model-name">正在准备运行时</strong>}<span className="model-chevron">⌄</span></button></div><div>{isActive && <button className="stop-button" onClick={() => void stop()}>停止</button>}<button className="send-button" disabled={providerRestartRequired || busy || (!input.trim() && !attachments.length) || status === "waiting_approval" || status === "stopping" || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClick={() => void submit()}>↑</button></div></div>{permissionOpen && <div className="permission-popover" role="menu" aria-label="权限模式"><header><strong>权限模式</strong><small>按所选模式执行；完全访问含危险操作</small></header>{(Object.keys(approvalModeDetails) as DesktopApprovalMode[]).map((mode) => <button key={mode} className={approvalMode === mode ? "selected" : ""} disabled={busy || isActive} onClick={() => void setApprovalMode(mode)}><span className={`permission-icon mode-${mode}`}>{approvalModeDetails[mode].icon}</span><span><strong>{approvalModeDetails[mode].label}</strong><small>{approvalModeDetails[mode].description}</small></span><i>{approvalMode === mode ? "✓" : ""}</i></button>)}</div>}{providerOpen && providerPlacement === "composer" && providerPicker}</div></div>
           </section>
-          <ReviewInspector overviewHidden={overviewHidden} task={runtime?.task} workspace={workspace.workspace} collapsed={workbenchCollapsed} setCollapsed={setWorkbenchCollapsed} review={review} events={taskView.events} agents={taskView.agents} selectedPath={selectedDiff?.path} history={taskView.history} tab={reviewTab} changeView={changeView} preview={filePreview} previewMode={previewMode} active={isActive || busy} onTab={setReviewTab} onChangeView={(view) => void selectChangeView(view)} onPreview={(file) => void openPreview(file)} onDiff={openDiff} onPreviewMode={setPreviewMode} onRefresh={() => void refreshReview().catch((reason) => setError(String(reason)))} onRestore={(id) => void restoreCheckpoint(id)} onRecover={(id) => void recoverTask(id)} onAbandon={(id) => void abandonRecovery(id)} />
+<ReviewInspector onComputerTask={(goal) => void submit("使用电脑操作工具完成目标：" + goal + "。先 computer_windows 查找目标，computer_select 请求授权；随后观察、操作并验证。优先控件 ID，输入后验证实际结果并更新计划。不操作密码、支付、删除或发布，遇阻碍请求用户回应。")} onComputerEnable={() => void setApprovalMode("full")} computerAutomatic={approvalMode === "full"} computerDisabled={isActive || busy || planMode || !connection || providerRestartRequired} overviewHidden={overviewHidden} task={runtime?.task} workspace={workspace.workspace} collapsed={workbenchCollapsed} setCollapsed={setWorkbenchCollapsed} review={review} events={taskView.events} agents={taskView.agents} selectedPath={selectedDiff?.path} history={taskView.history} tab={reviewTab} changeView={changeView} preview={filePreview} previewMode={previewMode} active={isActive || busy} onTab={setReviewTab} onChangeView={(view) => void selectChangeView(view)} onPreview={(file) => void openPreview(file)} onDiff={openDiff} onPreviewMode={setPreviewMode} onRefresh={() => void refreshReview().catch((reason) => setError(String(reason)))} onRestore={(id) => void restoreCheckpoint(id)} onRecover={(id) => void recoverTask(id)} onAbandon={(id) => void abandonRecovery(id)} />
         </ResizableTaskLayout>}
       </div>
     </section>
@@ -1185,7 +1238,6 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
       onClose={() => void closeProviderRecovery()} />}
     {confirmation && <ConfirmationDialog kind={confirmation.kind} name={confirmation.name} busy={busy} onCancel={() => setConfirmation(undefined)} onConfirm={() => void confirmDestructiveAction()} />}
     {mcpOpen && <McpPanel snapshot={mcpSnapshot} busy={busy} error={error} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onRefresh={() => void refreshMcp()} onReload={() => void changeMcp("reload")} onDisconnect={() => void changeMcp("disconnect")} onApprove={(name, fingerprint) => void changeMcp("approve", name, fingerprint)} onManage={manageMcp} onBrowse={browseMcp} onClose={() => void closeMcp()} />}
-    {providerOpen && providerPlacement === "settings" && <div className="dialog-backdrop settings-provider-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeProviderPicker(); }}><div className="settings-provider-dialog" onMouseDown={(event) => event.stopPropagation()}>{providerPicker}</div></div>}
-    {settingsOpen && <SettingsPage value={preferences} modelDisabled={busy || isActive || workspace.trust !== "trusted"} onClose={() => setSettingsOpen(false)} onModels={() => { setSettingsOpen(false); void openProviderPicker("settings"); }} onSave={async (next) => { const saved = await window.xiuDesktop.savePreferences(next); setPreferences(saved); applyAppearance(saved); }} />}
+    {settingsOpen && <SettingsPage value={preferences} modelDisabled={busy || isActive || workspace.trust !== "trusted"} models={providerPlacement === "settings" ? providerPicker : null} onClose={() => { closeProviderPicker(); setSettingsOpen(false); }} onModels={() => void openProviderPicker("settings")} onModelsClose={closeProviderPicker} onSave={async (next) => { const saved = await window.xiuDesktop.savePreferences(next); setPreferences(saved); applyAppearance(saved); }} />}
   </main></PreferencesContext.Provider>;
 }

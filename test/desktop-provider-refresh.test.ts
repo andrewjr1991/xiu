@@ -50,3 +50,15 @@ test("restored configuration rejects both picker refresh and selection until res
   await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /必须退出.*重新打开/);
   assert.deepEqual(f.state(), { loads: 1, writes: 0, model: "original" });
 });
+
+test("discovery snapshot preserves vision evidence and unknown candidates", async () => {
+  const f = fixture();
+  const controller = await DesktopProviderController.create({ registry: f.registry, discover: async () => [
+    { id: "agnes-3.0-flash", source: "api" },
+    { id: "opaque-reader", source: "api", capabilities: ["vision", "text"] },
+  ] });
+  const snapshot = await controller.discover("fixture-workspace", { providerId: "fixture" });
+  const models = snapshot.capabilityModelsByProvider.fixture.vision;
+  assert.equal(models.find(model => model.id === "agnes-3.0-flash")?.capabilityEvidence, "unknown");
+  assert.equal(models.find(model => model.id === "opaque-reader")?.capabilityEvidence, "declared");
+});

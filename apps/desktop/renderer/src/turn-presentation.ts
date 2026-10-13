@@ -16,11 +16,11 @@ export function roundPresentation(events: RuntimeEvent[]) {
   const finished = [...events].reverse().find((e) => e.type === "task.finished");
   const replies = events.filter((e) => e.type === "assistant.message" && !e.payload.hasToolCalls && e.payload.text.trim());
   const lastReply = replies.at(-1);
-  const answer = finished?.type === "task.finished" && finished.payload.state === "completed" && finished.payload.result?.trim()
+  const answer = finished?.type === "task.finished" && ["completed", "waiting_user"].includes(finished.payload.state) && finished.payload.result?.trim()
     ? finished : lastReply;
   const users = events.filter((e) => e.type === "task.started" || e.type === "task.steered");
   const candidates = events.filter((e) => e.type === "runtime.notice" && e.payload.kind === "failure"
-    || e.type === "task.finished" && e.payload.state !== "completed"
+    || e.type === "task.finished" && !["completed", "waiting_user"].includes(e.payload.state)
     || e.type === "tool.finished" && ["failure", "denied", "cancelled"].includes(e.payload.result?.status ?? ""));
   const failedChildren = new Map<string, RuntimeEvent>();
   for (const event of events) if (event.type === "subagent.updated") {

@@ -13,6 +13,7 @@ import {
   type DesktopAttachmentUploadRequest,
   type DesktopTaskContinueRequest,
   type DesktopTaskDeleteRequest,
+  type DesktopComputerAcceptanceRequest,
   type DesktopFilePreviewRequest,
   type DesktopProviderCredentialRequest,
   type DesktopProviderRecoveryRequest,
@@ -42,6 +43,7 @@ import {
 } from "../shared/protocol.js";
 
 const bridge: XiuDesktopBridge = Object.freeze({
+  computerUse: (request: import("../shared/computer-use.js").ComputerUseRequest) => ipcRenderer.invoke(desktopChannels.computerUse, request),
   preferences: () => ipcRenderer.invoke(desktopChannels.preferences),
   savePreferences: (value: import("../shared/preferences.js").DesktopPreferences) => ipcRenderer.invoke(desktopChannels.preferencesSave, value),
   desktopAbout: () => ipcRenderer.invoke(desktopChannels.about),
@@ -75,6 +77,7 @@ const bridge: XiuDesktopBridge = Object.freeze({
   setApprovalMode: (request: DesktopApprovalModeRequest) => ipcRenderer.invoke(desktopChannels.approvalModeSet, request),
   decideApproval: (request: RuntimeApprovalDecisionRequest) => ipcRenderer.invoke(desktopChannels.approvalDecide, request),
   openTaskHistory: (request: DesktopTaskHistoryRequest) => ipcRenderer.invoke(desktopChannels.taskHistoryOpen, request),
+  computerAcceptance: (request: DesktopComputerAcceptanceRequest) => ipcRenderer.invoke(desktopChannels.computerAcceptance, request),
   deleteTask: (request: DesktopTaskDeleteRequest) => ipcRenderer.invoke(desktopChannels.taskDelete, request),
   chooseAttachments: () => ipcRenderer.invoke(desktopChannels.attachmentsChoose),
   pasteAttachments: () => ipcRenderer.invoke(desktopChannels.attachmentsPaste),
@@ -90,6 +93,9 @@ const bridge: XiuDesktopBridge = Object.freeze({
   selectProvider: (request: DesktopProviderSelectRequest) => ipcRenderer.invoke(desktopChannels.providerSelect, request),
   saveProviderCredential: (request: DesktopProviderCredentialRequest) => ipcRenderer.invoke(desktopChannels.providerCredentialSave, request),
   testProvider: (request: DesktopProviderTestRequest) => ipcRenderer.invoke(desktopChannels.providerTest, request),
+  testVisionProvider: (request: DesktopProviderSelectRequest & { allCandidates?: boolean }) => ipcRenderer.invoke(desktopChannels.providerVisionTest, request),
+  visionProbeProgress: () => ipcRenderer.invoke(desktopChannels.providerVisionProgress),
+  cancelVisionProbe: () => ipcRenderer.invoke(desktopChannels.providerVisionCancel),
   upsertProvider: (request: DesktopProviderUpsertRequest) => ipcRenderer.invoke(desktopChannels.providerUpsert, request),
   deleteProvider: (request: DesktopProviderDeleteRequest) => ipcRenderer.invoke(desktopChannels.providerDelete, request),
   terminalSnapshot: () => ipcRenderer.invoke(desktopChannels.terminalSnapshot),

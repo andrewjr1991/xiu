@@ -15,6 +15,11 @@ await Promise.all([mkdir(temp, { recursive: true }), mkdir(cache, { recursive: t
 const cli = path.join(desktopRoot, "node_modules", "electron-builder", "cli.js");
 const builderTarget = target === "msix" ? "appx" : target;
 const args = [cli, "--win", builderTarget, "--x64", "--publish", "never", "--config.electronDist=node_modules/electron/dist"];
+const localName = process.argv[3];
+if (localName) {
+  if (target !== "nsis" || !/^Xiu-[0-9A-Za-z.-]+-local-[a-z0-9-]+-x64\.exe$/.test(localName)) throw new Error("Local installer filename must be an explicit Xiu-<version>-local-<name>-x64.exe basename.");
+  args.push(`--config.win.artifactName=${localName}`);
+}
 const code = await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, args, {
     cwd: desktopRoot,
