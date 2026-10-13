@@ -40,7 +40,14 @@ test("project index detects stack, checks, and relevant source files", async () 
       return { text: "done", toolCalls: [], raw: {} };
     },
   };
-  await new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {}, undefined, index)
+  await new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
+    provider,
+    tools: [],
+    approve: async () => true,
+    events: {},
+    projectIndex: index,
+  })
     .run("fix authentication session token validation");
   assert.match(receivedContext, /Detected project: Node\.js, TypeScript, React, Vite/);
   assert.match(receivedContext, /src\/authentication\.ts/);
@@ -188,13 +195,17 @@ test("a long-lived Agent refreshes externally added changed deleted and renamed 
   await fs.writeFile(path.join(cwd, "unchanged.ts"), "export const unchangedExternalMarker = true;\n");
   const index = new ProjectIndex(cwd);
   let context = "";
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
-    { async complete(_system, messages) {
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
+    provider: { async complete(_system, messages) {
       context = messages.at(-1)?.content ?? "";
       return { text: "Inspected.", toolCalls: [], raw: {} };
-    } }, [], async () => false, {}, undefined, index,
-  );
+    } },
+    tools: [],
+    approve: async () => false,
+    events: {},
+    projectIndex: index,
+  });
   await agent.run("Find oldExternalMarker");
   assert.match(context, /oldExternalMarker/);
   await fs.writeFile(path.join(cwd, "changed.ts"), "export const updatedExternalMarker = true;\n");

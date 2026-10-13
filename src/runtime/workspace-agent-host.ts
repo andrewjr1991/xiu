@@ -161,11 +161,20 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     await childIndex.initialize();
     const childPlan = new TaskPlanManager(undefined, task.mode === "shared_readonly", language);
     const childTools = selectSubagentTools([...builtinTools.filter((tool) => !desktopDeferredTools.has(tool.name)), ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)], task.mode);
-    const child = new Agent(childConfig, options.provider ?? createProvider(childConfig), childTools, requestApproval, {
-      onModelStart: (turn) => context.reportProgress(`模型调用 · 第 ${turn} 轮`),
-      onToolStart: (name) => { context.reportProgress(name); context.reportToolActivity(name, "started"); },
-      onToolEnd: (name, _output, details) => context.reportToolActivity(name, details?.result.status === "success" ? "completed" : details?.result.status === "cancelled" ? "interrupted" : "failed"),
-    }, undefined, childIndex, childPlan, new CheckpointManager(context.cwd));
+    const child = new Agent({
+      config: childConfig,
+      provider: options.provider ?? createProvider(childConfig),
+      tools: childTools,
+      approve: requestApproval,
+      events: {
+        onModelStart: (turn) => context.reportProgress(`模型调用 · 第 ${turn} 轮`),
+        onToolStart: (name) => { context.reportProgress(name); context.reportToolActivity(name, "started"); },
+        onToolEnd: (name, _output, details) => context.reportToolActivity(name, details?.result.status === "success" ? "completed" : details?.result.status === "cancelled" ? "interrupted" : "failed"),
+      },
+      projectIndex: childIndex,
+      planManager: childPlan,
+      checkpointManager: new CheckpointManager(context.cwd),
+    });
     // Children always remain workspace/worktree scoped, even under parent full access.
     const cancel = () => child.cancel();
     context.signal.addEventListener("abort", cancel, { once: true });
@@ -186,19 +195,18 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     if (!allowed) throw new Error("Worktree integration was denied.");
     return tool.execute(input, context);
   } }));
-  const agent = new Agent(
+  const agent = new Agent({
     config,
     provider,
     tools,
-    requestApproval,
-    runtime.agentEvents(),
-    undefined,
+    approve: requestApproval,
+    events: runtime.agentEvents(),
     projectIndex,
     planManager,
     checkpointManager,
     skillRegistry,
-    journal,
-  );
+    taskRunJournal: journal,
+  });
   const adapter = new AgentRuntimeAdapter(agent);
   runtime.attachDriver({
     run: async (task) => { try { return await adapter.run(task); } finally { await coordinator.shutdown(); } },

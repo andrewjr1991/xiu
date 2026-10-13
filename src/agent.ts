@@ -227,6 +227,22 @@ function annotateUnknownWebDates(task: string, answer: string, language: UiLangu
   }).join("\n\n").trim();
 }
 
+/** Everything an Agent is assembled from; the CLI, desktop host, subagents and evals all pass this one shape. */
+export interface AgentOptions {
+  config: AgentConfig;
+  provider: ModelProvider;
+  tools: AgentTool[];
+  approve: (request: ApprovalRequest) => Promise<boolean>;
+  events?: AgentEvents;
+  /** A saved session to continue instead of starting a new one. */
+  restored?: RestoredSession;
+  projectIndex?: ProjectIndex;
+  planManager?: TaskPlanManager;
+  checkpointManager?: CheckpointManager;
+  skillRegistry?: SkillRegistry;
+  taskRunJournal?: TaskRunJournal;
+}
+
 export class Agent {
   private messages: ConversationMessage[] = [];
   private system?: string;
@@ -257,19 +273,29 @@ export class Agent {
   private blockedRecoveryOperations = new Set<string>();
   private budgetWarnings = new Set<TaskBudgetMetric>();
 
-  constructor(
-    private config: AgentConfig,
-    private provider: ModelProvider,
-    private tools: AgentTool[],
-    private approve: (request: ApprovalRequest) => Promise<boolean>,
-    private events: AgentEvents = {},
-    restored?: RestoredSession,
-    private projectIndex?: ProjectIndex,
-    private planManager?: TaskPlanManager,
-    private checkpointManager?: CheckpointManager,
-    private skillRegistry?: SkillRegistry,
-    private taskRunJournal?: TaskRunJournal,
-  ) {
+  private config: AgentConfig;
+  private provider: ModelProvider;
+  private tools: AgentTool[];
+  private approve: (request: ApprovalRequest) => Promise<boolean>;
+  private events: AgentEvents;
+  private projectIndex?: ProjectIndex;
+  private planManager?: TaskPlanManager;
+  private checkpointManager?: CheckpointManager;
+  private skillRegistry?: SkillRegistry;
+  private taskRunJournal?: TaskRunJournal;
+
+  constructor(options: AgentOptions) {
+    this.config = options.config;
+    this.provider = options.provider;
+    this.tools = options.tools;
+    this.approve = options.approve;
+    this.events = options.events ?? {};
+    this.projectIndex = options.projectIndex;
+    this.planManager = options.planManager;
+    this.checkpointManager = options.checkpointManager;
+    this.skillRegistry = options.skillRegistry;
+    this.taskRunJournal = options.taskRunJournal;
+    const restored = options.restored;
     if (restored) {
       this.messages = restored.messages;
       this.sessionPath = restored.file;

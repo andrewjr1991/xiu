@@ -18,7 +18,7 @@ test("a closed session can be loaded and continued in the same project", async (
   const firstProvider: ModelProvider = {
     async complete() { return { text: "first answer", toolCalls: [], raw: { role: "assistant", content: "first answer" }, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } }; },
   };
-  await new Agent(config(cwd), firstProvider, [], async () => true).run("first task");
+  await new Agent({ config: config(cwd), provider: firstProvider, tools: [], approve: async () => true }).run("first task");
   const sessions = await listSessions(cwd);
   assert.equal(sessions.length, 1);
   const restored = await loadSession(cwd);
@@ -32,7 +32,7 @@ test("a closed session can be loaded and continued in the same project", async (
       return { text: "continued", toolCalls: [], raw: { role: "assistant", content: "continued" } };
     },
   };
-  await new Agent(config(cwd), secondProvider, [], async () => true, {}, restored).run("continue task");
+  await new Agent({ config: config(cwd), provider: secondProvider, tools: [], approve: async () => true, events: {}, restored }).run("continue task");
   assert.equal(sawPreviousAnswer, true);
   assert.equal((await listSessions(cwd)).length, 1);
 });
@@ -41,7 +41,7 @@ test("sessions are isolated by workspace", async () => {
   const first = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-a-"));
   const second = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-b-"));
   const provider: ModelProvider = { async complete() { return { text: "done", toolCalls: [], raw: {} }; } };
-  await new Agent(config(first), provider, [], async () => true).run("project A");
+  await new Agent({ config: config(first), provider, tools: [], approve: async () => true }).run("project A");
   assert.equal((await listSessions(first)).length, 1);
   assert.equal((await listSessions(second)).length, 0);
   await assert.rejects(loadSession(second), /No Xiu sessions/);
@@ -81,7 +81,12 @@ test("session restoration keeps the latest provider profile", async () => {
 test("session logs redact locally saved provider credentials", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-secret-log-"));
   const provider: ModelProvider = { async complete() { return { text: "request mentioned never-write-this-secret", toolCalls: [], raw: {} }; } };
-  await new Agent({ ...config(cwd), providerId: "private", apiKey: "never-write-this-secret" }, provider, [], async () => true).run("check never-write-this-secret safely");
+  await new Agent({
+    config: { ...config(cwd), providerId: "private", apiKey: "never-write-this-secret" },
+    provider,
+    tools: [],
+    approve: async () => true,
+  }).run("check never-write-this-secret safely");
   const session = (await listSessions(cwd))[0]!;
   const log = await fs.readFile(session.file, "utf8");
   assert.doesNotMatch(log, /never-write-this-secret/);
@@ -98,7 +103,7 @@ test("manual compaction replaces long history with a continuation brief", async 
       return { text: "A very detailed answer ".repeat(200), toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent(config(cwd), provider, [], async () => true);
+  const agent = new Agent({ config: config(cwd), provider, tools: [], approve: async () => true });
   await agent.run("Discuss the architecture in detail");
   const before = agent.status().stats.estimatedTokens;
   const result = await agent.compact("Focus on exact test output and code changes.");
@@ -179,7 +184,7 @@ test("conversation compacts automatically before crossing the configured context
     },
   };
   const tiny = { ...config(cwd), contextLimit: 100 };
-  const agent = new Agent(tiny, provider, [], async () => true);
+  const agent = new Agent({ config: tiny, provider, tools: [], approve: async () => true });
   await agent.run("first task");
   await agent.run("second task");
   assert.equal(summaries, 1);
@@ -208,7 +213,7 @@ test("automatic compaction preserves the active primary task for the next model 
       return { text: "completed", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ ...config(cwd), contextLimit: 300 }, provider, [], async () => true);
+  const agent = new Agent({ config: { ...config(cwd), contextLimit: 300 }, provider, tools: [], approve: async () => true });
   await agent.run(primaryTask);
   assert.match(continuation, /ACTIVE TASK CONTRACT/);
   assert.match(continuation, new RegExp(primaryTask.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -220,7 +225,7 @@ test("automatic compaction preserves the active primary task for the next model 
 test("an active interactive agent can switch to a selected persisted session", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-switch-session-"));
   const provider: ModelProvider = { async complete() { return { text: "new answer", toolCalls: [], raw: {} }; } };
-  const agent = new Agent(config(cwd), provider, [], async () => true);
+  const agent = new Agent({ config: config(cwd), provider, tools: [], approve: async () => true });
   agent.restoreSession({
     id: "chosen-session",
     file: path.join(cwd, ".xiu", "sessions", "chosen-session.jsonl"),
@@ -256,7 +261,7 @@ test("session discovery includes legacy Forge session directories", async () => 
 test("internal subagent sessions do not appear in the user resume list", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-subagent-session-"));
   const provider: ModelProvider = { async complete() { return { text: "internal", toolCalls: [], raw: {} }; } };
-  await new Agent({ ...config(cwd), sessionNamespace: "agent-sessions" }, provider, [], async () => true).run("internal task");
+  await new Agent({ config: { ...config(cwd), sessionNamespace: "agent-sessions" }, provider, tools: [], approve: async () => true }).run("internal task");
   assert.equal((await listSessions(cwd)).length, 0);
   const internal = await fs.readdir(path.join(cwd, ".xiu", "agent-sessions"));
   assert.equal(internal.length, 1);

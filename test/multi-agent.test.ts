@@ -185,14 +185,19 @@ test("legacy text verdicts lack patch-bound inspection receipts", async () => {
 
 async function verifyArtifacts(cwd: string, inputs: Record<string, unknown>[]) {
   let calls = 0;
-  const agent = new Agent({ provider: "openai", providerId: "fixture", model: "fixture", cwd, maxTurns: 4, autoApprove: false }, {
-    async complete(_system, _messages, tools) {
-      assert.ok(!tools.some((tool) => ["write_file", "run_process", "run_command", "validate_project"].includes(tool.name)));
-      return ++calls === 1
-        ? { text: "Checking artifacts", toolCalls: inputs.map((input, index) => ({ id: `check-${index}`, name: "verify_output", input })), raw: {} }
-        : { text: "Bounded artifact checks complete.\nVERDICT: PASS", toolCalls: [], raw: {} };
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fixture", model: "fixture", cwd, maxTurns: 4, autoApprove: false },
+    provider: {
+      async complete(_system, _messages, tools) {
+        assert.ok(!tools.some((tool) => ["write_file", "run_process", "run_command", "validate_project"].includes(tool.name)));
+        return ++calls === 1
+          ? { text: "Checking artifacts", toolCalls: inputs.map((input, index) => ({ id: `check-${index}`, name: "verify_output", input })), raw: {} }
+          : { text: "Bounded artifact checks complete.\nVERDICT: PASS", toolCalls: [], raw: {} };
+      },
     },
-  }, selectSubagentTools(builtinTools, "shared_readonly"), async () => { throw new Error("Read-only checks must not request execution approval"); });
+    tools: selectSubagentTools(builtinTools, "shared_readonly"),
+    approve: async () => { throw new Error("Read-only checks must not request execution approval"); },
+  });
   const result = await agent.run("Verify explicitly scoped artifacts without modifying them");
   return { result, stats, verification: await agent.getVerificationEvidence(), outcome: agent.status().outcome };
 }

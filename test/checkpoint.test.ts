@@ -41,10 +41,14 @@ test("Agent creates a checkpoint automatically before an approved write", async 
       return { text: "done", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
-    provider, builtinTools, async () => true, {}, undefined, undefined, undefined, manager,
-  );
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
+    provider,
+    tools: builtinTools,
+    approve: async () => true,
+    events: {},
+    checkpointManager: manager,
+  });
   await agent.run("change tracked.txt");
   const checkpoints = await manager.list();
   assert.equal(checkpoints.length, 1);

@@ -95,8 +95,14 @@ test("MCP tools use real Agent danger approval and Plan read-only boundaries", a
       assert.match(messages.at(-1)?.content ?? "", planMode ? /plan mode is read-only/ : /denied|declined/i);
       return { text: "done", toolCalls: [], raw: {} };
     } };
-    const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd: root, maxTurns: 3, autoApprove: false }, provider, tools(),
-      async (request) => { approvals.push(request.risk); return false; }, {}, undefined, undefined, new TaskPlanManager(undefined, planMode));
+    const agent = new Agent({
+      config: { provider: "openai", providerId: "openai", model: "test", cwd: root, maxTurns: 3, autoApprove: false },
+      provider,
+      tools: tools(),
+      approve: async (request) => { approvals.push(request.risk); return false; },
+      events: {},
+      planManager: new TaskPlanManager(undefined, planMode),
+    });
     assert.equal(await agent.run("test boundary"), "done");
     assert.deepEqual(approvals, planMode ? [] : ["dangerous"]);
   }
