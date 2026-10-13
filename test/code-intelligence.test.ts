@@ -40,7 +40,7 @@ export function useOther(): number { return add(2); }
 async function execute(index: ProjectIndex, name: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const tool = createProjectIndexTools(index).find((candidate) => candidate.name === name);
   assert.ok(tool, `missing tool ${name}`);
-  return JSON.parse(await tool.execute(input, { cwd: "unused" })) as Record<string, unknown>;
+  return JSON.parse(await tool.execute(input, { cwd: "unused", approve: async () => { throw new Error("read tools must not request approval"); } })) as Record<string, unknown>;
 }
 
 test("repository map exposes modules symbols dependencies and pagination", async () => {

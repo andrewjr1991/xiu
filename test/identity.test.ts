@@ -27,7 +27,7 @@ test("agent deterministically preserves Xiu identity against provider defaults",
   };
   const deltas: string[] = [];
   const completedText: string[] = [];
-  const agent = new Agent({ provider: "agnes", model: "test", cwd, autoApprove: true, language: "zh-CN" }, provider, [], async () => true, {
+  const agent = new Agent({ provider: "agnes", providerId: "agnes", model: "test", cwd, autoApprove: true, language: "zh-CN" }, provider, [], async () => true, {
     onTextDelta: (value) => deltas.push(value),
     onText: (value) => completedText.push(value),
   });

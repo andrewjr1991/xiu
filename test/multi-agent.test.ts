@@ -21,7 +21,7 @@ test("model dispatch cannot invent a child turn budget", async () => {
   try {
     const spawn = createMultiAgentTools(coordinator).find((tool) => tool.name === "spawn_agents")!;
     assert.doesNotMatch(JSON.stringify(spawn.inputSchema), /maxTurns/);
-    await spawn.execute({ goal: "review", tasks: [{ id: "review", title: "review", instructions: "review", role: "reviewer", maxTurns: 10 }] });
+    await spawn.execute({ goal: "review", tasks: [{ id: "review", title: "review", instructions: "review", role: "reviewer", maxTurns: 10 }] }, { cwd, approve: async () => false });
     await coordinator.wait(coordinator.list()[0]!.id, 1000);
     assert.equal(budget, undefined);
   } finally { await fs.rm(cwd, { recursive: true, force: true }); }
@@ -36,7 +36,7 @@ test("model retry clears a persisted legacy budget but trusted coordinator retri
     await coordinator.wait(run.id, 1000);
     await coordinator.retry(run.id, "review"); await coordinator.wait(run.id, 1000);
     const retry = createMultiAgentTools(coordinator).find((tool) => tool.name === "retry_agent")!;
-    await retry.execute({ run_id: run.id, task_id: "review" }); await coordinator.wait(run.id, 1000);
+    await retry.execute({ run_id: run.id, task_id: "review" }, { cwd, approve: async () => false }); await coordinator.wait(run.id, 1000);
     assert.deepEqual(budgets, [10, 10, undefined]);
   } finally { await fs.rm(cwd, { recursive: true, force: true }); }
 });
@@ -47,7 +47,7 @@ test("desktop model-dispatched reviewer can complete beyond ten turns", async (t
   await fs.writeFile(path.join(cwd, "source.txt"), Array.from({ length: 12 }, (_, index) => `source line ${index + 1}`).join("\n"));
   let calls = 0;
   const host = await createWorkspaceAgentHost(cwd, {
-    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
     journalRoot: path.join(cwd, ".xiu", "journal"), backgroundRoot: path.join(cwd, ".xiu", "background"),
     provider: { async complete(_system, messages) {
       calls++;
@@ -56,9 +56,9 @@ test("desktop model-dispatched reviewer can complete beyond ten turns", async (t
         : { text: "VERDICT: PASS", toolCalls: [], raw: {} };
     } },
   });
-  t.after(() => host.close());
+  t.after(() => host.close!());
   const spawn = createMultiAgentTools(host.coordinator!).find((tool) => tool.name === "spawn_agents")!;
-  await spawn.execute({ goal: "Review source", tasks: [{ id: "review", title: "Review source", instructions: "Review source", role: "reviewer", maxTurns: 10 }] });
+  await spawn.execute({ goal: "Review source", tasks: [{ id: "review", title: "Review source", instructions: "Review source", role: "reviewer", maxTurns: 10 }] }, { cwd, approve: async () => false });
   const done = await host.coordinator!.wait(host.coordinator!.list()[0]!.id, 10_000);
   assert.equal(done.tasks[0]?.status, "completed", done.tasks[0]?.error);
   assert.equal(calls, 13);
@@ -417,7 +417,7 @@ test("fresh patch identity cannot hide a stale ignored-artifact receipt", async 
 test("desktop child executor passes real verification receipts without expanding tester tools", async (t) => {
   const cwd = await gitRepository();
   const host = await createWorkspaceAgentHost(cwd, {
-    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
     backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
     provider: { async complete(_system, messages, tools) {
       const context = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
@@ -432,7 +432,7 @@ test("desktop child executor passes real verification receipts without expanding
       return { text: "VERDICT: PASS", toolCalls: [], raw: {} };
     } },
   });
-  t.after(() => host.close());
+  t.after(() => host.close!());
   host.setApprovalMode!("full");
   const run = await host.coordinator!.start("desktop evidence", integrationTasks.map((task) => ({ ...task, title: `Fixture ${task.id === "impl" ? "implement" : task.id}`, maxTurns: 5 })));
   const done = await host.coordinator!.wait(run.id, 10_000);
@@ -447,14 +447,14 @@ test("desktop child executor passes real verification receipts without expanding
 test("desktop child with an unfinished plan fails and blocks dependent specialists", async (t) => {
   const cwd = await gitRepository();
   const host = await createWorkspaceAgentHost(cwd, {
-    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
     backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
     provider: { async complete(_system, messages) {
       if (!messages.some((message) => message.role === "tool")) return { text: "Plan", toolCalls: [{ id: "plan", name: "update_task_plan", input: { goal: "unfinished", steps: [{ id: "one", title: "Unfinished", status: "pending" }] } }], raw: {} };
       return { text: "VERDICT: PASS", toolCalls: [], raw: {} };
     } },
   });
-  t.after(() => host.close());
+  t.after(() => host.close!());
   host.setApprovalMode!("full");
   const run = await host.coordinator!.start("incomplete child", integrationTasks);
   const done = await host.coordinator!.wait(run.id, 10_000);

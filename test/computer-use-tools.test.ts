@@ -4,7 +4,7 @@ import { computerVisionRoute, createComputerUseTools, type ComputerUseHost } fro
 import type { AgentConfig } from "../src/config.js";
 import type { ToolContext } from "../src/types.js";
 
-const config: AgentConfig = { provider: "openai", providerId: "fixture", providerLabel: "Fixture channel", model: "fixture", capabilities: { vision: "fixture-vision" }, cwd: ".", language: "en-US", autoApprove: false };
+const config: AgentConfig = { provider: "openai", providerId: "fixture", providerLabel: "Fixture channel", model: "fixture", capabilities: { text: "fixture", vision: "fixture-vision" }, cwd: ".", language: "en-US", autoApprove: false };
 const context: ToolContext = { cwd: ".", approve: async () => false };
 const frame = { image: "data:image/png;base64,Zml4dHVyZQ==", frameId: "frame-fixture", width: 720, height: 480 };
 const host: ComputerUseHost = { observe: async () => frame, input: async () => "sent once", status: () => "authorized fixture" };
@@ -123,7 +123,7 @@ test("cancel after local capture prevents upload", async () => {
 
 test("unsupported vision fails before capturing or asking upload consent", async () => {
   let captures = 0;
-  const tools = createComputerUseTools({...config,providerFeatures:{vision:false,image:false,video:false,audio:false}}, {...host,observe:async()=>{captures++;return frame;}}, {analyzeImage:async()=>""});
+  const tools = createComputerUseTools({...config,providerFeatures:{text:true,tools:true,vision:false,image:false,video:false,audio:false}}, {...host,observe:async()=>{captures++;return frame;}}, {analyzeImage:async()=>""});
   await assert.rejects(tools[1]!.execute({prompt:"Inspect"},context),/no vision/);assert.equal(captures,0);
 });
 

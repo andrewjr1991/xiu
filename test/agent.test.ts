@@ -44,7 +44,7 @@ test("empty stream headers retain first-body deadline instead of starting short 
       return { text: "公开回复", toolCalls: [], raw: {}, finishReason: "stop" };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
     modelFirstResponseTimeoutMs: 150, modelStreamIdleTimeoutMs: 10 }, provider, [], async () => false,
     { onDraftPreview: () => undefined });
   await agent.run("回答即可");
@@ -58,7 +58,7 @@ test("model phase deadlines stop once and never claim a response was received", 
     const pending = async () => { requests++; return await new Promise<AssistantTurn>(() => undefined); };
     const provider: ModelProvider = { complete: pending, ...(stream ? { stream: pending } : {}) };
     const ends: Array<boolean | undefined> = [];
-    const agent = new Agent({ provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+    const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
       modelFirstResponseTimeoutMs: 20, modelStreamIdleTimeoutMs: 5, modelCompleteTimeoutMs: 20 }, provider, [], async () => false,
       { onDraftPreview: () => undefined, onModelEnd: (received) => ends.push(received) });
     await assert.rejects(agent.run("检查工作区"), stream ? /首个公开正文或工具参数/ : /完整模型响应/);
@@ -70,7 +70,7 @@ test("model phase deadlines stop once and never claim a response was received", 
 
 test("stream silence records counters only and manual restored continuation uses complete response", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-stream-timeout-"));
-  const config: AgentConfig = { provider: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test", cwd, language: "zh-CN", autoApprove: false,
     modelFirstResponseTimeoutMs: 100, modelStreamIdleTimeoutMs: 15 };
   let streams = 0, completions = 0;
   const provider: ModelProvider = {
@@ -102,7 +102,7 @@ test("incomplete provider response gives specific guidance without executing its
     toolCalls: [{ id: "unsafe", name: "write_file", input: { path: "should-not-exist.txt", content: "partial" } }],
   }; } };
   let approvals = 0;
-  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools, async () => { approvals++; return true; });
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools, async () => { approvals++; return true; });
   const result = await agent.run("Create the file");
   assert.match(result, /no finish marker/);
   assert.match(result, /not a turn limit or confirmed output limit/);
@@ -119,7 +119,7 @@ test("missing streamed finish marker switches only the next user continuation to
       toolCalls: [{ id: "partial", name: "write_file", input: { path: "must-not-execute.txt", content: "partial" } }] }; },
     async complete() { completions++; return { text: "Inspection complete.", raw: {}, finishReason: "stop", toolCalls: [] }; },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools,
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, language: "en-US", autoApprove: true }, provider, builtinTools,
     async () => { approvals++; return true; }, { onDraftPreview: () => undefined });
   const result = await agent.run("Inspect this workspace");
   assert.match(result, /No automatic retry/);
@@ -137,7 +137,7 @@ test("missing streamed finish marker switches only the next user continuation to
 
 test("restoring a failed session retains non-streaming compatibility without replaying calls", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-restored-stream-"));
-  const config: AgentConfig = { provider: "openai", model: "test", cwd, language: "en-US", autoApprove: true };
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test", cwd, language: "en-US", autoApprove: true };
   const failed: ModelProvider = { async complete() { throw new Error("unexpected"); },
     async stream() { return { text: "", raw: {}, toolCalls: [], finishReason: "unknown", protocolIssue: "missing_finish_reason" }; } };
   await new Agent({ ...config }, failed, [], async () => true, { onDraftPreview: () => undefined }).run("Inspect");
@@ -153,7 +153,7 @@ test("restoring a failed session retains non-streaming compatibility without rep
 
 test("agent executes tools and continues until the model finishes", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-"));
-  const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
   const provider = new ScriptedProvider();
   const events: string[] = [];
   const changedPaths: string[] = [];
@@ -205,7 +205,7 @@ test("agent does not report success when the final tool operation failed", async
     describe: () => "run failing operation",
     execute: async () => "Tool error: service unavailable",
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
   assert.equal(await agent.run("Complete an external operation"), "The service is unavailable.");
   assert.equal(agent.status().outcome, "failed");
   assert.equal(agent.status().diagnostics?.outcome, "failed");
@@ -233,7 +233,7 @@ test("agent suppresses fabricated current facts when every web search fails", as
   };
   const visible: string[] = [];
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" },
     provider,
     [tool],
     async () => true,
@@ -270,7 +270,7 @@ test("agent stops immediately after a deterministic managed search authenticatio
     execute: async () => "Tool error: Xiu Search device registration failed with HTTP 403 (registration_not_allowed).",
   };
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
     provider,
     [tool],
     async () => true,
@@ -316,7 +316,7 @@ test("agent requires opened source URLs before completing a current-information 
   }];
   const visible: string[] = [];
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 6, autoApprove: true, language: "en-US" },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 6, autoApprove: true, language: "en-US" },
     provider,
     tools,
     async () => true,
@@ -354,7 +354,7 @@ test("agent rejects current-information citations that were not opened after the
   };
   const visible: string[] = [];
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "zh-CN" },
     provider,
     [tool],
     async () => true,
@@ -391,7 +391,7 @@ test("agent accepts an older explicitly dated opened source when the preferred r
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
     execute: async () => `UNTRUSTED WEB CONTENT\nURL: ${source}\nTitle: Old update\nPublished: 2000-01-01`,
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
 
   const result = await agent.run("Find Claude news from the past 1 day and provide the date");
   assert.match(result, /Old update/);
@@ -421,7 +421,7 @@ test("agent deterministically marks a cited result date unknown instead of askin
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
     execute: async () => `UNTRUSTED WEB CONTENT\nURL: ${source}\nCurrent update without publication metadata`,
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
 
   assert.equal(await agent.run("Find Claude news from the past 1 day and provide the date"), `Current update\nSource: ${source}\nDate: Unknown (the source did not provide a verifiable date)`);
   assert.equal(agent.status().outcome, "completed");
@@ -467,7 +467,7 @@ test("agent accepts markdown-formatted Chinese dates for every cited result", as
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
     execute: async (input) => `UNTRUSTED WEB CONTENT\nURL: ${String(input.url)}\nPublished: ${currentDate}`,
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
 
   const result = await agent.run("搜索 Claude 最近一周的消息，给出标题、日期和原始链接");
   assert.match(result, /\*\*日期\*\*/);
@@ -496,7 +496,7 @@ test("agent bounds repeated failed web page opens", async () => {
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
     execute: async () => { executions += 1; return "Tool error: Web request failed with HTTP 403."; },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
 
   await agent.run("Open these pages");
   assert.equal(executions, 6);
@@ -524,7 +524,7 @@ test("agent bounds repeated web discovery searches", async () => {
     inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, describe: () => "search",
     execute: async () => { executions += 1; return "UNTRUSTED WEB CONTENT\nResults (1):\nURL: https://example.com/result"; },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true, language: "en-US" }, provider, [tool], async () => true);
 
   assert.equal(await agent.run("Research several Claude topics"), "Discovery finished.");
   assert.equal(executions, 3);
@@ -567,7 +567,7 @@ test("agent permits one evidence-only final answer after the web page failure bu
       return input.url === source ? `UNTRUSTED WEB CONTENT\nCitation URL: ${source}\nCurrent news` : "Tool error: fetch failed";
     },
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "en-US" }, provider, tools, async () => true);
 
   assert.equal(await agent.run("Find the latest Claude news"), `One verified result. Source: ${source}`);
   assert.equal(executions, 5);
@@ -616,7 +616,7 @@ test("agent prunes unsupported result blocks from the final web answer and keeps
       ? `UNTRUSTED WEB CONTENT\nURL: ${verified}\nPublished: 2026-08-14`
       : "Tool error: fetch failed",
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
 
   const result = await agent.run("搜索 Claude 最新消息");
   assert.match(result, /已核验消息/);
@@ -669,7 +669,7 @@ test("agent prunes unsupported result blocks before the web page failure budget 
       ? `UNTRUSTED WEB CONTENT\nURL: ${verified}\nPublished: 2026-08-14`
       : "Tool error: fetch failed",
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
 
   const result = await agent.run("搜索 Claude 最新消息");
   assert.match(result, /已核验消息/);
@@ -700,7 +700,7 @@ test("agent localizes a source evidence failure after web finalization", async (
     inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, describe: () => "open",
     execute: async () => "Tool error: fetch failed",
   }];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 4, autoApprove: true, language: "zh-CN" }, provider, tools, async () => true);
 
   const result = await agent.run("搜索 Claude 最新消息");
   assert.match(result, /网页来源多次打开失败|网页打开失败预算耗尽/);
@@ -788,7 +788,7 @@ test("agent completes a generated artifact after verify_output passes", async ()
       return { text: "The verified table is ready.", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
   assert.equal(await agent.run("Create a prelabel table"), "The verified table is ready.");
   assert.equal(calls, 3);
   assert.equal(agent.status().outcome, "completed");
@@ -822,7 +822,7 @@ test("a malformed redundant tool call cannot override successful verification in
   };
   const failures: string[] = [];
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
     provider,
     builtinTools,
     async () => true,
@@ -845,7 +845,7 @@ test("agent rebuilds its language contract immediately after a runtime switch", 
       return { text: "done", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true, language: "en-US" }, provider, [], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true, language: "en-US" }, provider, [], async () => true);
 
   await agent.run("first task");
   agent.setLanguage("zh-CN");
@@ -862,7 +862,7 @@ test("Chinese agent returns and stores normalized Simplified Chinese", async () 
       return { text: "設計與驗證已完成。保留 `繁體變數`。", toolCalls: [], raw: { content: "設計與驗證已完成。" } };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true, language: "zh-CN" }, provider, [], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true, language: "zh-CN" }, provider, [], async () => true);
   assert.equal(await agent.run("完成任务"), "设计与验证已完成。保留 `繁體變數`。");
   assert.match(agent.history(), /设计与验证已完成/);
   assert.doesNotMatch(agent.history(), /設計與驗證/);
@@ -898,7 +898,7 @@ test("steering amends the active task without replacing its primary goal", async
       return { text: "primary goal and steering complete", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true }, provider, builtinTools, async () => true);
   const running = agent.run("process input");
   await started;
   assert.equal(agent.steer("also create JSONL"), true);
@@ -918,7 +918,7 @@ test("agent stops a repeated successful tool-call loop before the turn limit", a
       return { text: "read again", toolCalls: [{ id: `read-${calls}`, name: "read_file", input: { path: "same.txt" } }], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 20, autoApprove: true }, provider, builtinTools, async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 20, autoApprove: true }, provider, builtinTools, async () => true);
   await assert.rejects(agent.run("inspect without looping"), /repeatedly revisiting/i);
   assert.ok(calls < 20);
   assert.equal(agent.status().outcome, "failed");
@@ -936,7 +936,7 @@ test("agent can continue beyond 30 model turns when no explicit limit is configu
       return { text: "completed after turn 30", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, autoApprove: true }, provider, [], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true }, provider, [], async () => true);
   assert.equal(await agent.run("finish a long task"), "completed after turn 30");
   assert.equal(calls, 31);
   assert.equal(agent.status().maxTurns, undefined);
@@ -966,7 +966,7 @@ test("agent keeps complete tool logs out of the model context after a bounded he
       return { text: "done", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [tool], async () => true);
   assert.equal(await agent.run("inspect a large result"), "done");
   const restored = await loadSession(cwd);
   const restoredTool = restored.messages.find((message) => message.role === "tool");
@@ -987,7 +987,7 @@ test("agent cancellation aborts an in-flight model request", async () => {
       });
     },
   };
-  const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
   const agent = new Agent(config, provider, builtinTools, async () => true);
   const running = agent.run("wait forever");
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1006,7 +1006,7 @@ test("agent retains conversation across interactive tasks and can clear it", asy
       return { text: "ok", toolCalls: [], raw: { role: "assistant", content: "ok" } };
     },
   };
-  const config: AgentConfig = { provider: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true };
   const agent = new Agent(config, provider, builtinTools, async () => true);
   await agent.run("first");
   await agent.run("second");
@@ -1027,7 +1027,7 @@ test("agent streams model text without printing the completed response twice", a
   };
   const deltas: string[] = [];
   const completed: string[] = [];
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {
     onTextDelta: (text) => deltas.push(text),
     onText: (text) => completed.push(text),
   });
@@ -1049,7 +1049,7 @@ test("agent retries a transient model failure before any text is emitted", async
       return { text: "recovered", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true }, provider, [], async () => true, {
     onTextDelta: () => {},
     onRetry: (message) => retries.push(message),
   });

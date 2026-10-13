@@ -9,7 +9,7 @@ import { createWorkspaceAgentHost } from "../src/runtime/workspace-agent-host.js
 import { MultiAgentCoordinator } from "../src/multi-agent.js";
 import { XiuRuntime } from "../src/runtime/xiu-runtime.js";
 import { applyRuntimeEvent } from "../src/runtime/protocol.js";
-const profile = { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "mock", features: { tools: true, vision: false, image: false, video: false, audio: false } };
+const profile = { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "mock", features: { text: true as const, tools: true, vision: false, image: false, video: false, audio: false } };
 
 test("desktop Node resolution never launches Electron as npm/Node", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-node-"));

@@ -29,7 +29,7 @@ test("Windows vision trusts enterprise roots without disabling certificate verif
   t.mock.method(tls,"getCACertificates",(type?:"default"|"system"|"bundled"|"extra")=>type==="system"?[certificate]:roots(type));
   syncBuiltinESMExports();
   t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();});
-  const config={provider:"openai-compatible",model:"fixture",apiKey:"fixture",baseURL:`https://127.0.0.1:${address.port}`,cwd:directory,autoApprove:false} satisfies AgentConfig;
+  const config={provider:"openai-compatible",providerId:"openai-compatible",model:"fixture",apiKey:"fixture",baseURL:`https://127.0.0.1:${address.port}`,cwd:directory,autoApprove:false} satisfies AgentConfig;
   const backend=createMediaBackend(config,{maxRetries:0});
   assert.equal(await backend.analyzeImage!("Inspect synthetic fixture","data:image/png;base64,Zml4dHVyZQ=="),"TLS_FIXTURE_SEEN");
   // A different root is not accepted: adding system roots is not TLS bypass.
@@ -47,7 +47,7 @@ for (const provider of ["openai-compatible", "anthropic"] as const) test(`${prov
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture failed");
-  const backend = createMediaBackend({ provider, model: "manual-vision-id", capabilities: { vision: "manual-vision-id" }, apiKey: "fixture", baseURL: `http://127.0.0.1:${address.port}/v1`, cwd: process.cwd(), autoApprove: false }, { maxRetries: 0 });
+  const backend = createMediaBackend({ provider, providerId: provider, model: "manual-vision-id", capabilities: { text: "manual-vision-id", vision: "manual-vision-id" }, apiKey: "fixture", baseURL: `http://127.0.0.1:${address.port}/v1`, cwd: process.cwd(), autoApprove: false }, { maxRetries: 0 });
   await assert.rejects(backend.analyzeImage!("Inspect", "data:image/png;base64,Zml4dHVyZQ=="));
   assert.equal(requests, 1);
 });
@@ -63,7 +63,7 @@ test("Anthropic vision uses the declared media destination rather than another e
   await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
   t.after(() => new Promise<void>((resolve,reject) => server.close(error=>error?reject(error):resolve())));
   const address=server.address(); if (!address || typeof address === "string") throw new Error("No fixture server");
-  const backend=createMediaBackend({provider:"anthropic",model:"fixture",capabilities:{vision:"fixture"},apiKey:"fixture",mediaBaseURL:`http://127.0.0.1:${address.port}`,cwd:process.cwd(),autoApprove:false});
+  const backend=createMediaBackend({provider:"anthropic",providerId:"anthropic",model:"fixture",capabilities:{text:"fixture",vision:"fixture"},apiKey:"fixture",mediaBaseURL:`http://127.0.0.1:${address.port}`,cwd:process.cwd(),autoApprove:false});
   assert.equal(await backend.analyzeImage!("Inspect","data:image/png;base64,Zml4dHVyZQ=="),"Visible fixture");
   assert.equal(called,true);
 });

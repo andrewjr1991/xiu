@@ -222,7 +222,7 @@ test("real desktop host forwards idle Plan mode to its shared manager and resets
   const finish = deferred<void>();
   let calls = 0;
   const options = {
-    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "offline", features: { tools: true, vision: false, image: false, video: false, audio: false } },
+    profile: { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "offline", features: { text: true as const, tools: true, vision: false, image: false, video: false, audio: false } },
     backgroundRoot: path.join(workspace, ".xiu", "background"), journalRoot,
     provider: { async complete() {
       calls++;
@@ -257,7 +257,7 @@ test("failed Plan-mode persistence never changes the selected policy and pending
   await fs.writeFile(file, `${JSON.stringify({ type: "task", task: "Old task", timestamp: new Date().toISOString() })}\n`);
   const restored = await loadSession(workspace, "old");
   const manager = new TaskPlanManager(undefined, true);
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, language: "en-US" },
+  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
     { async complete() { return { text: "done", toolCalls: [], raw: {} }; } }, [], async () => false, {}, undefined, undefined, manager);
   agent.restoreSession(restored, { preservePlanMode: true });
   await fs.rename(file, `${file}.backup`);
@@ -280,7 +280,7 @@ for (const failingRecord of ["stats", "diagnostics"]) {
     const { workspace, journalRoot } = await fixture(t);
     const manager = new TaskPlanManager(undefined, true);
     const runtime = new XiuRuntime();
-    const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, language: "en-US" },
+    const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
       { async complete() { return { text: "Planning done", toolCalls: [], raw: {} }; } }, [], async () => false, runtime.agentEvents(), undefined, undefined, manager);
     runtime.attachDriver(new AgentRuntimeAdapter(agent));
     const controller = new DesktopTaskController(() => {}, async () => ({ runtime, agent,
@@ -321,7 +321,7 @@ async function startedConversation(t: { after: (fn: () => Promise<unknown>) => v
   const manager = new TaskPlanManager();
   const runtime = new XiuRuntime();
   const journal = new TaskRunJournal(workspace, journalRoot);
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, language: "en-US" },
+  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
     { async complete() { return { text: "Done", toolCalls: [], raw: {} }; } }, [], async () => false, runtime.agentEvents(), undefined, undefined, manager);
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
   const controller = new DesktopTaskController(() => {}, async () => ({ runtime, agent, journal, provider: { id: "fake", label: "Fake", model: "offline" } }));

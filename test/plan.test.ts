@@ -73,7 +73,7 @@ test("plan mode blocks workspace changes at the Agent boundary", async () => {
     },
   };
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
     provider,
     [...builtinTools, ...createPlanTools(manager)],
     async () => true,
@@ -102,7 +102,7 @@ test("task plans persist with the resumable session", async () => {
     },
   };
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
+    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
     provider,
     createPlanTools(manager),
     async () => true,
@@ -158,7 +158,7 @@ for (const mode of [false, true]) {
     manager.update("Finish the request", [{ id: "one", title: "Wait for approval", status: "blocked", note: "User approval is required" }]);
     let calls = 0;
     const agent = new Agent(
-      { provider: "openai", model: "test", cwd, autoApprove: false },
+      { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
       { async complete() { calls++; return { text: "Waiting for approval.", toolCalls: [], raw: {} }; } },
       createPlanTools(manager), async () => false, {}, undefined, undefined, manager,
     );
@@ -176,7 +176,7 @@ test("planning-only pending steps do not require executing the plan", async () =
   manager.update("Design the change", [{ id: "one", title: "Implement later", status: "pending" }]);
   let calls = 0;
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, autoApprove: false },
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
     { async complete() { calls++; return { text: "Here is the plan.", toolCalls: [], raw: {} }; } },
     createPlanTools(manager), async () => false, {}, undefined, undefined, manager,
   );
@@ -192,7 +192,7 @@ test("the plan reminder allows a completed update to finish successfully", async
   manager.update("Inspect", [{ id: "one", title: "Inspect the request", status: "in_progress" }]);
   let calls = 0;
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, autoApprove: false },
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
     { async complete(_system, messages) {
       calls++;
       if (calls === 2) {
@@ -217,7 +217,7 @@ for (const stop of ["cancel", "turn-limit"] as const) {
     let calls = 0;
     let completions = 0;
     const agent = new Agent(
-      { provider: "openai", model: "test", cwd, autoApprove: false, ...(stop === "turn-limit" ? { maxTurns: 1 } : {}) },
+      { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, ...(stop === "turn-limit" ? { maxTurns: 1 } : {}) },
       { async complete() { calls++; return { text: "Done.", toolCalls: [], raw: {} }; } },
       createPlanTools(manager), async () => false,
       { onCompletionGate: () => { if (stop === "cancel") agent.cancel(); }, onTaskComplete: () => { completions++; } },
@@ -242,7 +242,7 @@ test("passing verification cannot override an unfinished plan", async () => {
   let calls = 0;
   let verified = false;
   const agent = new Agent(
-    { provider: "openai", model: "test", cwd, autoApprove: false },
+    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
     { async complete() {
       if (++calls === 1) return { text: "Verifying.", toolCalls: [{ id: "verify", name: "verify_output", input: {
         path: "artifact.txt", required_substrings: ["verified artifact"],

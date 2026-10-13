@@ -194,7 +194,7 @@ test("desktop explicitly selects pinned managed search without clearing domain/t
 test("shared policy skips unsupported or attempted fallback models and refuses oversized context", async () => {
   const { registry } = fixture();
   const policy = createProviderPolicy(registry, (profile, model) => resolveConfig({ provider: profile.kind, providerId: profile.id, model, apiKey: profile.apiKey, contextWindow: "8192" }), () => []);
-  const request = { originProviderId: "primary", currentProviderId: "primary", attemptedProviderIds: ["primary"], error: new Error("fixture"), estimatedInputTokens: 100, requiresTools: true };
+  const request = { originProviderId: "primary", currentProviderId: "primary", currentModel: "fixture-model", attemptedProviderIds: ["primary"], error: new Error("fixture"), estimatedInputTokens: 100, requiresTools: true };
   assert.equal((await policy.failover.resolve(request)).candidate?.config.providerId, "fallback");
   assert.equal((await policy.failover.resolve({ ...request, attemptedProviderIds: ["primary", "fallback"] })).candidate, undefined);
   assert.equal((await policy.failover.resolve({ ...request, estimatedInputTokens: 100_000 })).candidate, undefined);

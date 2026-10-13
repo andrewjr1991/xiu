@@ -142,8 +142,8 @@ test("local and OpenAI-compatible provider profiles do not overclaim media capab
 
 test("task budgets are opt-in and parse bounded values", () => {
   const unlimited = resolveConfig({ provider: "openai" });
-  assert.equal(unlimited.taskBudget.tokens, undefined);
-  assert.equal(unlimited.taskBudget.warningRatio, 0.8);
+  assert.equal(unlimited.taskBudget!.tokens, undefined);
+  assert.equal(unlimited.taskBudget!.warningRatio, 0.8);
   const configured = resolveConfig({ provider: "openai", budgetTokens: "1000", budgetModelCalls: "8", budgetToolCalls: "20", budgetFailures: "3", budgetSeconds: "60", budgetWarningPercent: "75", stallTimeoutSeconds: "90" });
   assert.deepEqual(configured.taskBudget, { tokens: 1000, modelCalls: 8, toolCalls: 20, failures: 3, wallTimeMs: 60_000, warningRatio: 0.75 });
   assert.equal(configured.stallTimeoutMs, 90_000);

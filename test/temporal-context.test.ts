@@ -25,9 +25,9 @@ test("first and subsequent provider requests receive fresh clock context", async
     calls++;
     assert.match(system, /Trusted host clock: current local date is \d{4}-\d{2}-\d{2}/);
     assert.match(system, /before the FIRST search/);
-    return { text: "No sources checked.", toolCalls: [] };
+    return { text: "No sources checked.", toolCalls: [], raw: undefined };
   } };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 1 }, provider, [], async () => true);
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 1, autoApprove: false }, provider, [], async () => true);
   await agent.run("Search for the latest holiday news");
   await agent.run("Research holiday news from 2025");
   assert.equal(calls, 2);
@@ -43,10 +43,10 @@ test("streaming provider gets the same host clock before its first response", as
       streamed = true;
       assert.match(system, /Trusted host clock/);
       assert.match(system, /before the FIRST search/);
-      return { text: "No sources checked.", toolCalls: [] };
+      return { text: "No sources checked.", toolCalls: [], raw: undefined };
     },
   };
-  const agent = new Agent({ provider: "openai", model: "test", cwd, maxTurns: 1 }, provider, [], async () => true, { onTextDelta() {} });
+  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 1, autoApprove: false }, provider, [], async () => true, { onTextDelta() {} });
   await agent.run("Search for recent news");
   assert.equal(streamed, true);
 });

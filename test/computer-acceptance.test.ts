@@ -25,7 +25,7 @@ test("human computer acceptance preserves failed checks, program state and subse
   const after = await new TaskRunJournal(root, path.join(root, "journal")).read(run.runId);
   assert.equal(after?.manualAcceptance?.decision, "passed");
   const { manualAcceptance, ...unchanged } = after!;
-  assert.deepEqual(unchanged, before); assert.equal(manualAcceptance.scope, "computer-result");
+  assert.deepEqual(unchanged, before); assert.equal(manualAcceptance!.scope, "computer-result");
   const next = await journal.begin({ sessionId: "session", task: "next", providerId: "p", model: "m" });
   assert.equal(next.manualAcceptance, undefined);
   await journal.complete("unverified");

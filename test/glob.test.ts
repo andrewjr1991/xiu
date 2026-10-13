@@ -80,7 +80,7 @@ test("both search tools enforce glob limits even with Full Access and preserve o
     await fs.writeFile(path.join(cwd, "ok.ts"), "needle");
     for (const name of ["list_files", "search_text"]) {
       const tool = builtinTools.find((candidate) => candidate.name === name)!;
-      for (const accessMode of ["ask", "full"] as const) {
+      for (const accessMode of ["workspace", "full"] as const) {
         const context = { cwd, accessMode, approve: async () => false };
         for (const pattern of ["{".repeat(1000), "{)".repeat(32)]) {
           assert.match(await executeTool(tool, { pattern, query: "needle" }, context), /^Tool error: Glob .*limit/);

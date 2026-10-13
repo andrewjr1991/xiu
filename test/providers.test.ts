@@ -18,7 +18,7 @@ test("model discovery distinguishes image input from image output", async () => 
     const address = server.address();
     assert.ok(address && typeof address === "object");
     const config = resolveConfig({ provider: "ollama", providerId: "vision-metadata-test", model: "opaque-reader", baseURL: `http://127.0.0.1:${address.port}/v1` });
-    const models = await createProvider(config).listModels();
+    const models = await createProvider(config).listModels!();
     assert.ok(models.find(model => model.id === "opaque-reader")?.capabilities?.includes("vision"));
     assert.ok(!models.find(model => model.id === "opaque-reader")?.capabilities?.includes("image"));
     assert.ok(models.find(model => model.id === "opaque-generator")?.capabilities?.includes("image"));

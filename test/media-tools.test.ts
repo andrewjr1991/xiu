@@ -36,7 +36,7 @@ class MockMediaBackend implements MediaBackend {
     return { id: "video-1", status: "completed", progress: 100, url: "https://assets.example/generated.mp4" };
   }
 
-  async getVideo(): Promise<VideoTask> {
+  async getVideo(_id: string): Promise<VideoTask> {
     throw new Error("completed tasks should not be polled");
   }
 
@@ -55,6 +55,7 @@ class MockMediaBackend implements MediaBackend {
 function config(cwd: string): AgentConfig {
   return {
     provider: "agnes",
+    providerId: "agnes",
     model: "text-model",
     cwd,
     maxTurns: 5,
@@ -355,8 +356,8 @@ test("media recovery never replays an ambiguous submission without a task or ass
 
 test("provider capability profiles only expose supported media tools", () => {
   const cwd = process.cwd();
-  const openai = createMediaTools({ provider: "openai", model: "gpt", cwd, maxTurns: 5, autoApprove: true });
-  const anthropic = createMediaTools({ provider: "anthropic", model: "claude", cwd, maxTurns: 5, autoApprove: true });
+  const openai = createMediaTools({ provider: "openai", providerId: "openai", model: "gpt", cwd, maxTurns: 5, autoApprove: true });
+  const anthropic = createMediaTools({ provider: "anthropic", providerId: "anthropic", model: "claude", cwd, maxTurns: 5, autoApprove: true });
   const agnes = createMediaTools(config(cwd));
   assert.deepEqual(openai.map((tool) => tool.name), ["analyze_image"]);
   assert.deepEqual(anthropic.map((tool) => tool.name), ["analyze_image"]);

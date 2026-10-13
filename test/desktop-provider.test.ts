@@ -188,7 +188,7 @@ test("desktop provider controller creates, edits, and deletes custom channels", 
     model: "team-default",
     baseURL: "https://team.example.test/v1",
     apiKey: "team-secret",
-    features: { tools: true, vision: true, image: false, video: false },
+    features: { tools: true, vision: true, image: false, video: false, audio: false },
   });
   const profile = created.profiles.find((candidate) => candidate.id === "team-gateway");
   assert.equal(profile?.name, "Team Gateway");
@@ -202,7 +202,7 @@ test("desktop provider controller creates, edits, and deletes custom channels", 
     kind: "openai-compatible",
     model: "team-default",
     baseURL: "https://team-2.example.test/v1",
-    features: { tools: true, vision: false, image: false, video: false },
+    features: { tools: true, vision: false, image: false, video: false, audio: false },
   });
   assert.equal(edited.profiles.find((candidate) => candidate.id === "team-gateway")?.name, "Team Gateway 2");
 
@@ -231,7 +231,7 @@ test("desktop provider controller edits a legacy mixed-case channel without chan
     kind: "openai-compatible",
     model: "legacy-model",
     baseURL: "https://legacy-2.example.test/v1",
-    features: { tools: true, vision: false, image: false, video: false },
+    features: { tools: true, vision: false, image: false, video: false, audio: false },
   });
 
   assert.equal(edited.profiles.find((candidate) => candidate.id === "ChatGPT")?.name, "Legacy Gateway 2");
@@ -243,7 +243,7 @@ test("desktop provider controller edits a legacy mixed-case channel without chan
     kind: "openai-compatible",
     model: "legacy-model",
     baseURL: "https://legacy-2.example.test/v1",
-    features: { tools: true, vision: false, image: false, video: false },
+    features: { tools: true, vision: false, image: false, video: false, audio: false },
   }), /Provider ID/);
 });
 
