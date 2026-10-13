@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Background stop and liveness checks on Linux no longer treat zombie processes as running. Where no init reaps orphans (for example a container without `--init`), stopping a background job previously never confirmed. If `/proc` is unreadable, the process is still treated as alive.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.
