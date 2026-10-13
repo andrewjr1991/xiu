@@ -1,19 +1,19 @@
 version: 2
 updates:
-  # Grouped weekly updates keep review load low; security updates still open individually.
+  # One grouped PR per directory per month keeps CI usage low; security updates still open individually.
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 1
     groups:
       cli-dependencies:
         patterns: ["*"]
   - package-ecosystem: npm
     directory: /apps/desktop
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 1
     groups:
       desktop-dependencies:
         patterns: ["*"]
@@ -21,3 +21,7 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns: ["*"]
