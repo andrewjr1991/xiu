@@ -140,6 +140,8 @@ If a process stops mid-task, Xiu records the last safe boundary and pending side
 
 For current-information tasks, search snippets are discovery evidence only. Final citations must have been successfully opened, and Xiu fails rather than filling unsupported current facts from model memory.
 
+Search needs no API key. When [uv](https://docs.astral.sh/uv/) is installed, Xiu runs the open-source [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) locally: a pinned version that queries several engines at once, with only its read-only search tool enabled. Without uv, or when local search finds nothing, Xiu falls back to its managed search service. Pages are always opened by Xiu's own HTTPS-only fetcher. See `/web` in [USAGE.zh-CN.md](./USAGE.zh-CN.md).
+
 ### Local-first records
 
 Xiu does not upload project code, sessions, audit records, or diagnostics by default. Model calls and explicitly configured web/MCP services still communicate with their configured endpoints. Update notifications are off by default, and ordinary startup performs no update check unless the user explicitly enabled that feature.

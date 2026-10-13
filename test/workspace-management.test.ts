@@ -191,6 +191,22 @@ test("desktop explicitly selects pinned managed search without clearing domain/t
   assert.equal(settings().webSearch?.apiKeyEnv, "CUSTOM_SEARCH_KEY");
 });
 
+test("desktop selects local-first search with the managed fallback and keeps domain/timeout/proxy policy", async () => {
+  const { service, settings } = fixture(undefined, { webSearch: { enabled: true, provider: "brave", baseURL: "https://api.search.brave.com/res/v1/web/search",
+    apiKeyEnv: "BRAVE_SEARCH_API_KEY", blockedDomains: ["blocked.test"], timeoutMs: 4_000, proxy: "http://127.0.0.1:8888" } });
+  const request = { action: "web" as const, revision: (await service.snapshot()).revision, mode: "local" as const,
+    enabled: true, provider: "free-search" as const, endpoint: XIU_BETA_SEARXNG_ENDPOINT };
+  await assert.rejects(service.change({ ...request, provider: "searxng" }), /Invalid/);
+  await assert.rejects(service.change({ ...request, apiKeyEnv: "BRAVE_SEARCH_API_KEY" }), /Invalid/);
+  await service.change(request);
+  assert.deepEqual(settings().webSearch, { enabled: true, provider: "free-search", baseURL: XIU_BETA_SEARXNG_ENDPOINT,
+    apiKeyEnv: undefined, managedAuth: "xiu-device", authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT,
+    blockedDomains: ["blocked.test"], timeoutMs: 4_000, proxy: "http://127.0.0.1:8888" });
+  const snapshot = await service.snapshot();
+  assert.equal(snapshot.web.local, true);
+  assert.equal(snapshot.web.managed, true);
+});
+
 test("shared policy skips unsupported or attempted fallback models and refuses oversized context", async () => {
   const { registry } = fixture();
   const policy = createProviderPolicy(registry, (profile, model) => resolveConfig({ provider: profile.kind, providerId: profile.id, model, apiKey: profile.apiKey, contextWindow: "8192" }), () => []);

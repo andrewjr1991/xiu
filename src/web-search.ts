@@ -4,9 +4,11 @@ import * as tls from "node:tls";
 import { createHash } from "node:crypto";
 import * as cheerio from "cheerio";
 import { Agent, fetch as undiciFetch, ProxyAgent } from "undici";
+import { sharedFreeSearchBackend, type FreeSearchBackend } from "./free-search.js";
 import type { AgentTool } from "./types.js";
 
-export type WebSearchProvider = "tavily" | "brave" | "searxng";
+/** "free-search" runs keyless local search and falls back to the managed Xiu Search endpoint in `baseURL`. */
+export type WebSearchProvider = "tavily" | "brave" | "searxng" | "free-search";
 
 export interface WebSearchConfig {
   enabled: boolean;
@@ -27,6 +29,7 @@ export interface WebSearchDependencies {
   fetch?: FetchLike;
   resolveHostname?: (hostname: string) => Promise<string[]>;
   getBearerToken?: (signal?: AbortSignal) => Promise<string | undefined>;
+  freeSearch?: Pick<FreeSearchBackend, "search">;
 }
 
 const MAX_RESPONSE_BYTES = 1_000_000;
@@ -313,6 +316,32 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
       const query = stringValue(input, "query", 500);
       const count = boundedInteger(input.count, 5, 1, 10, "count");
       const domains = domainList(input);
+      if (config.provider !== "free-search") {
+        const filtered = filterResults(await providerSearch(config, query, count, domains, context.signal), config, domains, count);
+        return formatResults(query, filtered.results, filtered.duplicatesRemoved);
+      }
+      let localFailure: string;
+      try {
+        const local = await (dependencies.freeSearch ?? sharedFreeSearchBackend(config.proxy)).search({
+          query, count, timeoutMs,
+          ...(domains.length || config.allowedDomains?.length ? { includeDomains: domains.length ? domains : normalizedDomains(config.allowedDomains) } : {}),
+          ...(config.blockedDomains?.length ? { excludeDomains: normalizedDomains(config.blockedDomains) } : {}),
+          ...(context.signal ? { signal: context.signal } : {}),
+        });
+        const filtered = filterResults(local.results, config, domains, count);
+        const note = local.failedEngines.length ? `\nSearch backend: local free-search; engines without results this time: ${local.failedEngines.join(", ")}.` : "\nSearch backend: local free-search.";
+        if (filtered.results.length) return `${formatResults(query, filtered.results, filtered.duplicatesRemoved)}${note}`;
+        localFailure = "local free-search returned no usable results";
+      } catch (error) {
+        if (context.signal?.aborted) throw error;
+        localFailure = error instanceof Error ? error.message : String(error);
+      }
+      if (config.managedAuth !== "xiu-device") throw new Error(`Web search failed: ${localFailure}`);
+      const filtered = filterResults(await providerSearch({ ...config, provider: "searxng" }, query, count, domains, context.signal), config, domains, count);
+      return `${formatResults(query, filtered.results, filtered.duplicatesRemoved)}\nSearch backend: Xiu Search fallback (${boundedText(localFailure, 200)}).`;
+    },
+  };
+  async function providerSearch(config: WebSearchConfig, query: string, count: number, domains: string[], signal: AbortSignal | undefined): Promise<SearchResult[]> {
       const requested = domains.length ? `${query} ${domains.map((domain) => `site:${domain}`).join(" OR ")}` : query;
       const endpoint = new URL(config.baseURL);
       const headers: Record<string, string> = {};
@@ -345,13 +374,13 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
         }
         endpoint.search = new URLSearchParams({ q: requested, format: "json", language: "all", safesearch: "1" }).toString();
         const key = config.managedAuth === "xiu-device"
-          ? await dependencies.getBearerToken?.(context.signal)
+          ? await dependencies.getBearerToken?.(signal)
           : config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
         if (config.managedAuth === "xiu-device" && !key) throw Object.assign(new Error("Managed Xiu Search authentication is unavailable."), { status: 401 });
         if (config.apiKeyEnv && !key) throw Object.assign(new Error(`Missing web search API key environment variable: ${config.apiKeyEnv}`), { status: 401 });
         if (key) headers.authorization = `Bearer ${key}`;
       }
-      const lifecycle = requestSignal(timeoutMs, context.signal);
+      const lifecycle = requestSignal(timeoutMs, signal);
       try {
         const { response } = await safeFetch(endpoint.toString(), { ...config, allowedDomains: undefined, blockedDomains: undefined }, fetchImpl, resolveHostname, lifecycle.signal, headers, request);
         if (!response.ok) throw responseError(response);
@@ -368,11 +397,9 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
             ...(value.age || value.publishedDate ? { published: String(value.age ?? value.publishedDate) } : {}),
           };
         });
-        const filtered = filterResults(results, config, domains, count);
-        return formatResults(query, filtered.results, filtered.duplicatesRemoved);
+        return results;
       } finally { lifecycle.dispose(); }
-    },
-  };
+  }
   const webOpen: AgentTool = {
     name: "web_open",
     description: "Open one public HTTPS page as bounded readable text. Redirects and DNS are revalidated; local/private hosts, credentials, downloads, and active page content are blocked.",

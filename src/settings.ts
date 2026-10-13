@@ -15,13 +15,15 @@ export interface XiuSettings {
 export const XIU_BETA_SEARXNG_ENDPOINT = "https://search.jingran.vip";
 export const XIU_BETA_SEARCH_AUTH_ENDPOINT = `${XIU_BETA_SEARXNG_ENDPOINT}/xiu-auth`;
 export const XIU_BETA_SEARXNG_TOKEN_ENV = "XIU_BETA_SEARXNG_TOKEN";
+const WEB_SEARCH_SCHEMA = 2;
 
 function betaWebSearchConfig(environment: NodeJS.ProcessEnv): WebSearchConfig | undefined {
   const legacyToken = environment[XIU_BETA_SEARXNG_TOKEN_ENV]?.trim();
   const proxy = environment.XIU_WEB_PROXY?.trim();
   return {
     enabled: true,
-    provider: "searxng",
+    // Keyless local search first; the managed endpoint below is its fallback.
+    provider: legacyToken ? "searxng" : "free-search",
     baseURL: XIU_BETA_SEARXNG_ENDPOINT,
     ...(legacyToken
       ? { apiKeyEnv: XIU_BETA_SEARXNG_TOKEN_ENV }
@@ -39,7 +41,7 @@ function stringArray(value: unknown): string[] | undefined {
 function webSearchConfig(value: unknown): WebSearchConfig | undefined {
   if (!value || typeof value !== "object") return undefined;
   const input = value as Record<string, unknown>;
-  if (input.provider !== "tavily" && input.provider !== "brave" && input.provider !== "searxng") return undefined;
+  if (input.provider !== "tavily" && input.provider !== "brave" && input.provider !== "searxng" && input.provider !== "free-search") return undefined;
   if (typeof input.baseURL !== "string") return undefined;
   let endpoint: URL;
   try { endpoint = new URL(input.baseURL); } catch { return undefined; }
@@ -82,14 +84,20 @@ export class SettingsStore {
 
   async load(): Promise<XiuSettings> {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown; update?: unknown };
+      const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown; webSearchSchema?: unknown; update?: unknown };
       const webSearch = webSearchConfig(parsed.webSearch);
       const legacyBetaWithoutToken = webSearch?.enabled === true
         && webSearch.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT
         && Boolean(webSearch.apiKeyEnv)
         && !this.environment[webSearch.apiKeyEnv!]?.trim();
+      // Settings written before schema 2 persisted the managed preset without the user choosing it;
+      // move that preset to local-first search once. Later saves record schema 2, so an explicit
+      // choice of the managed service afterwards is kept.
+      const managedPreset = webSearch?.provider === "searxng" && webSearch.managedAuth === "xiu-device"
+        && webSearch.baseURL.replace(/\/$/, "") === XIU_BETA_SEARXNG_ENDPOINT;
+      const upgradedPreset = parsed.webSearchSchema !== WEB_SEARCH_SCHEMA && managedPreset ? { ...webSearch, provider: "free-search" as const } : webSearch;
       const effectiveWebSearch = Object.prototype.hasOwnProperty.call(parsed, "webSearch")
-        ? legacyBetaWithoutToken ? betaWebSearchConfig(this.environment) : webSearch
+        ? legacyBetaWithoutToken ? betaWebSearchConfig(this.environment) : upgradedPreset
         : betaWebSearchConfig(this.environment);
       return {
         ...(typeof parsed.language === "string" ? { language: normalizeLanguage(parsed.language) } : {}),
@@ -114,7 +122,7 @@ export class SettingsStore {
       ...(settings.language ? { language: settings.language } : {}),
       // Persist explicit selections, including managed auth and domain controls.
       // Omitting the beta preset could resurrect an old environment-token mode.
-      ...(settings.webSearch ? { webSearch: settings.webSearch } : {}),
+      ...(settings.webSearch ? { webSearch: settings.webSearch, webSearchSchema: WEB_SEARCH_SCHEMA } : {}),
       ...(settings.update?.notifications ? { update: { notifications: true } } : {}),
     };
     await fs.writeFile(temporary, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");

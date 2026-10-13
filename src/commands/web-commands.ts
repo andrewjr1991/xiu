@@ -5,6 +5,8 @@ import type { ManagedWebSearchAuth } from "../managed-web-search-auth.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
 import type { SettingsStore, XiuSettings } from "../settings.js";
 import { askQuestion } from "../terminal-prompts.js";
+import { FREE_SEARCH_VERSION, sharedFreeSearchBackend } from "../free-search.js";
+import { XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT } from "../settings.js";
 import type { WebSearchConfig, WebSearchProvider } from "../web-search.js";
 
 export interface WebCommandContext {
@@ -35,9 +37,14 @@ function webSearchSummary(settings: XiuSettings, language: UiLanguage): string {
     web.allowedDomains?.length ? `${localize(language, "允许域名", "allowlisted domains")}: ${web.allowedDomains.join(", ")}` : localize(language, "允许所有公网域名", "all public domains allowed"),
     web.blockedDomains?.length ? `${localize(language, "阻止域名", "blocked domains")}: ${web.blockedDomains.join(", ")}` : undefined,
   ].filter(Boolean).join(" · ");
+  const endpoint = web.provider === "free-search"
+    ? localize(language,
+      `本机 free-search-mcp ${FREE_SEARCH_VERSION}（需要 uv；不可用时回退 ${web.managedAuth === "xiu-device" ? web.baseURL : "无"}）`,
+      `local free-search-mcp ${FREE_SEARCH_VERSION} (needs uv; falls back to ${web.managedAuth === "xiu-device" ? web.baseURL : "nothing"} when unavailable)`)
+    : web.baseURL;
   return [
     localize(language, `原生联网搜索：已启用 · ${web.provider}`, `Native web search: enabled · ${web.provider}`),
-    `${localize(language, "端点", "Endpoint")}: ${web.baseURL}`,
+    `${localize(language, "端点", "Endpoint")}: ${endpoint}`,
     `${localize(language, "认证", "Authentication")}: ${credential}`,
     `${localize(language, "联网代理", "Web proxy")}: ${web.proxy ? localize(language, "已配置", "configured") : localize(language, "直连", "direct")}`,
     `${localize(language, "超时", "Timeout")}: ${web.timeoutMs ?? 20_000}ms`,
@@ -123,6 +130,21 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
 
   const diagnoseWebSearch = async (): Promise<void> => {
     if (!settings.webSearch?.enabled) throw new Error(localize(language, "联网搜索未启用。", "Web search is disabled."));
+    if (settings.webSearch.provider === "free-search") {
+      console.log(chalk.cyan(localize(language, "正在启动本机 free-search 并发送一次测试搜索（首次启动会下载依赖）……", "Starting local free-search and sending one test search (the first launch downloads its packages)...")));
+      try {
+        const started = Date.now();
+        const result = await sharedFreeSearchBackend(settings.webSearch.proxy).search({ query: "Node.js release schedule", count: 3, timeoutMs: 180_000 });
+        console.log(chalk.green(localize(language,
+          `✓ free-search 可用 · ${result.results.length} 条结果 · ${Date.now() - started}ms${result.failedEngines.length ? ` · 本次无结果的引擎：${result.failedEngines.join(", ")}` : ""}\n`,
+          `✓ free-search is available · ${result.results.length} result(s) · ${Date.now() - started}ms${result.failedEngines.length ? ` · engines without results this time: ${result.failedEngines.join(", ")}` : ""}\n`)));
+        return;
+      } catch (error) {
+        console.log(chalk.yellow(`${localize(language, "free-search 不可用", "free-search is unavailable")}: ${error instanceof Error ? error.message : String(error)}`));
+        if (settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error(localize(language, "没有可用的回退搜索。", "No fallback search is available."));
+        console.log(chalk.dim(localize(language, "搜索会回退到 Xiu 托管搜索，继续检查回退服务。", "Searches fall back to Xiu managed search; checking the fallback service.")));
+      }
+    }
     if (settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) {
       const keyEnv = settings.webSearch.apiKeyEnv ?? (settings.webSearch.provider === "tavily" ? "TAVILY_API_KEY" : settings.webSearch.provider === "brave" ? "BRAVE_SEARCH_API_KEY" : undefined);
       if (keyEnv && !process.env[keyEnv]?.trim()) throw new Error(localize(language, `缺少环境变量 ${keyEnv}。`, `Missing environment variable ${keyEnv}.`));
@@ -184,16 +206,26 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
     const requested = command.slice("/web configure".length).trim().toLowerCase();
     let provider: WebSearchProvider | undefined;
     if (requested) {
-      if (requested !== "tavily" && requested !== "brave" && requested !== "searxng") throw new Error(localize(language, "Web Search 后端仅支持 tavily、brave 或 searxng。", "Web Search provider must be tavily, brave, or searxng."));
+      if (requested !== "free-search" && requested !== "tavily" && requested !== "brave" && requested !== "searxng") throw new Error(localize(language, "Web Search 后端仅支持 free-search、tavily、brave 或 searxng。", "Web Search provider must be free-search, tavily, brave, or searxng."));
       provider = requested;
     } else {
       provider = await selectTerminalOption(localize(language, "选择只读搜索后端", "Choose a read-only search provider"), [
+        { label: "free-search", description: localize(language, "本机免 Key 多引擎搜索（需要 uv），不可用时回退 Xiu 托管搜索", "Keyless local multi-engine search (needs uv); falls back to Xiu managed search"), value: "free-search" as const },
         { label: "Tavily", description: localize(language, "面向 AI 的 HTTPS API，免费额度无需信用卡", "AI-oriented HTTPS API; free allowance without a credit card"), value: "tavily" as const },
         { label: "Brave Search", description: localize(language, "官方 HTTPS API，需要 API Key 环境变量", "Official HTTPS API; requires an API key environment variable"), value: "brave" as const },
         { label: "SearXNG", description: localize(language, "使用你自建或信任的 HTTPS 实例，可选 Bearer Token", "Use a self-hosted or trusted HTTPS instance; optional Bearer token"), value: "searxng" as const },
       ], language);
     }
     if (!provider) { console.log(chalk.dim(localize(language, "已取消联网搜索配置。\n", "Web search configuration cancelled.\n"))); return; }
+    if (provider === "free-search") {
+      // Keeps domain policy, timeout and proxy; the fallback is the fixed managed service.
+      const { apiKeyEnv: _unused, ...kept } = settings.webSearch ?? { enabled: true, provider, baseURL: XIU_BETA_SEARXNG_ENDPOINT };
+      settings.webSearch = { ...kept, enabled: true, provider, baseURL: XIU_BETA_SEARXNG_ENDPOINT, managedAuth: "xiu-device", authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT };
+      await settingsStore.save(settings);
+      refreshWebSearchRuntime();
+      console.log(`${chalk.green(localize(language, "已切换到本机 free-search。可用 /web doctor 预先下载并测试。", "Switched to local free-search. Run /web doctor to download and test it ahead of time."))}\n${webSearchSummary(settings, language)}\n`);
+      return;
+    }
     const previous = settings.webSearch?.provider === provider ? settings.webSearch : undefined;
     const defaultEndpoint = provider === "tavily" ? "https://api.tavily.com/search"
       : provider === "brave" ? "https://api.search.brave.com/res/v1/web/search"

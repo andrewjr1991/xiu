@@ -9,6 +9,7 @@
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。
 - **0.20.8 包含的安全修复：** 命令按实际执行片段分级（修复组合命令跳过审批和 Plan 只读的问题）；电脑操作自动额度按父任务累计、渲染进程输入逐步确认；Linux 僵尸进程视为已退出；MCP 客户端升级到 2.3.1（GHSA-6qxp-vccf-f47h）。
 - **发布后的结构重构（main，未发布，行为不变）：** `src/cli.ts` 的斜杠命令按功能域移到 `src/commands/*-commands.ts`（Provider、插件、技能、MCP、后台任务、诊断/报告/审计、凭据、联网搜索，以及任务运行中“补充>”提示符的命令），`cli.ts` 由 3782 行降到 2075 行；`runTaskSequence` 其余部分直接读写会话状态，暂不再拆。桌面 `App.tsx` 拆出 `TaskTimeline.tsx`、`InteractiveTerminal.tsx`、`ReviewInspector.tsx`、`ProviderPicker.tsx`，由 1243 行降到 642 行。
+- **联网搜索默认本机免 Key（main，未发布）：** 维护者于 2026-10-13 选定“默认加兜底”。装了 uv 时用本机 free-search-mcp 0.13.1（依赖全部锁定，只开放 `search` 工具），不可用或没有结果时回退 `search.jingran.vip` 托管搜索；打开网页仍由 `web_open` 完成。需要在三平台和国内网络做真实搜索验收。
 - **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR，安全更新单独提出。
 - **当前设计：** [0.20.8 子智能体明细设计](./V0.20.8_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
@@ -25,7 +26,6 @@
 需要维护者决定或提供：
 
 - Windows 代码签名证书。拿到后把 CI 的“断言未签名”改为“有证书时签名并校验”。
-- 托管联网搜索的默认值（当前默认使用 `search.jingran.vip`）：保留并在 README 与首次运行时明示，或改为默认关闭。
 - Microsoft Store 身份、外部 Windows x64/ARM64/企业设备、macOS/Linux 真实用户矩阵，以及真实计费 Provider 的验收授权。
 
 ## 下一步

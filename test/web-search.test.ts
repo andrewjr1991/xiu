@@ -295,6 +295,8 @@ test("a new user with a stale beta key reference automatically enrolls before th
   let authorization = "";
   const tools = createWebSearchTools(config, undefined, {
     getBearerToken: (signal) => auth.getBearerToken(signal),
+    // The default is local-first; without uv, the search goes to the managed service.
+    freeSearch: { search: async () => { throw new Error("uv is not installed"); } },
     resolveHostname: publicDns,
     fetch: async (_url, init) => {
       authorization = new Headers(init.headers).get("authorization") ?? "";

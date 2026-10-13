@@ -82,7 +82,7 @@ interface ToolEvidenceEntry {
 }
 
 function isFatalWebSearchFailure(message: string): boolean {
-  return /(?:Missing web search API key environment variable|managed web search authentication is unavailable|device registration failed with HTTP 4(?:00|01|03)|device credential was rejected|token request failed with HTTP 4(?:00|01|03)|(?:device registration|token issuance|authentication) transport failed \((?:SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+|UNABLE_TO_GET_ISSUER_CERT[^)]*)\))/i.test(message);
+  return /(?:Missing web search API key environment variable|uv is not installed|managed web search authentication is unavailable|device registration failed with HTTP 4(?:00|01|03)|device credential was rejected|token request failed with HTTP 4(?:00|01|03)|(?:device registration|token issuance|authentication) transport failed \((?:SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_[A-Z_]+|UNABLE_TO_GET_ISSUER_CERT[^)]*)\))/i.test(message);
 }
 
 function isTimeSensitiveWebTask(task: string): boolean {

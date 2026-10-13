@@ -14,7 +14,7 @@ export interface WorkspaceManagementSnapshot {
   revision: string;
   providers: Array<{ id: string; name: string; fallback: string[] }>;
   routing: ProviderRoutingPolicy;
-  web: { enabled: boolean; provider?: string; endpoint?: string; apiKeyEnv?: string; managed: boolean };
+  web: { enabled: boolean; provider?: string; endpoint?: string; apiKeyEnv?: string; managed: boolean; local: boolean };
   skills: Array<{ name: string; description: string; scope: string; permissions: string[]; warnings: string[] }>;
 }
 export type WorkspaceManagementRequest =
@@ -22,7 +22,7 @@ export type WorkspaceManagementRequest =
   | { action: "routing"; revision: string; enabled: boolean }
   | { action: "stage"; revision: string; phase: ProviderRoutingPhase; providerId?: string }
   | { action: "fallback"; revision: string; providerId: string; chain: string[] }
-  | { action: "web"; revision: string; enabled: boolean; mode?: "managed" | "custom"; provider: "tavily" | "brave" | "searxng"; endpoint: string; apiKeyEnv?: string };
+  | { action: "web"; revision: string; enabled: boolean; mode?: "local" | "managed" | "custom"; provider: "tavily" | "brave" | "searxng" | "free-search"; endpoint: string; apiKeyEnv?: string };
 
 /** Only explicit non-secret configuration and bounded summaries cross the bridge. */
 export class WorkspaceManagementService {
@@ -102,7 +102,8 @@ export class WorkspaceManagementService {
     return { revision, providers, routing,
       web: { enabled: config.webSearch?.enabled === true, provider: config.webSearch?.provider,
         apiKeyEnv: config.webSearch?.apiKeyEnv,
-        endpoint: config.webSearch?.baseURL ? clean(config.webSearch.baseURL.split(/[?#]/)[0]!, 2_000) : undefined, managed: Boolean(config.webSearch?.managedAuth) },
+        endpoint: config.webSearch?.baseURL ? clean(config.webSearch.baseURL.split(/[?#]/)[0]!, 2_000) : undefined, managed: Boolean(config.webSearch?.managedAuth),
+        local: config.webSearch?.provider === "free-search" },
       skills: this.skills.list().slice(0, 300).map((item) => ({ name: clean(item.name, 160),
         description: clean(item.description, 500), scope: item.scope,
         permissions: item.permissions, warnings: item.permissionWarnings.map((value) => clean(value, 160)) })),
@@ -137,6 +138,15 @@ export class WorkspaceManagementService {
         if (typeof request.providerId !== "string" || !Array.isArray(request.chain) || request.chain.length > 8 || request.chain.some((id) => typeof id !== "string")) throw new Error("Invalid fallback chain.");
         return this.registry.setFailoverChain(request.providerId, request.chain);
       case "web": {
+        if (request.mode === "local") {
+          if (typeof request.enabled !== "boolean" || request.provider !== "free-search" || request.apiKeyEnv) throw new Error("Invalid search configuration.");
+          const current = await this.settings.load();
+          // Local search keeps the fixed managed service as its fallback, plus any domain policy, timeout and proxy.
+          const webSearch: WebSearchConfig = { ...current.webSearch, enabled: request.enabled, provider: "free-search", baseURL: XIU_BETA_SEARXNG_ENDPOINT,
+            apiKeyEnv: undefined, managedAuth: "xiu-device", authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT };
+          await this.settings.save({ ...current, webSearch });
+          return;
+        }
         if (typeof request.enabled !== "boolean" || !["tavily", "brave", "searxng"].includes(request.provider)
           || typeof request.endpoint !== "string" || request.endpoint.length > 2_000) throw new Error("Invalid search configuration.");
         const url = new URL(request.endpoint);

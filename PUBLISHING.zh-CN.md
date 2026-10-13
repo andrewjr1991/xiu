@@ -1137,3 +1137,14 @@ npm.cmd run smoke:platform
 ### 0.20.2 标签工作台追加门禁
 
 候选需验收自定义菜单的键盘/鼠标、轮次选择与空状态字体；按需打开/关闭标签、终端关闭与页签切换生命周期、分屏/完整视图，以及紧凑数据展开。运行 `npm --prefix apps/desktop run smoke:browser` 离线检查真实 Electron 网页视图的公开 HTTPS/POST 门禁、无 Node/preload/任务桥、显隐与关闭；UI smoke 覆盖宽窄窗口和标签操作。网页会话不得共享桌面凭据或 Agent 工具，不支持登录提交/下载；正式包不含 smoke 桥。本轮不发布，MSIX 未签名的限制不变。
+
+## 四十、本机免 Key 搜索（free-search）发布门禁
+
+包含本机 free-search 默认搜索的版本，发布前除通用流程外还必须验证：
+
+1. `src/free-search.ts` 中的 `FREE_SEARCH_VERSION` 与依赖约束同时更新；约束由 `uv pip compile --universal --python-version 3.11` 生成，每一行都是确切版本，并在干净的 uv 缓存下实际启动过一次。
+2. 启动参数只开放 `search` 工具，下载、智能体后端和登录类引擎关闭；子进程环境不含 Provider Key 等 Xiu 进程的秘密，工作目录和配置目录位于 `~/.xiu/free-search/`。
+3. 未安装 uv、启动超时、搜索出错或没有可用结果时，回退到 Xiu 托管搜索并在结果中注明；没有托管回退时明确报错，不伪造结果。
+4. 搜索结果仍经过 HTTPS、域名策略与去重过滤；打开网页仍只走 `web_open`。
+5. 旧版保存的托管预置升级后切换为 free-search 且保留代理、超时和域名策略；升级后明确选择的托管或自定义服务不再被迁移。
+6. 在 Windows、macOS 和 Linux 上各做一次真实搜索，包括国内网络环境；记录哪些引擎可用。
