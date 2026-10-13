@@ -9,6 +9,7 @@ Use Node.js 20.18.1 or newer:
 ```bash
 npm ci
 npm run typecheck
+npm run typecheck:test
 npm test
 npm run build
 npm run smoke:package
