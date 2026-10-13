@@ -47,7 +47,7 @@ export function unquotedText(value: string): string {
 }
 
 export function commandTokens(command: string): string[] {
-  return command.match(/"(?:`.|[^"])*"|'(?:''|[^'])*'|[^\s]+/g)?.map((token) => {
+  return command.match(/"(?:`[\s\S]|[^"`])*"|'(?:''|[^'])*'|[^\s]+/g)?.map((token) => {
     if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) return token.slice(1, -1);
     return token;
   }) ?? [];
