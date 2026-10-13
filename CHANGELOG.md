@@ -20,6 +20,8 @@ Local unpublished Computer Use increment: separate per-round human acceptance fr
 
 0.20.8 本地候选（未发布）：保留真实子智能体工具明细、计划滞后提醒、等待回答卡片和会话换行修复。Computer Use 已扩展为用户选择已打开的 Windows 应用窗口，不再以 HTML 文件为唯一目标；支持目标截图、单步点击、普通文本输入、受限按键和滚动，并接入桌面父任务的观察/输入工具。窗口授权、每步输入、每次向当前视觉渠道发送截图分别确认；统一使用 Xiu 深浅主题的隔离确认框，默认取消。截图不写历史、审计或文件；仅明确确认的单张画面发送模型。Plan、未信任工作区和子智能体不得获得此能力；授权最长 10 分钟 / 30 步，任务结束、窗口身份变化、切换工作区或停止撤销。未知输入结果不重放。不包含整个桌面自主控制、管理员、密码或支付流程；真实付费模型和完整实玩验收尚未完成。
 
+Local unpublished fix: Security: classify shell commands per executed segment. Composed commands (`&&`, `||`, `&`, newlines, redirection, `$(...)`/backtick substitution) are never read-only, so a read-only prefix such as `git status && …` can no longer skip approval or Plan mode. `rm`-class programs are detected after control operators, inside `sh -c`/`cmd /c`/`powershell -Command`/`Invoke-Expression` scripts, behind wrappers (`sudo`, `env`, `xargs`, `timeout`, …) and in `find -delete`/`-exec`; uninspectable PowerShell `-EncodedCommand` and scripts piped into a shell are dangerous. `git -c`/`--config-env` and `--output` are no longer read-only, and read-only PowerShell pipelines require every element to be an allowlisted cmdlet.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.
