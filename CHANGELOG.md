@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Security: upgrade `@modelcontextprotocol/client` from 2.0.0 to 2.3.1 for GHSA-6qxp-vccf-f47h. Before 2.2.0, the OAuth client could send credentials to an authorization server chosen by the MCP server. The SDK license changed from MIT to Apache-2.0 upstream. `npm audit --omit=dev` now reports 0 vulnerabilities.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.

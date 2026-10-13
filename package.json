@@ -54,7 +54,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "chalk": "^5.4.1",
     "cheerio": "1.0.0",
     "commander": "^14.0.0",
