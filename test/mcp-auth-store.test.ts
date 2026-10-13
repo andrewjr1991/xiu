@@ -60,7 +60,7 @@ test("MCP auth store persists versioned credentials bound to resource, issuer, a
     assert.deepEqual(await reloaded.status(), {
       backend: "legacy-file", available: true, secure: false, location: file, entries: 2, reason: "local plaintext compatibility storage",
     });
-    assert.doesNotMatch(JSON.stringify(parsed), /code_verifier|authorization_code|\"state\"/i);
+    assert.doesNotMatch(JSON.stringify(parsed), /code_verifier|authorization_code|"state"/i);
 
     assert.equal(await reloaded.clearCredentials(first, "tokens"), true);
     assert.equal((await reloaded.get(first))?.tokens, undefined);

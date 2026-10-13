@@ -10,7 +10,7 @@ const commandCases: Array<[string, "read" | "execute" | "dangerous"]> = [
  ["git status > out.txt","execute"],["get-content a.txt > b.txt","execute"],['git diff "$(node evil.js)"',"execute"],["git status `node x`","execute"],
  ["git -c core.fsmonitor='touch x' status","execute"],["git diff --output=x","execute"],["git branch --list -D main","execute"],["git branch --list","read"],
  ["ls && rm -rf x","dangerous"],["echo hi\nrm -rf build","dangerous"],["sh -c 'rm -rf build'","dangerous"],['bash -lc "rm -rf /"',"dangerous"],
- ["git status | xargs rm","dangerous"],["find . -name '*.tmp' -delete","dangerous"],["find . -exec rm {} \;","dangerous"],["sudo rm -rf /","dangerous"],
+ ["git status | xargs rm","dangerous"],["find . -name '*.tmp' -delete","dangerous"],["find . -exec rm {} ;","dangerous"],["sudo rm -rf /","dangerous"],
  ["env FOO=1 /bin/rm x","dangerous"],["echo $(rm -rf x)","dangerous"],['echo "$(rm -rf x)"',"dangerous"],["echo 'rm -rf x'","execute"],
  ["cmd /c rd /s /q build","dangerous"],["powershell -EncodedCommand AAAA","dangerous"],['powershell -Command "Remove-Item x"',"dangerous"],
  ["iex 'rm x'","dangerous"],["echo rm | sh","dangerous"],["timeout 5 git reset --hard","dangerous"],["cd x && git reset --hard","dangerous"],

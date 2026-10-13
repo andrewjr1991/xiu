@@ -104,7 +104,7 @@ export function consumeTerminalMouseInput(
   now = Date.now(),
 ): TerminalMouseInputResult {
   const sequence = key.sequence ?? text ?? "";
-  let pending = now - state.startedAt <= 250 ? state.sequence : "";
+  const pending = now - state.startedAt <= 250 ? state.sequence : "";
 
   if (!pending && (sequence === "\x1b[<" || sequence === "\x1b[M")) {
     return { state: { sequence, startedAt: now }, consumed: true };

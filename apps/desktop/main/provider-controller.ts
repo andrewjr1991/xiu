@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, resolveStartupModel, type ProviderProfile } from "../../../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, type ProviderProfile } from "../../../src/provider-registry.js";
 import { ProviderConfigurationError } from "../../../src/provider-config-migration.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
@@ -88,7 +88,6 @@ export class DesktopProviderController {
     if (!activeProfile) return { templates, activeProviderId: "", activeModel: "", modelProviderId: "", profiles: [], models: [], modelsByProvider: {}, capabilityModelsByProvider: {} };
     const activeModel = this.registry.activeModel(activeProfile.id) ?? activeProfile.model;
     const modelProfile = this.registry.get(providerId ?? activeProviderId) ?? activeProfile;
-    const model = this.registry.activeModel(modelProfile.id) ?? modelProfile.model;
     const credentials = new Map(this.registry.credentialInfo().map((item) => [item.providerId, item]));
     const profiles = allProfiles.sort((left, right) => left.id === activeProviderId ? -1 : right.id === activeProviderId ? 1 : left.name.localeCompare(right.name, "zh-CN"));
     const modelsByProvider = Object.fromEntries(profiles.map((profile) => {

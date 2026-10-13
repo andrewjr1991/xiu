@@ -10,6 +10,7 @@ Use Node.js 20.18.1 or newer:
 npm ci
 npm run typecheck
 npm run typecheck:test
+npm run lint
 npm test
 npm run build
 npm run smoke:package

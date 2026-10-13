@@ -80,8 +80,7 @@ test("real desktop parent tool flow emits completed specialist events", async (t
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-parent-child-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   let step = 0;
-  let host: Awaited<ReturnType<typeof createWorkspaceAgentHost>>;
-  host = await createWorkspaceAgentHost(root, { profile, backgroundRoot: path.join(root, ".xiu", "background"), journalRoot: path.join(root, ".xiu", "journal"), provider: { async complete(_system, _messages, tools) {
+  const host: Awaited<ReturnType<typeof createWorkspaceAgentHost>> = await createWorkspaceAgentHost(root, { profile, backgroundRoot: path.join(root, ".xiu", "background"), journalRoot: path.join(root, ".xiu", "journal"), provider: { async complete(_system, _messages, tools) {
     if (!tools.some((tool) => tool.name === "spawn_agents")) return { text: "Child checked files. VERDICT: PASS", toolCalls: [], raw: {} };
     step++;
     if (step === 1) return { text: "Delegating investigation", toolCalls: [{ id: "spawn", name: "spawn_agents", input: { goal: "investigate", tasks: [{ id: "child", title: "Investigate", instructions: "Inspect only", role: "explorer" }] } }], raw: {} };
@@ -106,8 +105,7 @@ test("desktop stop cancels an actual active child model call and waits for shutd
   let ready!: () => void;
   const childReady = new Promise<void>((resolve) => { ready = resolve; });
   let childAborted = false, step = 0;
-  let host: Awaited<ReturnType<typeof createWorkspaceAgentHost>>;
-  host = await createWorkspaceAgentHost(root, { profile, backgroundRoot: path.join(root, ".xiu", "background"), journalRoot: path.join(root, ".xiu", "journal"), provider: { async complete(_system, _messages, tools, signal) {
+  const host: Awaited<ReturnType<typeof createWorkspaceAgentHost>> = await createWorkspaceAgentHost(root, { profile, backgroundRoot: path.join(root, ".xiu", "background"), journalRoot: path.join(root, ".xiu", "journal"), provider: { async complete(_system, _messages, tools, signal) {
     if (!tools.some((tool) => tool.name === "spawn_agents")) {
       ready();
       return new Promise((_, reject) => signal!.addEventListener("abort", () => { childAborted = true; reject(new Error("cancelled")); }, { once: true }));

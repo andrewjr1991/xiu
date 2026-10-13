@@ -270,7 +270,7 @@ test("persisted background previews and output redact common credential values",
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
   const secret = "background-secret-canary";
-  const started = startBackgroundProcess(`node -e \"console.log('api_key=${secret}')\"`, process.cwd());
+  const started = startBackgroundProcess(`node -e "console.log('api_key=${secret}')"`, process.cwd());
   for (let attempt = 0; attempt < 300 && listBackgroundProcesses().find((item) => item.id === started.id)?.running; attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const serialized = JSON.stringify(listBackgroundProcesses()) + backgroundProcessOutput(started.id);
   assert.doesNotMatch(serialized, new RegExp(secret));

@@ -18,16 +18,6 @@ export interface PluginSignatureVerification {
   problem?: string;
 }
 
-interface PluginSignatureDocument {
-  version: 1;
-  algorithm: "ed25519";
-  pluginId: string;
-  pluginVersion: string;
-  packageDigest: string;
-  publisher: { name?: string; publicKey: string };
-  signature: string;
-}
-
 export interface TrustedPluginPublisher {
   fingerprint: string;
   name?: string;

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { listSessions } from "../../../src/session.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
-import { TaskRunJournal, type TaskRunStatus } from "../../../src/task-run.js";
+import { TaskRunJournal } from "../../../src/task-run.js";
 import { isWorkspaceTrusted, trustWorkspace } from "../../../src/trust.js";
 import {
   DESKTOP_BRIDGE_VERSION,

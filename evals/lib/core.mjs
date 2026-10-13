@@ -176,7 +176,7 @@ export function changedFiles(before, after) {
 
 export function redact(value, key = "") {
   if (/api.?key|authorization|cookie|client.?secret|password|token$/i.test(key)) return "[REDACTED]";
-  if (typeof value === "string") return value.replace(/\b(?:sk|xox[baprs]|ghp)_[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]").replace(/Bearer\s+[A-Za-z0-9._~+\/-]{8,}/gi, "Bearer [REDACTED]");
+  if (typeof value === "string") return value.replace(/\b(?:sk|xox[baprs]|ghp)_[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]").replace(/Bearer\s+[A-Za-z0-9._~+/-]{8,}/gi, "Bearer [REDACTED]");
   if (Array.isArray(value)) return value.map((item) => redact(item));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redact(child, childKey)]));
   return value;

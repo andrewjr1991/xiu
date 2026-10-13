@@ -31,7 +31,7 @@ test("wide startup screen places branding and quick start on the same row", () =
     console.log = originalLog;
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
   }
-  assert.match(lines[1] ?? "", /__  __.*Quick start/);
+  assert.match(lines[1] ?? "", /__ {2}__.*Quick start/);
   assert.ok(lines.length < 18, `expected compact output, received ${lines.length} lines`);
 });
 

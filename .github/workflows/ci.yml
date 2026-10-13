@@ -56,6 +56,9 @@ jobs:
       - id: typecheck_tests
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: npm run typecheck:test
+      - id: lint
+        if: ${{ !cancelled() && matrix.platform == 'linux' && steps.dependencies.outcome == 'success' }}
+        run: npm run lint
       - name: Verify Windows provider privacy before the full suite
         id: provider_privacy
         if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}

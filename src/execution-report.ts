@@ -136,7 +136,6 @@ export function buildExecutionReport(options: {
   const startedAt = runs.map((item) => item.startedAt).sort()[0] ?? run.startedAt;
   const finishedAt = runs.map((item) => item.finishedAt ?? item.updatedAt).sort().at(-1) ?? run.updatedAt;
   const auditRecords = (options.auditRecords ?? []).filter((record) => record.timestamp >= startedAt && record.timestamp <= finishedAt);
-  const changed = files.length > 0;
   const verificationPassed = verification.some((item) => item.status === "succeeded");
   const complete = run.status === "completed";
   const verified = complete && verificationPassed;

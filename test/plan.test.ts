@@ -33,7 +33,7 @@ test("Chinese mode rejects English natural-language plan steps", () => {
     { id: "inspect", title: "Inspect current implementation", status: "in_progress" },
   ]), /必须使用简体中文/);
   assert.doesNotThrow(() => manager.update("完成终端交互修复", [
-    { id: "inspect", title: "检查 src\/cli.ts", status: "in_progress" },
+    { id: "inspect", title: "检查 src/cli.ts", status: "in_progress" },
   ]));
 });
 
