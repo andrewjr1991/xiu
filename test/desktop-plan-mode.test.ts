@@ -118,7 +118,7 @@ test("desktop Plan rejects other writers, MCP work, pending Full Access confirma
   await assert.rejects(controller.setPlanMode(workspace, request), /任务或配置/);
   mcp.busy = false;
   const confirmation = deferred<boolean>();
-  const selecting = controller.setApprovalMode(workspace, { mode: "full" }, () => confirmation.promise);
+  const selecting = controller.setApprovalMode(workspace, { mode: "full", contextId: connection.modeContextId! }, () => confirmation.promise);
   await new Promise((resolve) => setImmediate(resolve));
   await assert.rejects(controller.setPlanMode(workspace, request), /任务或配置/);
   confirmation.resolve(false);
@@ -407,14 +407,14 @@ test("same-workspace Provider reconfiguration preserves Plan but resets Full Acc
   });
   const initial = await controller.connect(workspace);
   const selected = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId! });
-  await controller.setApprovalMode(workspace, { mode: "full" }, async () => true);
+  await controller.setApprovalMode(workspace, { mode: "full", contextId: selected.modeContextId! }, async () => true);
   const reconfigured = await controller.reload(workspace);
   assert.equal(reconfigured.runtime.snapshot.planMode, true);
   assert.equal(reconfigured.approvalMode, "ask");
   assert.equal(reconfigured.provider.id, "provider-2");
   assert.notEqual(reconfigured.modeContextId, selected.modeContextId);
   assert.equal(closed, 1);
-  await assert.rejects(controller.setApprovalMode(workspace, { mode: "full" }), /首次确认/);
+  await assert.rejects(controller.setApprovalMode(workspace, { mode: "full", contextId: reconfigured.modeContextId! }), /首次确认/);
   const execution = await controller.setPlanMode(workspace, { enabled: false, contextId: reconfigured.modeContextId! });
   assert.equal(execution.runtime.snapshot.planMode, false);
   const executionReload = await controller.reload(workspace);

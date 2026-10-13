@@ -70,7 +70,8 @@ export interface DesktopRuntimeConnection {
 export type DesktopApprovalMode = "ask" | "workspace" | "full";
 export interface DesktopPlanModeRequest { enabled: boolean; contextId: string }
 export interface DesktopSubagentCancelRequest { runId: string; taskId: string; parentTaskId: string }
-export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode }
+/** contextId binds the change to the idle host/conversation the renderer saw, like Plan mode. */
+export interface DesktopApprovalModeRequest { mode: DesktopApprovalMode; contextId: string }
 
 export interface DesktopProviderProfile {
   id: string;
