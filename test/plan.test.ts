@@ -72,16 +72,14 @@ test("plan mode blocks workspace changes at the Agent boundary", async () => {
       return { text: "planned only", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
     provider,
-    [...builtinTools, ...createPlanTools(manager)],
-    async () => true,
-    {},
-    undefined,
-    undefined,
-    manager,
-  );
+    tools: [...builtinTools, ...createPlanTools(manager)],
+    approve: async () => true,
+    events: {},
+    planManager: manager,
+  });
   assert.equal(await agent.run("plan without edits"), "planned only");
   await assert.rejects(fs.access(path.join(cwd, "blocked.txt")));
 });
@@ -101,13 +99,14 @@ test("task plans persist with the resumable session", async () => {
       return { text: "finished", toolCalls: [], raw: {} };
     },
   };
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 3, autoApprove: true },
     provider,
-    createPlanTools(manager),
-    async () => true,
-    {}, undefined, undefined, manager,
-  );
+    tools: createPlanTools(manager),
+    approve: async () => true,
+    events: {},
+    planManager: manager,
+  });
   await agent.run("make a plan");
   const restored = await loadSession(cwd);
   assert.equal(restored.plan?.goal, "finish");
@@ -121,9 +120,9 @@ test("an ignored plan reminder never turns pending or in-progress work into succ
   const gates: string[] = [];
   let completed = "";
   const journal = new TaskRunJournal(cwd, path.join(cwd, ".xiu", "test-runs"));
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, language: "en-US" },
-    { async complete() {
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, language: "en-US" },
+    provider: { async complete() {
       calls++;
       if (calls === 1) return {
         text: "I will do both steps.",
@@ -136,10 +135,13 @@ test("an ignored plan reminder never turns pending or in-progress work into succ
       };
       if (calls > 3) throw new Error("unfinished plan must stop after one reminder");
       return { text: "Done.", toolCalls: [], raw: {} };
-    } }, createPlanTools(manager), async () => false,
-    { onCompletionGate: (gate) => gates.push(gate), onTaskComplete: (result) => { completed = result.outcome; } },
-    undefined, undefined, manager, undefined, undefined, journal,
-  );
+    } },
+    tools: createPlanTools(manager),
+    approve: async () => false,
+    events: { onCompletionGate: (gate) => gates.push(gate), onTaskComplete: (result) => { completed = result.outcome; } },
+    planManager: manager,
+    taskRunJournal: journal,
+  });
   await agent.run("Complete both steps");
   assert.equal(calls, 3);
   assert.equal(gates.length, 1);
@@ -157,11 +159,14 @@ for (const mode of [false, true]) {
     const manager = new TaskPlanManager(undefined, mode);
     manager.update("Finish the request", [{ id: "one", title: "Wait for approval", status: "blocked", note: "User approval is required" }]);
     let calls = 0;
-    const agent = new Agent(
-      { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
-      { async complete() { calls++; return { text: "Waiting for approval.", toolCalls: [], raw: {} }; } },
-      createPlanTools(manager), async () => false, {}, undefined, undefined, manager,
-    );
+    const agent = new Agent({
+      config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
+      provider: { async complete() { calls++; return { text: "Waiting for approval.", toolCalls: [], raw: {} }; } },
+      tools: createPlanTools(manager),
+      approve: async () => false,
+      events: {},
+      planManager: manager,
+    });
     assert.equal(await agent.run("Handle the request"), "Waiting for approval.");
     assert.equal(calls, 1);
     assert.equal(agent.status().outcome, mode ? "completed" : "failed");
@@ -175,11 +180,14 @@ test("planning-only pending steps do not require executing the plan", async () =
   const manager = new TaskPlanManager(undefined, true);
   manager.update("Design the change", [{ id: "one", title: "Implement later", status: "pending" }]);
   let calls = 0;
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
-    { async complete() { calls++; return { text: "Here is the plan.", toolCalls: [], raw: {} }; } },
-    createPlanTools(manager), async () => false, {}, undefined, undefined, manager,
-  );
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
+    provider: { async complete() { calls++; return { text: "Here is the plan.", toolCalls: [], raw: {} }; } },
+    tools: createPlanTools(manager),
+    approve: async () => false,
+    events: {},
+    planManager: manager,
+  });
   await agent.run("Only make a plan");
   assert.equal(calls, 1);
   assert.equal(agent.status().outcome, "completed");
@@ -191,9 +199,9 @@ test("the plan reminder allows a completed update to finish successfully", async
   const manager = new TaskPlanManager();
   manager.update("Inspect", [{ id: "one", title: "Inspect the request", status: "in_progress" }]);
   let calls = 0;
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
-    { async complete(_system, messages) {
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
+    provider: { async complete(_system, messages) {
       calls++;
       if (calls === 2) {
         assert.match(messages.at(-1)?.content ?? "", /Plan gate/);
@@ -202,8 +210,12 @@ test("the plan reminder allows a completed update to finish successfully", async
         } }], raw: {} };
       }
       return { text: "Inspected.", toolCalls: [], raw: {} };
-    } }, createPlanTools(manager), async () => false, {}, undefined, undefined, manager,
-  );
+    } },
+    tools: createPlanTools(manager),
+    approve: async () => false,
+    events: {},
+    planManager: manager,
+  });
   await agent.run("Inspect the request");
   assert.equal(calls, 3);
   assert.equal(agent.status().outcome, "completed");
@@ -216,13 +228,14 @@ for (const stop of ["cancel", "turn-limit"] as const) {
     manager.update("Inspect", [{ id: "one", title: "Unfinished work", status: "pending" }]);
     let calls = 0;
     let completions = 0;
-    const agent = new Agent(
-      { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, ...(stop === "turn-limit" ? { maxTurns: 1 } : {}) },
-      { async complete() { calls++; return { text: "Done.", toolCalls: [], raw: {} }; } },
-      createPlanTools(manager), async () => false,
-      { onCompletionGate: () => { if (stop === "cancel") agent.cancel(); }, onTaskComplete: () => { completions++; } },
-      undefined, undefined, manager,
-    );
+    const agent = new Agent({
+      config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false, ...(stop === "turn-limit" ? { maxTurns: 1 } : {}) },
+      provider: { async complete() { calls++; return { text: "Done.", toolCalls: [], raw: {} }; } },
+      tools: createPlanTools(manager),
+      approve: async () => false,
+      events: { onCompletionGate: () => { if (stop === "cancel") agent.cancel(); }, onTaskComplete: () => { completions++; } },
+      planManager: manager,
+    });
     await assert.rejects(agent.run("Inspect"), stop === "cancel" ? /Task cancelled/ : /1-turn limit/);
     assert.equal(calls, 1);
     assert.equal(completions, 0);
@@ -241,16 +254,19 @@ test("passing verification cannot override an unfinished plan", async () => {
   ]);
   let calls = 0;
   let verified = false;
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
-    { async complete() {
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: false },
+    provider: { async complete() {
       if (++calls === 1) return { text: "Verifying.", toolCalls: [{ id: "verify", name: "verify_output", input: {
         path: "artifact.txt", required_substrings: ["verified artifact"],
       } }], raw: {} };
       return { text: "Done.", toolCalls: [], raw: {} };
-    } }, [...builtinTools, ...createPlanTools(manager)], async () => false,
-    { onTaskComplete: (summary) => { verified = summary.verified; } }, undefined, undefined, manager,
-  );
+    } },
+    tools: [...builtinTools, ...createPlanTools(manager)],
+    approve: async () => false,
+    events: { onTaskComplete: (summary) => { verified = summary.verified; } },
+    planManager: manager,
+  });
   await agent.run("Finish both outcomes");
   assert.equal(verified, true);
   assert.equal(calls, 3);

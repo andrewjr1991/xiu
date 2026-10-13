@@ -51,7 +51,13 @@ async function fixture(): Promise<string> {
 }
 
 function createAgent(cwd: string, provider: ScriptedProvider, events: AgentEvents = {}, maxTurns = 12): Agent {
-  return new Agent({ provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns, autoApprove: true, language: "en-US" }, provider, builtinTools, async () => true, events);
+  return new Agent({
+    config: { provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns, autoApprove: true, language: "en-US" },
+    provider,
+    tools: builtinTools,
+    approve: async () => true,
+    events,
+  });
 }
 
 const fix = () => action("replace_text", { path: "calc.mjs", old_text: "return a - b", new_text: "return a + b" });
@@ -289,16 +295,22 @@ test("P1 Chinese Agent streams only redacted draft previews and persists its fin
   const lifecycle: string[] = [];
   let livePreview = "";
   let ends = 0;
-  const agent = new Agent({ provider: "openai", providerId: "openai", model: "offline-test", apiKey: secret, cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
-    onDraftPreview: (text, receivedChars) => {
-      assert.ok(receivedChars > 0);
-      previews.push(text);
-      livePreview = text;
-      lifecycle.push("draft");
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "offline-test", apiKey: secret, cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" },
+    provider,
+    tools: builtinTools,
+    approve: async () => true,
+    events: {
+      onDraftPreview: (text, receivedChars) => {
+        assert.ok(receivedChars > 0);
+        previews.push(text);
+        livePreview = text;
+        lifecycle.push("draft");
+      },
+      onTextDelta: () => assert.fail("draft mode must not emit raw text chunks"),
+      onModelEnd: () => { ends++; livePreview = ""; lifecycle.push("end"); },
+      onText: (text) => { visible.push(text); lifecycle.push("final"); },
     },
-    onTextDelta: () => assert.fail("draft mode must not emit raw text chunks"),
-    onModelEnd: () => { ends++; livePreview = ""; lifecycle.push("end"); },
-    onText: (text) => { visible.push(text); lifecycle.push("final"); },
   });
   assert.equal(await agent.run("说明当前检查状态，不修改文件。"), finalText);
   assert.equal(streams, 1);
@@ -329,9 +341,15 @@ test("P1 a failed streaming request still ends the preview and never replays vis
       throw new Error("ECONNRESET after visible output");
     },
   };
-  const agent = new Agent({ provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" }, provider, builtinTools, async () => true, {
-    onDraftPreview: (value) => { livePreview = value; },
-    onModelEnd: () => { ended++; livePreview = ""; },
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "offline-test", cwd, maxTurns: 3, autoApprove: true, language: "zh-CN" },
+    provider,
+    tools: builtinTools,
+    approve: async () => true,
+    events: {
+      onDraftPreview: (value) => { livePreview = value; },
+      onModelEnd: () => { ended++; livePreview = ""; },
+    },
   });
   await assert.rejects(agent.run("回答项目问题。"), /ECONNRESET/);
   assert.equal(calls, 1);

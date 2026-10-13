@@ -240,19 +240,14 @@ test("agent recovery never replays the exact unknown side-effect operation", asy
       ? { text: "", toolCalls: [{ id: "call-1", name: "write_once", input }], raw: undefined }
       : { text: "Stopped after verifying the interrupted operation.", toolCalls: [], raw: undefined },
   };
-  const agent = new Agent(
-    { provider: "openai", providerId: "p", model: "m", cwd: item.workspace, autoApprove: true },
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "p", model: "m", cwd: item.workspace, autoApprove: true },
     provider,
-    [tool],
-    async () => true,
-    {},
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    next,
-  );
+    tools: [tool],
+    approve: async () => true,
+    events: {},
+    taskRunJournal: next,
+  });
   agent.setRecoverySource(interrupted);
   await agent.run(recoveryContinuation(interrupted));
   assert.equal(executions, 0);

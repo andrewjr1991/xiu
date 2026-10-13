@@ -17,7 +17,15 @@ test("an explicit blocking question pauses before plan gates and releases the jo
   let calls = 0;
   const plan = new TaskPlanManager({ goal: "build", steps: [{ id: "one", title: "choose", status: "in_progress" }], updatedAt: new Date().toISOString() });
   const provider: ModelProvider = { async complete() { calls++; return { text: "Need a decision.\nUSER_INPUT_REQUIRED: Which platform?", toolCalls: [], raw: {} }; } };
-  const agent = new Agent({ provider: "openai", providerId: "fixture", model: "fixture", cwd, language: "en-US", autoApprove: false }, provider, createPlanTools(plan), async () => false, {}, undefined, undefined, plan, undefined, undefined, journal);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fixture", model: "fixture", cwd, language: "en-US", autoApprove: false },
+    provider,
+    tools: createPlanTools(plan),
+    approve: async () => false,
+    events: {},
+    planManager: plan,
+    taskRunJournal: journal,
+  });
   await agent.run("Build a program");
   assert.equal(calls, 1); assert.equal(agent.status().outcome, "waiting_user");
   assert.equal((await journal.recent())[0]?.status, "waiting_user");
@@ -53,8 +61,14 @@ test("long-running stale plans receive a bounded freshness reminder without inve
     if (calls <= 7) return { text: "", raw: {}, toolCalls: [{ id: `read-${calls}`, name: "fixture_read", input: { number: calls } }] };
     return { text: "USER_INPUT_REQUIRED: Continue?", raw: {}, toolCalls: [] };
   } };
-  const agent = new Agent({ provider: "openai", providerId: "openai", model: "fixture", cwd, language: "en-US", autoApprove: false }, provider,
-    [...createPlanTools(plan), { name: "fixture_read", description: "read", risk: "read", inputSchema: {}, describe: () => "read", execute: async () => "observed" }], async () => false, {}, undefined, undefined, plan);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "fixture", cwd, language: "en-US", autoApprove: false },
+    provider,
+    tools: [...createPlanTools(plan), { name: "fixture_read", description: "read", risk: "read", inputSchema: {}, describe: () => "read", execute: async () => "observed" }],
+    approve: async () => false,
+    events: {},
+    planManager: plan,
+  });
   await agent.run("inspect"); assert.equal(freshness, true);
   assert.equal(plan.snapshot()?.steps[0]?.status, "in_progress");
 });

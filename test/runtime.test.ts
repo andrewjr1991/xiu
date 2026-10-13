@@ -371,13 +371,13 @@ test("Agent adapter runs a real Agent task through the shared runtime", async (t
     complete: async () => ({ text: "finished through runtime", toolCalls: [], raw: {} }),
   };
   const runtime = new XiuRuntime();
-  const agent = new Agent(
-    { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true },
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, autoApprove: true },
     provider,
-    [],
-    (request) => runtime.requestApproval(request),
-    runtime.agentEvents(),
-  );
+    tools: [],
+    approve: (request) => runtime.requestApproval(request),
+    events: runtime.agentEvents(),
+  });
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
   assert.equal(await runtime.createTask("answer once"), "finished through runtime");
   assert.equal(runtime.snapshot().task?.state, "completed");

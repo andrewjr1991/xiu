@@ -150,9 +150,14 @@ test("real shared Agent in desktop Plan mode blocks writes, processes and child 
     ] };
     return { text: "Planning deliverable complete", toolCalls: [], raw: {} };
   } };
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, maxTurns: 5, autoApprove: false, language: "en-US" }, provider,
-    [...builtinTools, ...createPlanTools(plan), { name: "spawn_agent", risk: "execute", description: "spawn child", inputSchema: { type: "object" }, describe: () => "child", async execute() { childExecutions++; return "unsafe"; } }],
-    async () => { approvals++; return true; }, runtime.agentEvents({ onToolEnd: (_name, output) => { outputs.push(output); } }), undefined, undefined, plan);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fake", model: "offline", cwd: workspace, maxTurns: 5, autoApprove: false, language: "en-US" },
+    provider,
+    tools: [...builtinTools, ...createPlanTools(plan), { name: "spawn_agent", risk: "execute", description: "spawn child", inputSchema: { type: "object" }, describe: () => "child", async execute() { childExecutions++; return "unsafe"; } }],
+    approve: async () => { approvals++; return true; },
+    events: runtime.agentEvents({ onToolEnd: (_name, output) => { outputs.push(output); } }),
+    planManager: plan,
+  });
   agent.setAccessMode("full");
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
   await runtime.setPlanMode(true);
@@ -180,7 +185,15 @@ test("desktop history continuation and recovery preserve the explicitly selected
   const provider: ModelProvider = { async complete() { return { text: "Plan complete", toolCalls: [], raw: {} }; } };
   const runtime = new XiuRuntime();
   const journal = new TaskRunJournal(workspace, journalRoot);
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, maxTurns: 3, autoApprove: false, language: "en-US" }, provider, [], async () => false, runtime.agentEvents(), undefined, undefined, plan, undefined, undefined, journal);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fake", model: "offline", cwd: workspace, maxTurns: 3, autoApprove: false, language: "en-US" },
+    provider,
+    tools: [],
+    approve: async () => false,
+    events: runtime.agentEvents(),
+    planManager: plan,
+    taskRunJournal: journal,
+  });
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
   const controller = new DesktopTaskController(() => {}, async () => ({ runtime, agent, journal, provider: { id: "fake", label: "Fake", model: "offline" } }));
   const connected = await controller.connect(workspace);
@@ -257,8 +270,14 @@ test("failed Plan-mode persistence never changes the selected policy and pending
   await fs.writeFile(file, `${JSON.stringify({ type: "task", task: "Old task", timestamp: new Date().toISOString() })}\n`);
   const restored = await loadSession(workspace, "old");
   const manager = new TaskPlanManager(undefined, true);
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
-    { async complete() { return { text: "done", toolCalls: [], raw: {} }; } }, [], async () => false, {}, undefined, undefined, manager);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
+    provider: { async complete() { return { text: "done", toolCalls: [], raw: {} }; } },
+    tools: [],
+    approve: async () => false,
+    events: {},
+    planManager: manager,
+  });
   agent.restoreSession(restored, { preservePlanMode: true });
   await fs.rename(file, `${file}.backup`);
   await fs.mkdir(file); // Deterministic append failure on every platform, without permission assumptions.
@@ -280,8 +299,14 @@ for (const failingRecord of ["stats", "diagnostics"]) {
     const { workspace, journalRoot } = await fixture(t);
     const manager = new TaskPlanManager(undefined, true);
     const runtime = new XiuRuntime();
-    const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
-      { async complete() { return { text: "Planning done", toolCalls: [], raw: {} }; } }, [], async () => false, runtime.agentEvents(), undefined, undefined, manager);
+    const agent = new Agent({
+      config: { provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
+      provider: { async complete() { return { text: "Planning done", toolCalls: [], raw: {} }; } },
+      tools: [],
+      approve: async () => false,
+      events: runtime.agentEvents(),
+      planManager: manager,
+    });
     runtime.attachDriver(new AgentRuntimeAdapter(agent));
     const controller = new DesktopTaskController(() => {}, async () => ({ runtime, agent,
       journal: new TaskRunJournal(workspace, journalRoot), provider: { id: "fake", label: "Fake", model: "offline" } }));
@@ -321,8 +346,14 @@ async function startedConversation(t: { after: (fn: () => Promise<unknown>) => v
   const manager = new TaskPlanManager();
   const runtime = new XiuRuntime();
   const journal = new TaskRunJournal(workspace, journalRoot);
-  const agent = new Agent({ provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
-    { async complete() { return { text: "Done", toolCalls: [], raw: {} }; } }, [], async () => false, runtime.agentEvents(), undefined, undefined, manager);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "fake", model: "offline", cwd: workspace, autoApprove: false, language: "en-US" },
+    provider: { async complete() { return { text: "Done", toolCalls: [], raw: {} }; } },
+    tools: [],
+    approve: async () => false,
+    events: runtime.agentEvents(),
+    planManager: manager,
+  });
   runtime.attachDriver(new AgentRuntimeAdapter(agent));
   const controller = new DesktopTaskController(() => {}, async () => ({ runtime, agent, journal, provider: { id: "fake", label: "Fake", model: "offline" } }));
   const connection = await controller.connect(workspace);

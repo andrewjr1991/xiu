@@ -46,7 +46,7 @@ import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnosticSummary } from "./diagnostics.js";
-import type { AgentTool, ModelProvider } from "./types.js";
+import type { AgentTool, ApprovalRequest, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
@@ -627,7 +627,7 @@ async function main(): Promise<void> {
     let approvalQueue = Promise.resolve();
     let activeApproval = Promise.resolve();
     const sessionApprovalScopes = new Set<string>();
-    const approveRequest = async (request: Parameters<ConstructorParameters<typeof Agent>[3]>[0]): Promise<boolean> => {
+    const approveRequest = async (request: ApprovalRequest): Promise<boolean> => {
       let release!: () => void;
       const previous = approvalQueue;
       approvalQueue = new Promise<void>((resolve) => { release = resolve; });
@@ -790,12 +790,12 @@ async function main(): Promise<void> {
         const childCheckpoint = new CheckpointManager(context.cwd);
         const candidateTools = [...builtinTools, ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)];
         const childTools = selectSubagentTools(candidateTools, task.mode);
-        const childAgent = new Agent(
-          childConfig,
-          createProvider(childConfig),
-          childTools,
-          approveRequest,
-          {
+        const childAgent = new Agent({
+          config: childConfig,
+          provider: createProvider(childConfig),
+          tools: childTools,
+          approve: approveRequest,
+          events: {
             onModelStart: (turn) => context.reportProgress(localize(language, `思考中 - 第 ${turn} 轮`, `Thinking - turn ${turn}`)),
             onToolStart: (name, description) => context.reportProgress(`${name}: ${localizeToolDescription(name, description, language)}`),
             onToolProgress: (name, message) => context.reportProgress(`${name}: ${localizeToolProgress(message, language)}`),
@@ -805,12 +805,11 @@ async function main(): Promise<void> {
               `Provider 故障转移：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`,
               `Provider failover: ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`)),
           },
-          undefined,
-          childIndex,
-          childPlan,
-          childCheckpoint,
+          projectIndex: childIndex,
+          planManager: childPlan,
+          checkpointManager: childCheckpoint,
           skillRegistry,
-        );
+        });
         childAgent.setFailoverController({
           resolve: async (request) => {
             const resolution = await resolveProviderFailover(request, () => childTools);
@@ -914,12 +913,12 @@ async function main(): Promise<void> {
       sanitize: redactTerminalOutput,
       approvalHandler: approveRequest,
     });
-    const agent = new Agent(
+    const agent = new Agent({
       config,
       provider,
       tools,
-      (request) => xiuRuntime.requestApproval(request),
-      xiuRuntime.agentEvents({
+      approve: (request) => xiuRuntime.requestApproval(request),
+      events: xiuRuntime.agentEvents({
         onModelStart: (turn) => {
           runningTaskView?.clearDraftPreview();
           runningTaskView?.setTurn(turn, config.maxTurns);
@@ -1100,7 +1099,7 @@ async function main(): Promise<void> {
       checkpointManager,
       skillRegistry,
       taskRunJournal,
-    );
+    });
     xiuRuntime.attachDriver(new AgentRuntimeAdapter(agent));
     const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
     const rebuildBaseTools = (): void => { baseTools = buildBaseTools(); };

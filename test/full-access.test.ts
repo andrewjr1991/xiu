@@ -150,11 +150,19 @@ test("real Agent writes externally without workspace checkpoint/Diff; Plan still
       return { text: "Done", toolCalls: [], raw: {} };
     } };
     const checkpoints = new CheckpointManager(cwd);
-    const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {
-      onToolEnd: (_name, result) => { outputs.push(result); },
-      onWorkspaceChange: (change) => { changes.push(...change.paths); },
-      onToolProgress: (_name, message) => { notices.push(message); },
-    }, undefined, undefined, new TaskPlanManager(undefined, planMode), checkpoints);
+    const agent = new Agent({
+      config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false },
+      provider,
+      tools: builtinTools,
+      approve: async () => true,
+      events: {
+        onToolEnd: (_name, result) => { outputs.push(result); },
+        onWorkspaceChange: (change) => { changes.push(...change.paths); },
+        onToolProgress: (_name, message) => { notices.push(message); },
+      },
+      planManager: new TaskPlanManager(undefined, planMode),
+      checkpointManager: checkpoints,
+    });
     agent.setAccessMode("full");
     await agent.run("Diagnose local software");
     if (planMode) assert.ok(outputs.some((value) => value.includes("plan mode is read-only")));
@@ -179,7 +187,14 @@ test("full access preserves workspace checkpoints and refreshes its prompt after
     return { text: "Done", toolCalls: [], raw: {} };
   } };
   const checkpoints = new CheckpointManager(cwd);
-  const agent = new Agent({ provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false }, provider, builtinTools, async () => true, {}, undefined, undefined, undefined, checkpoints);
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: false },
+    provider,
+    tools: builtinTools,
+    approve: async () => true,
+    events: {},
+    checkpointManager: checkpoints,
+  });
   agent.setAccessMode("full");
   await agent.run("Write inside workspace");
   const saved = await checkpoints.list();
