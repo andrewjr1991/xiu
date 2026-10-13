@@ -1586,13 +1586,31 @@ v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默�
 /web proxy
 /web proxy set http://127.0.0.1:12334
 /web proxy clear
+/web configure free-search
 /web configure tavily
 /web configure brave
 /web configure searxng
 /web disable
 ```
 
-### Tavily（推荐先试）
+### 本机免 Key 搜索：free-search（默认）
+
+新安装默认使用本机运行的开源项目 [free-search-mcp](https://github.com/sweetcornna/free-search-mcp)（MIT）。它同时查询 DuckDuckGo、Bing、AnySearch、Mojeek 等引擎，按名次融合去重；遇到版本号、CVE、天气、汇率这类问题，还会直接从对应的官方数据源取记录。不需要申请任何 API Key，搜索请求从你自己的网络发出。
+
+前提是安装 [uv](https://docs.astral.sh/uv/)（Windows 可用 `winget install astral-sh.uv`，macOS/Linux 可用 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。第一次搜索会下载 Python 依赖，可能需要几十秒；执行 `/web doctor` 可以提前下载并测试一次。
+
+安全边界：
+
+- Xiu 固定使用 free-search-mcp `0.13.1`，所有依赖都锁定到确切版本（0.13.1 未锁定的 `selectolax` 在 1.x 下无法启动）。
+- 只开放它的 `search` 工具；抓取、下载、research 等工具不注册，登录类引擎和智能体后端保持关闭。
+- 它在 `~/.xiu/free-search/` 下运行，使用独立的配置和缓存目录，不读取你自己为 free-search 准备的 `.env` 或项目目录里的 `.env`；Xiu 的模型 Key 等环境变量不会传给它。
+- 打开网页仍由 Xiu 的 `web_open` 完成，HTTPS、内网拦截、重定向复核、域名策略和来源核验规则都不变；`/web proxy` 设置的联网代理同样用于 free-search。
+
+没有安装 uv、启动失败或本机搜索没有可用结果时，`web_search` 会自动改用 Xiu 托管搜索，并在结果里注明使用了回退。国内网络下 DuckDuckGo 等引擎可能无法访问，主要依赖 Bing 和 360 搜索；结果偏少时可以配置 `/web proxy set`。
+
+旧版本保存的「Xiu 托管搜索」预置会在升级后自动切换到 free-search（仍以托管搜索作回退）；之后明确选择的配置会被保留。只想用托管搜索时，在桌面「工具与运行设置 → 联网检索」选择「Xiu 托管搜索 · 自动认证」。
+
+### Tavily
 
 Tavily 面向 AI 检索，免费计划目前每月提供 1,000 credits，注册无需信用卡。到 Tavily 控制台创建 Key 后，先在当前 PowerShell 会话设置：
 
@@ -1679,7 +1697,7 @@ Invoke-RestMethod 'https://search.example.com/search?q=xiu&format=json' -Headers
 
 1. 用户通过 `/web configure` 保存的配置优先于内测预置。
 2. `/web disable` 会保存明确的停用状态，后续启动不会被环境变量重新启用。
-3. 删除用户配置后，下一次加载会恢复内测托管搜索；旧版保存的 `XIU_BETA_SEARXNG_TOKEN` 引用会自动迁移。
+3. 删除用户配置后，下一次加载会恢复默认的本机 free-search，并以托管搜索作回退；旧版保存的 `XIU_BETA_SEARXNG_TOKEN` 引用会自动迁移。
 4. 为兼容已设置旧环境变量的内测设备，变量存在时仍可继续使用；删除后会自动切换到设备认证。
 5. Xiu 不把设备秘密或短期 Token 写入 `~/.xiu/settings.json`、会话、诊断或日志。
 

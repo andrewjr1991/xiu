@@ -23,7 +23,7 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
     const next = await window.xiuDesktop.managementSnapshot(); setData(next);
     setEndpoint(next.web.endpoint ?? ""); setProvider(next.web.provider ?? "searxng"); setEnabled(next.web.enabled);
     setKeyEnv(next.web.apiKeyEnv ?? "");
-    setWebMode(next.web.managed ? "managed" : "custom");
+    setWebMode(next.web.local ? "local" : next.web.managed ? "managed" : "custom");
   };
   const perform = async (action: () => Promise<unknown>, failureMessage?: string) => {
     setBusy(true); setError("");
@@ -53,14 +53,14 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
     {error && <p role="alert" className="error-banner">{error}</p>}
     {tab === "web" && <><p>Agent 使用只读检索和来源证据门禁；网页标签仍与任务隔离。</p>
       <label><input type="checkbox" disabled={unavailable} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用只读联网工具</label>
-      <label>认证方式<Select aria-label="检索认证方式" disabled={unavailable} value={webMode} onChange={(event) => setWebMode(event.target.value)}><option value="managed">Xiu 托管搜索 · 自动认证</option><option value="custom">自定义服务 · 环境变量密钥</option></Select></label>
-      {webMode === "managed" ? <p className="provider-warning">使用 https://search.jingran.vip。首次检索时自动注册设备并获取短期 Token，后续按需续期；与 CLI 共用设备凭据，无需填写密钥。保存配置不会发起注册或测试请求。</p> : <>
+      <label>认证方式<Select aria-label="检索认证方式" disabled={unavailable} value={webMode} onChange={(event) => setWebMode(event.target.value)}><option value="local">本机免 Key 搜索 · free-search</option><option value="managed">Xiu 托管搜索 · 自动认证</option><option value="custom">自定义服务 · 环境变量密钥</option></Select></label>
+      {webMode === "local" ? <p className="provider-warning">在本机运行开源的 free-search-mcp（固定版本），同时查询 DuckDuckGo、Bing 等多个引擎，无需密钥，搜索请求从本机发出。需要先安装 uv，首次检索会下载依赖；uv 不可用或没有结果时自动回退 Xiu 托管搜索。打开网页仍由 Xiu 的安全抓取处理。</p> : webMode === "managed" ? <p className="provider-warning">使用 https://search.jingran.vip。首次检索时自动注册设备并获取短期 Token，后续按需续期；与 CLI 共用设备凭据，无需填写密钥。保存配置不会发起注册或测试请求。</p> : <>
       <label>服务<Select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="searxng">SearXNG</option><option value="brave">Brave</option><option value="tavily">Tavily</option></Select></label>
       <label>HTTPS 服务地址<input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>
       <label>密钥环境变量名（不要填写密钥）<input value={keyEnv} onChange={(event) => setKeyEnv(event.target.value)} /></label>
       <p>使用 Xiu 官方搜索遇到 401？请选择上方「Xiu 托管搜索 · 自动认证」，不要手动填写短期 Token。</p></>}
       <p>保留已有域名限制、超时和代理；不会自动发送测试请求。</p>
-      <button disabled={unavailable} onClick={() => save({ action: "web", revision: data!.revision, enabled, mode: webMode as "managed" | "custom", provider: webMode === "managed" ? "searxng" : provider as "searxng" | "brave" | "tavily", endpoint: webMode === "managed" ? "https://search.jingran.vip" : endpoint, ...(webMode === "custom" && keyEnv ? { apiKeyEnv: keyEnv } : {}) })}>保存检索配置</button></>}
+      <button disabled={unavailable} onClick={() => save({ action: "web", revision: data!.revision, enabled, mode: webMode as "local" | "managed" | "custom", provider: webMode === "local" ? "free-search" : webMode === "managed" ? "searxng" : provider as "searxng" | "brave" | "tavily", endpoint: webMode === "custom" ? endpoint : "https://search.jingran.vip", ...(webMode === "custom" && keyEnv ? { apiKeyEnv: keyEnv } : {}) })}>保存检索配置</button></>}
     {tab === "routing" && data && <><p>故障转移不重放工具或未知副作用。</p><label><input type="checkbox" disabled={unavailable} checked={data.routing.enabled} onChange={(event) => save({ action: "routing", revision: data.revision, enabled: event.target.checked })} />启用分阶段路由</label>
       {([["planning", "分析与规划"], ["implementation", "实现"], ["verification", "验证"]] as const).map(([phase, label]) => <label key={phase}>{label}<Select disabled={unavailable} value={data.routing.phases[phase] ?? ""} onChange={(event) => save({ action: "stage", revision: data.revision, phase, providerId: event.target.value || undefined })}><option value="">任务默认渠道</option>{data.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>)}
       <h3>备用渠道顺序</h3><Select aria-label="主渠道" value={primary} onChange={(event) => { setPrimary(event.target.value); setChain(data.providers.find((item) => item.id === event.target.value)?.fallback ?? []); }}><option value="">选择主渠道</option>{data.providers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select>

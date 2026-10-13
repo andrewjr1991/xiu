@@ -104,6 +104,8 @@ Provider 配置和常用命令见[快速上手](./QUICKSTART.md)。
 
 对于时效性任务，搜索摘要只用于发现。最终引用必须成功打开；证据不足时 Xiu 会失败，而不是让模型凭记忆补齐当前事实。
 
+搜索不需要 API Key。装了 [uv](https://docs.astral.sh/uv/) 时，Xiu 会在本机运行开源的 [free-search-mcp](https://github.com/sweetcornna/free-search-mcp)，使用固定版本同时查询多个引擎，只开放它的只读搜索工具。没有 uv 或本机搜索没有结果时，回退到 Xiu 托管搜索。打开网页始终由 Xiu 自己的 HTTPS 安全抓取完成。详见 [USAGE.zh-CN.md](./USAGE.zh-CN.md) 的 `/web`。
+
 ### 本地优先的记录
 
 Xiu 默认不上传项目代码、会话、审计或诊断数据。模型调用以及用户明确配置的 Web/MCP 服务仍会连接相应端点。更新提醒默认关闭；除非用户主动开启，普通启动不会执行更新检查。

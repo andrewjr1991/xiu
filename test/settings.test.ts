@@ -7,7 +7,7 @@ import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT
 
 const managedBetaSearch = {
   enabled: true,
-  provider: "searxng" as const,
+  provider: "free-search" as const,
   baseURL: XIU_BETA_SEARXNG_ENDPOINT,
   managedAuth: "xiu-device" as const,
   authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT,
@@ -166,5 +166,29 @@ test("update notifications are opt-in and persist only when enabled", async () =
   await store.save({ update: { notifications: false } });
   assert.equal((await store.load()).update, undefined);
   assert.doesNotMatch(await fs.readFile(filename, "utf8"), /notifications/);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("a managed preset saved before local-first search moves to free-search once, then explicit choices stick", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-settings-local-first-"));
+  const filename = path.join(directory, "settings.json");
+  const preset = { ...managedBetaSearch, provider: "searxng" as const, baseURL: `${XIU_BETA_SEARXNG_ENDPOINT}/`, proxy: "http://127.0.0.1:12334/" };
+  await fs.writeFile(filename, JSON.stringify({ language: "zh-CN", webSearch: preset }));
+  const store = new SettingsStore(filename, {});
+  assert.deepEqual((await store.load()).webSearch, { ...preset, provider: "free-search" });
+
+  // Choosing the managed service again is saved with the new schema and is not migrated.
+  await store.save({ language: "zh-CN", webSearch: preset });
+  assert.match(await fs.readFile(filename, "utf8"), /"webSearchSchema": 2/);
+  assert.deepEqual((await store.load()).webSearch, preset);
+  await fs.rm(directory, { recursive: true, force: true });
+});
+
+test("custom search services are never moved to local-first search", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-settings-custom-search-"));
+  const filename = path.join(directory, "settings.json");
+  const custom = { enabled: true, provider: "searxng", baseURL: "https://search.example.com/" };
+  await fs.writeFile(filename, JSON.stringify({ webSearch: custom }));
+  assert.deepEqual((await new SettingsStore(filename, {}).load()).webSearch, custom);
   await fs.rm(directory, { recursive: true, force: true });
 });
