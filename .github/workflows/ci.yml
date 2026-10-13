@@ -105,7 +105,7 @@ jobs:
           XIU_CI_STEPS: ${{ toJSON(steps) }}
       - name: Upload CLI candidate and verification record
         if: ${{ always() && steps.report.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.report.outputs.artifact_name }}
           path: ${{ steps.report.outputs.directory }}/*
@@ -193,7 +193,7 @@ jobs:
       - name: Preserve successful synthetic UI screenshots
         id: ui_evidence_upload
         if: ${{ !cancelled() && steps.ui.outcome == 'success' && steps.ui_evidence.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: xiu-ui-screenshots-${{ steps.ui_evidence.outputs.version }}-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
           # Exact fixture outputs only: never upload the temporary profile or configuration.
@@ -252,7 +252,7 @@ jobs:
       - name: Preserve synthetic UI failure diagnostics
         id: ui_diagnostics
         if: ${{ always() && steps.ui.outcome == 'failure' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: xiu-ui-diagnostics-${{ matrix.platform }}-${{ github.sha }}-attempt${{ github.run_attempt }}
           path: .desktop-build-temp/ui-smoke-failure.*
@@ -267,7 +267,7 @@ jobs:
           XIU_CI_STEPS: ${{ toJSON(steps) }}
       - name: Upload desktop candidate and verification record
         if: ${{ always() && steps.report.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.report.outputs.artifact_name }}
           path: ${{ steps.report.outputs.directory }}/*
