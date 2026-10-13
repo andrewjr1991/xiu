@@ -1,5 +1,7 @@
 # Changelog
 
+Local unpublished Computer Use hardening: a merged Full Access grant now covers one 20-minute / 100-input automatic allowance per parent task; re-selecting a window continues that allowance, and once it is spent or expired the user must confirm again. Renderer-originated inputs always require per-step confirmation in automatic mode. Update the prompt test for the plan-freshness rule.
+
 Local unpublished settings update: embed channel/model management directly in Settings, retaining existing trust, writer and approval guards. The chat picker selects existing models only, with no editing, credential or probe controls. Settings model selection stays inline; leaving management clears unsaved credential input and cancels visual probing.
 
 Local unpublished batch visual probing: test all visual candidates in the current saved channel with one explicit potentially billable confirmation, serial bounded requests, progress, per-model outcomes and cancellation of remaining calls. No cross-channel expansion, automatic retries or model switching.

@@ -9,6 +9,7 @@ import type { ComputerElement, ComputerInput, ComputerWindow } from "../shared/c
 import { WindowsComputer } from "./windows-computer.js";
 import { confirmComputerAction } from "./full-access-dialog.js";
 import { ComputerStatusWindow } from "./computer-status-window.js";
+import { AUTOMATIC_INPUT_LIMIT, MANUAL_DURATION_MS, MANUAL_INPUT_LIMIT, inputNeedsConfirmation, mayReuseMergedGrant, nextTaskBudget, type ComputerTaskBudget } from "./computer-use-policy.js";
 
 const assetTypes: Record<string, string> = { ".html": "text/html", ".htm": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg" };
 const CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -32,6 +33,8 @@ export class ComputerUseController {
   private opening = false;
   private openingWorkspace?: string;
   private mergedGrant?: { workspace: string; provider: string };
+  // Survives stop() so re-selecting a window cannot reset the automatic allowance.
+  private taskBudget?: ComputerTaskBudget;
   private readonly indicator: ComputerStatusWindow;
   private paused = false;
   constructor(private readonly owner: BrowserWindow, native?: WindowsComputer, stop?: () => void) { this.native = native ?? new WindowsComputer(); this.indicator = new ComputerStatusWindow(stop ?? (() => this.stop()), () => this.togglePause()); }
@@ -47,7 +50,7 @@ export class ComputerUseController {
   feedbackFinished(): void { this.phase("等待下一步"); }
   get hasBoundTask(): boolean { return this.boundTask !== undefined; }
   taskStarted(id: string): void { if (this.selected && !this.boundTask) this.boundTask = id; else this.stop(); this.activeTask = id; }
-  taskFinished(): void { this.stop(); this.activeTask = undefined; }
+  taskFinished(): void { this.stop(); this.activeTask = undefined; this.taskBudget = undefined; }
   selectedStatus(): string {
     if (!this.selected) return "No authorized window. Use computer_windows to discover the requested application, then computer_select to request explicit target and screenshot consent. Never ask the user for coordinates.";
     const target = this.activeTarget(); return `Authorized target: ${target.app} · ${target.title}. Mode: ${this.automaticProvider ? "automatic within confirmed Full Access task scope" : "step-by-step confirmation"}. Steps: ${this.inputs}. Authorization expires in ${Math.max(0,Math.floor((this.expires-Date.now())/1000))}s. No other window is authorized.`;
@@ -63,16 +66,20 @@ export class ComputerUseController {
     if (!picked || !this.activeTask) throw new Error("请先发现当前窗口；只能为正在运行的父任务请求授权。");
     const task = this.activeTask, generation = this.generation;
     const automatic = fullAccess;
-    const merged = automatic && this.mergedGrant?.workspace === workspace && this.mergedGrant.provider === provider;
+    const grantMatches = this.mergedGrant?.workspace === workspace && this.mergedGrant.provider === provider;
+    const merged = mayReuseMergedGrant({ automatic, grantMatches, budget: this.taskBudget, task, now: Date.now() });
     const accepted = merged || await confirmComputerAction(this.owner, automatic ? "允许 Xiu 自动操作此窗口？" : "授权此任务的目标窗口", `${picked.app} · ${picked.title}\n视觉渠道/模型与发送目的地：${provider}\n${automatic ? "在你已确认的完全访问模式下，允许本任务连续截图并发送上述渠道、点击、普通文本输入和滚动，不再逐步弹窗。可能改变应用数据，不能保证撤销。" : "截图发送和每步输入仍分别确认。要连续自动操作，请在任务开始前由用户开启完全访问权限。"}\n仅此窗口，不是整个桌面。请关闭密码、聊天、付款及其他敏感内容。不支持密码、支付、删除、发布、安装或系统设置流程；发现这些步骤必须停止交给用户。\n${automatic ? "20 分钟或 100 步" : "10 分钟或 30 步"}到期、目标变化、任务结束或停止即撤销，不能从历史恢复。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
     if (!accepted || signal?.aborted || generation !== this.generation || this.activeTask !== task) throw new Error("窗口授权已取消或任务变化。");
     const current = (await this.native.list()).find(window => window.handle === picked.handle && window.pid === picked.pid && window.started === picked.started && window.title === picked.title);
     if (!current || !this.allowed(current) || generation !== this.generation || signal?.aborted) throw new Error("窗口已变化，请重新发现。");
     this.stop(); this.activeTask = task; this.boundTask = task; this.root = workspace; this.selected = current;
     this.automaticProvider = automatic ? provider : undefined;
-    const duration = automatic ? 20 * 60_000 : 10 * 60_000;
-    this.expires = Date.now() + duration; this.expiryTimer = setTimeout(() => this.stop(), duration); this.expiryTimer.unref();
-    this.value = { state: "observing", target: current, mode: automatic ? "automatic" : "manual", steps: 0, expiresAt: new Date(this.expires).toISOString(), activity: [] };
+    if (automatic) {
+      this.taskBudget = nextTaskBudget(this.taskBudget, task, Date.now(), !merged);
+      this.expires = this.taskBudget.deadline; this.inputs = this.taskBudget.inputs;
+    } else this.expires = Date.now() + MANUAL_DURATION_MS;
+    this.expiryTimer = setTimeout(() => this.stop(), Math.max(0, this.expires - Date.now())); this.expiryTimer.unref();
+    this.value = { state: "observing", target: current, mode: automatic ? "automatic" : "manual", steps: this.inputs, expiresAt: new Date(this.expires).toISOString(), activity: [] };
     await this.activate(signal);
     this.phase("等待观察");
     return this.selectedStatus();
@@ -119,12 +126,14 @@ export class ComputerUseController {
     this.value.target = { ...this.selected };
     return { ...this.value };
   }
-  async input(workspace: string, input: ComputerInput, signal?: AbortSignal): Promise<string> {
+  async input(workspace: string, input: ComputerInput, signal?: AbortSignal, origin: "model" | "renderer" = "model"): Promise<string> {
     await this.waitForResume(signal);
     this.retainWorkspace(workspace); const target = this.activeTarget(), generation = this.generation;
     if (!input || !["click", "scroll", "type", "key"].includes(input.kind) || input.frameId !== this.value.frameId || !this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图已失效，请重新观察后操作。");
-    const limit = this.automaticProvider ? 100 : 30;
+    const limit = this.automaticProvider ? AUTOMATIC_INPUT_LIMIT : MANUAL_INPUT_LIMIT;
     if (++this.inputs > limit) { this.stop(); throw new Error(`本次窗口授权已达 ${limit} 步，请重新授权。`); }
+    const budget = this.taskBudget;
+    if (this.automaticProvider && budget && budget.task === this.boundTask) budget.inputs = this.inputs;
     if (input.elementId !== undefined) {
       if (input.kind !== "click") throw new Error("控件定位只用于点击；输入前先点击并观察焦点。");
       const element = this.value.elements?.find(element => element.id === input.elementId);
@@ -136,10 +145,11 @@ export class ComputerUseController {
     if (input.kind === "type" && (typeof input.text !== "string" || !input.text || input.text.length > 500 || /[\x00-\x1f\x7f]/.test(input.text))) throw new Error("仅允许 1–500 字普通文本，不允许控制字符。");
     if (input.kind === "key" && !["Enter", "Tab", "Escape", "Backspace", "Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Shift+Home", "Shift+End"].includes(input.key ?? "")) throw new Error("不支持系统快捷键。");
     const detail = input.kind === "type" ? `输入文本：${input.text}` : input.kind === "key" ? `按键：${input.key}` : `${input.kind === "click" ? "左键单击" : `滚动 ${input.delta}`}：(${input.x}, ${input.y})`;
-    const accepted = Boolean(this.automaticProvider) || await confirmComputerAction(this.owner, "确认此步窗口操作", `${target.app} · ${target.title}\n${detail}\n请确认该操作不涉及密码、支付、删除、发布或系统设置。输入和点击可能不可撤销；只执行一次。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
+    const confirm = inputNeedsConfirmation({ automatic: Boolean(this.automaticProvider), origin });
+    const accepted = !confirm || await confirmComputerAction(this.owner, "确认此步窗口操作", `${target.app} · ${target.title}\n${detail}\n请确认该操作不涉及密码、支付、删除、发布或系统设置。输入和点击可能不可撤销；只执行一次。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
     if (!accepted || signal?.aborted || generation !== this.generation) throw new Error("窗口操作已取消。");
     // Complete modal teardown before spawning the input helper from the foreground owner.
-    if (!this.automaticProvider) { this.owner.focus(); await new Promise(resolve => setTimeout(resolve, 150)); }
+    if (confirm) { this.owner.focus(); await new Promise(resolve => setTimeout(resolve, 150)); }
     const windows = await this.native.list();
     this.activeTarget();
     if (input.frameId !== this.value.frameId || !this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图在确认期间已失效，请重新观察。");
@@ -188,11 +198,11 @@ export class ComputerUseController {
       if (!accepted || generation !== this.generation) return { ...this.value };
       const current = (await this.native.list()).find(window => window.handle === picked.handle && window.pid === picked.pid && window.started === picked.started && window.title === picked.title);
       if (!current || !this.allowed(current) || generation !== this.generation) throw new Error("窗口已变化，请重新选择。");
-      this.stop(); this.root = workspace; this.selected = current; this.expires = Date.now() + 10 * 60_000;
-      this.expiryTimer = setTimeout(() => this.stop(), 10 * 60_000); this.expiryTimer.unref();
+      this.stop(); this.root = workspace; this.selected = current; this.expires = Date.now() + MANUAL_DURATION_MS;
+      this.expiryTimer = setTimeout(() => this.stop(), MANUAL_DURATION_MS); this.expiryTimer.unref();
       this.value = { state: "observing", target: current }; await this.activate(); this.phase("等待观察"); return { ...this.value };
     }
-    if (request.action === "input") { await this.input(workspace, request.input); return { ...this.value }; }
+    if (request.action === "input") { await this.input(workspace, request.input, undefined, "renderer"); return { ...this.value }; }
     if (request.action === "capture" && this.selected) return this.captureExternal();
     if (request?.action === "capture") {
       const target = this.target, generation = this.generation;
