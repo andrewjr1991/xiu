@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.8 — 2026-10-13
+
+Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) from main `d36c488fc5706277562d3018a23907761440d124`; all nine exact-source CI jobs passed. Windows CLI: 1117 tests, 1109 passed, 8 skipped, no failures. Windows Computer Use preview, subagent tool details, waiting answers, inline channel management and individual/batch visual probes; command-chain approval/Plan hardening, task-bound computer allowances, process liveness fixes and MCP 2.3.1. Original CI assets and digests retained; Windows unsigned, paid-provider/enterprise validation pending. npm publication is a separate maintainer step. Older unpublished notes below describe development history.
+
 Local unpublished Computer Use hardening: a merged Full Access grant now covers one 20-minute / 100-input automatic allowance per parent task; re-selecting a window continues that allowance, and once it is spent or expired the user must confirm again. Renderer-originated inputs always require per-step confirmation in automatic mode. Update the prompt test for the plan-freshness rule.
 
 Local unpublished settings update: embed channel/model management directly in Settings, retaining existing trust, writer and approval guards. The chat picker selects existing models only, with no editing, credential or probe controls. Settings model selection stays inline; leaving management clears unsaved credential input and cancels visual probing.

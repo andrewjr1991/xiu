@@ -1,4 +1,8 @@
-Unpublished 0.20.8 local candidate: the vision picker supports unknown chat-model candidates, manual IDs, individual visual tests and testing all visual candidates in the current saved channel. A single batch confirmation lists destinations, model count and potential billing; serial requests show individual results and progress, with cancellation and no automatic retries. Synthetic images only; results are per-test, not permanent capability guarantees. No real paid-provider validation has been run. See the usage guide for details.
+# Xiu 0.20.8
+
+Released on [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) from main `d36c488fc5706277562d3018a23907761440d124`, with all nine exact-source CI jobs passed. Windows Computer Use remains a foreground, target-scoped preview; the installer is unsigned. npm publication is separate and was not performed. See the publishing guide for the original CI tarball and commands. Older local-candidate notes below are development history.
+
+0.20.8 visual testing: the vision picker supports unknown chat-model candidates, manual IDs, individual visual tests and testing all visual candidates in the current saved channel. A single batch confirmation lists destinations, model count and potential billing; serial requests show individual results and progress, with cancellation and no automatic retries. Synthetic images only; results are per-test, not permanent capability guarantees. No real paid-provider validation has been run. See the usage guide for details.
 
 Local unpublished settings update: manage channels, credentials and model capabilities directly in Settings → Models and channels. The chat model picker only selects existing models; add/edit/delete, discovery and tests are available in Settings. Trusted idle workspace and existing approval/Plan guards still apply.
 

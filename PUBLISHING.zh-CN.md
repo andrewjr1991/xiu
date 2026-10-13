@@ -1,4 +1,27 @@
-## 0.20.8 模型设置内嵌（2026-10-12，未发布）
+## 0.20.8 正式发布记录（2026-10-13）
+
+[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 已公开，标签与五份附件精确源提交为 `d36c488fc5706277562d3018a23907761440d124`。[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业通过（CLI/桌面三平台、Node 22/24、生产依赖审计）；Windows CLI 全量 1117 项中 1109 通过、8 跳过、0 失败。发布直接使用同一 main 的原始 CI tarball、未签名 NSIS、两份 manifest 和 SHA256SUMS；上传后大小与摘要逐项回读通过，不重新打包或替换正式资产。
+
+- CLI：`apps/desktop/release/xiu-ai-cli-0.20.8-d36c488fc5706277562d3018a23907761440d124.tgz`，885080 字节，SHA256 `6b893736e00de7cabf0ae272409115f0bc4cfa0b319c46765002fe9becb32ff7`。
+- Windows：`apps/desktop/release/Xiu-0.20.8-x64-d36c488fc5706277562d3018a23907761440d124-unsigned.exe`，128933423 字节，SHA256 `4d99d9a904556d00792e8118bad0b81cbd45528c00e2e5122a7c9ebb191997a3`，`NotSigned`。
+- tarball integrity：`sha512-yNyXQCyMj4oesyK30cdNAs3EPz8pPTYEpobVsVLtUfbFHs9Ut9ag7RhjvaQ36+RxHCC5gtKnoHddwD0E3znxxw==`。
+
+本地同步 main 后按锁定依赖重建：两端类型/构建、文档、376 文件 npm 包清单、CLI 隔离安装、86 项相关回归（85 通过、1 Linux 专用跳过）和深浅宽窄设置/视觉界面通过；本地 NSIS 的 10 项 dist 一致性与原生启动通过。标准 `win-unpacked` 与 `Xiu-0.20.8-x64.exe` 是本地重建物，不冒充上述原始 CI 资产。本地对正式 CI 安装器的五项隔离安装/启动/升级/中断重启/卸载也通过；退出时出现已销毁窗口的 `desktop:snapshot` 日志，非致命且未隐瞒。构建期弃用/HTTP-cache 开发依赖告警和大块提示保留，真实付费渠道及外部设备验收仍独立待办。
+
+npm 未发布：本轮官方 Registry 明确返回 0.20.8 E404，latest 仍为 0.20.4。维护者执行以下命令，只有版本查询明确返回 E404 时才继续 publish；其他网络/认证错误不能视为版本不存在。禁止覆盖已发布版本，不重新 npm pack：
+
+```powershell
+Set-Location 'D:\QoderWork Project\AGENT'
+npm.cmd login --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.8 version --registry=https://registry.npmjs.org/
+npm.cmd publish 'apps/desktop/release/xiu-ai-cli-0.20.8-d36c488fc5706277562d3018a23907761440d124.tgz' --access public --tag latest --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.8 version dist.integrity --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org/
+```
+
+发布后核对 version/latest 均为 0.20.8，integrity 与上文相同。下面为开发过程/旧包记录；发布补记仅文档提交采用 `[skip ci]`，不修改正式标签/资产，也不绕过该源提交已通过的九项检查。
+
+## 0.20.8 模型设置内嵌（历史本地候选）
 
 最终交付补记：签名状态 `NotSigned`；隔离全新安装、安装物启动、覆盖升级、中断重启及卸载五项生命周期全部通过。首次安装检查因 shell 默认临时路径中文编码损坏而未启动，指定标准 `D:\XiuTemp` 后重跑通过，未更改生产行为。文档与 Diff 空白检查通过。
 
