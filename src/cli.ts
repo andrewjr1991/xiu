@@ -45,7 +45,7 @@ import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
-import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "./diagnostics.js";
+import { formatTaskDiagnosticSummary } from "./diagnostics.js";
 import type { AgentTool, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
@@ -63,7 +63,8 @@ import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
 import { handleReportCommand } from "./commands/report-commands.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
-import { handleWebCommand, printWebSearchStatus } from "./commands/web-commands.js";
+import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
+import { handleWebCommand } from "./commands/web-commands.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -1606,92 +1607,7 @@ async function main(): Promise<void> {
             console.log(chalk.yellow(localize(language, "退出前正在取消当前任务。\n", "Cancelling current task before exit.\n")));
             break;
           }
-          if (followUp === "/queue") {
-            const pending = queue.list();
-            console.log(pending.length
-              ? `${chalk.cyan(localize(language, "排队任务", "Queued follow-ups"))}\n${pending.map((item, index) => `${index + 1}. ${item.text.replace(/\s+/g, " ").slice(0, 100)}`).join("\n")}\n`
-              : chalk.dim(localize(language, "后续任务队列为空。\n", "The follow-up queue is empty.\n")));
-            continue;
-          }
-          if (followUp.startsWith("/queue ")) {
-            if (/^\/(?:check|diff)(?:\s|$)/.test(followUp.slice("/queue ".length).trim())) {
-              console.log(chalk.dim(localize(language, "项目检查和差异命令请直接使用，不进入模型任务队列。\n", "Use check and diff commands directly; they are not queued model tasks.\n")));
-              continue;
-            }
-            try {
-              const queued = queue.enqueue(followUp.slice("/queue ".length));
-              console.log(chalk.green(localize(language, `已安排下一项 ${queued.id}：${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`, `Scheduled next ${queued.id}: ${queued.text.replace(/\s+/g, " ").slice(0, 100)}\n`)));
-            } catch (error) {
-              console.error(chalk.red(`${error instanceof Error ? error.message : String(error)}\n`));
-            }
-            continue;
-          }
-          if (followUp === "/clear-queue") {
-            const cleared = queue.clear();
-            console.log(chalk.dim(localize(language, `已清空 ${cleared} 个排队任务。\n`, `Cleared ${cleared} queued follow-up(s).\n`)));
-            continue;
-          }
-          if (followUp === "/language" || followUp.startsWith("/language ")) {
-            const selected = await chooseRuntimeLanguage(followUp);
-            if (!selected) console.log(chalk.dim(localize(language, "已取消语言选择。\n", "Language selection cancelled.\n")));
-            else await applyRuntimeLanguage(selected, false);
-            continue;
-          }
-          if (followUp === "/web" || followUp === "/web status") {
-            await printWebSearchStatus({ language, managedWebSearchAuth: () => managedWebSearchAuth, settings });
-            continue;
-          }
-          if (followUp === "/check" || followUp.startsWith("/check ")) {
-            console.log(chalk.dim(localize(language, "请在当前任务结束后执行 /check；检查命令没有作为模型补充发送。\n", "Run /check after the current task finishes; the command was not sent as model steering.\n")));
-            continue;
-          }
-          if (followUp === "/diff" || followUp.startsWith("/diff ")) {
-            await printDiff(followUp);
-            continue;
-          }
-          if (followUp.startsWith("/web ")) {
-            console.log(chalk.dim(localize(language, "联网搜索配置请在当前任务结束后修改。\n", "Change web search configuration after the current task finishes.\n")));
-            continue;
-          }
-          if (followUp === "/status") {
-            const currentStatus = agent.status();
-            const turnStatus = currentStatus.maxTurns ? `${currentStatus.turn}/${currentStatus.maxTurns}` : `${currentStatus.turn}`;
-            console.log(chalk.dim(localize(language, `运行中：第 ${turnStatus} 轮 | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)} 秒 | ${currentStatus.pendingSteering} 条补充 | ${queue.size} 个排队 | ${currentStatus.stats.modelCalls} 次模型调用 | ${currentStatus.stats.toolCalls} 次工具调用${currentStatus.diagnostics ? `\n诊断：${formatTaskDiagnosticSummary(currentStatus.diagnostics, language)}` : ""}\n`, `Working: turn ${turnStatus} | ${view.phase()} | ${Math.floor(view.elapsedMs() / 1000)}s | ${currentStatus.pendingSteering} steering | ${queue.size} queued | ${currentStatus.stats.modelCalls} model call(s) | ${currentStatus.stats.toolCalls} tool call(s)${currentStatus.diagnostics ? `\nDiagnostics: ${formatTaskDiagnosticSummary(currentStatus.diagnostics, language)}` : ""}\n`)));
-            continue;
-          }
-          if (followUp === "/diagnostics") {
-            console.log(`${formatTaskDiagnostics(agent.status().diagnostics, language)}\n`);
-            continue;
-          }
-          if (followUp === "/credentials" || followUp === "/credentials status") {
-            try { await printCredentialStatus(); }
-            catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
-            continue;
-          }
-          if (followUp === "/credentials probe") {
-            console.log(chalk.dim(localize(language, "/credentials probe 请在当前任务结束后执行。\n", "Run /credentials probe after the current task finishes.\n")));
-            continue;
-          }
-          if (followUp.startsWith("/credentials migrate") || followUp.startsWith("/credentials cleanup") || followUp.startsWith("/credentials rollback") || followUp.startsWith("/credentials forget")) {
-            console.log(chalk.dim(localize(language, "凭证修改请在当前任务结束后执行。\n", "Change credentials after the current task finishes.\n")));
-            continue;
-          }
-          if (followUp === "/paste") {
-            try {
-              const pasted = await clipboard.paste();
-              await draftStore.save(pasted.insertText);
-              await draftStore.flush();
-              console.log(chalk.green(`${pasted.notice ?? localize(language, "剪贴板内容已加入输入草稿。", "Clipboard content added to the input draft.")}\n`));
-            } catch (error) {
-              console.error(chalk.red(`${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
-            }
-            continue;
-          }
-          if (followUp === "/details") {
-            const visible = view.toggleDetails();
-            console.log(chalk.dim(localize(language, `实时视图已切换为${visible ? "详细工具活动" : "任务步骤摘要"}，Ctrl+O 可直接切换。\n`, `Live view switched to ${visible ? "detailed tool activity" : "task step summary"}. Ctrl+O toggles it without submitting the prompt.\n`)));
-            continue;
-          }
+          if (await handleRunningTaskCommand(followUp, { agent, applyRuntimeLanguage, chooseRuntimeLanguage, clipboard, draftStore, language, managedWebSearchAuth: () => managedWebSearchAuth, printCredentialStatus, printDiff, queue, settings, view })) continue;
 
           if (!settled && xiuRuntime.steerTask(followUp)) {
             replaySupplements.push(followUp);
@@ -1749,21 +1665,7 @@ async function main(): Promise<void> {
           exact: true,
         });
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
-        if (!failure && agent.status().outcome === "failed") {
-          const reason = agent.status().failureReason;
-          const message = reason === "verification_failed"
-            ? localize(language, "仍有失败或已过期的必要验证，目标尚未完成。", "A required verification is still failed or stale, so the goal is incomplete.")
-            : reason === "plan_incomplete"
-              ? localize(language, "任务计划仍有未完成或受阻步骤，目标尚未完成。", "The task plan still has unfinished or blocked steps, so the goal is incomplete.")
-            : reason === "web_evidence"
-              ? localize(language, "联网证据不足或获取失败，目标尚未完成。", "Required web evidence was unavailable or insufficient, so the goal is incomplete.")
-              : reason === "model_incomplete"
-                ? localize(language, "模型响应未正常结束，目标尚未完成。", "The model response did not finish normally, so the goal is incomplete.")
-                : reason === "tool_failed"
-                  ? localize(language, "最后一批工具操作均失败或被拒绝，目标尚未完成。", "Every operation in the last tool batch failed or was denied, so the goal is incomplete.")
-                  : localize(language, "任务因运行时错误停止，目标尚未完成。", "The task stopped because of a runtime error, so the goal is incomplete.");
-          failure = new Error(message);
-        }
+        if (!failure && agent.status().outcome === "failed") failure = new Error(incompleteTaskMessage(agent.status().failureReason, language));
         if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
         if (failure && !exitRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
