@@ -18,7 +18,7 @@
 1. **测试文件纳入类型检查（已完成）。** 新增 `tsconfig.test.json` 与 `npm run typecheck:test`，覆盖 `src/` 与 `test/`，三平台 Verify 作业在测试前执行。原有 169 处错误已按生产配置补全测试夹具修正，未使用 `any` 或 `@ts-ignore`。
 2. **Windows 后台任务状态竞态（已修复，待观察）。** 根因是 Windows 上目标文件被其他进程（例如状态轮询）打开时，替换状态文件的 rename 会返回 EPERM/EACCES；预加载 bootstrap 与前台管理器没有重试，失败的启动因此停留在 `starting`，30 秒后被判为 `interrupted`，真实失败证据丢失。现在三处统一做有界重试，只重试元数据替换，不重跑命令。后续 Windows CI 若再出现同类失败需重新定位。
 3. **统一 Agent 装配（已完成）。** `Agent` 改为接收单个 `AgentOptions` 对象，CLI、桌面 host、子智能体、评测和测试的 86 处调用按名称传参，不再用 `undefined` 占位。CLI 与桌面的子智能体装配仍各自保留（桌面过滤延迟工具、CLI 注入技能与故障转移覆盖），暂不强行合并。
-4. **发布链自动化。** 增加由标签触发的发布工作流：CI 全绿后生成 GitHub Release，npm 使用 `--provenance` 发布同源 tarball，随附件发布校验和。npm 发布仍由维护者授权，不覆盖已发布版本。
+4. **发布链自动化（GitHub 草稿已完成）。** 新增手动触发的 `Release draft` 工作流（`scripts/release-draft.mjs`）：输入一个 main 提交，只在该提交的 main 推送 CI 全部作业通过时，取原始 Windows CLI tarball、未签名安装器与两份 manifest，核对提交、版本、运行号、清洁工作树、大小和 SHA256 后生成 `SHA256SUMS-<版本>`，创建 GitHub Release **草稿**并回读附件摘要；已存在同名 tag 或 Release 时拒绝。它不发布草稿、不建 tag、不发 npm。npm `--provenance`/可信发布需要维护者先在 npm 配置，待决定。
 5. **基础门禁（ESLint 已完成）。** `npm run lint` 以错误级运行 JavaScript/TypeScript 推荐规则，CI 在 Linux Verify 作业执行一次；开启时清理了未使用导入/变量、死接口和多余转义，无运行时行为变化。CodeQL 仍待评估。
 6. **桌面审批模式切换的上下文绑定（已完成）。** `setApprovalMode` 请求现在与 Plan 一样携带 `contextId`，主进程在完全访问确认前后都校验上下文；过期的渲染进程不能再切换当前 host 的权限模式。
 7. **Computer Use 后续。** 0.20.8 复核中的中等问题（C3–C6）需要在 Windows 上验证；真实付费模型与完整实玩验收尚未完成；常用编辑/系统快捷键分级仍在设计中，暂不开放任意组合键或剪贴板。
@@ -30,7 +30,7 @@
 
 ## 下一步
 
-发布工作流（优先级 4）涉及发布流程与 npm 账号配置，等待维护者决定方案；在此之前推进 Computer Use 后续（优先级 7）与 CodeQL 评估。每项单独提 PR，一次推送一轮 CI。
+发布草稿工作流已就绪；npm 自动发布是否接入等待维护者决定。接下来推进 CodeQL 评估与 Computer Use 后续（优先级 7，需 Windows 验证）。每项单独提 PR，一次推送一轮 CI。
 
 ## 1. 项目定位
 

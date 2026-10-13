@@ -1,4 +1,13 @@
-## 0.20.8 正式发布记录（2026-10-13）
+## 发布草稿工作流（当前做法）
+
+1. 版本提交合入 main，等待该提交的 main 推送 CI 九项作业全部通过。
+2. 在 GitHub Actions 中手动运行 `Release draft`（只能从 main 运行），输入该提交的完整 40 位 SHA。
+3. 工作流只读取该提交最新一次成功的 main CI：取 Windows 作业的原始 CLI tarball 与未签名 NSIS 安装器及两份 manifest，逐项核对提交、版本、运行号、`main` 推送来源、清洁工作树、`job-checks-passed`、大小和 SHA256，再生成 `SHA256SUMS-<版本>`；任一不符即失败，不重新打包。
+4. 已存在 `v<版本>` tag 或同名 Release（含草稿）时直接拒绝，绝不覆盖。通过后创建 Release **草稿**（目标为该提交，说明取自 CHANGELOG 对应段落），上传五个附件并回读大小与摘要。
+5. 维护者补全说明与验收记录后手动发布草稿；发布时 GitHub 才创建 tag。npm 仍由维护者用附件中的同源 tarball 手动发布，先确认版本不存在。
+
+工作流不发布 Release、不创建 tag、不发布 npm，也不使用任何 npm 凭据。
+
 
 [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 已公开，标签与五份附件精确源提交为 `d36c488fc5706277562d3018a23907761440d124`。[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业通过（CLI/桌面三平台、Node 22/24、生产依赖审计）；Windows CLI 全量 1117 项中 1109 通过、8 跳过、0 失败。发布直接使用同一 main 的原始 CI tarball、未签名 NSIS、两份 manifest 和 SHA256SUMS；上传后大小与摘要逐项回读通过，不重新打包或替换正式资产。
 

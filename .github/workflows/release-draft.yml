@@ -1,0 +1,42 @@
+name: Release draft
+
+# Manual only. Turns the original main-CI candidates of one exact commit into a
+# GitHub Release draft. It does not publish the release, create a tag, or publish
+# to npm; a maintainer reviews and publishes the draft by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of a main commit whose CI passed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-draft
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    name: Draft from main CI
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the draft release and upload its assets
+      actions: read # read CI runs, jobs and artifacts
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 20.18.1
+      - name: Create draft from verified CI candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          XIU_RELEASE_COMMIT: ${{ inputs.commit }}
+        run: node scripts/release-draft.mjs
