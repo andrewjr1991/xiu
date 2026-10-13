@@ -103,6 +103,7 @@ export class DesktopWorkspaceController {
           title: boundedTitle(session?.firstTask ?? run?.taskPreview ?? "未命名任务"),
           updatedAt: [session?.updatedAt, run?.updatedAt].filter((value): value is string => Boolean(value)).sort().at(-1)!,
           status,
+          manualAccepted: run?.manualAcceptance?.decision === "passed",
         };
       }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 100);
       const recoverable = runs.some((run) => (run.status === "running" && !lock.live) || run.status === "paused");

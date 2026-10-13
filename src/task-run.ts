@@ -8,7 +8,7 @@ import type { RuntimeEvent } from "./runtime/protocol.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
 
-export type TaskRunStatus = "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned";
+export type TaskRunStatus = "running" | "paused" | "completed" | "failed" | "cancelled" | "unverified" | "abandoned" | "waiting_user";
 export type TaskOperationKind = "model" | "tool" | "verification" | "checkpoint" | "steering";
 export type TaskOperationStatus = "planned" | "started" | "succeeded" | "failed" | "cancelled" | "unknown";
 export type TaskSideEffect = "none" | "workspace" | "process" | "external" | "unknown";
@@ -64,6 +64,8 @@ export interface TaskRunRecord {
   events: TaskRunEvent[];
   runtimeEvents?: RuntimeEvent[];
   resumedFrom?: string;
+  /** Human assessment only; never verification evidence, execution authority or recovery consent. */
+  manualAcceptance?: { decision: "passed" | "rejected"; at: string; scope: "computer-result" };
 }
 
 export interface InterruptedTaskRun extends TaskRunRecord {
@@ -176,7 +178,8 @@ function isRecord(value: unknown): value is TaskRunRecord {
     && typeof item.status === "string"
     && Array.isArray(item.operations)
     && Array.isArray(item.recoveryPoints)
-    && Array.isArray(item.events);
+    && Array.isArray(item.events)
+    && (item.manualAcceptance === undefined || (item.manualAcceptance !== null && typeof item.manualAcceptance === "object" && item.manualAcceptance.scope === "computer-result" && ["passed", "rejected"].includes(item.manualAcceptance.decision) && typeof item.manualAcceptance.at === "string" && Number.isFinite(Date.parse(item.manualAcceptance.at))));
 }
 
 async function atomicWrite(file: string, value: unknown): Promise<void> {
@@ -396,6 +399,15 @@ export class TaskRunJournal {
     const record = await this.read(runId);
     if (!record) throw new Error(`Task-run journal not found: ${runId}`);
     record.runtimeEvents = structuredClone(events.slice(-1_000));
+    await this.writeRecord(record);
+  }
+
+  async recordComputerAcceptance(runId: string, decision: "passed" | "rejected", confirmed: boolean): Promise<void> {
+    if (!confirmed || !/^[A-Za-z0-9-]{1,160}$/.test(runId) || !["passed", "rejected"].includes(decision)) throw new Error("Explicit human acceptance is required.");
+    const record = await this.read(runId);
+    if (!record || !["completed", "unverified", "failed"].includes(record.status) || !record.operations.some(operation => operation.name === "computer_input" && operation.status === "succeeded")) throw new Error("Only a finished computer-operation result can be accepted.");
+    record.manualAcceptance = { decision, at: new Date().toISOString(), scope: "computer-result" };
+    // Preserve program status, verification failures, timestamps, operations and recovery boundaries.
     await this.writeRecord(record);
   }
 

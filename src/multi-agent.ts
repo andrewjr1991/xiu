@@ -6,6 +6,7 @@ import { WorktreeManager, type WorktreeInfo, type WorktreeMergeAnalysis } from "
 import { localize, type UiLanguage } from "./i18n.js";
 import { sanitizeSecrets } from "./secret-redaction.js";
 import { captureVerificationStamp, type VerificationEvidence } from "./verification.js";
+import { finishSubagentActivity, updateSubagentActivity, type SubagentToolActivity } from "./subagent-activity.js";
 
 export type SubagentRole = "explorer" | "implementer" | "reviewer" | "tester";
 export type SubagentMode = "shared_readonly" | "worktree";
@@ -39,6 +40,7 @@ export interface SubagentTask extends SubagentTaskInput {
   result?: string;
   error?: string;
   progress?: string;
+  activity?: SubagentToolActivity[];
   stats?: SubagentStats;
   worktree?: WorktreeInfo;
   integration?: SubagentIntegrationRecord;
@@ -94,6 +96,7 @@ export interface TaskExecutionContext {
   signal: AbortSignal;
   dependencyResults: Array<{ id: string; result: string }>;
   reportProgress: (message: string) => void;
+  reportToolActivity: (name: string, phase: "started" | "completed" | "failed" | "interrupted") => void;
 }
 
 export interface TaskExecutionResult {
@@ -289,6 +292,7 @@ export class MultiAgentCoordinator {
             task.status = "interrupted";
             task.error = "Xiu exited while this agent was running. Retry it to continue.";
             task.completedAt = now();
+            task.activity = finishSubagentActivity(task.activity ?? [], task.completedAt);
             changed = true;
           }
         }
@@ -368,6 +372,7 @@ export class MultiAgentCoordinator {
     task.status = "cancelled";
     task.error = "Cancelled by user or parent agent.";
     task.completedAt = now();
+    task.activity = finishSubagentActivity(task.activity ?? [], task.completedAt);
     run.updatedAt = now();
     await this.persist(run);
     this.events.onTaskUpdate?.(cloneRun(run), structuredClone(task));
@@ -386,6 +391,7 @@ export class MultiAgentCoordinator {
     task.error = undefined;
     task.result = undefined;
     task.progress = undefined;
+    task.activity = undefined;
     task.startedAt = undefined;
     task.completedAt = undefined;
     task.stats = undefined;
@@ -534,6 +540,13 @@ export class MultiAgentCoordinator {
         cwd: taskCwd,
         signal: controller.signal,
         dependencyResults: dependencies.map((dependency) => ({ id: dependency.id, result: dependency.result ?? "" })),
+        reportToolActivity: (name, phase) => {
+          if (controller.signal.aborted || task.status !== "running") return;
+          task.activity = updateSubagentActivity(task.activity ?? [], name, phase);
+          run.updatedAt = now();
+          void this.persist(run);
+          this.events.onTaskUpdate?.(cloneRun(run), structuredClone(task));
+        },
         reportProgress: (message) => {
           task.progress = message;
           run.updatedAt = now();
@@ -559,6 +572,7 @@ export class MultiAgentCoordinator {
     } finally {
       this.controllers.delete(key);
       task.completedAt = now();
+      task.activity = finishSubagentActivity(task.activity ?? [], task.completedAt);
       await this.changed(run, task);
     }
   }

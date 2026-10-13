@@ -4,6 +4,36 @@ import test from "node:test";
 import type { AgentConfig } from "../src/config.js";
 import { createMediaBackend } from "../src/media.js";
 
+for (const provider of ["openai-compatible", "anthropic"] as const) test(`${provider} visual probes disable SDK retries`, async (t) => {
+  let requests = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain fixture */ }
+    requests++; response.statusCode = 500; response.setHeader("content-type", "application/json"); response.end('{"error":{"message":"fixture error","type":"api_error"}}');
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture failed");
+  const backend = createMediaBackend({ provider, model: "manual-vision-id", capabilities: { vision: "manual-vision-id" }, apiKey: "fixture", baseURL: `http://127.0.0.1:${address.port}/v1`, cwd: process.cwd(), autoApprove: false }, { maxRetries: 0 });
+  await assert.rejects(backend.analyzeImage!("Inspect", "data:image/png;base64,Zml4dHVyZQ=="));
+  assert.equal(requests, 1);
+});
+
+test("Anthropic vision uses the declared media destination rather than another endpoint", async (t) => {
+  let called = false;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain fixture body */ }
+    assert.equal(request.url, "/v1/messages"); called = true;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({id:"fixture",type:"message",role:"assistant",model:"fixture",content:[{type:"text",text:"Visible fixture"}],stop_reason:"end_turn",usage:{input_tokens:1,output_tokens:1}}));
+  });
+  await new Promise<void>(resolve => server.listen(0,"127.0.0.1",resolve));
+  t.after(() => new Promise<void>((resolve,reject) => server.close(error=>error?reject(error):resolve())));
+  const address=server.address(); if (!address || typeof address === "string") throw new Error("No fixture server");
+  const backend=createMediaBackend({provider:"anthropic",model:"fixture",capabilities:{vision:"fixture"},apiKey:"fixture",mediaBaseURL:`http://127.0.0.1:${address.port}`,cwd:process.cwd(),autoApprove:false});
+  assert.equal(await backend.analyzeImage!("Inspect","data:image/png;base64,Zml4dHVyZQ=="),"Visible fixture");
+  assert.equal(called,true);
+});
+
 test("OpenAI-compatible media backend routes image, video, and audio to the configured vendor", async (t) => {
   const requests: Array<{ method: string; url: string; authorization?: string; body: string }> = [];
   const server = createServer(async (request, response) => {

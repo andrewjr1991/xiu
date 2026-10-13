@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseAssistantInteraction, continueTaskAfterAnswer } from "../../../src/assistant-interaction.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
@@ -203,7 +204,11 @@ export class DesktopTaskController {
     return this.connect(workspace, 0);
   }
 
-  async createTask(workspace: string, text: string): Promise<DesktopRuntimeConnection> {
+  async computerVisionRoute(workspace: string): Promise<string | undefined> {
+    return (await this.ensure(workspace)).computerVisionRoute;
+  }
+
+  async createTask(workspace: string, text: string, answerTo?: { taskId: string; questionId: string }): Promise<DesktopRuntimeConnection> {
     if (this.mcpBusy || this.permissionBusy) throw new Error("配置或权限正在确认，请等待完成后再启动任务。");
     const normalized = this.taskText(text);
     const host = await this.ensure(workspace);
@@ -212,10 +217,11 @@ export class DesktopTaskController {
     if (host.providerConfigured === false) throw new Error("尚未配置渠道，请先在设置与模型中新增渠道。");
     const lock = await host.journal.lockStatus();
     if (lock.active && lock.live && !this.active(host)) throw new Error("此工作区正由另一个 Xiu 进程写入。请先停止该任务或选择其他工作区。");
+    if (answerTo && (host.runtime.snapshot().task?.id !== answerTo.taskId || host.runtime.snapshot().task?.pendingQuestion?.id !== answerTo.questionId)) throw new Error("问题已变化，请刷新后回答。");
     this.completedTaskChanges = undefined;
     this.baseline = await captureTaskBaseline(workspace);
     this.modeContextId = randomUUID();
-    void host.runtime.createTask(normalized).catch(() => undefined);
+    void host.runtime.createTask(normalized, answerTo).catch(() => undefined);
     return this.connect(workspace, 0);
   }
 
@@ -231,6 +237,12 @@ export class DesktopTaskController {
     const runs = await host.journal.recent(500);
     const selectedRun = runs.find((run) => run.runId === taskId);
     const restored = await loadSession(workspace, selectedRun?.sessionId ?? taskId);
+    const previousTurn = restored.replay.at(-1);
+    const previousQuestion = previousTurn?.response ? parseAssistantInteraction(previousTurn.response, "zh-CN").question : undefined;
+    const selectedFinished = selectedRun?.runtimeEvents?.filter((event) => event.type === "task.finished").at(-1);
+    const selectedQuestion = selectedFinished?.type === "task.finished" ? selectedFinished.payload.pendingQuestion?.question : undefined;
+    const continuation = selectedRun?.status === "waiting_user" && selectedQuestion === previousQuestion && previousQuestion && previousTurn
+      ? continueTaskAfterAnswer(previousTurn.task, previousQuestion, normalized, "zh-CN") : normalized;
     host.agent.restoreSession(restored, { preservePlanMode: true });
     this.modeContextId = randomUUID();
     await host.agent.setModel(host.provider.model);
@@ -240,7 +252,7 @@ export class DesktopTaskController {
     this.completedTaskChanges = undefined;
     this.baseline = await captureTaskBaseline(workspace);
     this.modeContextId = randomUUID();
-    void host.runtime.createTask(normalized).catch(() => undefined);
+    void host.runtime.createTask(continuation).catch(() => undefined);
     return this.connect(workspace, 0);
   }
 
@@ -274,6 +286,37 @@ export class DesktopTaskController {
     }
     if (request.rememberForSession !== undefined && request.rememberForSession !== true) throw new Error("Invalid session approval decision.");
     (await this.ensure(workspace)).runtime.decideApproval(request.approvalId, request.allowed, request.confirmedRisk, request.rememberForSession);
+  }
+
+  async computerAcceptance(workspace: string, request: import("../shared/protocol.js").DesktopComputerAcceptanceRequest, confirm?: () => Promise<boolean>): Promise<import("../shared/protocol.js").DesktopComputerAcceptanceState> {
+    if (!request || typeof request.taskId !== "string" || !/^[A-Za-z0-9-]{1,160}$/.test(request.taskId) || (request.decision !== undefined && !["passed", "rejected"].includes(request.decision))) throw new Error("人工验收请求无效。");
+    const host = await this.ensure(workspace), context = this.modeContextId;
+    await this.eventPersistence;
+    const matches = (await host.journal.recent(500)).filter(run => run.runId === request.taskId || run.runtimeEvents?.some(event => event.type === "task.finished" && event.taskId === request.taskId));
+    if (matches.length !== 1) {
+      if (request.decision !== undefined) throw new Error("无法定位准确轮次，请重新打开任务后验收。");
+      return { eligible: false };
+    }
+    const run = matches[0]!;
+    const eligible = ["completed", "unverified", "failed"].includes(run.status) && run.operations.some(operation => operation.name === "computer_input" && operation.status === "succeeded");
+    if (request.decision !== undefined) {
+      if (host.runtime.snapshot().planMode) throw new Error("Plan 模式只读，请退出 Plan 后记录人工验收。");
+      if (!eligible || !confirm) throw new Error("该轮结果无法人工验收。");
+      this.assertIdleContext(host, workspace, context);
+      const lock = await host.journal.lockStatus();
+      this.assertIdleContext(host, workspace, context);
+      if (lock.active && lock.live) throw new Error("请等待工作区任务结束后验收。");
+      this.conversationBusy = true;
+      try {
+        if (!await confirm()) return { eligible, ...run.manualAcceptance };
+        if (this.host !== host || this.workspace !== workspace || this.modeContextId !== context || ["running", "waiting_approval", "stopping"].includes(host.runtime.snapshot().task?.state ?? "")) throw new Error("工作区或任务已变化，请重新验收。");
+        const confirmedLock = await host.journal.lockStatus();
+        if (confirmedLock.active && confirmedLock.live) throw new Error("请等待工作区任务结束后验收。");
+        await host.journal.recordComputerAcceptance(run.runId, request.decision, true);
+        return { eligible, ...(await host.journal.read(run.runId))?.manualAcceptance };
+      } finally { this.conversationBusy = false; }
+    }
+    return { eligible, ...run.manualAcceptance };
   }
 
   async openTaskHistory(workspace: string, request: DesktopTaskHistoryRequest): Promise<DesktopTaskHistorySnapshot> {
@@ -343,6 +386,7 @@ export class DesktopTaskController {
       taskId: session.id,
       title: clean(session.replay[0]?.task ?? run?.taskPreview ?? "历史任务", 160),
       status: run?.status ?? "session",
+      manualAcceptance: run?.manualAcceptance ? { eligible: true, ...run.manualAcceptance } : undefined,
       updatedAt: run?.updatedAt ?? session.updatedAt,
       ...(run?.providerId ?? session.providerId ? { providerId: run?.providerId ?? session.providerId } : {}),
       ...(run?.model ?? session.model ? { model: run?.model ?? session.model } : {}),
@@ -421,6 +465,7 @@ export class DesktopTaskController {
     const changeRounds = await Promise.all(related.map(async (run) => ({ id: run.runId, startedAt: run.startedAt, report: await loadTaskChangeHistory(workspace, run.runId) })));
     return {
       changeRounds,
+      manualAcceptance: latest?.manualAcceptance ? { eligible: true, ...latest.manualAcceptance } : undefined,
       overview: { workspace, taskId: currentTaskId, taskChanges: taskReport, branch: await promisify(execFile)("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: workspace, windowsHide: true, timeout: 2000, maxBuffer: 4096 }).then(({ stdout }) => redactSecrets(stdout.trim()).slice(0, 160)).catch(() => undefined) },
       generatedAt: new Date().toISOString(), changeView, changes, files,
       artifacts: (taskReport?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })),

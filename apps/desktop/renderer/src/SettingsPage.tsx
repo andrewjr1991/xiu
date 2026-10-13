@@ -2,14 +2,19 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { defaultPreferences, type DesktopPreferences } from "../../shared/preferences.js";
 import { Select } from "./Select.js";
 const sections = ["外观", "对话与运行", "通知", "模型与渠道", "关于"] as const;
-export function SettingsPage({ value, onSave, onClose, onModels, modelDisabled }: {
-  value: DesktopPreferences; onSave: (next: DesktopPreferences) => Promise<void>; onClose: () => void; onModels: () => void; modelDisabled: boolean;
+export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, models, modelDisabled }: {
+  value: DesktopPreferences; onSave: (next: DesktopPreferences) => Promise<void>; onClose: () => void; onModels: () => void; onModelsClose: () => void; models: ReactNode; modelDisabled: boolean;
 }) {
   const [section, setSection] = useState<typeof sections[number]>("外观");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [about, setAbout] = useState<{ version: string; packaged: boolean; notificationsSupported: boolean }>();
   const close = useRef<HTMLButtonElement>(null);
+  const modelAccess = useRef({ models, onModels });
+  modelAccess.current = { models, onModels };
+  useEffect(() => {
+    if (section === "模型与渠道" && !modelDisabled && !modelAccess.current.models) modelAccess.current.onModels();
+  }, [section, modelDisabled]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     close.current?.focus();
@@ -37,8 +42,8 @@ export function SettingsPage({ value, onSave, onClose, onModels, modelDisabled }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   }}>
-    <aside className="settings-nav"><h1 id="settings-heading">设置</h1><nav aria-label="设置分类">{sections.map((name) => <button key={name} aria-current={section === name ? "page" : undefined} onClick={() => setSection(name)}>{name}</button>)}</nav><small>偏好保存在本机<br />不包含任务授权或凭证</small></aside>
-    <div className="settings-main"><header><span>偏好设置</span><button ref={close} aria-label="关闭设置" onClick={onClose}>×</button></header><div className="settings-body"><h2>{section}</h2>
+    <aside className="settings-nav"><h1 id="settings-heading">设置</h1><nav aria-label="设置分类">{sections.map((name) => <button key={name} aria-current={section === name ? "page" : undefined} onClick={() => { if (section !== name) { if (section === "模型与渠道") onModelsClose(); setSection(name); } }}>{name}</button>)}</nav><small>偏好保存在本机<br />不包含任务授权或凭证</small></aside>
+    <div className="settings-main"><header><span>偏好设置</span><button ref={close} aria-label="关闭设置" onClick={onClose}>×</button></header><div className={`settings-body${section === "模型与渠道" ? " settings-models-body" : ""}`}><h2>{section}</h2>
       {section === "外观" && <>
         <p className="settings-lead">选择适合你的亮度与阅读节奏。外观立即生效，无需重新打开工作区。</p>
         <div className="theme-options">{(["system", "light", "dark"] as const).map((theme, index) => <button key={theme} disabled={saving} aria-pressed={value.theme === theme} onClick={() => change("theme", theme)}><span className={`theme-preview theme-${theme}`}><i /><b /><em /></span>{["跟随系统", "浅色", "深色"][index]}</button>)}</div>
@@ -58,7 +63,7 @@ export function SettingsPage({ value, onSave, onClose, onModels, modelDisabled }
       {section === "通知" && <><p className="settings-lead">仅在 Xiu 不在前台时发送。通知不包含需求、路径、代码或模型回复，系统通知权限仍由操作系统控制。</p><div className="settings-group">
         {toggle("notifyComplete", "任务完成", "任务完成后提醒。")}{toggle("notifyFailure", "任务失败", "失败或未通过验证时提醒。")}{toggle("notifyApproval", "需要批准", "需要你返回软件作出决定时提醒。")}{toggle("sound", "通知提示音", "随系统通知播放，不独立播放音频。")}
       </div>{about && !about.notificationsSupported && <p>当前系统不支持桌面通知。</p>}</>}
-      {section === "模型与渠道" && <><p className="settings-lead">沿用已有渠道、凭证与能力模型管理。设置外观不会切换模型或重置授权。</p><button className="settings-action" disabled={modelDisabled} onClick={onModels}>管理模型与渠道 →</button>{modelDisabled && <p>请先打开可信工作区，并结束正在运行的任务或配置操作。</p>}<p>完全访问仍只在本次工作区打开期间有效，不作为永久设置保存。</p></>}
+      {section === "模型与渠道" && <><p className="settings-lead">在这里管理渠道、凭据与模型能力。聊天窗口只用于选择已有模型。</p>{models}{!models && <p role="status">{modelDisabled ? "请先打开可信工作区，并结束正在运行的任务或配置操作。" : "正在读取渠道配置…"}</p>}<p className="settings-models-note">完全访问仍只在本次工作区打开期间有效，不作为永久设置保存。</p></>}
       {section === "关于" && <><div className="settings-group">{row("Xiu", "本地优先的编码工作台", <span>{about?.version ?? "正在读取…"}</span>)}{row("构建类型", "Windows 本地安装器目前未签名。", <span>{about ? about.packaged ? "打包版本" : "开发版本" : "—"}</span>)}</div><p>发布说明：github.com/andrewjr1991/xiu/releases</p><p>本批尚未接入桌面自动更新检查，不会后台下载或安装。</p></>}
       {resetKeys.length > 0 && <button className="settings-reset" disabled={saving} onClick={() => { const next = { ...value }; for (const key of resetKeys) Object.assign(next, { [key]: defaultPreferences[key] }); void save(next); }}>恢复本页默认设置</button>}
       <p role="status" className="settings-save-status">{saving ? "正在保存…" : notice}</p>

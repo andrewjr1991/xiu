@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, Notification, net, protocol, session, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, net, protocol, session, type IpcMainInvokeEvent } from "electron";
 import { PreferencesStore } from "./preferences-store.js";
 import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
@@ -13,7 +13,14 @@ import { DesktopProviderRecoveryController } from "./provider-recovery-controlle
 import type { DesktopProviderRecoveryRequest } from "../shared/provider-recovery.js";
 import { DesktopTerminalController } from "./terminal-controller.js";
 import { DesktopBrowserController } from "./browser-controller.js";
-import { confirmFullAccess, confirmSubagentCancel } from "./full-access-dialog.js";
+import { ComputerUseController } from "./computer-use-controller.js";
+import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
+import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
+import { VisionProbeController } from "./vision-probe-controller.js";
+import { readEnvironmentCredential } from "../../../src/credential-store.js";
+import { createHash } from "node:crypto";
+
+const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
 import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
@@ -21,7 +28,7 @@ import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from
 protocol.registerSchemesAsPrivileged([{
   scheme: "xiu-app",
   privileges: { standard: true, secure: true, supportFetchAPI: true },
-}]);
+}, { scheme: "xiu-preview", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
 const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const rendererRoot = path.join(appRoot, "renderer");
@@ -35,6 +42,13 @@ function updateNativeAppearance(): void {
   if (mainWindow && process.platform !== "darwin") mainWindow.setTitleBarOverlay({ color: dark ? "#181a1d" : "#fbfcfe", symbolColor: dark ? "#bbc1ca" : "#65758b" });
 }
 let browserController: DesktopBrowserController | undefined;
+let computerUseController: ComputerUseController | undefined;
+function stopComputerUse(): import("../shared/computer-use.js").ComputerUseState {
+  const bound = computerUseController?.hasBoundTask;
+  const state = computerUseController?.stop() ?? { state: "idle" as const };
+  if (bound) { try { void taskController.stopTask(controller.trustedWorkspacePath()).catch(() => undefined); } catch { /* Authority already revoked. */ } }
+  return state;
+}
 const smokeLog = process.env.XIU_DESKTOP_SMOKE_LOG;
 function smokeMilestone(value: string): void {
   if (!smokeLog) return;
@@ -42,6 +56,8 @@ function smokeMilestone(value: string): void {
 }
 smokeMilestone("module-loaded");
 const taskController = new DesktopTaskController((event) => {
+  if (event.type === "task.started") computerUseController?.taskStarted(event.taskId!);
+  if (event.type === "task.finished") computerUseController?.taskFinished();
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.runtimeEvent, event);
   const p = preferencesStore.value;
   const body = event.type === "approval.requested" && p.notifyApproval ? "任务需要你的批准"
@@ -54,6 +70,22 @@ const taskController = new DesktopTaskController((event) => {
       notification.show();
     } catch { /* OS notifications cannot interrupt the task. */ }
   }
+}, async (workspace) => {
+  const check = () => {
+    if (controller.trustedWorkspacePath() !== workspace || !computerUseController || host.runtime.snapshot().planMode) throw new Error("电脑操作授权不可用；Plan 或工作区已变化。");
+    return computerUseController;
+  };
+  const host = await createWorkspaceAgentHost(workspace, { computerUse: {
+    windows: () => check().discover(workspace),
+    select: (handle, provider, fullAccess, signal) => check().selectForModel(workspace, handle, provider, fullAccess, signal),
+    observe: (provider, signal) => check().observeForModel(workspace, provider, signal),
+    input: (input, signal) => check().input(workspace, input, signal),
+    feedbackFinished: () => check().feedbackFinished(),
+    status: () => { const target = check().selectedStatus(); return target; },
+  } });
+  const close = host.close;
+  host.close = async () => { computerUseController?.revokeFullAccess(); await close?.(); };
+  return host;
 });
 const terminalController = new DesktopTerminalController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.terminalEvent, event);
@@ -127,11 +159,23 @@ async function presentAttachments(workspace: string, result: Awaited<ReturnType<
 }
 
 function emitSnapshot(snapshot: DesktopWorkspaceSnapshot): DesktopWorkspaceSnapshot {
+  computerUseController?.retainWorkspace(snapshot.trust === "trusted" ? snapshot.workspace?.path : undefined);
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.snapshotChanged, snapshot);
   return snapshot;
 }
 
 function registerIpc(): void {
+  ipcMain.handle(desktopChannels.computerUse, async (event, request: import("../shared/computer-use.js").ComputerUseRequest) => {
+    assertTrustedSender(event, request?.action === "stop");
+    if (!computerUseController) throw new Error("受控预览尚未就绪。");
+    if (request?.action === "stop") return stopComputerUse();
+    return serializeWriterStart(async () => {
+      const workspace = controller.trustedWorkspacePath();
+      if (request?.action !== "state") await taskController.assertCanUseTerminal(workspace);
+      const connection = await taskController.connect(workspace, 0);
+      return computerUseController!.control(workspace, request, connection.runtime.snapshot.planMode === true);
+    });
+  });
   ipcMain.handle(desktopChannels.preferences, (event) => { assertTrustedSender(event, true); return { ...preferencesStore.value }; });
   ipcMain.handle(desktopChannels.preferencesSave, async (event, value: unknown) => {
     assertTrustedSender(event, true);
@@ -233,7 +277,7 @@ function registerIpc(): void {
     return serializeWriterStart(async () => {
       const workspace = controller.trustedWorkspacePath();
       if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再启动 Agent 任务。");
-      return taskController.createTask(workspace, request?.text);
+      return taskController.createTask(workspace, request?.text, request?.answerTo);
     });
   });
   ipcMain.handle(desktopChannels.taskContinue, async (event, request: DesktopTaskContinueRequest) => {
@@ -261,6 +305,7 @@ function registerIpc(): void {
     return serializeWriterStart(async () => {
       const workspace = controller.trustedWorkspacePath();
       if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行，请先关闭终端再切换 Plan 模式。");
+      computerUseController?.stop();
       return taskController.setPlanMode(workspace, request);
     });
   });
@@ -269,12 +314,23 @@ function registerIpc(): void {
     return taskController.setApprovalMode(controller.trustedWorkspacePath(), request, async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return false;
       await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
-      return confirmFullAccess(mainWindow);
+      const workspace = controller.trustedWorkspacePath();
+      const route = await taskController.computerVisionRoute(workspace);
+      const accepted = await confirmFullAccess(mainWindow, route);
+      if (accepted && route && controller.trustedWorkspacePath() === workspace) computerUseController?.grantFullAccess(workspace, route);
+      return accepted;
     });
   });
   ipcMain.handle(desktopChannels.approvalDecide, async (event, request: RuntimeApprovalDecisionRequest) => {
     assertTrustedSender(event);
     return taskController.decideApproval(controller.trustedWorkspacePath(), request);
+  });
+  ipcMain.handle(desktopChannels.computerAcceptance, async (event, request: import("../shared/protocol.js").DesktopComputerAcceptanceRequest) => {
+    assertTrustedSender(event);
+    return taskController.computerAcceptance(controller.trustedWorkspacePath(), request, async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      return confirmComputerAction(mainWindow, request.decision === "passed" ? "确认电脑操作结果通过？" : "记录电脑操作结果未通过？", "仅记录你对这一轮电脑操作结果的人工判断，不覆盖程序验证、失败校验或过程提醒，不授予执行或恢复权限。确认前请检查目标应用的最终结果。后续轮次不会继承本次验收。");
+    });
   });
   ipcMain.handle(desktopChannels.taskHistoryOpen, async (event, request: DesktopTaskHistoryRequest) => {
     assertTrustedSender(event);
@@ -431,6 +487,37 @@ function registerIpc(): void {
     await taskController.assertCanReconfigure(workspace);
     return (await getProviderController()).test(workspace, request);
   }));
+  ipcMain.handle(desktopChannels.providerVisionCancel, (event) => { assertTrustedSender(event); visionProbe.cancel(); });
+  ipcMain.handle(desktopChannels.providerVisionProgress, (event) => { assertTrustedSender(event); return visionProbe.snapshot(); });
+  ipcMain.handle(desktopChannels.providerVisionTest, async (event, request: DesktopProviderSelectRequest & { allCandidates?: boolean }) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    const providers = await getProviderController();
+    await providers.refresh();
+    const config = providers.visionProbeConfig(workspace, request);
+    const models = request.allCandidates === true ? [...new Set(providers.snapshot(request.providerId).capabilityModelsByProvider[request.providerId]?.vision.map(model => model.id) ?? [])] : [request.model];
+    if (!models.length || models.length > 200) throw new Error("批量视觉测试需要 1–200 个候选；请先刷新或整理模型列表。");
+    const configs = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
+    const fingerprint = () => {
+      const current = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
+      return createHash("sha256").update(JSON.stringify([current, readEnvironmentCredential(config.apiKeyEnv), readEnvironmentCredential("AGNES_API_KEY"), readEnvironmentCredential("OPENAI_API_KEY"), readEnvironmentCredential("ANTHROPIC_API_KEY"), process.env.AGNES_BASE_URL])).digest("hex");
+    };
+    const initial = fingerprint();
+    const validate = async () => {
+      assertTrustedSender(event);
+      if (controller.trustedWorkspacePath() !== workspace) throw new Error("工作区已改变，视觉测试取消。");
+      await taskController.assertCanReconfigure(workspace);
+      if ((await taskController.connect(workspace)).runtime.snapshot.planMode) throw new Error("Plan 只读模式不执行付费视觉测试。");
+      await providers.refresh();
+      if (fingerprint() !== initial) throw new Error("渠道配置已改变，请重新测试。");
+    };
+    await validate();
+    const parent = mainWindow!;
+    const cancel = () => visionProbe.cancel();
+    parent.once("closed", cancel);
+    try { return request.allCandidates === true ? await visionProbe.runBatch(configs, (route, signal) => confirmVisionProbe(parent, route, signal, true), validate) : await visionProbe.run(config, (route, signal) => confirmVisionProbe(parent, route, signal), validate); }
+    finally { if (!parent.isDestroyed()) parent.removeListener("closed", cancel); }
+  }));
   ipcMain.handle(desktopChannels.providerUpsert, async (event, request: DesktopProviderUpsertRequest) => serializeWriterStart(async () => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
@@ -513,9 +600,11 @@ function createWindow(): BrowserWindow {
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
-  window.webContents.on("render-process-gone", () => { /* Preserve main-process state; no automatic task replay. */ });
+  window.webContents.on("render-process-gone", () => { stopComputerUse(); /* No automatic task replay. */ });
   browserController = new DesktopBrowserController(window, (state) => { if (!window.isDestroyed()) window.webContents.send(desktopChannels.browserState, state); });
   window.once("close", () => browserController?.close());
+  computerUseController = new ComputerUseController(window, undefined, stopComputerUse);
+  window.once("close", () => computerUseController?.stop());
   window.once("closed", () => terminalController.stopAll("窗口已关闭，终端会话已结束。"));
   window.webContents.once("did-fail-load", (_event, _code, description) => {
     smokeMilestone(`load-failed ${description}`);
@@ -551,6 +640,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     await registerLocalProtocol();
     mainWindow = createWindow();
+    globalShortcut.register("Control+Alt+Backspace", stopComputerUse);
     updateNativeAppearance();
     smokeMilestone("window-created");
   }).catch((error) => {
@@ -563,6 +653,9 @@ if (!app.requestSingleInstanceLock()) {
 let shutdownComplete = false;
 let shutdownStarted = false;
 app.on("before-quit", (event) => {
+  visionProbe.cancel();
+  globalShortcut.unregisterAll();
+  computerUseController?.stop();
   terminalController.stopAll("Xiu 正在退出，终端会话已结束。");
   if (shutdownComplete) return;
   event.preventDefault();

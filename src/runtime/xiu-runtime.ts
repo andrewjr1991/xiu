@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseAssistantInteraction, continueTaskAfterAnswer } from "../assistant-interaction.js";
 import type { AgentEvents, AgentRunOutcome, AgentFailureReason } from "../agent.js";
 import { redactSecrets, sanitizeSecrets } from "../secret-redaction.js";
 import type { ApprovalRequest, ToolResult } from "../types.js";
@@ -49,6 +50,7 @@ function terminalState(outcome: AgentRunOutcome): Exclude<RuntimeTaskState, "idl
   if (outcome === "unverified") return "unverified";
   if (outcome === "cancelled") return "cancelled";
   if (outcome === "paused") return "paused";
+  if (outcome === "waiting_user") return "waiting_user";
   return "failed";
 }
 
@@ -88,6 +90,7 @@ export class XiuRuntime {
   private readonly sessionApprovalScopes = new Set<string>();
   private lastDraftAt = 0;
   private lastDraftChars = 0;
+  private questionTask?: string;
   private readonly now: () => Date;
   private readonly sanitizeText: (value: string) => string;
 
@@ -137,6 +140,7 @@ export class XiuRuntime {
       throw new Error("Cannot reset the conversation while a task is active.");
     }
     this.task = undefined;
+    this.questionTask = undefined;
     this.pendingApproval = undefined;
     this.sessionApprovalScopes.clear();
     this.events.length = 0;
@@ -161,12 +165,18 @@ export class XiuRuntime {
     finally { this.changingPlanMode = false; }
   }
 
-  async createTask(task: string): Promise<string> {
+  async createTask(task: string, answerTo?: { taskId: string; questionId: string }): Promise<string> {
     if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
     const driver = this.requireDriver();
     const normalized = task.trim();
     if (!normalized) throw new Error("Task must not be empty.");
     if (this.task && ["running", "waiting_approval", "stopping"].includes(this.task.state)) throw new Error("A task is already active.");
+    const pending = this.task?.pendingQuestion;
+    if (answerTo && (!pending || this.task?.id !== answerTo.taskId || pending.id !== answerTo.questionId)) throw new Error("Question is unavailable or stale.");
+    const executionTask = answerTo && pending && this.questionTask
+      ? continueTaskAfterAnswer(this.questionTask, pending.question, normalized, "zh-CN") : normalized;
+    const originalTask = answerTo ? this.questionTask ?? normalized : normalized;
+    this.questionTask = undefined;
 
     const recovery = this.task?.state === "recoverable" ? this.task.recovery : undefined;
     const taskId = recovery?.runId ?? randomUUID();
@@ -183,10 +193,13 @@ export class XiuRuntime {
     this.emit("task.started", { taskPreview: this.task.taskPreview, ...(recovery ? { resumedFrom: recovery.runId } : {}) });
 
     try {
-      const result = await driver.run(normalized);
+      const result = await driver.run(executionTask);
       const status = driver.status();
       const state = terminalState(status.outcome);
-      const safeResult = this.clean(result, MAX_MESSAGE_TEXT);
+      const interaction = status.outcome === "waiting_user" ? parseAssistantInteraction(result, "zh-CN") : undefined;
+      const safeResult = this.clean(interaction?.text ?? result, MAX_MESSAGE_TEXT);
+      const pendingQuestion = interaction?.question ? { id: randomUUID(), question: this.clean(interaction.question, 4_000) } : undefined;
+      if (pendingQuestion) this.questionTask = originalTask;
       const reasons: Partial<Record<AgentFailureReason, string>> = {
         verification_failed: "尚有必需校验失败或在文件变更后失效；模型的完成声明不等于全部验证已通过。请继续补齐完成检查中列出的校验。",
         plan_incomplete: "任务计划仍有未完成步骤；模型的完成声明未通过程序检查。",
@@ -194,7 +207,7 @@ export class XiuRuntime {
       };
       const reason = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
       const error = reason ? this.clean([reason, ...(status.completionIssues ?? []).slice(0, 12)].join("\n"), MAX_TOOL_TEXT) : undefined;
-      this.finish(state, { result: safeResult, ...(error ? { error } : {}) });
+      this.finish(state, { result: safeResult, ...(error ? { error } : {}), ...(pendingQuestion ? { pendingQuestion } : {}) });
       return result;
     } catch (error) {
       const state = terminalState(driver.status().outcome);
@@ -369,13 +382,14 @@ export class XiuRuntime {
     };
   }
 
-  private finish(state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">, details: { result?: string; error?: string }): void {
+  private finish(state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">, details: { result?: string; error?: string; pendingQuestion?: { id: string; question: string } }): void {
     if (!this.task) return;
     this.task.state = state;
     this.task.updatedAt = this.timestamp();
     this.task.result = details.result;
     this.task.error = details.error;
     this.task.pendingApproval = undefined;
+    this.task.pendingQuestion = details.pendingQuestion;
     this.pendingApproval = undefined;
     this.emit("task.finished", { state, ...details });
   }

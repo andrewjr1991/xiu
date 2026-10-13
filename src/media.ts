@@ -241,13 +241,14 @@ export class OpenAIVisionBackend implements MediaBackend {
   private readonly baseURL: string;
   private readonly dispatcher?: ProxyAgent;
 
-  constructor(private readonly config: AgentConfig) {
+  constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
     this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
     this.dispatcher = config.proxy ? new ProxyAgent(config.proxy) : undefined;
     this.client = new OpenAI({
       apiKey: this.apiKey,
       baseURL: this.baseURL,
+      ...options,
       fetchOptions: this.dispatcher ? { dispatcher: this.dispatcher } : undefined,
     });
   }
@@ -341,9 +342,11 @@ export class OpenAIVisionBackend implements MediaBackend {
 export class AnthropicVisionBackend implements MediaBackend {
   private readonly client: Anthropic;
 
-  constructor(private readonly config: AgentConfig) {
+  constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     this.client = new Anthropic({
+      ...options,
       apiKey: readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"),
+      baseURL: config.mediaBaseURL ?? config.baseURL,
       fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
     });
   }
@@ -367,8 +370,8 @@ export class AnthropicVisionBackend implements MediaBackend {
   }
 }
 
-export function createMediaBackend(config: AgentConfig): MediaBackend {
+export function createMediaBackend(config: AgentConfig, options: { maxRetries?: number } = {}): MediaBackend {
   if (config.provider === "agnes") return new AgnesMediaBackend(config);
-  if (config.provider === "anthropic") return new AnthropicVisionBackend(config);
-  return new OpenAIVisionBackend(config);
+  if (config.provider === "anthropic") return new AnthropicVisionBackend(config, options);
+  return new OpenAIVisionBackend(config, options);
 }

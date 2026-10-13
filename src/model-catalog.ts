@@ -29,14 +29,27 @@ export function modelSupportsCapability(model: AvailableModel, capability: Model
   return CAPABILITY_PATTERNS[capability].test(`${model.id} ${model.name ?? ""} ${model.description ?? ""}`);
 }
 
-export function selectableCapabilityModels(capability: Exclude<ModelCapability, "text">, current: string | undefined, discovered: AvailableModel[] = []): AvailableModel[] {
+export function visionCapabilityEvidence(model: AvailableModel): "declared" | "inferred" | "unknown" {
+  if (model.capabilities?.some((item) => item.toLowerCase() === "vision")) return "declared";
+  return modelSupportsCapability(model, "vision") ? "inferred" : "unknown";
+}
+
+export function selectableCapabilityModels(capability: Exclude<ModelCapability, "text">, current: string | undefined, discovered: AvailableModel[] = []): Array<AvailableModel & { capabilityEvidence?: "declared" | "inferred" | "unknown" }> {
   const combined = [
-    ...(current ? [{ id: current, name: current, description: `Current ${capability} model`, source: "current" as const }] : []),
-    ...discovered.filter((model) => model.id && modelSupportsCapability(model, capability)),
+    ...(current ? [{ id: current, name: current, description: "Configured model", source: "current" as const }] : []),
+    ...discovered.filter((model) => model.id && (modelSupportsCapability(model, capability)
+      || (capability === "vision" && modelSupportsCapability(model, "text")
+        && (!model.capabilities?.some((item) => ["image", "video", "audio"].includes(item.toLowerCase()))
+          || model.capabilities?.some((item) => item.toLowerCase() === "text"))))),
   ];
   const unique = new Map<string, AvailableModel>();
-  for (const model of combined) if (!unique.has(model.id) || model.source === "current") unique.set(model.id, model);
-  return [...unique.values()].sort((a, b) => a.id === current ? -1 : b.id === current ? 1 : (a.name ?? a.id).localeCompare(b.name ?? b.id));
+  for (const model of combined) {
+    const existing = unique.get(model.id);
+    if (!existing) unique.set(model.id, model);
+    else if (existing.source === "current") unique.set(model.id, { ...model, source: "current" });
+  }
+  return [...unique.values()].sort((a, b) => a.id === current ? -1 : b.id === current ? 1 : (a.name ?? a.id).localeCompare(b.name ?? b.id))
+    .map((model) => capability === "vision" ? { ...model, capabilityEvidence: visionCapabilityEvidence(model) } : model);
 }
 
 export function selectableModels(provider: ProviderName, current: string, discovered: AvailableModel[] = [], language: UiLanguage = "en-US"): AvailableModel[] {

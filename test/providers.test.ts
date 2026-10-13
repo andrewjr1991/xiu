@@ -4,6 +4,32 @@ import test from "node:test";
 import { resolveConfig } from "../src/config.js";
 import { createProvider, probeProvider } from "../src/providers.js";
 
+test("model discovery distinguishes image input from image output", async () => {
+  const server = http.createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ data: [
+      { id: "opaque-reader", input_modalities: ["text", "image"], output_modalities: ["text"] },
+      { id: "opaque-generator", input_modalities: ["text"], output_modalities: ["image"] },
+      { id: "opaque-unspecified", modalities: ["text", "image"] },
+    ] }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const config = resolveConfig({ provider: "ollama", providerId: "vision-metadata-test", model: "opaque-reader", baseURL: `http://127.0.0.1:${address.port}/v1` });
+    const models = await createProvider(config).listModels();
+    assert.ok(models.find(model => model.id === "opaque-reader")?.capabilities?.includes("vision"));
+    assert.ok(!models.find(model => model.id === "opaque-reader")?.capabilities?.includes("image"));
+    assert.ok(models.find(model => model.id === "opaque-generator")?.capabilities?.includes("image"));
+    assert.ok(!models.find(model => model.id === "opaque-generator")?.capabilities?.includes("vision"));
+    assert.ok(!models.find(model => model.id === "opaque-unspecified")?.capabilities?.includes("vision"));
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test("local OpenAI-compatible providers do not require a cloud API key", () => {
   const config = resolveConfig({
     provider: "ollama", providerId: "ollama", model: "local-model", baseURL: "http://127.0.0.1:11434/v1",

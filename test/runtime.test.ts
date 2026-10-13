@@ -83,6 +83,28 @@ test("runtime emits a monotonic task stream and preserves one active task", asyn
   assert.equal(runtime.snapshot().task?.state, "completed");
 });
 
+test("child tool activity survives runtime events and reducer replay without sharing mutable records", async () => {
+  const driver = new FakeDriver();
+  const runtime = new XiuRuntime();
+  runtime.attachDriver(driver);
+  let replay = runtime.snapshot();
+  const running = runtime.createTask("review");
+  const card = { id: "run:child", runId: "run", title: "review", role: "reviewer", status: "running", activity: [{ id: "tool-1", name: "read_file", status: "running" as const, startedAt: new Date().toISOString() }] };
+  runtime.recordSubagent(card);
+  runtime.recordSubagent({ ...card, status: "completed", activity: [{ ...card.activity[0], status: "completed", durationMs: 10 }] });
+  driver.outcome = "completed";
+  driver.result.resolve("done");
+  await running;
+  const events = runtime.connect(0).events;
+  for (const event of events) replay = applyRuntimeEvent(replay, event);
+  assert.equal(replay.task?.subagents?.[0].activity?.[0].status, "completed");
+  assert.equal(replay.task?.subagents?.[0].activity?.[0].durationMs, 10);
+  const initial = events.find(event => event.type === "subagent.updated");
+  assert(initial?.type === "subagent.updated");
+  assert.equal(initial.payload.agent.activity?.[0].status, "running");
+  assert.equal(card.activity[0].status, "running");
+});
+
 test("runtime conversation reset clears terminal presentation state but rejects active tasks", async () => {
   const driver = new FakeDriver();
   const runtime = new XiuRuntime();

@@ -1,5 +1,31 @@
 # Changelog
 
+Local unpublished Computer Use hardening: a merged Full Access grant now covers one 20-minute / 100-input automatic allowance per parent task; re-selecting a window continues that allowance, and once it is spent or expired the user must confirm again. Renderer-originated inputs always require per-step confirmation in automatic mode. Update the prompt test for the plan-freshness rule.
+
+Local unpublished settings update: embed channel/model management directly in Settings, retaining existing trust, writer and approval guards. The chat picker selects existing models only, with no editing, credential or probe controls. Settings model selection stays inline; leaving management clears unsaved credential input and cancels visual probing.
+
+Local unpublished batch visual probing: test all visual candidates in the current saved channel with one explicit potentially billable confirmation, serial bounded requests, progress, per-model outcomes and cancellation of remaining calls. No cross-channel expansion, automatic retries or model switching.
+
+Local unpublished visual capability probing: explicit potentially billable confirmation, synthetic random-digit PNG verification, one request with SDK retries disabled, timeout/cancellation and context guards. Distinguish passed, incorrect, inconclusive and cancelled; no user screenshots or permanent capability claims. Real paid-provider validation is pending.
+
+Local unpublished vision picker correction: keep unknown chat models as explicit candidates, distinguish API-declared/name-inferred/unknown evidence, interpret image input as vision rather than generation, and provide an unfiltered themed menu alongside manual model ID entry. No paid visual probes or authorization changes.
+
+Local unpublished UI correction: fix dark-theme Computer Use human-acceptance buttons using the shared secondary-button palette; add light/dark contrast regression checks. Vision routing and authorization behavior remain unchanged.
+
+Local unpublished Computer Use increment: separate per-round human acceptance from program verification without overriding failed checks; restricted Shift+Home / Shift+End editor selection and one-input replacement, with no arbitrary system chords or clipboard access.
+
+0.20.8 最新电脑交互候选（2026-10-12，未发布）：新版完全访问确认合并电脑操作和实际视觉渠道说明，明确接受后同工作区/渠道的普通窗口不再额外确认；旧确认和其他渠道仍询问。授权弹窗先完成销毁，再自动交接目标前台；重试只取得焦点，不重放输入。新增不夺焦点的真实阶段悬浮条与暂停/继续/停止，暂停不撤回在途动作或延长时效；仍非后台并行操作。下方旧候选为历史。
+
+0.20.8 最新本地增量（2026-10-12，未发布）：自然语言目标、窗口发现与 UIA 控件操作已接入；用户显式启用临时完全访问并确认窗口/视觉渠道范围后，自动模式最长 20 分钟 / 100 次输入，范围内不逐步弹窗。手动模式保留单步确认及 10 分钟 / 30 次上限。每次输入默认等待 350 毫秒重新观察，可配置 0–3000 毫秒加载等待；取消和过期画面不继续提供可操作结果，未知输入不重放。维护者报告记事本任务通过，完整实玩仍待验收。下面单步候选段落为历史，不代表当前自动模式。
+
+0.20.8 本地候选（未发布）：保留真实子智能体工具明细、计划滞后提醒、等待回答卡片和会话换行修复。Computer Use 已扩展为用户选择已打开的 Windows 应用窗口，不再以 HTML 文件为唯一目标；支持目标截图、单步点击、普通文本输入、受限按键和滚动，并接入桌面父任务的观察/输入工具。窗口授权、每步输入、每次向当前视觉渠道发送截图分别确认；统一使用 Xiu 深浅主题的隔离确认框，默认取消。截图不写历史、审计或文件；仅明确确认的单张画面发送模型。Plan、未信任工作区和子智能体不得获得此能力；授权最长 10 分钟 / 30 步，任务结束、窗口身份变化、切换工作区或停止撤销。未知输入结果不重放。不包含整个桌面自主控制、管理员、密码或支付流程；真实付费模型和完整实玩验收尚未完成。
+
+Local unpublished fix: Security: classify shell commands per executed segment. Composed commands (`&&`, `||`, `&`, newlines, redirection, `$(...)`/backtick substitution) are never read-only, so a read-only prefix such as `git status && …` can no longer skip approval or Plan mode. `rm`-class programs are detected after control operators, inside `sh -c`/`cmd /c`/`powershell -Command`/`Invoke-Expression` scripts, behind wrappers (`sudo`, `env`, `xargs`, `timeout`, …) and in `find -delete`/`-exec`; uninspectable PowerShell `-EncodedCommand` and scripts piped into a shell are dangerous. `git -c`/`--config-env` and `--output` are no longer read-only, and read-only PowerShell pipelines require every element to be an allowlisted cmdlet.
+
+Local unpublished fix: Background stop and liveness checks on Linux no longer treat zombie processes as running. Where no init reaps orphans (for example a container without `--init`), stopping a background job previously never confirmed. If `/proc` is unreadable, the process is still treated as alive.
+
+Local unpublished fix: Security: upgrade `@modelcontextprotocol/client` from 2.0.0 to 2.3.1 for GHSA-6qxp-vccf-f47h. Before 2.2.0, the OAuth client could send credentials to an authorization server chosen by the MCP server. The SDK license changed from MIT to Apache-2.0 upstream. `npm audit --omit=dev` now reports 0 vulnerabilities.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.

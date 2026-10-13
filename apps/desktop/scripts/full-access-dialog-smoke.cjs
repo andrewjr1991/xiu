@@ -12,9 +12,9 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = theme;
   const outfile = path.join(root, 'dialog.cjs');
   buildSync({ entryPoints: [path.join(__dirname, '../main/full-access-dialog.ts')], outfile, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] });
-  const { confirmFullAccess, confirmSubagentCancel } = require(outfile);
+  const { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } = require(outfile);
   const parent = new BrowserWindow({ show: false });
-  for (const confirm of [confirmFullAccess, confirmSubagentCancel]) {
+  for (const confirm of [confirmFullAccess, parent => confirmFullAccess(parent, 'Fixture vision / model · https://fixture.invalid/v1'), confirmSubagentCancel, parent => confirmVisionProbe(parent, 'Fixture / unknown-model · https://fixture.invalid/v1', new AbortController().signal), parent => confirmVisionProbe(parent, '共 4 个模型，每个最多一次请求（最多 4 次，可能分别计费）。\n' + Array.from({length:4},(_,i)=>`Fixture / model-${i} · https://fixture.invalid/v1`).join('\n'), new AbortController().signal, true), parent => confirmComputerAction(parent, 'Computer Use', '<script>fixture</script>\n' + 'Long bounded authorization detail. '.repeat(100))]) {
   for (const action of ['cancel', 'close', 'escape', 'close-button', 'accept']) {
     console.log('Dialog smoke:', action);
     const result = confirm(parent);
@@ -25,6 +25,7 @@ app.whenReady().then(async () => {
     assert.equal(child.webContents.getLastWebPreferences().sandbox, true);
     assert.equal(await child.webContents.executeJavaScript('getComputedStyle(document.body).backgroundColor'), theme === 'dark' ? 'rgb(32, 34, 38)' : 'rgb(255, 255, 255)');
     assert.equal(await child.webContents.executeJavaScript('document.activeElement.id'), 'cancel');
+    assert.equal(await child.webContents.executeJavaScript('document.getElementById("accept").getBoundingClientRect().bottom <= innerHeight'), true);
     if (action === 'accept') fs.writeFileSync(path.resolve(__dirname, '../../../.desktop-build-temp/full-access-dialog.png'), (await child.webContents.capturePage()).toPNG());
     if (action === 'close') child.close();
     else if (action === 'escape') await child.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));true`);
@@ -32,6 +33,10 @@ app.whenReady().then(async () => {
     assert.equal(await result, action === 'accept');
     await closed;
   }
+  const cancellation = new AbortController();
+  const pending = confirmComputerAction(parent, 'Stop fixture', 'Abort must dismiss authorization.', cancellation.signal);
+  cancellation.abort();
+  assert.equal(await pending, false);
   }
   parent.destroy();
   console.log('Full Access and subagent cancellation dialogs: cancel, close, Escape, explicit acceptance and isolation passed.');

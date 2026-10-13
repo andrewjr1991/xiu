@@ -274,3 +274,39 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+  compat:
+    # Newer Node releases allowed by engines (>=20.18.1). The full candidate
+    # pipeline stays on the minimum version above; this only checks behavior.
+    name: Compat (ubuntu-latest, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:ci
+      - run: npm run build
+
+  audit:
+    # Known advisories in shipped (production) dependencies fail the build.
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.12.0
+      - name: Audit CLI production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit desktop production dependencies
+        run: npm --prefix apps/desktop audit --omit=dev --audit-level=high

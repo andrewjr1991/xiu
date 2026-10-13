@@ -1,0 +1,10 @@
+import { build } from "esbuild";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+const require = createRequire(import.meta.url);
+const output = fileURLToPath(new URL("../../../.desktop-build-temp/computer-use-controller.cjs", import.meta.url));
+await build({ entryPoints: [fileURLToPath(new URL("../main/computer-use-controller.ts", import.meta.url))], outfile: output, bundle: true, platform: "node", format: "cjs", define: { "import.meta.url": JSON.stringify(pathToFileURL(fileURLToPath(new URL("../dist/main/index.js",import.meta.url))).href) }, external: ["electron"], target: "node24" });
+const result = spawnSync(require("electron"), [fileURLToPath(new URL("computer-use-smoke-harness.cjs", import.meta.url)), output], { stdio: "inherit", windowsHide: true, timeout: 45000 });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);

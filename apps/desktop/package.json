@@ -1,6 +1,6 @@
 {
   "name": "@xiu-ai/desktop",
-  "version": "0.20.7",
+  "version": "0.20.8",
   "private": true,
   "description": "Xiu local-first desktop workbench.",
   "author": "Xiu",
@@ -52,6 +52,7 @@
     "productName": "Xiu",
     "asar": true,
     "asarUnpack": [
+      "dist/native/*.exe",
       "dist/main/background-worker.mjs",
       "node_modules/node-pty/**"
     ],

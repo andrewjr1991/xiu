@@ -117,10 +117,14 @@ function discoveredContextWindow(model: object): number | undefined {
 
 function discoveredCapabilities(model: object): string[] | undefined {
   const metadata = model as Record<string, unknown>;
-  const values = [metadata.capabilities, metadata.modalities, metadata.input_modalities, metadata.output_modalities]
-    .flatMap((value) => Array.isArray(value) ? value : value && typeof value === "object"
+  const entries = (value: unknown): unknown[] => Array.isArray(value) ? value : value && typeof value === "object"
       ? Object.entries(value as Record<string, unknown>).filter(([, enabled]) => enabled === true).map(([name]) => name)
-      : []);
+      : [];
+  // Image input is vision, not image generation. Generic modality metadata is
+  // ambiguous; keep it as a candidate hint rather than asserting input support.
+  const values = [metadata.capabilities, metadata.modalities, metadata.output_modalities].flatMap(entries);
+  const inputValues = entries(metadata.input_modalities).map(value => /image/.test(String(value).toLowerCase()) ? "vision" : value);
+  values.push(...inputValues);
   const normalized = [...new Set(values.flatMap((value) => {
     const item = String(value).toLowerCase();
     if (/image/.test(item)) return ["image"];

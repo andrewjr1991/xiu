@@ -8,6 +8,7 @@ export type RuntimeTaskState =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "waiting_user"
   | "stopping"
   | "completed"
   | "unverified"
@@ -47,6 +48,7 @@ export interface RuntimeTaskSnapshot {
   error?: string;
   plan?: TaskPlan;
   pendingApproval?: RuntimeApprovalSnapshot;
+  pendingQuestion?: { id: string; question: string };
   recovery?: RuntimeRecoverySnapshot;
 }
 
@@ -64,7 +66,7 @@ export interface RuntimeEventPayloads {
   "task.started": { taskPreview: string; resumedFrom?: string };
   "task.state": { state: RuntimeTaskState; reason?: string };
   "task.steered": { text: string };
-  "task.finished": { state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">; result?: string; error?: string };
+  "task.finished": { state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">; result?: string; error?: string; pendingQuestion?: { id: string; question: string } };
   "assistant.message": { text: string; hasToolCalls: boolean };
   "assistant.draft": { text: string; receivedChars: number };
   "assistant.stream-end": Record<string, never>;
@@ -89,6 +91,7 @@ export interface RuntimeSubagentCard {
   taskId?: string; mode?: "shared_readonly" | "worktree"; dependencies?: string[]; createdAt?: string;
   startedAt?: string; completedAt?: string; durationMs?: number;
   progress?: string; result?: string; error?: string;
+  activity?: import("../subagent-activity.js").SubagentToolActivity[];
 }
 
 export type RuntimeEvent<K extends RuntimeEventType = RuntimeEventType> = {
@@ -188,6 +191,7 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
       next.task.result = event.payload.result;
       next.task.error = event.payload.error;
       next.task.pendingApproval = undefined;
+      next.task.pendingQuestion = event.payload.pendingQuestion;
       break;
     case "plan.updated":
       next.task.plan = structuredClone(event.payload.plan);

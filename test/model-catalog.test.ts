@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectableCapabilityModels, selectableModels } from "../src/model-catalog.js";
+import { selectableCapabilityModels, selectableModels, visionCapabilityEvidence } from "../src/model-catalog.js";
 
 test("model catalog keeps current and chat models while filtering non-chat endpoints", () => {
   const models = selectableModels("openai", "custom-chat", [
@@ -28,6 +28,33 @@ test("model catalog de-duplicates provider and built-in model ids", () => {
 test("model catalog localizes the current-model description", () => {
   const models = selectableModels("agnes", "agnes-2.5-flash", [], "zh-CN");
   assert.equal(models[0]?.description, "当前会话模型");
+});
+
+test("vision candidates retain unknown chat models without claiming vision support", () => {
+  const models = selectableCapabilityModels("vision", "agnes-2.5-flash", [
+    { id: "agnes-3.0-flash", source: "api" },
+    { id: "opaque-vision", source: "api", capabilities: ["vision"] },
+    { id: "vendor-chat", source: "api", capabilities: ["text"] },
+    { id: "opaque-combined", source: "api", capabilities: ["text", "image"] },
+    { id: "vendor-image", source: "api" },
+    { id: "opaque-audio", source: "api", capabilities: ["audio"] },
+    { id: "text-embedding-3", source: "api" },
+  ]);
+  assert.equal(models[0].id, "agnes-2.5-flash");
+  assert.equal(models.find((model) => model.id === "agnes-3.0-flash")?.capabilityEvidence, "unknown");
+  assert.equal(models.find((model) => model.id === "vendor-chat")?.capabilityEvidence, "unknown");
+  assert.equal(models.find((model) => model.id === "opaque-vision")?.capabilityEvidence, "declared");
+  assert.equal(models.find((model) => model.id === "opaque-combined")?.capabilityEvidence, "unknown");
+  assert.equal(models.length, 5);
+  assert.equal(visionCapabilityEvidence({ id: "gemini-example", source: "api" }), "inferred");
+});
+
+test("current vision model keeps discovered capability metadata and manual ids", () => {
+  const models = selectableCapabilityModels("vision", "manual-id", [{ id: "manual-id", source: "api", capabilities: ["vision"] }]);
+  assert.equal(models.length, 1);
+  assert.equal(models[0].source, "current");
+  assert.equal(models[0].capabilityEvidence, "declared");
+  assert.equal(selectableCapabilityModels("vision", "custom-id")[0].capabilityEvidence, "unknown");
 });
 
 test("model catalog classifies discovered media models without mixing them into chat", () => {

@@ -12,6 +12,9 @@ import { normalizeToolResult, toolResult, toolErrorCode } from "./tool-result.js
 import { isVerificationCommand } from "./verification.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
 import { resolveWorkspacePath, resolveToolPath, validateWorkspaceGlob } from "./workspace-path.js";
+import { classifyCommand, classifyProcess, commandTokens, programName, unquotedText } from "./command-risk.js";
+
+export { classifyCommand, classifyProcess };
 
 export { resolveWorkspacePath } from "./workspace-path.js";
 
@@ -67,10 +70,6 @@ function processTimeout(input: Record<string, unknown>): number {
 
 const SHELL_PROGRAMS = new Set(["powershell", "pwsh", "cmd", "command", "bash", "sh", "zsh", "fish", "wsl"]);
 
-function programName(program: string): string {
-  return path.basename(program).toLowerCase().replace(/\.(?:exe|cmd|bat|com)$/i, "");
-}
-
 function validateDirectProcess(input: Record<string, unknown>): void {
   const program = processProgram(input);
   processArgs(input);
@@ -87,18 +86,6 @@ function quoteProcessArgument(value: string): string {
 
 export function formatProcessInvocation(program: string, args: string[]): string {
   return [quoteProcessArgument(program), ...args.map(quoteProcessArgument)].join(" ");
-}
-
-export function classifyProcess(program: string, args: string[]): ToolRisk {
-  const name = programName(program);
-  const lowered = args.map((item) => item.toLowerCase());
-  if (["rm", "rmdir", "del", "erase", "format", "shutdown", "taskkill"].includes(name)) return "dangerous";
-  if (name === "git") {
-    if ((lowered[0] === "reset" && lowered.includes("--hard")) || (lowered[0] === "clean" && lowered.some((item) => /^-[a-z]*f/i.test(item)))) return "dangerous";
-    if (["status", "log", "diff", "show", "rev-parse"].includes(lowered[0] ?? "") || (lowered[0] === "branch" && lowered.includes("--list"))) return "read";
-  }
-  if (lowered.length === 1 && ["--version", "-v"].includes(lowered[0]!)) return "read";
-  return "execute";
 }
 
 function resolveProcessProgram(program: string, cwd: string, accessMode?: "workspace" | "full"): string {
@@ -162,86 +149,6 @@ function decodeOutput(value: string | Buffer | undefined, encoding: string): str
   const utf8 = value.toString("utf8");
   if (!utf8.includes("\uFFFD") && Buffer.from(utf8, "utf8").equals(value)) return utf8;
   return iconv.decode(value, encoding);
-}
-
-function unquotedText(value: string): string {
-  let quote: "'" | '"' | undefined;
-  let result = "";
-  for (let index = 0; index < value.length; index++) {
-    const character = value[index];
-    if (quote) {
-      if (character === "`" && index + 1 < value.length) index++;
-      else if (character === quote) quote = undefined;
-    } else if (character === "'" || character === '"') {
-      quote = character;
-    } else {
-      result += character;
-    }
-  }
-  return result;
-}
-
-function commandTokens(command: string): string[] {
-  return command.match(/"(?:`.|[^"])*"|'(?:''|[^'])*'|[^\s]+/g)?.map((token) => {
-    if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) return token.slice(1, -1);
-    return token;
-  }) ?? [];
-}
-
-function readOnlyPowerShellScript(command: string): boolean {
-  const tokens = commandTokens(command);
-  const executable = path.basename(tokens[0] ?? "").toLowerCase().replace(/\.exe$/i, "");
-  let script = command;
-  if (executable === "powershell" || executable === "pwsh") {
-    const commandIndex = tokens.findIndex((token) => ["-command", "-c"].includes(token.toLowerCase()));
-    if (commandIndex < 0 || !tokens[commandIndex + 1]) return false;
-    script = tokens.slice(commandIndex + 1).join(" ");
-  }
-  const structure = unquotedText(script);
-  if (/[;&><=]/.test(structure) || /\b(?:set|add|remove|new|clear|copy|move|rename|start|stop|invoke|out|export|import)-[a-z]+\b/i.test(structure)) return false;
-  const cmdlets = structure.match(/\b[A-Za-z]+-[A-Za-z]+\b/g) ?? [];
-  if (!cmdlets.length) return false;
-  const allowed = new Set(["get-content", "get-childitem", "test-path", "select-string", "get-filehash", "measure-object", "select-object", "where-object", "compare-object"]);
-  return cmdlets.every((cmdlet) => allowed.has(cmdlet.toLowerCase()));
-}
-
-export function classifyCommand(command: string): ToolRisk {
-  const shell = unquotedText(command).trim();
-  const gitInvocation = classifyGitInvocation(command, shell);
-  if (gitInvocation) return gitInvocation;
-  const dangerous = /(^|[;|]\s*)(remove-item\b|del\s+|erase\s+|rd\s+|rmdir\s+|rm\s+)|git\s+(reset\s+--hard|clean\s+-[^\r\n]*f)|\b(format|shutdown|restart-computer|stop-computer)\b/i;
-  if (dangerous.test(shell)) return "dangerous";
-  const readOnly = [
-    /^git\s+(status|log|diff|show|rev-parse|branch\s+--list)\b/i,
-    /^(node|npm|python|py|git)\s+--version\b/i,
-    /^(get-content|get-childitem|test-path|select-string|get-filehash|measure-object)\b/i,
-  ];
-  if (readOnlyPowerShellScript(command)) return "read";
-  if (/[|;]/.test(shell)) return "execute";
-  return readOnly.some((pattern) => pattern.test(shell)) ? "read" : "execute";
-}
-
-function classifyGitInvocation(command: string, shell: string): ToolRisk | undefined {
-  // Only classify a single Git invocation here. Composed shell commands stay
-  // conservative because a later segment may mutate the workspace.
-  if (!/^git\b/i.test(shell) || /[;|&<>]/.test(shell)) return undefined;
-  const tokens = commandTokens(command);
-  if (tokens[0]?.toLowerCase() !== "git") return undefined;
-  let index = 1;
-  while (index < tokens.length) {
-    const option = tokens[index]?.toLowerCase() ?? "";
-    if (option === "-c") { index += 2; continue; }
-    if (option === "--no-pager" || option === "--paginate" || option.startsWith("--git-dir=") || option.startsWith("--work-tree=")) { index++; continue; }
-    break;
-  }
-  const subcommand = tokens[index]?.toLowerCase();
-  const rest = tokens.slice(index + 1).map((token) => token.toLowerCase());
-  if (subcommand === "reset" && rest.includes("--hard")) return "dangerous";
-  if (subcommand === "clean" && rest.some((item) => /^-[a-z]*f/i.test(item))) return "dangerous";
-  if (["status", "log", "diff", "show", "rev-parse"].includes(subcommand ?? "")) return "read";
-  if (subcommand === "branch" && rest.includes("--list")) return "read";
-  if (subcommand === "worktree" && rest[0] === "list") return "read";
-  return "execute";
 }
 
 export function looksLikeVerification(command: string): boolean {

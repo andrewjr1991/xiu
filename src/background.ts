@@ -9,6 +9,8 @@ import { createRequire } from "node:module";
 import { BACKGROUND_BOOTSTRAP_SOURCE } from "./background-bootstrap.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { withBackgroundLifecycle } from "./background-lifecycle.js";
+import { readLaunchMetadata } from "./background-metadata.js";
+import { processAlive } from "./process-liveness.js";
 
 const BACKGROUND_SCHEMA_VERSION = 1 as const;
 const MAX_PREVIEW = 240;
@@ -125,11 +127,6 @@ function readRecord(file: string): BackgroundProcessRecord | undefined {
   } catch { return undefined; }
 }
 
-function processAlive(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-}
 
 function backgroundRecordAlive(record: BackgroundProcessRecord): boolean {
   return knownProcessTargets(record).some(processAlive);
@@ -197,8 +194,8 @@ export function configureBackgroundWorkspace(cwd: string, root = path.join(os.ho
   for (const name of fs.readdirSync(workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.(?:request\.json|bootstrap\.cjs)$/.test(item))) {
     const file = path.join(workspaceDirectory(), name);
     try {
-      const stat = fs.lstatSync(file);
-      if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
+      const stat = readLaunchMetadata(() => fs.lstatSync(file), () => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); });
+      if (stat?.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
     } catch (error) {
       // A worker or another manager can remove a launch artifact after this
       // scan's readdir or lstat. Only an already-missing entry is harmless.
