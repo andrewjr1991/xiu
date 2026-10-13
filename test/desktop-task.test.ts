@@ -110,7 +110,7 @@ test("desktop management reload revokes Full Access and preserves Plan; active t
   });
   const initial = await controller.connect(workspace);
   const planned = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId! });
-  await controller.setApprovalMode(workspace, { mode: "full" }, async () => true);
+  await controller.setApprovalMode(workspace, { mode: "full", contextId: planned.modeContextId! }, async () => true);
   const reloaded = await controller.changeManagement(workspace, { action: "routing", revision: "fixture", enabled: true });
   assert.equal(changed, 1);
   assert.equal(reloaded.approvalMode, "ask");
@@ -461,11 +461,18 @@ test("desktop approval mode is applied by the main-process controller and expose
     journal: new TaskRunJournal(workspace, journals),
     setApprovalMode(mode) { modes.push(mode); },
   }));
-  assert.equal((await controller.connect(workspace, 0)).approvalMode, "ask");
-  const connection = await controller.setApprovalMode(workspace, { mode: "workspace" });
+  const initial = await controller.connect(workspace, 0);
+  assert.equal(initial.approvalMode, "ask");
+  const connection = await controller.setApprovalMode(workspace, { mode: "workspace", contextId: initial.modeContextId! });
   assert.equal(connection.approvalMode, "workspace");
   assert.deepEqual(modes, ["ask", "workspace"]);
-  await assert.rejects(() => controller.setApprovalMode(workspace, { mode: "invalid" as never }), /Invalid approval mode/);
+  await assert.rejects(() => controller.setApprovalMode(workspace, { mode: "invalid" as never, contextId: initial.modeContextId! }), /Invalid approval mode/);
+  await assert.rejects(() => controller.setApprovalMode(workspace, { mode: "ask" } as never), /Invalid approval mode/);
+  // A renderer still holding the context from before a Plan change cannot switch the mode.
+  const planned = await controller.setPlanMode(workspace, { enabled: true, contextId: initial.modeContextId! });
+  await assert.rejects(() => controller.setApprovalMode(workspace, { mode: "ask", contextId: initial.modeContextId! }), /上下文/);
+  assert.deepEqual(modes, ["ask", "workspace"]);
+  assert.equal((await controller.setApprovalMode(workspace, { mode: "ask", contextId: planned.modeContextId! })).approvalMode, "ask");
 });
 
 test("desktop can continue a historical session and start a genuinely fresh conversation", async (t) => {

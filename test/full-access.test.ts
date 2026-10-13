@@ -78,17 +78,21 @@ test("main-process full access confirmation is required, cancellable, once per o
     runtime: new XiuRuntime(), provider: { id: "test", label: "Test", model: "test" },
     journal: new TaskRunJournal(workspace), setApprovalMode: (mode) => { modes.push(mode); },
   }));
-  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "full" }), /首次确认/);
-  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "full" }, async () => { throw new Error("dialog unavailable"); }), /dialog unavailable/);
+  // The renderer only ever sends the context it last saw from connect().
+  const context = async () => (await controller.connect(cwd)).modeContextId!;
+  await assert.rejects(async () => controller.setApprovalMode(cwd, { mode: "full", contextId: await context() }), /首次确认/);
+  await assert.rejects(async () => controller.setApprovalMode(cwd, { mode: "full", contextId: await context() }, async () => { throw new Error("dialog unavailable"); }), /dialog unavailable/);
   assert.equal((await controller.connect(cwd)).approvalMode, "ask");
-  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "full", confirmed: true } as never), /首次确认/);
-  assert.equal((await controller.setApprovalMode(cwd, { mode: "full" }, async () => false)).approvalMode, "ask");
-  assert.equal((await controller.setApprovalMode(cwd, { mode: "full" }, async () => true)).approvalMode, "full");
-  await controller.setApprovalMode(cwd, { mode: "ask" });
-  assert.equal((await controller.setApprovalMode(cwd, { mode: "full" })).approvalMode, "full");
+  await assert.rejects(async () => controller.setApprovalMode(cwd, { mode: "full", contextId: await context(), confirmed: true } as never), /首次确认/);
+  assert.equal((await controller.setApprovalMode(cwd, { mode: "full", contextId: await context() }, async () => false)).approvalMode, "ask");
+  assert.equal((await controller.setApprovalMode(cwd, { mode: "full", contextId: await context() }, async () => true)).approvalMode, "full");
+  await controller.setApprovalMode(cwd, { mode: "ask", contextId: await context() });
+  assert.equal((await controller.setApprovalMode(cwd, { mode: "full", contextId: await context() })).approvalMode, "full");
+  const stale = await context();
   controller.detach();
   assert.equal((await controller.connect(cwd)).approvalMode, "ask");
-  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "full" }), /首次确认/);
+  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "full", contextId: stale }, async () => true), /上下文/);
+  await assert.rejects(async () => controller.setApprovalMode(cwd, { mode: "full", contextId: await context() }), /首次确认/);
   const next = path.join(root, "next"); await fs.mkdir(next);
   assert.equal((await controller.connect(next)).approvalMode, "ask");
   assert.ok(modes.includes("full"));
@@ -120,11 +124,12 @@ test("pending full access confirmation blocks task creation and workspace change
   let finish!: (value: boolean) => void;
   let entered!: () => void;
   const ready = new Promise<void>((resolve) => { entered = resolve; });
-  const pending = controller.setApprovalMode(cwd, { mode: "full" }, () => { entered(); return new Promise((resolve) => { finish = resolve; }); });
+  const { modeContextId } = await controller.connect(cwd);
+  const pending = controller.setApprovalMode(cwd, { mode: "full", contextId: modeContextId! }, () => { entered(); return new Promise((resolve) => { finish = resolve; }); });
   await ready;
   assert.equal(controller.canChangeWorkspace(), false);
   await assert.rejects(() => controller.createTask(cwd, "must not start"), /确认/);
-  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "ask" }), /运行期间/);
+  await assert.rejects(() => controller.setApprovalMode(cwd, { mode: "ask", contextId: modeContextId! }), /运行期间/);
   await assert.rejects(() => controller.connect(path.join(cwd, "other")), /运行/);
   finish(false);
   assert.equal((await pending).approvalMode, "ask");

@@ -380,7 +380,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const setApprovalMode = async (mode: DesktopApprovalMode) => {
     setBusy(true); setError(undefined);
     try {
-      const next = await window.xiuDesktop.setApprovalMode({ mode });
+      const next = await window.xiuDesktop.setApprovalMode({ mode, contextId: connection?.modeContextId ?? "" });
       setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot;
       setPermissionOpen(false);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }

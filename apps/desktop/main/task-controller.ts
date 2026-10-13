@@ -183,8 +183,11 @@ export class DesktopTaskController {
   }
 
   async setApprovalMode(workspace: string, request: DesktopApprovalModeRequest, confirmFullAccess?: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
-    if (!request || !["ask", "workspace", "full"].includes(request.mode)) throw new Error("Invalid approval mode.");
+    if (!request || !["ask", "workspace", "full"].includes(request.mode) || typeof request.contextId !== "string") throw new Error("Invalid approval mode.");
     const host = await this.ensure(workspace);
+    // A stale renderer (replaced host, reconfiguration, other conversation) must not change the current mode.
+    const contextChanged = () => this.host !== host || this.workspace !== workspace || this.modeContextId !== request.contextId;
+    if (contextChanged()) throw new Error("权限上下文已经变化，请刷新后重新选择。");
     if (this.active(host)) throw new Error("任务运行期间不能切换权限模式。请先停止任务并等待结束。");
     let newlyConfirmed = false;
     if (request.mode === "full" && this.fullAccessWorkspace !== workspace) {
@@ -193,7 +196,7 @@ export class DesktopTaskController {
       let confirmed = false;
       try { confirmed = await confirmFullAccess(); }
       finally { this.permissionBusy = false; }
-      if (this.host !== host || this.workspace !== workspace || this.active(host)) throw new Error("权限上下文已经变化，请重新选择。");
+      if (contextChanged() || this.active(host)) throw new Error("权限上下文已经变化，请重新选择。");
       if (!confirmed) return this.connect(workspace, 0);
       newlyConfirmed = true;
     }
