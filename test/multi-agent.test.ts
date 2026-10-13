@@ -234,8 +234,11 @@ test("reviewer and tester inspect the implementation Worktree before gated integ
 
 test("one agent can be cancelled without stopping another", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agents-cancel-"));
+  let slowStarted!: () => void;
+  const slowRunning = new Promise<void>((resolve) => { slowStarted = resolve; });
   const executor: SubagentExecutor = async (task, context) => {
     context.reportToolActivity("read_file", "started");
+    if (task.id === "slow") slowStarted();
     if (task.id === "slow") await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, 500);
       context.signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
@@ -249,7 +252,7 @@ test("one agent can be cancelled without stopping another", async () => {
     { id: "slow", title: "slow", instructions: "slow", role: "explorer" },
     { id: "fast", title: "fast", instructions: "fast", role: "reviewer" },
   ]);
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await slowRunning;
   await coordinator.cancel(run.id, "slow");
   const completed = await coordinator.wait(run.id, 2_000);
   assert.equal(completed.tasks.find((task) => task.id === "slow")?.status, "cancelled");
