@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix the Windows background launch race accepted in 0.20.7: stale-artifact cleanup now skips a launch artifact whose `lstat` reports EPERM (Windows delete-pending) instead of failing the new launch. Nothing is deleted on that path; removal errors and other inspection errors still propagate.
+
 ## 0.20.7 — Task review corrections (2026-10-08)
 
 - Published exact main-CI assets with explicit maintainer acceptance of one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed; five other jobs passed). Original failed CLI manifest retained. Windows unsigned; npm authentication pending.

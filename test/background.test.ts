@@ -128,6 +128,46 @@ test("workspace cleanup still propagates inspection and removal I/O failures", a
   }
 });
 
+test("workspace cleanup skips a delete-pending artifact without aborting the scan", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-pending-"));
+  t.after(() => removeBackgroundTestRoot(root));
+  configureBackgroundWorkspace(root, root);
+  const directory = path.join(root, (await fs.readdir(root))[0]!);
+  const pending = path.join(directory, ".000000000001.bootstrap.cjs");
+  const stale = path.join(directory, ".000000000002.request.json");
+  for (const file of [pending, stale]) {
+    await fs.writeFile(file, "temporary launch artifact");
+    await fs.utimes(file, new Date(0), new Date(0));
+  }
+  const lstat = fsSync.lstatSync;
+  t.mock.method(fsSync, "lstatSync", function (target: fsSync.PathLike, ...args: unknown[]) {
+    // Windows maps STATUS_DELETE_PENDING to EPERM when a worker has unlinked
+    // its bootstrap while another handle (loader, scanner) is still open.
+    if (target === pending) throw Object.assign(new Error("EPERM: operation not permitted, lstat"), { code: "EPERM", syscall: "lstat" });
+    return Reflect.apply(lstat, fsSync, [target, ...args]);
+  });
+  assert.doesNotThrow(() => configureBackgroundWorkspace(root, root));
+  assert.equal(fsSync.existsSync(pending), true, "an uninspectable artifact is left for a later scan, never deleted");
+  assert.equal(fsSync.existsSync(stale), false, "the remaining stale artifacts are still cleaned");
+});
+
+test("workspace cleanup still propagates EPERM from removal", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-unlink-eperm-"));
+  t.after(() => removeBackgroundTestRoot(root));
+  configureBackgroundWorkspace(root, root);
+  const directory = path.join(root, (await fs.readdir(root))[0]!);
+  const file = path.join(directory, ".000000000001.bootstrap.cjs");
+  await fs.writeFile(file, "temporary launch artifact");
+  await fs.utimes(file, new Date(0), new Date(0));
+  const unlink = fsSync.unlinkSync;
+  const failure = Object.assign(new Error("fixture removal failure"), { code: "EPERM", syscall: "unlink" });
+  t.mock.method(fsSync, "unlinkSync", function (target: fsSync.PathLike, ...args: unknown[]) {
+    if (target === file) throw failure;
+    return Reflect.apply(unlink, fsSync, [target, ...args]);
+  });
+  assert.throws(() => configureBackgroundWorkspace(root, root), (error) => error === failure);
+});
+
 test("workspace cleanup retains its artifact name, age, regular-file, and symlink checks", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-cleanup-checks-"));
   t.after(() => removeBackgroundTestRoot(root));

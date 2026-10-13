@@ -2,7 +2,7 @@
 
 当前发布状态：0.20.7 已于 2026-10-08 [发布到 GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.7)，源提交 `34651d5081dc96fc135930c0b8be65fb97d67604`。main CI 37745693627 五作业通过，Windows CLI 全量测试 1010 通过、7 跳过、1 失败（后台临时 bootstrap 文件 lstat EPERM 竞态，尚未修复）；维护者明确接受该风险并授权发布。候选与 PR 各六作业通过。五个附件直接使用 main CI 制品，大小和 SHA256 已回读验证；CLI manifest 原样保留 failed/unaccepted-candidate。Windows 安装器未签名。npm 缺少认证，latest 仍为 0.20.4。
 
-下一动作：补齐子智能体真实工具执行明细、历史状态及本地测试包；Computer Use 可进入 Windows 受控预览设计阶段，独立授权、窗口白名单与紧急停止先行。后台竞态另行修复；以下旧阶段记录为历史。
+下一动作：补齐子智能体真实工具执行明细、历史状态及本地测试包；Computer Use 可进入 Windows 受控预览设计阶段，独立授权、窗口白名单与紧急停止先行。后台 bootstrap lstat EPERM 竞态已在分支 `claude/background-cleanup-eperm` 修复（清理扫描跳过 delete-pending 启动文件，不删除、不放宽其他错误），待 Windows CI 验证；以下旧阶段记录为历史。
 
 最新本地追加（2026-10-08，完整审查与历史图片）：新文本变更保存完整脱敏 Diff，侧栏/弹窗每页 250 行，长行横向滚动；旧预览记录明确不可恢复及范围估算，不读取当前文件补造历史。历史消息从原 `.xiu/attachments` 引用恢复缩略图，缺失项保留提示，续接后归属不变；拒绝任意路径、穿越和链接，信任/审批/Plan 边界不变。最终专项 94/94、两端类型检查/构建、文档检查、宽窄真实 UI 的完整 Diff 末页/长行与历史附件恢复/续接通过。全量套件仍未完成，不继承旧 CI。独立本地安装器 `apps/desktop/release/Xiu-0.20.6-local-full-review-x64.exe` 已生成，标准解包位置不变，包内 6 份 dist 文件逐字节匹配且无测试桥；隔离全新安装、启动、覆盖升级、中断重启、卸载全部通过。未签名、未提交/推送/发布，正式资产不变。下一动作：交由维护者复测原历史图片和新任务完整 Diff，再决定后续发布。
 

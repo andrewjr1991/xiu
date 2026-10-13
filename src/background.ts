@@ -202,7 +202,15 @@ export function configureBackgroundWorkspace(cwd: string, root = path.join(os.ho
     } catch (error) {
       // A worker or another manager can remove a launch artifact after this
       // scan's readdir or lstat. Only an already-missing entry is harmless.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      // Windows reports a file in the delete-pending state (a worker has just
+      // unlinked its bootstrap while another handle is still open) as EPERM
+      // on lstat. Skipping inspection only leaves this artifact for a later
+      // scan; nothing is deleted, and the launch's own writes still fail
+      // closed if the storage is genuinely unusable.
+      if (code === "EPERM" && (error as NodeJS.ErrnoException).syscall === "lstat") continue;
+      throw error;
     }
   }
 }
