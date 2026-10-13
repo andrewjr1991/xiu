@@ -1,8 +1,9 @@
-import { fetch, ProxyAgent } from "undici";
+import { fetch, ProxyAgent, type Dispatcher } from "undici";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
+import { createTrustedDispatcher } from "./trusted-dispatcher.js";
 
 export interface ImageGenerationRequest {
   prompt: string;
@@ -239,12 +240,12 @@ export class OpenAIVisionBackend implements MediaBackend {
   private readonly client: OpenAI;
   private readonly apiKey: string;
   private readonly baseURL: string;
-  private readonly dispatcher?: ProxyAgent;
+  private readonly dispatcher?: Dispatcher;
 
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
     this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
-    this.dispatcher = config.proxy ? new ProxyAgent(config.proxy) : undefined;
+    this.dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new OpenAI({
       apiKey: this.apiKey,
       baseURL: this.baseURL,
@@ -343,11 +344,12 @@ export class AnthropicVisionBackend implements MediaBackend {
   private readonly client: Anthropic;
 
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
+    const dispatcher = createTrustedDispatcher(config.proxy);
     this.client = new Anthropic({
       ...options,
       apiKey: readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"),
       baseURL: config.mediaBaseURL ?? config.baseURL,
-      fetchOptions: config.proxy ? { dispatcher: new ProxyAgent(config.proxy) } : undefined,
+      fetchOptions: dispatcher ? { dispatcher } : undefined,
     });
   }
 
