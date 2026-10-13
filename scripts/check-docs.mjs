@@ -40,6 +40,11 @@ const roadmap = readFileSync(path.join(workspace, "ROADMAP.zh-CN.md"), "utf8");
 if (!roadmap.includes(`| 当前开发版本 | \`${manifest.version}\``)) {
   failures.push(`ROADMAP current development version does not match package.json ${manifest.version}`);
 }
+// The roadmap keeps exactly one current state and one next step; dated history goes to docs/history/.
+for (const heading of ["## 当前状态", "## 当前优先级", "## 下一步"]) {
+  const count = roadmap.split("\n").filter((line) => line.trim() === heading).length;
+  if (count !== 1) failures.push(`ROADMAP must contain exactly one "${heading}" section; found ${count}`);
+}
 
 const security = readFileSync(path.join(workspace, "SECURITY.zh-CN.md"), "utf8");
 if (!security.includes("不伪造 Provider API 未返回的隐藏思维链")) {
