@@ -60,6 +60,12 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
       id: current.id && !settings?.templates?.some((item) => item.id === current.id) ? current.id : template?.id ?? "",
       name: current.name && !settings?.templates?.some((item) => item.name === current.name) ? current.name : template?.name ?? "" };
   });
+  // Say why saving is unavailable instead of leaving a silently disabled button.
+  const saveBlocked = (draft: DesktopProviderUpsertRequest): string | undefined => {
+    if (disabled) return "任务运行中，或配置正被其他窗口、恢复操作占用；结束后才能保存。";
+    const missing = [!draft.name.trim() && "名称", !draft.id.trim() && "标识", !draft.model.trim() && "默认模型"].filter(Boolean);
+    return missing.length ? `请先填写：${missing.join("、")}` : undefined;
+  };
   const updateCapabilityModel = (capability: "vision" | "image" | "video" | "audio", value: string) => setEditing((current) => current ? { ...current, capabilityModels: { ...current.capabilityModels, [capability]: value } } : current);
   return <div className={`provider-popover${management ? " provider-manager" : " provider-selection"}`} role={management ? "region" : "dialog"} aria-label={management ? "管理模型与渠道" : "选择 Provider 和模型"}>
     <header><div><strong>{management ? "渠道配置" : "选择模型"}</strong><small>{management ? "管理渠道、凭据与模型能力" : "仅切换模型；配置请前往设置 → 模型与渠道"}</small></div><div className="provider-header-actions">{management && <button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button>}{!management && <button onClick={onClose} aria-label="关闭">×</button>}</div></header>
@@ -89,7 +95,7 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
           }
           return <label key={capability} className="wide">{labels[capability]}<input list={listId} value={editing.capabilityModels?.[capability] ?? ""} onChange={(event) => updateCapabilityModel(capability, event.target.value)} placeholder="输入或选择模型 ID" /><datalist id={listId}>{options.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist></label>;
         })}
-      </div><footer><button onClick={() => setEditing(undefined)}>取消</button><button className="primary-button compact" disabled={busy || disabled || !editing.id.trim() || !editing.name.trim() || !editing.model.trim()} onClick={() => void onUpsert(editing).then(() => setEditing(undefined))}>{busy ? "保存中…" : "保存渠道"}</button></footer></section>
+      </div><footer>{saveBlocked(editing) && <small className="provider-save-hint" role="status">{saveBlocked(editing)}</small>}<button onClick={() => setEditing(undefined)}>取消</button><button className="primary-button compact" disabled={busy || Boolean(saveBlocked(editing))} onClick={() => void onUpsert(editing).then(() => setEditing(undefined))}>{busy ? "保存中…" : "保存渠道"}</button></footer></section>
       : management && deleting ? <section className="provider-editor provider-delete-confirm"><span className="confirmation-icon danger">⌫</span><h3>删除“{deleting.name}”？</h3><p>将删除此渠道配置和模型缓存。已保存的系统凭据不会在此操作中导出或显示。</p><div><button onClick={() => setDeleting(undefined)}>取消</button><button className="danger-button" disabled={busy || disabled} onClick={() => void onDelete(deleting).then(() => setDeleting(undefined))}>删除渠道</button></div></section>
       : selected && <section className="model-panel">
         <div className="provider-summary"><div><strong>{selected.name}</strong><small>{selected.id} · {selected.kind}</small></div><span className={selected.credential.configured ? "configured" : "missing"}>{credentialLabel(selected)}</span></div>

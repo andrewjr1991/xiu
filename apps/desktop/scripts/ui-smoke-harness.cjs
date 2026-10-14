@@ -585,8 +585,15 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.body.innerText.includes('尚未添加渠道')`, "zero-provider setup");
     await clickText(window, "新增渠道", ".provider-add");
     await waitFor(window, `Boolean(document.querySelector('.provider-form .xiu-select:not(:disabled)'))`, "provider form mounted");
+    // A disabled save must say what is missing, and the editor flows with the
+    // settings page instead of scrolling inside a fixed-height box.
+    assert(await evaluate(window, `(() => { const save=[...document.querySelectorAll('.provider-editor footer button')].find(el => el.innerText === '保存渠道'); return save.disabled && document.querySelector('.provider-save-hint')?.innerText === '请先填写：名称、标识、默认模型'; })()`), "Disabled channel save must name the missing fields.");
+    assert(await evaluate(window, `(() => { const el=document.querySelector('.provider-manager .provider-editor'); return getComputedStyle(el).overflowY === 'visible' && el.scrollHeight <= el.clientHeight + 1; })()`), "Channel editor must not scroll inside the settings page.");
+    await settleLayout(window);
+    await fs.promises.writeFile(path.join(smokeRoot, 'provider-editor-1366.png'), (await window.webContents.capturePage()).toPNG());
     await chooseOption(window, '.provider-form .xiu-select', 'agnes');
     await waitFor(window, `document.querySelector('.provider-form input').value === 'Agnes'`, "Agnes template fields");
+    assert(await evaluate(window, `!document.querySelector('.provider-save-hint')`), "A complete channel must not show a save hint.");
     await clickText(window, "保存渠道", ".provider-editor footer button");
     await waitFor(window, `window.xiuSmoke.calls().includes('onboarding:add:agnes')`, "first channel save");
     await waitFor(window, `document.querySelector('.provider-nav-row > button')`, "saved channel stays visible");
