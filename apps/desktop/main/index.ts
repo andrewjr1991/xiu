@@ -18,7 +18,6 @@ import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-h
 import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
 import { VisionProbeController } from "./vision-probe-controller.js";
 import { readEnvironmentCredential } from "../../../src/credential-store.js";
-import { createHmac, randomBytes } from "node:crypto";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
@@ -498,11 +497,10 @@ function registerIpc(): void {
     const models = request.allCandidates === true ? [...new Set(providers.snapshot(request.providerId).capabilityModelsByProvider[request.providerId]?.vision.map(model => model.id) ?? [])] : [request.model];
     if (!models.length || models.length > 200) throw new Error("批量视觉测试需要 1–200 个候选；请先刷新或整理模型列表。");
     const configs = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
-    // Keyed per probe so credential values never become a reusable plain digest.
-    const fingerprintKey = randomBytes(32);
+    // Compared in memory only: credential values are never hashed, stored or logged.
     const fingerprint = () => {
       const current = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
-      return createHmac("sha256", fingerprintKey).update(JSON.stringify([current, readEnvironmentCredential(config.apiKeyEnv), readEnvironmentCredential("AGNES_API_KEY"), readEnvironmentCredential("OPENAI_API_KEY"), readEnvironmentCredential("ANTHROPIC_API_KEY"), process.env.AGNES_BASE_URL])).digest("hex");
+      return JSON.stringify([current, readEnvironmentCredential(config.apiKeyEnv), readEnvironmentCredential("AGNES_API_KEY"), readEnvironmentCredential("OPENAI_API_KEY"), readEnvironmentCredential("ANTHROPIC_API_KEY"), process.env.AGNES_BASE_URL]);
     };
     const initial = fingerprint();
     const validate = async () => {
