@@ -10,7 +10,12 @@ permissions:
   contents: read
 
 # Every push keeps its verification and candidates; newer commits do not cancel it.
+# Only a pull request's superseded run is cancelled when a newer commit arrives.
 # Failed gates remain failed, but independent build/report steps still run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     name: Verify (${{ matrix.os }}, Node ${{ matrix.node }})

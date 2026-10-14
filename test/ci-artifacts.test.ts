@@ -176,6 +176,9 @@ test("CI keeps failed checks visible and uploads candidates without publishing",
   const workflow = await readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.equal(workflow.includes("continue-on-error:"), false);
   assert.equal(workflow.includes("cancel-in-progress: true"), false);
+  // Only a pull request's superseded run is cancelled; push runs never share a group.
+  assert.match(workflow, /group: ci-\$\{\{ github\.event_name == 'pull_request' && format\('pr-\{0\}', github\.event\.pull_request\.number\) \|\| github\.run_id \}\}/);
+  assert.match(workflow, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
   assert.equal(workflow.includes("installer:msix"), false);
   assert.equal(workflow.includes("npm publish"), false);
   assert.match(workflow, /python test\/xiu-search-auth-migration\.test\.py -v/);
