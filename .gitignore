@@ -3,6 +3,7 @@ dist/
 apps/desktop/dist/
 apps/desktop/release/
 apps/desktop/release-*/
+apps/desktop/bundled/
 .desktop-build-cache/
 .desktop-build-temp/
 .forge/

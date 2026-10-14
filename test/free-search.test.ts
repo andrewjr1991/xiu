@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { FREE_SEARCH_CONSTRAINTS, FREE_SEARCH_VERSION, FreeSearchBackend, freeSearchLaunch, parseFreeSearchResponse, type FreeSearchClient, type FreeSearchLaunch } from "../src/free-search.js";
+import { FREE_SEARCH_CONSTRAINTS, FREE_SEARCH_VERSION, FreeSearchBackend, freeSearchLaunch, parseFreeSearchResponse, useBundledUv, type FreeSearchClient, type FreeSearchLaunch } from "../src/free-search.js";
 import { XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT } from "../src/settings.js";
 import { executeTool } from "../src/tools.js";
 import { createWebSearchTools, type WebSearchConfig } from "../src/web-search.js";
@@ -76,11 +76,63 @@ test("the backend writes its constraints, reuses one server and stops retrying w
   assert.equal((await fs.readFile(launches[0]!.args[2]!, "utf8")).trim().split("\n").length, FREE_SEARCH_CONSTRAINTS.length);
 
   let attempts = 0;
-  const missing = new FreeSearchBackend({ home, connect: async () => { attempts++; throw Object.assign(new Error("spawn uvx ENOENT"), { code: "ENOENT" }); } });
-  await assert.rejects(missing.search({ query: "a", count: 3, timeoutMs: 5_000 }), /uv is not installed/);
+  let installs = 0;
+  const missing = new FreeSearchBackend({
+    home,
+    connect: async () => { attempts++; throw Object.assign(new Error("spawn uvx ENOENT"), { code: "ENOENT" }); },
+    ensureUv: async () => { installs++; throw new Error("offline"); },
+  });
+  await assert.rejects(missing.search({ query: "a", count: 3, timeoutMs: 5_000 }), /uv is not installed and Xiu could not set up its own copy: offline/);
   await assert.rejects(missing.search({ query: "a", count: 3, timeoutMs: 5_000 }), /uv is not installed/);
   assert.equal(attempts, 1);
+  assert.equal(installs, 1);
   await fs.rm(home, { recursive: true, force: true });
+});
+
+test("without uv on PATH the backend launches Xiu's pinned uvx with the same arguments", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-free-search-managed-"));
+  const commands: string[] = [];
+  let launch: FreeSearchLaunch | undefined;
+  let proxy: string | undefined;
+  const backend = new FreeSearchBackend({
+    home,
+    proxy: "http://127.0.0.1:7890/",
+    connect: async (value) => {
+      commands.push(value.command);
+      if (value.command === "uvx") throw Object.assign(new Error("spawn uvx ENOENT"), { code: "ENOENT" });
+      launch = value;
+      return { search: async () => ({ results: [] }), close: async () => undefined };
+    },
+    ensureUv: async (options) => { proxy = options.proxy; return "/home/me/.xiu/uv/0.0.0/uvx"; },
+  });
+  await backend.search({ query: "a", count: 3, timeoutMs: 5_000 });
+  assert.deepEqual(commands, ["uvx", "/home/me/.xiu/uv/0.0.0/uvx"]);
+  assert.ok(launch!.args.includes(`free-search-mcp==${FREE_SEARCH_VERSION}`));
+  assert.equal(launch!.env.SEARCH_MCP_TOOLS, "search");
+  assert.equal(proxy, "http://127.0.0.1:7890/");
+
+  // Any other start failure is not "uv missing" and must not trigger a download.
+  let installs = 0;
+  const broken = new FreeSearchBackend({ home, connect: async () => { throw new Error("server crashed"); }, ensureUv: async () => { installs++; return "uvx"; } });
+  await assert.rejects(broken.search({ query: "a", count: 3, timeoutMs: 5_000 }), /could not start: server crashed/);
+  assert.equal(installs, 0);
+  await fs.rm(home, { recursive: true, force: true });
+});
+
+test("the desktop's bundled uvx replaces the PATH lookup only when it exists", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-bundled-uv-"));
+  try {
+    assert.equal(useBundledUv(directory), false);
+    assert.equal(freeSearchLaunch("/xiu-home", undefined, {}).command, "uvx");
+    const uvx = path.join(directory, process.platform === "win32" ? "uvx.exe" : "uvx");
+    await fs.writeFile(uvx, "");
+    assert.equal(useBundledUv(directory), true);
+    assert.equal(freeSearchLaunch("/xiu-home", undefined, {}).command, uvx);
+  } finally {
+    useBundledUv(undefined);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+  assert.equal(freeSearchLaunch("/xiu-home", undefined, {}).command, "uvx");
 });
 
 test("a slow first launch gives up on this search but keeps starting for the next one", async () => {

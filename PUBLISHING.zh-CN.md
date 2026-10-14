@@ -1144,7 +1144,8 @@ npm.cmd run smoke:platform
 
 1. `src/free-search.ts` 中的 `FREE_SEARCH_VERSION` 与依赖约束同时更新；约束由 `uv pip compile --universal --python-version 3.11` 生成，每一行都是确切版本，并在干净的 uv 缓存下实际启动过一次。
 2. 启动参数只开放 `search` 工具，下载、智能体后端和登录类引擎关闭；子进程环境不含 Provider Key 等 Xiu 进程的秘密，工作目录和配置目录位于 `~/.xiu/free-search/`。
-3. 未安装 uv、启动超时、搜索出错或没有可用结果时，回退到 Xiu 托管搜索并在结果中注明；没有托管回退时明确报错，不伪造结果。
+3. uv 下载或校验失败、启动超时、搜索出错或没有可用结果时，回退到 Xiu 托管搜索并在结果中注明；没有托管回退时明确报错，不伪造结果。
 4. 搜索结果仍经过 HTTPS、域名策略与去重过滤；打开网页仍只走 `web_open`。
 5. 旧版保存的托管预置升级后切换为 free-search 且保留代理、超时和域名策略；升级后明确选择的托管或自定义服务不再被迁移。
 6. 在 Windows、macOS 和 Linux 上各做一次真实搜索，包括国内网络环境；记录哪些引擎可用。
+7. uv 固定在 `src/uv-install.ts`（版本、各平台 PyPI wheel 路径、大小与 SHA-256，均从 `https://pypi.org/pypi/uv/<版本>/json` 复制，版本至少发布两周）。Windows 打包时 `package-windows.mjs` 先下载并校验 win_amd64 wheel（缓存在 `.desktop-build-cache/`，需要访问 PyPI；可用 `XIU_BUILD_PROXY` 指定代理），解出 `uv.exe`、`uvx.exe` 和许可证到 `resources/uv/`；安装器验收会确认已安装的 `uvx.exe --version` 与 `VERSION` 一致。在没有 uv 的机器上验证 CLI 首次搜索会自动下载并启动。

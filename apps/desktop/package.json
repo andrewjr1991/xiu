@@ -65,6 +65,12 @@
       "package.json",
       "!node_modules/@xiu-ai/cli{,/**/*}"
     ],
+    "extraResources": [
+      {
+        "from": "bundled/uv",
+        "to": "uv"
+      }
+    ],
     "afterPack": "scripts/after-pack.cjs",
     "win": {
       "icon": "assets/icon.ico",

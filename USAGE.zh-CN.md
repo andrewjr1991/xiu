@@ -1597,7 +1597,7 @@ v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默�
 
 新安装默认使用本机运行的开源项目 [free-search-mcp](https://github.com/sweetcornna/free-search-mcp)（MIT）。它同时查询 DuckDuckGo、Bing、AnySearch、Mojeek 等引擎，按名次融合去重；遇到版本号、CVE、天气、汇率这类问题，还会直接从对应的官方数据源取记录。不需要申请任何 API Key，搜索请求从你自己的网络发出。
 
-前提是安装 [uv](https://docs.astral.sh/uv/)：Windows 在 PowerShell 中运行 `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`（有 winget 也可用 `winget install astral-sh.uv`；已装 Python 时可用 `pip install uv`），macOS/Linux 运行 `curl -LsSf https://astral.sh/uv/install.sh | sh`。装完重新打开终端，`uv --version` 能显示版本即可。第一次搜索会下载 Python 依赖，可能需要几十秒；执行 `/web doctor` 可以提前下载并测试一次。
+它通过 [uv](https://docs.astral.sh/uv/) 启动，不需要自己安装：桌面安装版自带固定版本的 uv（0.12.21）；CLI 优先用 PATH 里已有的 uv，没有时在第一次搜索时自动下载同一固定版本到 `~/.xiu/uv/`（依次尝试 PyPI 官方、清华、阿里云镜像，只接受与内置 SHA-256 完全一致的文件，代理沿用 `/web proxy` 或终端的 `HTTPS_PROXY`）。第一次搜索还会下载 Python 依赖，可能需要几十秒到几分钟，期间先用托管搜索；执行 `/web doctor` 可以提前准备并测试一次。
 
 安全边界：
 
@@ -1606,7 +1606,7 @@ v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默�
 - 它在 `~/.xiu/free-search/` 下运行，使用独立的配置和缓存目录，不读取你自己为 free-search 准备的 `.env` 或项目目录里的 `.env`；Xiu 的模型 Key 等环境变量不会传给它。
 - 打开网页仍由 Xiu 的 `web_open` 完成，HTTPS、内网拦截、重定向复核、域名策略和来源核验规则都不变；`/web proxy` 设置的联网代理同样用于 free-search。
 
-没有安装 uv、启动失败或本机搜索没有可用结果时，`web_search` 会自动改用 Xiu 托管搜索，并在结果里注明使用了回退。国内网络下 DuckDuckGo 等引擎可能无法访问，主要依赖 Bing 和 360 搜索；结果偏少时可以配置 `/web proxy set`。
+uv 准备失败、启动失败或本机搜索没有可用结果时，`web_search` 会自动改用 Xiu 托管搜索，并在结果里注明使用了回退。国内网络下 DuckDuckGo 等引擎可能无法访问，主要依赖 Bing 和 360 搜索；结果偏少时可以配置 `/web proxy set`。
 
 旧版本保存的「Xiu 托管搜索」预置会在升级后自动切换到 free-search（仍以托管搜索作回退）；之后明确选择的配置会被保留。只想用托管搜索时，在桌面「工具与运行设置 → 联网检索」选择「Xiu 托管搜索 · 自动认证」。「工具与运行设置」的入口是打开可信工作区后右上角的齿轮按钮，也可以从「设置 → 对话与运行 → 联网检索、模型路由与 Skills」点「打开」进入。
 

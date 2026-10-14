@@ -38,6 +38,16 @@ try {
   await run(executable, ["--smoke-test", `--user-data-dir=${userData}`], { ...isolatedEnv, XIU_DESKTOP_SMOKE_LOG: smokeLog });
   const startup = await readFile(smokeLog, "utf8");
   if (!startup.includes("load-finished")) throw new Error("Installed Xiu did not finish loading.");
+  if (!startup.includes("bundled-uv")) throw new Error("Installed Xiu did not find its bundled uv.");
+  const uvVersion = await new Promise((resolve, reject) => {
+    const child = spawn(path.join(installDir, "resources", "uv", "uvx.exe"), ["--version"], { windowsHide: true });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve(output.trim()) : reject(new Error(`Bundled uvx exited with ${code}.`)));
+  });
+  const expectedUv = (await readFile(path.join(installDir, "resources", "uv", "VERSION"), "utf8")).trim();
+  if (uvVersion !== `uvx ${expectedUv}` && !uvVersion.startsWith(`uvx ${expectedUv} `)) throw new Error(`Bundled uvx reported "${uvVersion}", expected ${expectedUv}.`);
 
   const sentinel = path.join(userData, "g5c-upgrade-sentinel.txt");
   await writeFile(sentinel, "preserve", "utf8");
@@ -61,7 +71,7 @@ try {
   await run(uninstaller, ["/S"], isolatedEnv);
   for (let attempt = 0; attempt < 600; attempt += 1) {
     try { await access(executable); await new Promise((resolve) => setTimeout(resolve, 100)); }
-    catch { passed = true; console.log(JSON.stringify({ passed: true, installer, checks: ["fresh-install", "installed-startup", "in-place-upgrade", "interrupted-restart", "uninstall"] }, null, 2)); break; }
+    catch { passed = true; console.log(JSON.stringify({ passed: true, installer, checks: ["fresh-install", "installed-startup", "bundled-uv", "in-place-upgrade", "interrupted-restart", "uninstall"] }, null, 2)); break; }
   }
   if (!passed) throw new Error(`Uninstall did not remove Xiu.exe. Acceptance files remain at ${temp}`);
 } finally {

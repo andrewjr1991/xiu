@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Local web search no longer needs uv installed by hand. The Windows desktop installer now includes uv 0.12.21, and the CLI, when no uv is on PATH, downloads that same version once into `~/.xiu/uv` on the first local search. Both use the official PyPI wheel (the CLI also tries the Tsinghua and Aliyun PyPI mirrors) and accept it only when its size and SHA-256 match the values pinned in the source; Linux uses the static musl build. The installer acceptance checks that the installed `uvx.exe` runs and reports the pinned version.
 - CLI web results read like the desktop: a successful `web_search` shows "returned N results" and `web_open` shows the page title and URL, instead of the start of the English untrusted-content notice. The search and page-open budget messages are shown in plain words too. The model still receives the full notice, and `/details` still shows the raw output.
 - Desktop: Settings → 对话与运行 now has a row that opens 工具与运行设置 (web search, model routing, Skills), which was previously only reachable from the gear icon in the workspace header.
 - Desktop channel settings: when **保存渠道** is unavailable, the editor now says why (the missing fields, such as 标识, or that a task or another window holds the configuration) instead of only greying out the button. In Settings the channel manager now grows with the page instead of scrolling inside a fixed-height box, and the save bar stays visible at the bottom.

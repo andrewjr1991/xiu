@@ -18,6 +18,7 @@ import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-h
 import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
 import { VisionProbeController } from "./vision-probe-controller.js";
 import { readEnvironmentCredential } from "../../../src/credential-store.js";
+import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
@@ -635,6 +636,8 @@ if (!app.requestSingleInstanceLock()) {
     nativeTheme.themeSource = preferencesStore.value.theme;
     nativeTheme.on("updated", updateNativeAppearance);
     smokeMilestone("app-ready");
+    // Installed builds ship a pinned uv (resources/uv) so local free-search needs no setup.
+    if (app.isPackaged && useBundledUv(path.join(process.resourcesPath, "uv"))) smokeMilestone("bundled-uv");
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     registerIpc();
