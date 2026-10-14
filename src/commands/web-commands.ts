@@ -39,8 +39,8 @@ function webSearchSummary(settings: XiuSettings, language: UiLanguage): string {
   ].filter(Boolean).join(" · ");
   const endpoint = web.provider === "free-search"
     ? localize(language,
-      `本机 free-search-mcp ${FREE_SEARCH_VERSION}（需要 uv；不可用时回退 ${web.managedAuth === "xiu-device" ? web.baseURL : "无"}）`,
-      `local free-search-mcp ${FREE_SEARCH_VERSION} (needs uv; falls back to ${web.managedAuth === "xiu-device" ? web.baseURL : "nothing"} when unavailable)`)
+      `本机 free-search-mcp ${FREE_SEARCH_VERSION}（uv 首次使用时自动准备；不可用时回退 ${web.managedAuth === "xiu-device" ? web.baseURL : "无"}）`,
+      `local free-search-mcp ${FREE_SEARCH_VERSION} (uv is set up on first use; falls back to ${web.managedAuth === "xiu-device" ? web.baseURL : "nothing"} when unavailable)`)
     : web.baseURL;
   return [
     localize(language, `原生联网搜索：已启用 · ${web.provider}`, `Native web search: enabled · ${web.provider}`),
@@ -131,7 +131,7 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
   const diagnoseWebSearch = async (): Promise<void> => {
     if (!settings.webSearch?.enabled) throw new Error(localize(language, "联网搜索未启用。", "Web search is disabled."));
     if (settings.webSearch.provider === "free-search") {
-      console.log(chalk.cyan(localize(language, "正在启动本机 free-search 并发送一次测试搜索（首次启动会下载依赖）……", "Starting local free-search and sending one test search (the first launch downloads its packages)...")));
+      console.log(chalk.cyan(localize(language, "正在启动本机 free-search 并发送一次测试搜索（首次启动会准备 uv 并下载依赖）……", "Starting local free-search and sending one test search (the first launch sets up uv and downloads its packages)...")));
       try {
         const started = Date.now();
         const result = await sharedFreeSearchBackend(settings.webSearch.proxy).search({ query: "Node.js release schedule", count: 3, timeoutMs: 180_000 });
@@ -210,7 +210,7 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
       provider = requested;
     } else {
       provider = await selectTerminalOption(localize(language, "选择只读搜索后端", "Choose a read-only search provider"), [
-        { label: "free-search", description: localize(language, "本机免 Key 多引擎搜索（需要 uv），不可用时回退 Xiu 托管搜索", "Keyless local multi-engine search (needs uv); falls back to Xiu managed search"), value: "free-search" as const },
+        { label: "free-search", description: localize(language, "本机免 Key 多引擎搜索（首次使用自动准备 uv），不可用时回退 Xiu 托管搜索", "Keyless local multi-engine search (sets up uv on first use); falls back to Xiu managed search"), value: "free-search" as const },
         { label: "Tavily", description: localize(language, "面向 AI 的 HTTPS API，免费额度无需信用卡", "AI-oriented HTTPS API; free allowance without a credit card"), value: "tavily" as const },
         { label: "Brave Search", description: localize(language, "官方 HTTPS API，需要 API Key 环境变量", "Official HTTPS API; requires an API key environment variable"), value: "brave" as const },
         { label: "SearXNG", description: localize(language, "使用你自建或信任的 HTTPS 实例，可选 Bearer Token", "Use a self-hosted or trusted HTTPS instance; optional Bearer token"), value: "searxng" as const },

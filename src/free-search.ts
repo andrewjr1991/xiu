@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { existsSync } from "node:fs";
+import { ensureManagedUv, uvExecutableName, type ManagedUvOptions } from "./uv-install.js";
 import type { SearchResult } from "./web-search.js";
 
 /**
  * Local, keyless search through free-search-mcp (MIT, https://github.com/sweetcornna/free-search-mcp).
  *
- * Xiu launches the pinned package with uvx and calls only its read-only `search` tool. The server's
+ * Xiu launches the pinned package with uvx (the desktop installer's bundled uv, else uv on PATH, else
+ * Xiu's own pinned uv downloaded on first use; see uv-install.ts) and calls only its read-only `search` tool. The server's
  * fetch/download/research tools are not registered, its sign-in engines and agent backend stay off,
  * and it reads no configuration from the user's own free-search setup. Opening pages stays with
  * Xiu's web_open, so the HTTPS/DNS/redirect policy and the evidence gates are unchanged.
@@ -135,6 +138,17 @@ export interface FreeSearchOptions {
   environment?: NodeJS.ProcessEnv;
   startupTimeoutMs?: number;
   connect?: (launch: FreeSearchLaunch) => Promise<FreeSearchClient>;
+  /** Supplies Xiu's pinned uvx when none is on PATH. */
+  ensureUv?: (options: ManagedUvOptions) => Promise<string>;
+}
+
+let bundledUvx: string | undefined;
+
+/** The desktop app calls this with its installer's uv directory; that uv is then always used. */
+export function useBundledUv(directory: string | undefined): boolean {
+  const candidate = directory && path.join(directory, uvExecutableName("uvx"));
+  bundledUvx = candidate && existsSync(candidate) ? candidate : undefined;
+  return Boolean(bundledUvx);
 }
 
 export interface FreeSearchRequest {
@@ -169,7 +183,7 @@ export function freeSearchLaunch(home: string, proxy: string | undefined, enviro
     ...(proxy ? { SEARCH_MCP_PROXY: proxy } : {}),
   });
   return {
-    command: "uvx",
+    command: bundledUvx ?? "uvx",
     args: ["--quiet", "--constraints", path.join(home, `constraints-${FREE_SEARCH_VERSION}.txt`), "--from", `free-search-mcp==${FREE_SEARCH_VERSION}`, "free-search-mcp"],
     // free-search also reads ./.env; an Xiu-owned working directory keeps a project's file out of it.
     cwd: home,
@@ -253,13 +267,25 @@ export class FreeSearchBackend {
       await fs.mkdir(path.join(home, "config"), { recursive: true });
       const launch = freeSearchLaunch(home, this.options.proxy, this.options.environment);
       await fs.writeFile(launch.args[2]!, `${FREE_SEARCH_CONSTRAINTS.join("\n")}\n`, "utf8");
-      return (this.options.connect ?? connectStdio)(launch);
+      const connect = this.options.connect ?? connectStdio;
+      try {
+        return await connect(launch);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || launch.command !== "uvx") throw error;
+      }
+      // No uv on PATH: use Xiu's pinned copy, downloaded and verified on first use.
+      let uvx: string;
+      try {
+        uvx = await (this.options.ensureUv ?? ensureManagedUv)({ ...(this.options.proxy ? { proxy: this.options.proxy } : {}) });
+      } catch (error) {
+        throw new Error(`uv is not installed and Xiu could not set up its own copy: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+      return connect({ ...launch, command: uvx });
     })().catch((error: unknown) => {
-      // A missing uv or a broken install will not fix itself mid-session; fail fast after the first attempt.
-      const code = (error as NodeJS.ErrnoException).code;
-      this.failure = new Error(code === "ENOENT"
-        ? "uv is not installed (https://docs.astral.sh/uv/), so local free-search is unavailable."
-        : `free-search-mcp could not start: ${error instanceof Error ? error.message : String(error)}`);
+      // A broken uv or install will not fix itself mid-session; fail fast after the first attempt.
+      this.failure = error instanceof Error && error.message.startsWith("uv is not installed")
+        ? error
+        : new Error(`free-search-mcp could not start: ${error instanceof Error ? error.message : String(error)}`);
       this.client = undefined;
       throw this.failure;
     });

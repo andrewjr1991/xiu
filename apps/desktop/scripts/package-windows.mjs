@@ -12,6 +12,18 @@ const temp = path.join(workspaceRoot, ".desktop-build-temp");
 const cache = path.join(workspaceRoot, ".desktop-build-cache");
 await Promise.all([mkdir(temp, { recursive: true }), mkdir(cache, { recursive: true })]);
 
+// The installer ships a pinned, SHA-256 verified uv for local free-search (resources/uv).
+const uvCode = await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ["--import", "tsx", path.join(desktopRoot, "scripts", "prepare-bundled-uv.mts"), path.join(desktopRoot, "bundled", "uv"), cache], {
+    cwd: workspaceRoot,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  child.once("error", reject);
+  child.once("exit", (exitCode) => resolve(exitCode ?? 1));
+});
+if (uvCode !== 0) process.exit(uvCode);
+
 const cli = path.join(desktopRoot, "node_modules", "electron-builder", "cli.js");
 const builderTarget = target === "msix" ? "appx" : target;
 const args = [cli, "--win", builderTarget, "--x64", "--publish", "never", "--config.electronDist=node_modules/electron/dist"];
