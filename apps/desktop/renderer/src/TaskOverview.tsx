@@ -21,7 +21,7 @@ export function TaskOverview({ hidden, task, events, history, review, workspace,
   const row = (text: string, tab: DesktopReviewTab, meta?: string) => <button className="overview-row" key={text} title={text} onClick={() => onOpen(tab)}><span>{text}</span>{meta && <small>{meta}</small>}</button>;
   return <section className="task-overview" aria-label="任务概览">
     <header><strong>{history ? "历史任务概览" : "任务概览"}</strong></header>
-    {!hidden && <details className="overview-content" open={collapsed}><summary>查看环境与任务活动</summary><div>
+    <details className="overview-content" open={collapsed}><summary>查看环境与任务活动</summary><div>
       {summary && <Group title={data.phase ?? "阶段摘要"}>{goal && <p className="overview-goal">{goal}</p>}<p className="overview-excerpt">{summary}</p>{data.updatedAt && <small>更新于 {new Date(data.updatedAt).toLocaleTimeString()}</small>}</Group>}
       <Group title={history ? "已保存环境" : "当前环境"}>
         <p>{history ? "历史快照 · 不混入实时工作区状态" : `${workspace?.name ?? "本地工作区"} · 本地执行`}</p>
@@ -34,6 +34,6 @@ export function TaskOverview({ hidden, task, events, history, review, workspace,
       {data.background.length > 0 && <Group title="后台进程 · 当前工作区">{data.background.map((item) => row(item.command, "data", `${item.running ? "运行中" : "已结束"} · ${Math.floor(item.elapsedMs / 1000)} 秒`))}</Group>}
       {data.artifacts.length > 0 && <Group title="产出 · 本轮文件">{data.artifacts.map((item) => row(item.path, "changes"))}</Group>}
       {data.sources.length > 0 && <Group title="来源 · 本轮检索与读取">{data.sources.map((text) => row(text, "data"))}<small>调用记录不代表来源已核验；详情见任务证据。</small></Group>}
-    </div></details>}
+    </div></details>
   </section>;
 }

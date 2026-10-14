@@ -43,3 +43,10 @@ test("deeply nested wrappers fail closed without exponential work", () => {
   assert.equal(classifyCommand(`${"env ".repeat(2_000)}true`), "dangerous");
   assert.ok(Date.now() - started < 1_000);
 });
+
+test("unterminated quotes full of PowerShell escapes tokenize in linear time", () => {
+  const started = Date.now();
+  assert.equal(classifyCommand(`echo "${"`".repeat(5_000)}`), "execute");
+  assert.equal(classifyCommand(`git status "${"`".repeat(5_000)}x`), "execute");
+  assert.ok(Date.now() - started < 1_000, "command classification must not backtrack exponentially");
+});
