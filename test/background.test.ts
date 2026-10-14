@@ -317,8 +317,15 @@ test("worker import failure after immediate launcher exit leaves bounded non-sec
   assert.match(backgroundProcessOutput(id), /bootstrap failed \(ERR_MODULE_NOT_FOUND\)/);
   const directory = (await fs.readdir(root, { withFileTypes: true })).find((entry) => entry.isDirectory());
   assert.ok(directory);
-  const stored = await fs.readdir(path.join(root, directory.name));
-  assert.deepEqual(stored.sort(), [`${id}.json`, `${id}.log`]);
+  // The bootstrap writes the failed record inside the lifecycle lock, then
+  // releases the lock and removes its request file. Wait for that cleanup.
+  let stored: string[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    stored = (await fs.readdir(path.join(root, directory.name))).sort();
+    if (stored.length === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.deepEqual(stored, [`${id}.json`, `${id}.log`]);
   const evidence = (await Promise.all(stored.map((name) => fs.readFile(path.join(root, directory.name, name), "utf8")))).join("");
   assert.ok(evidence.length < 2000);
   assert.doesNotMatch(evidence, new RegExp(canary));
