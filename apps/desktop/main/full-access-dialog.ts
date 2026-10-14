@@ -29,6 +29,18 @@ async function confirmAction(parent: BrowserWindow, cancelling: boolean, custom?
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  // Custom text is rendered into the static page, escaped, rather than injected as script.
+  const heading = custom ? escapeHtml(custom.title) : cancelling ? "停止这个子智能体？" : "开启完全访问权限？";
+  const lead = custom
+    ? custom.vision ? "测试所选模型的基础图像识别能力。" : "仅操作你明确选择的窗口，不代表授权整个桌面。"
+    : cancelling ? "取消后，这个子任务将停止工作；依赖它的任务可能无法继续。" : "Xiu 将自动执行任务操作，包括危险操作，不再逐项请求批准。";
+  const warning = custom
+    ? escapeHtml(custom.detail).replace(/\n/g, "<br>")
+    : cancelling ? "已产生的文件和结果会保留。取消不会撤销修改、删除 Worktree，也不会自动重新执行任务。" : "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。工作区外修改不保存源码快照，不能保证撤销。";
+  const note = custom
+    ? custom.vision ? "测试不会授予电脑操作权限，也不代表任务验收通过。关闭、Esc 或取消均不开始测试；不会自动重试。" : "画面可能包含个人信息；确认前请隐藏敏感内容。关闭、Esc 或停止均取消；不会记住授权或自动重试。"
+    : cancelling ? "仅停止当前父任务下选中的子任务。整合结果仍需独立确认；取消不授予新的权限。" : "仅本次工作区打开期间有效，重开或重配后撤销。权限不超过当前系统用户；工作区内检查点、Plan 只读、MCP 授权和凭证保护仍独立生效。";
+  const acceptLabel = custom ? custom.vision ? "开始测试（可能计费）" : "仅本次允许" : cancelling ? "确认取消子任务" : "开启完全访问";
   const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
     <style>
@@ -42,12 +54,12 @@ async function confirmAction(parent: BrowserWindow, cancelling: boolean, custom?
       #accept{background:#187fe7;color:white;border-color:#187fe7}button:focus-visible{outline:2px solid #82b9ef;outline-offset:3px}
       ${nativeTheme.shouldUseDarkColors ? "body{background:#202226;color:#e2e5e9;border-color:#3c4149}h1{color:#edf0f4}p,small{color:#bbc1ca}button,#close{background:#30343b;color:#e2e5e9;border-color:#484e59}.warning{background:#352b20;border-color:#665135;color:#edc38e}" : ""}
       ${custom ? "body{height:100vh;display:flex;flex-direction:column;overflow:hidden}.icon{flex-shrink:0}.warning{overflow:auto;min-height:0;overflow-wrap:anywhere}h1,p,small,footer{flex-shrink:0}footer{margin-top:14px}h1{padding-right:12px}" : ""}
-    </style><button id="close" aria-label="关闭">×</button><div class="icon">◇</div><h1>${cancelling ? "停止这个子智能体？" : "开启完全访问权限？"}</h1>
-    <p>${cancelling ? "取消后，这个子任务将停止工作；依赖它的任务可能无法继续。" : "Xiu 将自动执行任务操作，包括危险操作，不再逐项请求批准。"}</p>
-    <div class="warning">${cancelling ? "已产生的文件和结果会保留。取消不会撤销修改、删除 Worktree，也不会自动重新执行任务。" : "可访问工作区外的文件、联网并运行本机命令，可能删除文件或修改系统。工作区外修改不保存源码快照，不能保证撤销。"}</div>
+    </style><button id="close" aria-label="关闭">×</button><div class="icon">◇</div><h1>${heading}</h1>
+    <p>${lead}</p>
+    <div class="warning">${warning}</div>
     ${computerRoute ? `<p>同时允许本任务选择普通应用窗口、切到前台并操作，目标截图发送到：</p><div class="warning" style="overflow-wrap:anywhere">${escapeHtml(computerRoute)}</div><p>不再额外确认窗口或普通操作；只截目标窗口。会占用鼠标键盘，请隐藏敏感内容。密码、支付、删除、发布及系统设置流程仍不支持。</p>` : ""}
-    <small>${cancelling ? "仅停止当前父任务下选中的子任务。整合结果仍需独立确认；取消不授予新的权限。" : "仅本次工作区打开期间有效，重开或重配后撤销。权限不超过当前系统用户；工作区内检查点、Plan 只读、MCP 授权和凭证保护仍独立生效。"}</small>
-    <footer><button id="cancel">${cancelling ? "继续工作" : "取消"}</button><button id="accept">${custom ? "仅本次允许" : cancelling ? "确认取消子任务" : "开启完全访问"}</button></footer></html>`;
+    <small>${note}</small>
+    <footer><button id="cancel">${cancelling ? "继续工作" : "取消"}</button><button id="accept">${acceptLabel}</button></footer></html>`;
   return new Promise<boolean>((resolve) => {
     let settled = false;
     const finish = (accepted: boolean) => {
@@ -64,8 +76,6 @@ async function confirmAction(parent: BrowserWindow, cancelling: boolean, custom?
     void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(async () => {
       if (window.isDestroyed() || parent.isDestroyed()) return finish(false);
       // Install handlers before showing. Enter initially activates Cancel, never Accept.
-      if (custom) await window.webContents.executeJavaScript(`(() => { document.querySelector('h1').textContent=${JSON.stringify(custom.title)}; document.querySelector('p').textContent='仅操作你明确选择的窗口，不代表授权整个桌面。'; document.querySelector('.warning').innerHTML=${JSON.stringify(escapeHtml(custom.detail).replace(/\n/g, "<br>"))}; document.querySelector('small').textContent='画面可能包含个人信息；确认前请隐藏敏感内容。关闭、Esc 或停止均取消；不会记住授权或自动重试。'; })()`);
-      if (custom?.vision) await window.webContents.executeJavaScript(`document.querySelector('p').textContent='测试所选模型的基础图像识别能力。';document.querySelector('small').textContent='测试不会授予电脑操作权限，也不代表任务验收通过。关闭、Esc 或取消均不开始测试；不会自动重试。';document.querySelector('#accept').textContent='开始测试（可能计费）';`);
       const decision = window.webContents.executeJavaScript(`new Promise(resolve => {
         const cancel = document.getElementById('cancel');
         cancel.onclick = () => resolve(false);
