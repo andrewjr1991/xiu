@@ -220,9 +220,17 @@ app.whenReady().then(async () => {
       await waitFor(window, "!document.querySelector('.management-panel')", "management closed");
     };
     await checkManagement("1366");
-    window.webContents.setZoomFactor(1.25);
+    // A zoom change resizes the viewport asynchronously; its late resize event
+    // would dismiss a Select popup opened before it arrives.
+    const baseRatio = await evaluate(window, "devicePixelRatio");
+    const zoom = async (factor) => {
+      window.webContents.setZoomFactor(factor);
+      await waitFor(window, `Math.abs(devicePixelRatio - ${baseRatio * factor}) < 0.01`, `zoom ${factor} applied`);
+      await settleLayout(window);
+    };
+    await zoom(1.25);
     await checkManagement("zoom125");
-    window.webContents.setZoomFactor(1);
+    await zoom(1);
     const checkInspectorLayout = async () => {
       assert(await evaluate(window, `[...document.querySelectorAll('.inspector-tabs button')].every(el => getComputedStyle(el).whiteSpace === 'nowrap' && getComputedStyle(el).flexShrink === '0')`), "Inspector tabs can wrap or shrink into vertical text.");
       assert(await evaluate(window, `(() => { const el=document.querySelector('.task-console'); return el.scrollWidth <= el.clientWidth + 1; })()`), "Conversation overflows its grid column.");

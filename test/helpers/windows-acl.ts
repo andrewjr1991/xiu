@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import type { TestContext } from "node:test";
-import { replaceProviderWindowsPrivacyVerifierForTests, verifyProviderWindowsPrivacy } from "../../src/provider-config-migration.js";
+import { replaceProviderWindowsPrivacyVerifierForTests, verifyProviderWindowsPrivacyBatch } from "../../src/provider-config-migration.js";
 
 let standInInstalled = false;
 
@@ -14,9 +14,10 @@ let standInInstalled = false;
  */
 export function installWindowsAclStandIn(): void {
   if (process.platform !== "win32") return;
-  replaceProviderWindowsPrivacyVerifierForTests(async (target, directory, initialize) => {
-    if (initialize) await verifyProviderWindowsPrivacy(target, directory, true);
-    else await fs.lstat(target);
+  replaceProviderWindowsPrivacyVerifierForTests(async (checks) => {
+    const initialize = checks.filter((check) => check.initialize);
+    for (const check of checks) if (!check.initialize) await fs.lstat(check.target);
+    if (initialize.length) await verifyProviderWindowsPrivacyBatch(initialize);
   });
   standInInstalled = true;
 }
@@ -25,4 +26,24 @@ export function installWindowsAclStandIn(): void {
 export function useRealWindowsAcl(t: TestContext): void {
   replaceProviderWindowsPrivacyVerifierForTests();
   if (standInInstalled) t.after(() => installWindowsAclStandIn());
+}
+
+/**
+ * Record each storage ACL helper process (one entry per batch) without
+ * running PowerShell. Off Windows, also report win32 so the Windows storage
+ * path runs; both changes are undone after the test.
+ */
+export function countWindowsAclBatches(t: TestContext): string[][] {
+  const batches: string[][] = [];
+  replaceProviderWindowsPrivacyVerifierForTests(async (checks) => {
+    for (const check of checks) await fs.lstat(check.target);
+    batches.push(checks.map((check) => `${check.directory ? "directory" : "file"}:${check.initialize ? "initialize" : "verify"}`));
+  });
+  t.after(() => { if (standInInstalled) installWindowsAclStandIn(); else replaceProviderWindowsPrivacyVerifierForTests(); });
+  if (process.platform !== "win32") {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    t.after(() => { Object.defineProperty(process, "platform", { value: platform, configurable: true }); });
+  }
+  return batches;
 }

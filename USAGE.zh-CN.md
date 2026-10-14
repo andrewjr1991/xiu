@@ -1597,7 +1597,7 @@ v0.15.0 提供 `web_search` 和 `web_open` 两个内置只读工具。它们默�
 
 新安装默认使用本机运行的开源项目 [free-search-mcp](https://github.com/sweetcornna/free-search-mcp)（MIT）。它同时查询 DuckDuckGo、Bing、AnySearch、Mojeek 等引擎，按名次融合去重；遇到版本号、CVE、天气、汇率这类问题，还会直接从对应的官方数据源取记录。不需要申请任何 API Key，搜索请求从你自己的网络发出。
 
-前提是安装 [uv](https://docs.astral.sh/uv/)（Windows 可用 `winget install astral-sh.uv`，macOS/Linux 可用 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。第一次搜索会下载 Python 依赖，可能需要几十秒；执行 `/web doctor` 可以提前下载并测试一次。
+前提是安装 [uv](https://docs.astral.sh/uv/)：Windows 在 PowerShell 中运行 `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`（有 winget 也可用 `winget install astral-sh.uv`；已装 Python 时可用 `pip install uv`），macOS/Linux 运行 `curl -LsSf https://astral.sh/uv/install.sh | sh`。装完重新打开终端，`uv --version` 能显示版本即可。第一次搜索会下载 Python 依赖，可能需要几十秒；执行 `/web doctor` 可以提前下载并测试一次。
 
 安全边界：
 

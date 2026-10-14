@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { ProviderConfigurationError, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureKind, providerWindowsPrivacyFailureCategory, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, verifyProviderWindowsPrivacy, PROVIDER_WINDOWS_PRIVACY_SCRIPT } from "../src/provider-config-migration.js";
+import { ProviderConfigurationError, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureKind, providerWindowsPrivacyFailureCategory, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, verifyProviderWindowsPrivacy, verifyProviderWindowsPrivacyBatch, providerWindowsPrivacyBatchScript, PROVIDER_WINDOWS_PRIVACY_SCRIPT } from "../src/provider-config-migration.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { useRealWindowsAcl } from "./helpers/windows-acl.js";
 
@@ -50,10 +50,11 @@ test("Windows Provider privacy production invocation never searches PATH or the 
   const source = await fs.readFile(new URL("../src/provider-config-migration.ts", import.meta.url), "utf8");
   assert.match(source, /const executable = providerWindowsPowerShellPath\(process\.env\.SystemRoot\)/);
   assert.match(source, /await runFile\(executable, \["-NoLogo", "-NoProfile", "-NonInteractive"/);
-  assert.match(source, /const env = providerWindowsPowerShellEnvironment\(\{ \.\.\.process\.env, XIU_PROVIDER_PRIVATE_TARGET:/);
-  assert.match(source, /timeout: 15_000, maxBuffer: 1024, env \}/);
+  assert.match(source, /XIU_PROVIDER_PRIVATE_TARGET: path\.resolve\(check!\.target\)/);
+  assert.match(source, /const env = providerWindowsPowerShellEnvironment\(\{ \.\.\.process\.env, \.\.\.variables \}\)/);
+  assert.match(source, /timeout: 15_000 \* checks\.length, maxBuffer: 1024 \* checks\.length, env \}/);
+  assert.match(source, /const MAX_WINDOWS_PRIVACY_BATCH = 4;/);
   assert.doesNotMatch(source, /runFile\(["']powershell(?:\.exe)?["']/);
-  assert.match(source, /timeout: 15_000, maxBuffer: 1024/);
 });
 
 const freshDescriptor = `if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new() }
@@ -260,4 +261,41 @@ test("only the test harness replaces the Windows ACL check, and only for the ful
   assert.match(runner, /"--import", "\.\/test\/helpers\/windows-acl-stand-in\.ts"/);
   const workflow = await fs.readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts test\/provider-constrained-privacy\.test\.ts/, "CI must keep the real-ACL step");
+});
+
+test("Windows ACL batches reuse the single-object check unchanged except for success returns", () => {
+  const script = providerWindowsPrivacyBatchScript(2);
+  assert.ok(script.startsWith("function Invoke-XiuProviderPrivacyCheck {\n"));
+  assert.doesNotMatch(script, /^\s*exit 0$/m);
+  assert.equal(script.match(/^\s*exit 1$/gm)?.length, 2, "failures still end the whole batch");
+  assert.equal(script.replace(/^(\s*)return$/gm, "$1exit 0").includes(PROVIDER_WINDOWS_PRIVACY_SCRIPT), true);
+  for (const index of [0, 1]) assert.match(script, new RegExp(`\\$env:XIU_PROVIDER_PRIVATE_TARGET = \\$env:XIU_PROVIDER_PRIVATE_TARGET_${index}\\n`));
+  assert.equal(script.match(/^Invoke-XiuProviderPrivacyCheck$/gm)?.length, 2);
+  assert.throws(() => providerWindowsPrivacyBatchScript(1), RangeError);
+  assert.throws(() => providerWindowsPrivacyBatchScript(5), RangeError);
+});
+
+test("a Windows ACL batch checks in order and stops at the first unsafe object", { skip: process.platform !== "win32", timeout: 120_000 }, async (t) => {
+  useRealWindowsAcl(t);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu batch 中文 ' "));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, "private dir");
+  await fs.mkdir(directory);
+  await verifyProviderWindowsPrivacy(directory, true, true);
+  const first = path.join(directory, "first 文件.json");
+  await fs.writeFile(first, "");
+  await verifyProviderWindowsPrivacyBatch([{ target: directory, directory: true, initialize: false }, { target: first, directory: false, initialize: true }]);
+  await verifyProviderWindowsPrivacy(first, false, false);
+
+  await runFile(path.win32.join(process.env.SystemRoot!, "System32", "icacls.exe"), [directory, "/grant", "*S-1-1-0:(OI)(CI)R", "/q"], { windowsHide: true, timeout: 15_000, maxBuffer: 1024 });
+  const second = path.join(directory, "second.json");
+  await fs.writeFile(second, "");
+  await assert.rejects(verifyProviderWindowsPrivacyBatch([{ target: directory, directory: true, initialize: false }, { target: second, directory: false, initialize: true }]), (error: unknown) => {
+    assert.ok(error instanceof ProviderConfigurationError);
+    assert.equal(error.privacyFailure, "nonzero-exit");
+    assert.match(error.privacyStage ?? "", /^verify-/);
+    return true;
+  });
+  // The failed directory check ended the batch: the new file was never made private.
+  await assert.rejects(verifyProviderWindowsPrivacy(second, false, false));
 });

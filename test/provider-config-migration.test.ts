@@ -9,8 +9,8 @@ import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { useRealWindowsAcl } from "./helpers/windows-acl.js";
-import { providerWindowsPrivacyFailureKind, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment } from "../src/provider-config-migration.js";
+import { countWindowsAclBatches, useRealWindowsAcl } from "./helpers/windows-acl.js";
+import { ProviderConfigurationError, replaceProviderWindowsPrivacyVerifierForTests, providerWindowsPrivacyFailureKind, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment } from "../src/provider-config-migration.js";
 
 const canary = "fixture_Q7pR-not-a-real-key_38v!";
 async function fixture(t: TestContext, version: number | null = 4) {
@@ -82,6 +82,29 @@ for (const version of [1, 2, 3, 4]) test(`v${version} upgrade preserves exact pr
   const restart = new ProviderRegistry(f.filename);
   await restart.load();
   assert.equal((await restart.configurationDiagnostics()).backups.length, 1);
+});
+
+test("a Windows provider save checks ACLs in two helper processes, directory first", async (t) => {
+  const f = await fixture(t);
+  await f.registry.load();
+  const batches = countWindowsAclBatches(t);
+  await f.registry.setRoutingEnabled(true);
+  // Write lock, then the replacement file: each re-checks the directory and
+  // initializes the new empty file in one process before bytes are written.
+  assert.deepEqual(batches, [["directory:verify", "file:initialize"], ["directory:verify", "file:initialize"]]);
+});
+
+test("a Windows directory ACL failure during a save stays unsafe and leaves no write lock", async (t) => {
+  const f = await fixture(t);
+  await f.registry.load();
+  const before = await fs.readFile(f.filename);
+  countWindowsAclBatches(t);
+  replaceProviderWindowsPrivacyVerifierForTests(async (checks) => {
+    if (checks.some((check) => check.directory)) throw new ProviderConfigurationError("unsafe", "Provider configuration storage is not a protected regular file/directory. (fixture)");
+  });
+  await assert.rejects(f.registry.setRoutingEnabled(true), /protected regular file/);
+  await assert.rejects(fs.lstat(path.join(f.recovery, "write.lock")), { code: "ENOENT" });
+  assert.deepEqual(await fs.readFile(f.filename), before);
 });
 
 test("backup directory failure prevents migration and further saves", async (t) => {
