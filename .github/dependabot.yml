@@ -1,6 +1,7 @@
 version: 2
 updates:
   # One grouped PR per directory per month keeps CI usage low; security updates still open individually.
+  # Major versions are left out: they usually need code or Node changes and are upgraded one at a time by hand.
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -9,6 +10,10 @@ updates:
     groups:
       cli-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /apps/desktop
     schedule:
@@ -17,6 +22,10 @@ updates:
     groups:
       desktop-dependencies:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
