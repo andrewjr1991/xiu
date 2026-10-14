@@ -1,5 +1,7 @@
 # Xiu 完整使用指南
 
+0.20.9：本机免 Key 搜索不再需要手动安装 uv（桌面安装包内置，CLI 首次使用自动下载并校验），网页结果显示更简洁，设置页可直达「工具与运行设置」。详见下文「本机免 Key 搜索：free-search」。
+
 0.20.8 已在 [GitHub 发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8)，包含以下模型管理、视觉测试和 Windows Computer Use 受控预览。Windows 安装器未签名，npm 仍待维护者发布同源 tarball；下方旧候选及验证记录是开发历史，不代表永久视觉能力或高风险电脑操作授权。
 
 ### 模型管理与聊天选择（0.20.8）

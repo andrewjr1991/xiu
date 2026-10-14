@@ -1,4 +1,6 @@
-# Xiu 0.20.8
+# Xiu 0.20.9
+
+0.20.9 makes keyless local web search work out of the box: the Windows desktop installer includes a pinned uv, and the CLI downloads the same pinned, SHA-256 verified uv on first use when none is installed. It also brings the security fixes from the first CodeQL scan, faster provider saves on Windows, plainer web results in the CLI and a direct Settings entry for tool management. See [CHANGELOG](./CHANGELOG.md).
 
 Released on [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) from main `d36c488fc5706277562d3018a23907761440d124`, with all nine exact-source CI jobs passed. Windows Computer Use remains a foreground, target-scoped preview; the installer is unsigned. npm publication is separate and was not performed. See the publishing guide for the original CI tarball and commands. Older local-candidate notes below are development history.
 

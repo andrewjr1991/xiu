@@ -13,7 +13,8 @@ const files=asar.listPackage(archive).map(p=>p.replaceAll("\\","/").replace(/^\/
 const built=files.filter(p=>p.startsWith("dist/")&&fs.existsSync(path.join(desktop,p))&&fs.statSync(path.join(desktop,p)).isFile());
 for(const name of built)assert(asar.extractFile(archive,name.replaceAll("/",path.sep)).equals(fs.readFileSync(path.join(desktop,name))),`Mismatch: ${name}`);
 assert.ok(built.length>=10);
-assert.equal(JSON.parse(asar.extractFile(archive,"package.json").toString()).version,"0.20.8");
+const version=JSON.parse(fs.readFileSync(path.join(desktop,"package.json"),"utf8")).version;
+assert.equal(JSON.parse(asar.extractFile(archive,"package.json").toString()).version,version);
 assert(!files.some(p=>/ui-smoke|smoke-preload|uiSmoke|XiuWindowFixture|^(?:dist|scripts|native)\/.*(?:smoke|fixture)/.test(p)),"Xiu test bridge or test application packaged");
 const main=asar.extractFile(archive,path.join("dist","main","index.js")).toString();
 for(const name of ["computer_status","computer_observe","computer_input","XiuComputerBridge.exe","Control+Alt+Backspace"])assert(main.includes(name),`Missing ${name}`);
@@ -21,5 +22,5 @@ const helper=path.join(archive+".unpacked","dist/native/XiuComputerBridge.exe");
 assert(fs.readFileSync(helper).equals(fs.readFileSync(path.join(desktop,"dist/native/XiuComputerBridge.exe"))));
 const probe=spawnSync(helper,[],{input:'{"action":"list"}\n',encoding:"utf8",windowsHide:true,timeout:10000});
 assert.equal(probe.status,0);assert.equal(JSON.parse(probe.stdout).ok,true);assert(Array.isArray(JSON.parse(probe.stdout).value));
-const installer=process.argv[2]?path.resolve(process.argv[2]):path.join(desktop,"release/Xiu-0.20.8-local-window-control-x64.exe");
+const installer=process.argv[2]?path.resolve(process.argv[2]):path.join(desktop,`release/Xiu-${version}-local-window-control-x64.exe`);
 console.log(JSON.stringify({matchedDistFiles:built.length,nativeComponentStarted:true,installer,bytes:fs.statSync(installer).size,sha256:crypto.createHash("sha256").update(fs.readFileSync(installer)).digest("hex")},null,2));

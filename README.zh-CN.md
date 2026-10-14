@@ -1,4 +1,6 @@
-# Xiu 0.20.8 发布
+# Xiu 0.20.9
+
+0.20.9 让本机免 Key 搜索开箱即用：Windows 桌面安装包自带固定版本的 uv，CLI 没有 uv 时首次搜索自动下载同一版本并校验 SHA-256。另含 CodeQL 首扫安全修复、Windows 渠道保存提速、CLI 网页结果简化显示，以及设置页直达「工具与运行设置」。详见 [CHANGELOG](./CHANGELOG.md)。
 
 [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 已发布：Windows Computer Use 受控预览、子智能体执行明细、等待回答、内嵌模型设置、批量视觉检测及安全/可靠性修正。[main CI](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业通过；Windows 安装器未签名，电脑操作仍占用前台鼠标键盘，不支持高风险流程。npm 本轮未发布，手工同源 tarball 命令见发布指南。下面的本地未发布说明保留为开发历史。
 
