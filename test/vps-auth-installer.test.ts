@@ -40,7 +40,7 @@ test("every file the auth image copies reaches the build context", async () => {
   const script = await readFile(installer, "utf8");
   for (const source of sources) {
     assert.ok(ignore.includes(`!${source}`), `.dockerignore must allow ${source}`);
-    assert.match(script, new RegExp(`"\\$SOURCE_DIR/${source.replace(/\./g, "\\.")}"`), `installer must copy ${source}`);
+    assert.ok(script.includes(`"$SOURCE_DIR/${source}"`), `installer must copy ${source}`);
   }
 });
 
