@@ -488,8 +488,14 @@ button, input, textarea { font: inherit; }
 }
 
 .settings-models-body { max-width: 1120px; }
-.provider-manager { position: relative; left: auto; bottom: auto; width: 100%; box-shadow: none; backdrop-filter: none; }
-.provider-manager .provider-grid { grid-template-columns: minmax(160px, 25%) minmax(0, 1fr); height: min(620px, calc(100vh - 330px)); min-height: 340px; }
+/* In settings the manager is part of the page: it grows with its content and
+   scrolls with the page instead of inside a fixed-height inner box. */
+.provider-manager { position: relative; left: auto; bottom: auto; width: 100%; overflow: clip; border-color: var(--tone-e6e8ec, #e6e8ec); border-radius: 14px; background: transparent; box-shadow: none; backdrop-filter: none; }
+.provider-manager .provider-grid { grid-template-columns: minmax(160px, 25%) minmax(0, 1fr); height: auto; min-height: 340px; }
+.provider-manager .provider-editor, .provider-manager .model-panel { overflow: visible; padding: 18px 20px; }
+.provider-manager .provider-form { gap: 12px 14px; }
+.provider-manager .provider-editor > footer { position: sticky; bottom: 0; z-index: 1; align-items: center; margin: 16px -20px -18px; padding: 12px 20px; border-top: 1px solid var(--tone-e8edf3, #e8edf3); background: var(--surface, white); }
+.provider-save-hint { margin-right: auto; color: var(--tone-b26a00, #b26a00); font-size: calc(12px * var(--ui-scale, 1)); }
 .provider-manager .provider-actions { flex-wrap: wrap; overflow: visible; }
 .provider-manager .provider-actions button { white-space: normal; }
 .settings-models-note { color: var(--tone-7a8495, #7a8495); font-size: 12px; line-height: 1.7; }
