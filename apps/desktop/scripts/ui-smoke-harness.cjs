@@ -22,7 +22,7 @@ app.on("will-quit", () => {
   }
 });
 
-const clickText = (window, text, selector = "button") => evaluate(window, `(() => { const el=[...document.querySelectorAll(${JSON.stringify(selector)})].find((item)=>item.textContent.trim().includes(${JSON.stringify(text)})); if(!el) throw new Error('Missing ${text}'); el.click(); return true; })()`);
+const clickText = (window, text, selector = "button") => evaluate(window, `(() => { const el=[...document.querySelectorAll(${JSON.stringify(selector)})].find((item)=>item.textContent.trim().includes(${JSON.stringify(text)})); if(!el) throw new Error(${JSON.stringify(`Missing ${text}`)}); el.click(); return true; })()`);
 const chooseOption = async (window, selector, label) => {
   await settleLayout(window);
   await evaluate(window, `document.querySelector(${JSON.stringify(selector)}).click()`);

@@ -9,6 +9,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -31,6 +32,7 @@ def env_required(name: str) -> str:
 
 ISSUER = os.environ.get("XIU_AUTH_ISSUER", "https://search.jingran.vip/xiu-auth").rstrip("/")
 AUDIENCE = "xiu-search"
+DEVICE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
 JWT_SECRET = env_required("XIU_AUTH_JWT_SECRET")
 ENROLLMENT_CODE = os.environ.get("XIU_AUTH_ENROLLMENT_CODE", "").strip()
 ADMIN_TOKEN = env_required("XIU_AUTH_ADMIN_TOKEN")
@@ -360,6 +362,10 @@ class Handler(BaseHTTPRequestHandler):
             if not rate_allowed(device_id) or not rate_allowed(f"search-ip:{self.client_ip()}", REQUESTS_PER_IP_PER_MINUTE):
                 # Nginx auth_request treats only 2xx, 401, and 403 as valid auth responses.
                 self.send_json(403, {"error": "rate_limited"})
+                return
+            if not DEVICE_ID_PATTERN.fullmatch(device_id):
+                # Device ids are server-issued; anything else never reaches a response header.
+                self.send_json(401, {"error": "invalid_token"})
                 return
             self.send_response(204)
             self.send_header("X-Xiu-Device", device_id)
