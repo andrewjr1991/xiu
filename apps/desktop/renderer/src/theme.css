@@ -9,6 +9,9 @@
 :root[data-theme="dark"] .permission-popover,
 :root[data-theme="dark"] .provider-popover,
 :root[data-theme="dark"] .confirmation-dialog { background: rgba(32,34,38,.98); border-color: #3c4149; }
+:root[data-theme="dark"] .provider-manager { background: transparent; border-color: #34383f; }
+:root[data-theme="dark"] .provider-manager .provider-editor > footer { border-color: #34383f; }
+:root[data-theme="dark"] .provider-save-hint { color: #e6b679; }
 :root[data-theme="dark"] .attachment-tile > button { background: rgba(48,52,59,.96); }
 :root[data-theme="dark"] .agent-avatar { background: #25374a; color: #92bfff; }
 :root[data-theme="dark"] .agent-avatar.avatar-1 { background: #362d48; color: #c5a6ef; }
