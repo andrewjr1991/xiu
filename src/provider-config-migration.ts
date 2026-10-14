@@ -270,11 +270,47 @@ export function providerWindowsPowerShellEnvironment(environment: NodeJS.Process
 }
 
 export async function verifyProviderWindowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
+  return verifyProviderWindowsPrivacyBatch([{ target, directory, initialize }]);
+}
+
+export interface ProviderWindowsPrivacyCheck { target: string; directory: boolean; initialize: boolean }
+const MAX_WINDOWS_PRIVACY_BATCH = 4;
+
+/**
+ * Run the unchanged single-object check once per object, in order, inside one
+ * PowerShell process. Each check still reads the current ACL; only the process
+ * start is shared. The first failure exits the process, so later objects are
+ * neither verified nor initialized.
+ */
+export function providerWindowsPrivacyBatchScript(count: number): string {
+  if (!Number.isSafeInteger(count) || count < 2 || count > MAX_WINDOWS_PRIVACY_BATCH) throw new RangeError("Invalid Windows ACL batch size");
+  // Success returns to the next object; failure keeps `exit 1` and ends the batch.
+  const body = PROVIDER_WINDOWS_PRIVACY_SCRIPT.replace(/^(\s*)exit 0$/gm, "$1return");
+  if (/^\s*exit 0$/m.test(body) || (body.match(/^\s*return$/gm) ?? []).length !== 2) throw new Error("Unexpected Windows ACL script shape");
+  const calls = Array.from({ length: count }, (_, index) => `$env:XIU_PROVIDER_PRIVATE_TARGET = $env:XIU_PROVIDER_PRIVATE_TARGET_${index}\n$env:XIU_PROVIDER_DIRECTORY = $env:XIU_PROVIDER_DIRECTORY_${index}\n$env:XIU_PROVIDER_INITIALIZE = $env:XIU_PROVIDER_INITIALIZE_${index}\nInvoke-XiuProviderPrivacyCheck`);
+  return `function Invoke-XiuProviderPrivacyCheck {\n${body}\n}\n${calls.join("\n")}\n`;
+}
+
+export async function verifyProviderWindowsPrivacyBatch(checks: readonly ProviderWindowsPrivacyCheck[]): Promise<void> {
+  if (checks.length < 1 || checks.length > MAX_WINDOWS_PRIVACY_BATCH) throw new RangeError("Invalid Windows ACL batch size");
   try {
     const executable = providerWindowsPowerShellPath(process.env.SystemRoot);
-    const env = providerWindowsPowerShellEnvironment({ ...process.env, XIU_PROVIDER_PRIVATE_TARGET: path.resolve(target), XIU_PROVIDER_DIRECTORY: directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: initialize ? "1" : "0" });
-    const result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", PROVIDER_WINDOWS_PRIVACY_SCRIPT], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env });
-    if (!/^XIU_ACL_V1:ok\r?\n?$/.test(result.stdout)) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
+    const variables: NodeJS.ProcessEnv = {};
+    let script = PROVIDER_WINDOWS_PRIVACY_SCRIPT;
+    if (checks.length === 1) {
+      const [check] = checks;
+      Object.assign(variables, { XIU_PROVIDER_PRIVATE_TARGET: path.resolve(check!.target), XIU_PROVIDER_DIRECTORY: check!.directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: check!.initialize ? "1" : "0" });
+    } else {
+      script = providerWindowsPrivacyBatchScript(checks.length);
+      checks.forEach((check, index) => Object.assign(variables, { [`XIU_PROVIDER_PRIVATE_TARGET_${index}`]: path.resolve(check.target), [`XIU_PROVIDER_DIRECTORY_${index}`]: check.directory ? "1" : "0", [`XIU_PROVIDER_INITIALIZE_${index}`]: check.initialize ? "1" : "0" }));
+    }
+    const env = providerWindowsPowerShellEnvironment({ ...process.env, ...variables });
+    let result: { stdout: string };
+    try { result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000 * checks.length, maxBuffer: 1024 * checks.length, env }); }
+    catch (error) { throw lastWindowsPrivacyResult(error, checks.length); }
+    const lines = result.stdout.split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    if (lines.length !== checks.length || lines.some((line) => line !== "XIU_ACL_V1:ok")) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
   } catch (error) {
     if (error instanceof ProviderConfigurationError) throw error;
     const stage = providerWindowsPrivacyFailureStage(error);
@@ -284,8 +320,21 @@ export async function verifyProviderWindowsPrivacy(target: string, directory: bo
   }
 }
 
-export type ProviderWindowsPrivacyVerifier = (target: string, directory: boolean, initialize: boolean) => Promise<void>;
-let windowsPrivacyVerifier: ProviderWindowsPrivacyVerifier = verifyProviderWindowsPrivacy;
+/** A failed batch reports earlier objects' ok lines first; classify only its final result line. */
+function lastWindowsPrivacyResult(error: unknown, count: number): unknown {
+  if (count === 1 || !error || typeof error !== "object") return error;
+  const stdout = (error as { stdout?: unknown }).stdout;
+  if (typeof stdout !== "string") return error;
+  const lines = stdout.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  const last = lines.pop();
+  // Anything but earlier successes before the final line is a protocol failure.
+  if (last === undefined || lines.length >= count || lines.some((line) => line !== "XIU_ACL_V1:ok")) return Object.assign(error, { stdout: "" });
+  return Object.assign(error, { stdout: `${last}\n` });
+}
+
+export type ProviderWindowsPrivacyVerifier = (checks: readonly ProviderWindowsPrivacyCheck[]) => Promise<void>;
+let windowsPrivacyVerifier: ProviderWindowsPrivacyVerifier = verifyProviderWindowsPrivacyBatch;
 /**
  * Test harness only: each storage ACL check starts Windows PowerShell, which
  * makes the full suite far slower on Windows. The suite swaps in a stand-in;
@@ -293,9 +342,13 @@ let windowsPrivacyVerifier: ProviderWindowsPrivacyVerifier = verifyProviderWindo
  * test asserts that.
  */
 export function replaceProviderWindowsPrivacyVerifierForTests(verifier?: ProviderWindowsPrivacyVerifier): void {
-  windowsPrivacyVerifier = verifier ?? verifyProviderWindowsPrivacy;
+  windowsPrivacyVerifier = verifier ?? verifyProviderWindowsPrivacyBatch;
 }
 
+/** A failed ACL check (including the directory re-check in a lock write) stays "unsafe"; other failures map to `code`. */
+function unsafeOr(error: unknown, code: string): ProviderConfigurationError {
+  return error instanceof ProviderConfigurationError && error.code === "unsafe" ? error : failure(code);
+}
 function digest(value: Buffer): string { return createHash("sha256").update(value).digest("hex"); }
 function revision(value: Buffer, stat: Stats): string { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${digest(value)}`; }
 function sameFile(a: Stats, b: Stats): boolean { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
@@ -342,10 +395,16 @@ export class ProviderConfigurationStorage {
   }
 
   private windowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
-    return windowsPrivacyVerifier(target, directory, initialize);
+    return windowsPrivacyVerifier([{ target, directory, initialize }]);
   }
 
-  private async privateDirectory(create: boolean): Promise<boolean> {
+  /**
+   * On Windows a caller may pass `deferWindowsCheck` only when its next step
+   * is `writeExclusive`, which re-checks this directory's ACL in the same
+   * PowerShell process that initializes the new file, before any bytes are
+   * written. A newly created directory is always initialized here.
+   */
+  private async privateDirectory(create: boolean, deferWindowsCheck = false): Promise<boolean> {
     let created = false;
     if (create) {
       await fs.mkdir(path.dirname(this.filename), { recursive: true, mode: 0o700 });
@@ -358,7 +417,7 @@ export class ProviderConfigurationStorage {
     if (!stat.isDirectory() || stat.isSymbolicLink() || (process.platform !== "win32" && (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0))) throw failure("unsafe");
     // Windows mode bits do not protect secrets. Never cache ACL verification:
     // an existing directory can keep its identity while its ACL changes.
-    if (process.platform === "win32") await this.windowsPrivacy(this.directory, true, created);
+    if (process.platform === "win32" && (created || !deferWindowsCheck)) await this.windowsPrivacy(this.directory, true, created);
     return true;
   }
 
@@ -368,29 +427,40 @@ export class ProviderConfigurationStorage {
     try { await handle.sync(); } finally { await handle.close(); }
   }
   private async writeExclusive(filename: string, bytes: Buffer): Promise<void> {
-    if (process.platform === "win32") await this.privateDirectory(false);
+    // Directory type and ownership checks; on Windows its ACL is re-checked
+    // below together with the new file, still before any bytes are written.
+    if (process.platform === "win32") await this.privateDirectory(false, true);
     const handle = await fs.open(filename, "wx", 0o600);
+    let initialized = process.platform !== "win32";
     try {
       // Explicit per-file ACLs also protect against later parent ACL changes.
       // Initialize only a newly created empty file, before writing any bytes.
-      if (process.platform === "win32") await this.windowsPrivacy(filename, false, true);
+      if (!initialized) {
+        await windowsPrivacyVerifier([{ target: this.directory, directory: true, initialize: false }, { target: filename, directory: false, initialize: true }]);
+        initialized = true;
+      }
       await handle.writeFile(bytes); await handle.sync();
     }
-    finally { await handle.close(); }
+    finally {
+      await handle.close();
+      // Never leave an empty, unprotected marker (such as a write lock) behind.
+      if (!initialized) await fs.unlink(filename).catch(() => undefined);
+    }
   }
   async assertCurrent(expected: ProviderConfigurationSnapshot | undefined): Promise<void> {
     if ((await this.read())?.revision !== expected?.revision) throw failure("changed");
   }
 
   private async withLock<T>(run: () => Promise<T>, recoverLockRevision?: string, beforeTakeover?: () => Promise<void>): Promise<T> {
-    await this.privateDirectory(true);
+    // An existing directory's ACL is checked by the lock write that follows.
+    await this.privateDirectory(true, true);
     const recoveryLock = path.join(this.directory, "recovery.lock");
     let recoveryOwned = false;
     let owned = false;
     try {
       if (recoverLockRevision) {
         try { await this.writeExclusive(recoveryLock, Buffer.from("recovery\n")); recoveryOwned = true; }
-        catch { throw failure("busy"); }
+        catch (error) { throw unsafeOr(error, "busy"); }
         const stale = await this.regularFile(this.lock, 1024, true);
         if (stale?.revision !== recoverLockRevision || !this.deadLock(stale.bytes)) throw failure("busy");
         // Reject a stale preview before consuming even its write-lock marker.
@@ -398,7 +468,7 @@ export class ProviderConfigurationStorage {
         await fs.unlink(this.lock);
       } else if (await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
       try { await this.writeExclusive(this.lock, Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID() }))); owned = true; }
-      catch { throw failure("busy"); }
+      catch (error) { throw unsafeOr(error, "busy"); }
       if (!recoveryOwned && await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
       return await run();
     } finally {
