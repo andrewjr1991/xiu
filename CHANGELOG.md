@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.20.9 — 2026-10-14
+
+Local keyless web search works out of the box (uv bundled in the desktop installer, downloaded and verified by the CLI on first use), plus security fixes from the first CodeQL scan, faster Windows settings saves and smaller desktop fixes. The maintainer accepted the main CI test build of `3c7ed92` on 2026-10-14.
 
 - Local web search no longer needs uv installed by hand. The Windows desktop installer now includes uv 0.12.21, and the CLI, when no uv is on PATH, downloads that same version once into `~/.xiu/uv` on the first local search. Both use the official PyPI wheel (the CLI also tries the Tsinghua and Aliyun PyPI mirrors) and accept it only when its size and SHA-256 match the values pinned in the source; Linux uses the static musl build. The installer acceptance checks that the installed `uvx.exe` runs and reports the pinned version.
 - CLI web results read like the desktop: a successful `web_search` shows "returned N results" and `web_open` shows the page title and URL, instead of the start of the English untrusted-content notice. The search and page-open budget messages are shown in plain words too. The model still receives the full notice, and `/details` still shows the raw output.

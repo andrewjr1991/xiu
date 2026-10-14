@@ -4,14 +4,15 @@
 
 ## 当前状态
 
-更新于 2026-10-13。
+更新于 2026-10-14。
 
+- **0.20.9 发布中。** 维护者 2026-10-14 验收 main `3c7ed92` 的 CI 测试包并要求发布。内容：本机免 Key 搜索内置 uv（桌面安装包自带，CLI 首次使用自动下载并校验）、CodeQL 首扫安全修复、Windows 设置保存提速、CLI 网页结果展示与桌面设置入口。GitHub Release 由版本提交的 main CI 资产生成，npm 由维护者发布。
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。
 - **0.20.8 包含的安全修复：** 命令按实际执行片段分级（修复组合命令跳过审批和 Plan 只读的问题）；电脑操作自动额度按父任务累计、渲染进程输入逐步确认；Linux 僵尸进程视为已退出；MCP 客户端升级到 2.3.1（GHSA-6qxp-vccf-f47h）。
 - **发布后的结构重构（main，未发布，行为不变）：** `src/cli.ts` 的斜杠命令按功能域移到 `src/commands/*-commands.ts`（Provider、插件、技能、MCP、后台任务、诊断/报告/审计、凭据、联网搜索，以及任务运行中“补充>”提示符的命令），`cli.ts` 由 3782 行降到 2075 行；`runTaskSequence` 其余部分直接读写会话状态，暂不再拆。桌面 `App.tsx` 拆出 `TaskTimeline.tsx`、`InteractiveTerminal.tsx`、`ReviewInspector.tsx`、`ProviderPicker.tsx`，由 1243 行降到 642 行。
 - **联网搜索默认本机免 Key（main，未发布）：** 维护者于 2026-10-13 选定“默认加兜底”。用本机 free-search-mcp 0.13.1（桌面安装包内置固定版本 uv，CLI 在没有 uv 时首次搜索自动下载同一版本并校验 SHA-256）（依赖全部锁定，只开放 `search` 工具），不可用或没有结果时回退 `search.jingran.vip` 托管搜索；打开网页仍由 `web_open` 完成。需要在三平台和国内网络做真实搜索验收。
 - **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR，安全更新单独提出。
-- **当前设计：** [0.20.8 子智能体明细设计](./V0.20.8_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
+- **当前设计：** [0.20.9 设计](./V0.20.9_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
 ## 当前优先级
 
@@ -41,7 +42,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
 | 当前公开 npm 版本 | `0.20.8`，2026-10-13 回读 Registry latest |
-| 当前开发版本 | `0.20.8` 已发布 GitHub 与 npm；main 之后仅有未发布的结构重构 |
+| 当前开发版本 | `0.20.9` 发布中；0.20.8 已发布 GitHub 与 npm |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |
@@ -93,7 +94,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 
 ### 设计与验收
 
-当时的设计已归档到 Git 历史；当前设计见 [0.20.8 子智能体明细设计](./V0.20.8_DESIGN.zh-CN.md)。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
+当时的设计已归档到 Git 历史；当前设计见 [0.20.9 设计](./V0.20.9_DESIGN.zh-CN.md)。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
 
 ## 4. 后续工程化
 
