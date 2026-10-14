@@ -284,6 +284,18 @@ export async function verifyProviderWindowsPrivacy(target: string, directory: bo
   }
 }
 
+export type ProviderWindowsPrivacyVerifier = (target: string, directory: boolean, initialize: boolean) => Promise<void>;
+let windowsPrivacyVerifier: ProviderWindowsPrivacyVerifier = verifyProviderWindowsPrivacy;
+/**
+ * Test harness only: each storage ACL check starts Windows PowerShell, which
+ * makes the full suite far slower on Windows. The suite swaps in a stand-in;
+ * the real check keeps its own tests. Product code never calls this, and a
+ * test asserts that.
+ */
+export function replaceProviderWindowsPrivacyVerifierForTests(verifier?: ProviderWindowsPrivacyVerifier): void {
+  windowsPrivacyVerifier = verifier ?? verifyProviderWindowsPrivacy;
+}
+
 function digest(value: Buffer): string { return createHash("sha256").update(value).digest("hex"); }
 function revision(value: Buffer, stat: Stats): string { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${digest(value)}`; }
 function sameFile(a: Stats, b: Stats): boolean { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
@@ -330,7 +342,7 @@ export class ProviderConfigurationStorage {
   }
 
   private windowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
-    return verifyProviderWindowsPrivacy(target, directory, initialize);
+    return windowsPrivacyVerifier(target, directory, initialize);
   }
 
   private async privateDirectory(create: boolean): Promise<boolean> {
