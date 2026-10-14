@@ -9,6 +9,7 @@ SEARXNG_DIR="/opt/xiu-searxng"
 DOMAIN="search.jingran.vip"
 SEARXNG_PORT="8080"
 AUTH_PORT="8787"
+AUTH_IMAGE="xiu-search-auth:local"
 TRUSTED_CIDRS=""
 DATABASE_PATH_OVERRIDE=""
 MIGRATE_DATABASE_FROM=""
@@ -179,6 +180,7 @@ services:
   auth:
     build:
       context: ./app
+    image: ${AUTH_IMAGE}
     container_name: xiu-search-auth
     restart: unless-stopped
     env_file:
@@ -271,7 +273,9 @@ info "构建并启动授权服务"
 cd "$INSTALL_DIR"
 "${COMPOSE[@]}" build auth
 info "初始化 Docker 数据卷权限"
-AUTH_IMAGE_ID="$("${COMPOSE[@]}" images -q auth | head -n 1)"
+# `compose images` reports the running container's image, which is the old
+# build during an upgrade; inspect the tag this build just wrote instead.
+AUTH_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$AUTH_IMAGE" 2>/dev/null || true)"
 [[ -n "$AUTH_IMAGE_ID" ]] || die "无法确定授权服务镜像"
 docker run --rm --network none --read-only --user 0 \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
