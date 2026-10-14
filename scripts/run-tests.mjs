@@ -17,7 +17,10 @@ if (testFiles.length === 0) {
   // coverage itself launches additional PowerShell and Node children. Keep the
   // suite parallel without starving those lifecycle checks on shared runners.
   const concurrency = process.platform === "win32" ? 2 : 4;
-  const child = spawn(process.execPath, ["--test", `--test-concurrency=${concurrency}`, "--import", "tsx", ...testFiles], {
+  // On Windows, skip the PowerShell re-verification of provider settings ACLs
+  // in the full suite; see test/helpers/windows-acl.ts. CI runs the real checks
+  // in their own step first.
+  const child = spawn(process.execPath, ["--test", `--test-concurrency=${concurrency}`, "--import", "tsx", "--import", "./test/helpers/windows-acl-stand-in.ts", ...testFiles], {
     stdio: "inherit",
     windowsHide: true,
     env: { ...process.env, FORCE_COLOR: "0" },

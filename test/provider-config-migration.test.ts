@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
+import { useRealWindowsAcl } from "./helpers/windows-acl.js";
 import { providerWindowsPrivacyFailureKind, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment } from "../src/provider-config-migration.js";
 
 const canary = "fixture_Q7pR-not-a-real-key_38v!";
@@ -524,6 +525,7 @@ test("interrupted recovery with unknown lock ownership remains explicitly blocke
 });
 
 test("Windows directory and file ACL changes are rechecked and never repaired silently", { skip: process.platform !== "win32" }, async (t) => {
+  useRealWindowsAcl(t);
   const f = await upgraded(t);
   const before = await fs.readFile(f.filename);
   const backup = path.join(f.recovery, `${f.backupId}.json`);

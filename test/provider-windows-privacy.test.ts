@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { ProviderConfigurationError, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureKind, providerWindowsPrivacyFailureCategory, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, verifyProviderWindowsPrivacy, PROVIDER_WINDOWS_PRIVACY_SCRIPT } from "../src/provider-config-migration.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
+import { useRealWindowsAcl } from "./helpers/windows-acl.js";
 
 const runFile = promisify(execFile);
 const canary = "fixture_privacy_Q7nP8_no_real_key";
@@ -102,6 +103,7 @@ test("Windows privacy preflight compares fresh and existing descriptors and requ
 // This is an explicit Windows preflight. CI must run it as a required Windows
 // gate before broader suites; a skipped run on another OS is not validation.
 test("Windows Provider privacy preflight creates verifies and rejects changed owner-only ACLs", { skip: process.platform !== "win32", timeout: 90_000 }, async (t) => {
+  useRealWindowsAcl(t);
   // Simulate pwsh -> Node -> powershell.exe with an unusable inherited module
   // path. The production helper must reset only its child; restore this fixture
   // process before cleanup, even when any assertion fails.
@@ -241,4 +243,21 @@ test("real bounded child failures classify without exposing subprocess diagnosti
   assert.equal(providerWindowsPrivacyFailureKind(timeout), "timeout");
   const missing = await capture(path.join(os.tmpdir(), "xiu-nonexistent-acl-fixture-6e77054b"), []);
   assert.equal(providerWindowsPrivacyFailureKind(missing), "spawn");
+});
+
+test("only the test harness replaces the Windows ACL check, and only for the full suite", async () => {
+  const sources = await fs.readdir(path.resolve("src"), { recursive: true });
+  const callers: string[] = [];
+  for (const name of sources) {
+    if (!name.endsWith(".ts")) continue;
+    const text = await fs.readFile(path.resolve("src", name), "utf8");
+    if (text.includes("replaceProviderWindowsPrivacyVerifierForTests(")) callers.push(name);
+  }
+  assert.deepEqual(callers, ["provider-config-migration.ts"], "product code must not swap the ACL check");
+  const definition = await fs.readFile(path.resolve("src/provider-config-migration.ts"), "utf8");
+  assert.equal(definition.split("replaceProviderWindowsPrivacyVerifierForTests(").length, 2, "only the definition, no call");
+  const runner = await fs.readFile(path.resolve("scripts/run-tests.mjs"), "utf8");
+  assert.match(runner, /"--import", "\.\/test\/helpers\/windows-acl-stand-in\.ts"/);
+  const workflow = await fs.readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
+  assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts test\/provider-constrained-privacy\.test\.ts/, "CI must keep the real-ACL step");
 });
