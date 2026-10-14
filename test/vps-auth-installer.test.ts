@@ -47,7 +47,7 @@ test("every file the auth image copies reaches the build context", async () => {
 test("database tools run in the image this install just built", async () => {
   const source = await readFile(installer, "utf8");
   assert.match(source, /^AUTH_IMAGE="xiu-search-auth:local"$/m);
-  assert.match(source, /^    image: \$\{AUTH_IMAGE\}$/m);
+  assert.match(source, /^ {4}image: \$\{AUTH_IMAGE\}$/m);
   assert.match(source, /AUTH_IMAGE_ID="\$\(docker image inspect --format '\{\{\.Id\}\}' "\$AUTH_IMAGE"/);
   assert.doesNotMatch(source, /images -q auth/);
 });
