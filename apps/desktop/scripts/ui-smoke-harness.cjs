@@ -176,7 +176,13 @@ app.whenReady().then(async () => {
     await clickText(window, "设置", ".sidebar-footer");
     await clickText(window, "浅色", ".theme-options button");
     await waitFor(window, `document.documentElement.dataset.theme === 'light'`, "light theme restore");
-    await evaluate(window, `document.querySelector('[aria-label="关闭设置"]').click()`);
+    await waitFor(window, `!document.querySelector('.theme-options button').disabled`, "light theme saved");
+    await clickText(window, "对话与运行", ".settings-nav button");
+    await evaluate(window, `document.querySelector('.settings-page .setting-action').click()`);
+    await waitFor(window, "Boolean(document.querySelector('.management-panel')) && !document.querySelector('.settings-page')", "settings opens tool management");
+    await waitFor(window, "!document.querySelector('.management-panel [aria-label=\"关闭管理面板\"]').disabled", "management ready from settings");
+    await evaluate(window, `document.querySelector('.management-panel [aria-label="关闭管理面板"]').click()`);
+    await waitFor(window, "!document.querySelector('.management-panel')", "management closed");
     await resizeViewport(window, 1366, 768, "settings viewport restore");
     const checkManagement = async (label) => {
       await evaluate(window, `document.querySelector('.workspace-toolbar [aria-label="工具与运行设置"]').click()`);

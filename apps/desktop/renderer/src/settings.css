@@ -13,3 +13,4 @@
 .settings-nav button { font-size: inherit; }
 .setting-row strong { font-size: calc(14px * var(--ui-scale, 1)); }
 .setting-row p, .settings-advanced, .settings-save-status { font-size: calc(12px * var(--ui-scale, 1)); }
+.setting-row .setting-action { flex-shrink: 0; min-width: 72px; }

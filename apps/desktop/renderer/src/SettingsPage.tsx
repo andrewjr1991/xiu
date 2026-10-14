@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { defaultPreferences, type DesktopPreferences } from "../../shared/preferences.js";
 import { Select } from "./Select.js";
 const sections = ["外观", "对话与运行", "通知", "模型与渠道", "关于"] as const;
-export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, models, modelDisabled }: {
-  value: DesktopPreferences; onSave: (next: DesktopPreferences) => Promise<void>; onClose: () => void; onModels: () => void; onModelsClose: () => void; models: ReactNode; modelDisabled: boolean;
+export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, models, modelDisabled, onTools, toolsDisabled }: {
+  value: DesktopPreferences; onSave: (next: DesktopPreferences) => Promise<void>; onClose: () => void; onModels: () => void; onModelsClose: () => void; models: ReactNode; modelDisabled: boolean; onTools: () => void; toolsDisabled: boolean;
 }) {
   const [section, setSection] = useState<typeof sections[number]>("外观");
   const [saving, setSaving] = useState(false);
@@ -59,6 +59,7 @@ export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, 
         {toggle("processExpanded", "运行时展开过程", "只改变默认展示，随时可以手动展开或收起。")}
         {toggle("alertsExpanded", "默认展开运行提醒", "关闭时提醒折叠成一行，历史错误不会被删除。")}
         {row("发送快捷键", "输入法候选确认不会提交；Shift+Enter 始终换行。", <Select aria-label="发送快捷键" value={value.sendKey} disabled={saving} onChange={(e) => change("sendKey", e.target.value as DesktopPreferences["sendKey"])}><option value="enter">Enter 发送</option><option value="ctrl-enter">Ctrl / ⌘ + Enter 发送</option></Select>)}
+        {row("联网检索、模型路由与 Skills", toolsDisabled ? "请先打开可信工作区，并结束正在运行的任务。也可点工作区右上角齿轮进入。" : "在「工具与运行设置」中管理，也可点工作区右上角齿轮进入。", <button className="setting-action" disabled={toolsDisabled} onClick={onTools}>打开</button>)}
       </div><details className="settings-advanced"><summary>高级：模型等待时间</summary><p>当前默认：首次正文 600 秒、流式正文停顿 180 秒、完整响应 900 秒。不是整个任务的总时限。延长等待不保证渠道正常，残缺工具不会执行，也不会自动重试。</p><p>本批暂保留启动环境变量入口：XIU_MODEL_FIRST_RESPONSE_SECONDS、XIU_MODEL_STREAM_IDLE_SECONDS、XIU_MODEL_COMPLETE_SECONDS。设置数字后重启生效。</p></details></>}
       {section === "通知" && <><p className="settings-lead">仅在 Xiu 不在前台时发送。通知不包含需求、路径、代码或模型回复，系统通知权限仍由操作系统控制。</p><div className="settings-group">
         {toggle("notifyComplete", "任务完成", "任务完成后提醒。")}{toggle("notifyFailure", "任务失败", "失败或未通过验证时提醒。")}{toggle("notifyApproval", "需要批准", "需要你返回软件作出决定时提醒。")}{toggle("sound", "通知提示音", "随系统通知播放，不独立播放音频。")}
