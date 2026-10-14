@@ -73,3 +73,29 @@ export function localizeToolProgress(message: string, language: UiLanguage): str
     .replace(/^Temporary model error; retrying\s+/i, "模型暂时出错，正在重试 ")
     .replace(/^Model request failed:\s*/i, "模型请求失败：");
 }
+
+const UNTRUSTED_WEB_PREFIX = "UNTRUSTED WEB CONTENT:";
+
+/**
+ * Terminal-only summary for web tool results. The model still receives the
+ * full untrusted-content notice; /details keeps the raw output.
+ */
+export function summarizeToolResult(name: string, result: string, language: UiLanguage): string | undefined {
+  if (name === "web_search") {
+    const budget = /^Web search discovery budget reached after (\d+) searches\./.exec(result);
+    if (budget) return localize(language, `已达到本轮搜索上限（${budget[1]} 次），改为打开已找到的网页`, `Search limit reached (${budget[1]}); opening pages already found`);
+    if (!result.startsWith(UNTRUSTED_WEB_PREFIX)) return undefined;
+    const count = /\nResults \((\d+)\):/.exec(result)?.[1];
+    return count === undefined ? undefined : localize(language, `返回 ${count} 条结果`, `Returned ${count} result${count === "1" ? "" : "s"}`);
+  }
+  if (name === "web_open") {
+    const budget = /^Tool error: web_open failure budget exhausted after (\d+) failed page opens\./.exec(result);
+    if (budget) return localize(language, `已有 ${budget[1]} 个网页打不开，不再重试，用已读取的来源作答`, `${budget[1]} pages failed to open; answering with sources already read`);
+    if (!result.startsWith(UNTRUSTED_WEB_PREFIX)) return undefined;
+    const url = /\nCitation URL: (\S+)/.exec(result)?.[1];
+    if (!url) return undefined;
+    const title = /\nTitle: ([^\n]+)/.exec(result)?.[1]?.trim().slice(0, 120);
+    return localize(language, `已读取网页：${title ? `${title} · ` : ""}${url}`, `Read page: ${title ? `${title} · ` : ""}${url}`);
+  }
+  return undefined;
+}

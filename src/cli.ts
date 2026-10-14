@@ -39,7 +39,7 @@ import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
-import { localizeToolDescription, localizeToolProgress } from "./tool-display.js";
+import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools } from "./tools.js";
@@ -982,7 +982,7 @@ async function main(): Promise<void> {
           if (failed) verificationReadyForSummary = false;
           if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
           activeToolActivity = undefined;
-          const summary = redactTerminalOutput(result.replace(/\s+/g, " ").trim());
+          const summary = redactTerminalOutput(summarizeToolResult(_name, result, language) ?? result.replace(/\s+/g, " ").trim());
           runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
           // onPlanUpdate already writes the bounded user-facing receipt. Avoid
           // printing the tool result again (historically this was the full plan).

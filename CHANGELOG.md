@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- CLI web results read like the desktop: a successful `web_search` shows "returned N results" and `web_open` shows the page title and URL, instead of the start of the English untrusted-content notice. The search and page-open budget messages are shown in plain words too. The model still receives the full notice, and `/details` still shows the raw output.
+- Desktop: Settings → 对话与运行 now has a row that opens 工具与运行设置 (web search, model routing, Skills), which was previously only reachable from the gear icon in the workspace header.
 - Desktop channel settings: when **保存渠道** is unavailable, the editor now says why (the missing fields, such as 标识, or that a task or another window holds the configuration) instead of only greying out the button. In Settings the channel manager now grows with the page instead of scrolling inside a fixed-height box, and the save bar stays visible at the bottom.
 - CI speed on Windows: the full test suite no longer starts Windows PowerShell to re-verify the ACL of every provider settings file it reads. Files and directories it creates still get the real owner-only DACL, and the real checks keep running in the Windows privacy step and in the ACL tests that need them. Product behavior is unchanged; a test checks that only the test harness can swap the check.
 - CI: a new commit on a pull request now cancels that pull request's older, still-running CI run, so only the latest commit is checked. Runs from pushes to `main` and `codex/**` are never cancelled and keep their exact-commit candidates.
