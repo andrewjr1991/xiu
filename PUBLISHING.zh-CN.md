@@ -12,7 +12,7 @@
 
 最终 CI 安装器再次通过本地全新安装、启动、内置 uv、覆盖升级、中断重启及卸载六项。标准 win-unpacked 也已按该源码重建，独立本地安装器 `Xiu-0.20.9-local-release-961fd47-x64.exe` 的 10 项 dist 一致性和原生启动通过；正式附件不混用本地重建物。真实国内网络搜索、付费模型和外部设备验证仍独立待办，构建期已知告警及未签名状态保留。
 
-npm 本轮未发布。官方 Registry 明确返回 0.20.9 E404，latest 仍为 0.20.8。仅当下面版本查询明确返回 E404 时继续 publish；认证/网络错误不能视为版本不存在，已有版本绝不覆盖，不重新 npm pack：
+npm 已于 2026-10-15 发布并回读核对：Registry `version` 与 `latest` 均为 `0.20.9`，`dist.integrity` 与上文一致，`npm pack` 取回的 tarball SHA256 `71ff3ded760dfac054852f62d7b40779cc98bd8361dc2cf1a3840264136db82e` 与 Release 附件逐字节相同。下面是发布前的交接命令（已按此执行，保留备查）：发布前官方 Registry 明确返回 0.20.9 E404，latest 为 0.20.8；仅当版本查询明确返回 E404 时继续 publish；认证/网络错误不能视为版本不存在，已有版本绝不覆盖，不重新 npm pack：
 
 ```powershell
 Set-Location 'D:\QoderWork Project\AGENT'

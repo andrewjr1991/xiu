@@ -6,7 +6,7 @@
 
 更新于 2026-10-15。
 
-- **0.20.9 已发布 GitHub（2026-10-15）。** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 与标签精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`；[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业通过，Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。发布前修正 npm 清单漏列当前设计稿并补回归；旧未公开草稿已删除，旧制品及 rejected 摘要保留本地。最终五份附件采用新 CI 原始制品，大小/SHA256 回读通过。固定 uv、安装/启动/升级/中断重启/卸载已再次本地验收。npm 0.20.9 未发布，Registry 明确 E404，latest 仍为 0.20.8；下一步维护者发布同源 tarball 并核对完整性。Windows 未签名。仅文档补记跳过重复 CI，不改正式标签或附件。
+- **0.20.9 已发布 GitHub（2026-10-15）。** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 与标签精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`；[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业通过，Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。发布前修正 npm 清单漏列当前设计稿并补回归；旧未公开草稿已删除，旧制品及 rejected 摘要保留本地。最终五份附件采用新 CI 原始制品，大小/SHA256 回读通过。固定 uv、安装/启动/升级/中断重启/卸载已再次本地验收。npm 0.20.9 已于 2026-10-15 发布，回读 version/latest 均为 0.20.9，integrity 与 tarball SHA256 与 Release 附件一致。Windows 未签名。仅文档补记跳过重复 CI，不改正式标签或附件。
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。
 - **0.20.8 包含的安全修复：** 命令按实际执行片段分级（修复组合命令跳过审批和 Plan 只读的问题）；电脑操作自动额度按父任务累计、渲染进程输入逐步确认；Linux 僵尸进程视为已退出；MCP 客户端升级到 2.3.1（GHSA-6qxp-vccf-f47h）。
 - **发布后的结构重构（main，未发布，行为不变）：** `src/cli.ts` 的斜杠命令按功能域移到 `src/commands/*-commands.ts`（Provider、插件、技能、MCP、后台任务、诊断/报告/审计、凭据、联网搜索，以及任务运行中“补充>”提示符的命令），`cli.ts` 由 3782 行降到 2075 行；`runTaskSequence` 其余部分直接读写会话状态，暂不再拆。桌面 `App.tsx` 拆出 `TaskTimeline.tsx`、`InteractiveTerminal.tsx`、`ReviewInspector.tsx`、`ProviderPicker.tsx`，由 1243 行降到 642 行。
@@ -31,7 +31,7 @@
 
 ## 下一步
 
-发布保持手动。0.20.9 GitHub 发布已完成，先由维护者按发布指南发布原始 CI tarball 到 npm 并回读版本、integrity 和 latest。然后继续 Computer Use 后续（优先级 7）的 Windows 验证，以及不依赖 Windows 的可靠性与安全改进。每项单独提 PR，一次推送一轮 CI。
+发布保持手动。0.20.9 已发布 GitHub 与 npm。接下来继续 Computer Use 后续（优先级 7）的 Windows 验证，以及不依赖 Windows 的可靠性与安全改进。每项单独提 PR，一次推送一轮 CI。
 
 ## 1. 项目定位
 
@@ -41,8 +41,8 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | --- | --- |
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
-| 当前公开 npm 版本 | `0.20.8`，2026-10-13 回读 Registry latest |
-| 当前开发版本 | `0.20.9` 已发布 GitHub；npm 同源 tarball 待维护者发布，公开 npm latest 仍为 0.20.8 |
+| 当前公开 npm 版本 | `0.20.9`，2026-10-15 回读 Registry latest |
+| 当前开发版本 | `0.20.9` 已发布 GitHub 与 npm |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |

@@ -2,7 +2,7 @@
 
 ## 0.20.9 — 2026-10-15
 
-Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) from `961fd47e154b43747e3136843caea9ae368f0c44`; all nine exact-source CI jobs passed. Windows CLI: 1164 tests, 1155 passed, 9 skipped, no failures. Fixed the npm file list to include the current design and added a regression before publication; the earlier draft was never public. Five original CI assets and uploaded digests verified. Windows unsigned; npm 0.20.9 remains a separate maintainer step.
+Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) from `961fd47e154b43747e3136843caea9ae368f0c44`; all nine exact-source CI jobs passed. Windows CLI: 1164 tests, 1155 passed, 9 skipped, no failures. Fixed the npm file list to include the current design and added a regression before publication; the earlier draft was never public. Five original CI assets and uploaded digests verified. Windows unsigned; npm 0.20.9 is published from the same tarball (latest and integrity verified).
 
 Local keyless web search works out of the box (uv bundled in the desktop installer, downloaded and verified by the CLI on first use), plus security fixes from the first CodeQL scan, faster Windows settings saves and smaller desktop fixes. The maintainer accepted the main CI test build of `3c7ed92` on 2026-10-14.
 
