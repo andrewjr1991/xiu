@@ -13,7 +13,7 @@
 - **联网搜索默认本机免 Key（main，未发布）：** 维护者于 2026-10-13 选定“默认加兜底”。用本机 free-search-mcp 0.13.1（桌面安装包内置固定版本 uv，CLI 在没有 uv 时首次搜索自动下载同一版本并校验 SHA-256）（依赖全部锁定，只开放 `search` 工具），不可用或没有结果时回退 `search.jingran.vip` 托管搜索；打开网页仍由 `web_open` 完成。需要在三平台和国内网络做真实搜索验收。
 - **Anthropic 渠道适配当前 Claude 模型（main，未发布）：** 默认模型改为 `claude-opus-5-5`，能力探测在模型拒绝强制工具调用时改用 `auto` 重试，输出上限提高到 32000 并对只允许 8192 的旧模型自动回退，带工具调用的轮次按 API 要求回传不可读的思考状态（空文本签名与加密块）。`@anthropic-ai/sdk` 已升到 0.133。尚未用真实 Anthropic Key 验证，需要维护者在渠道管理里对 Anthropic 渠道点一次「测试连接」，再跑一轮带工具调用的任务。
 - **Computer Use 加固（main，未发布，待 Windows 真机验证）：** 0.20.8 复核的中等问题 C3–C6 已在代码层处理：敏感窗口标题、禁用应用和高风险控件名三份规则改为 `apps/desktop/shared/computer-use-sensitive.ts` 单一来源，C# 桥程序内嵌同一字符串并由测试保证一致，列表补充终端、远程桌面、密码管理器、结账/验证码等；桥程序在读不到指针下或焦点控件（UIA 失败、跨进程焦点、无名称的按钮/链接/菜单项上的点击或 Enter/Space）时拒绝输入并返回 `control-uninspected`，主进程只在用户单独确认这一步后才带 `allowUninspected` 重发一次，自动模式不覆盖；截图结果带控件遍历完整度（complete/partial/unavailable）回传模型并写进逐步确认框；所有授权框说明控件名称与视觉描述会返回对话模型并写入会话历史。C# 改动只经 CI 编译，行为需要维护者在 Windows 上跑一次本地 `window-computer-smoke` 与一轮真实任务。
-- **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR，安全更新单独提出。
+- **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR（只合批 minor/patch），安全更新单独提出。2026-10-15 起 Windows 全量测试的 ACL 替身完全不启动 PowerShell（#54），Windows Verify 作业约 14→7 分钟，测试步骤约 9→3 分钟；真实 DACL 由独立 Windows 隐私步骤和显式 `useRealWindowsAcl` 的测试覆盖。未升级的大版本：chalk 6 / commander 15 / undici 8 / openai 7 要求 Node ≥22；@napi-rs/keyring 2 需先在 Windows 验证 1.3 写入的凭据能被 2.x 读回；@types/node 26 与运行的 Node 20 不匹配。
 - **当前设计：** [0.20.9 设计](./V0.20.9_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
 ## 当前优先级
@@ -33,7 +33,7 @@
 
 ## 下一步
 
-发布保持手动。0.20.9 已发布 GitHub 与 npm。接下来继续 Computer Use 后续（优先级 7）的 Windows 验证，以及不依赖 Windows 的可靠性与安全改进。每项单独提 PR，一次推送一轮 CI。
+发布保持手动。0.20.9 已发布 GitHub 与 npm。Computer Use 后续（优先级 7）中不依赖 Windows 的代码项已完成（#51–#53），剩余的真机验证、快捷键分级范围和是否做桥程序完整性校验需要维护者决定。之后可选的方向：后台任务停止前校验进程启动时间以防 PID 复用（评估 S5，Linux 可本地验证，Windows 需额外进程查询）；桌面网页页签的 DNS 重绑定窗口（S3）；`security-policy.ts` 与 `assertTrustedSender` 的单测（S6）。每项单独提 PR，一次推送一轮 CI。
 
 ## 1. 项目定位
 
