@@ -2,6 +2,7 @@
 
 ## Unreleased
 - Anthropic: works with current Claude models. The built-in default is now `claude-opus-5-5` (with `claude-sonnet-5-5` and `claude-haiku-5-5` as built-in candidates); the capability probe retries with `tool_choice: auto` when a model rejects a forced tool call; requests allow 32,000 output tokens so always-on reasoning no longer truncates answers, falling back once to 8,192 for models that cap lower; and tool-calling turns replay the opaque thinking state the API requires (empty-text signatures and encrypted blocks only, never readable reasoning), stripping it once if the API rejects it. Upgraded `@anthropic-ai/sdk` 0.57 → 0.133 (Dependabot #47).
+- Dependencies: `openai` 5.23 → 6.49 (the 6.0 breaking change only touches Responses API output types Xiu does not use). `openai` 7 requires Node 22 and stays out while the CLI supports Node 20.18.1.
 
 ## 0.20.9 — 2026-10-15
 
