@@ -1,6 +1,10 @@
-## 0.20.11 npm 发布记录（2026-10-15）
+## 0.20.11 正式发布记录（2026-10-15）
 
-维护者已于 2026-10-15 08:43 UTC 发布 npm 0.20.11（此前 08:18 UTC 发布 0.20.10）。Registry `latest` 为 0.20.11，integrity `sha512-YZORUuf4SxFFhBAbpgJrD+o6KOEzn8UfWr2tEaJruyAWBYFqYf7wPjqb3vVTEQUFNA4YZ1w7Ojt+eszYqI7cag==`；线程已把 tarball 解包与 main `c0ba7fd` 本地 `npm pack` 逐文件比对，完全一致（tarball 内记录的 gitHead 为更早的 5e22e79，因打包发生在提交之前）。main `c0ba7fd` 的 [CI 38707383288](https://github.com/andrewjr1991/xiu/actions/runs/38707383288) 九作业全部通过。GitHub 尚无 v0.20.10 / v0.20.11 标签与 Release；如需与 0.20.9 一样补 Release，请维护者打标签并上传 CI 制品。发布前检查命令保留如下：
+0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
+
+npm 发布时间：0.20.10 为 2026-10-15 08:18 UTC，0.20.11 为 08:43 UTC。
+
+以下命令仅保留为发布历史，0.20.11 已存在，不得重复发布。CLI SHA256：ee783206d9654d1e04bdd32c8fcdf62c248d9229ef4543cc2e4b8bb3d1da7b36；Windows SHA256：bdd2d2afb1600ed37163209d1132846a867fb0d0b88c17eecd6c140caac2f69d。npm integrity：sha512-YZORUuf4SxFFhBAbpgJrD+o6KOEzn8UfWr2tEaJruyAWBYFqYf7wPjqb3vVTEQUFNA4YZ1w7Ojt+eszYqI7cag==。
 
 ```powershell
 npm.cmd login --registry=https://registry.npmjs.org/

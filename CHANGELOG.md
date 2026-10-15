@@ -2,7 +2,7 @@
 
 ## 0.20.11 — 2026-10-15
 
-Published to npm by the maintainer from main `c0ba7fda8624bde8dcf4940ab1288d7f911db3d2` (the tarball's recorded `gitHead` is the earlier 5e22e79 because it was packed before the commit; its contents match a pack of c0ba7fd file for file). Registry `latest` is 0.20.11, integrity `sha512-YZORUuf4SxFFhBAbpgJrD+o6KOEzn8UfWr2tEaJruyAWBYFqYf7wPjqb3vVTEQUFNA4YZ1w7Ojt+eszYqI7cag==`. All nine CI jobs passed on c0ba7fd ([run 38707383288](https://github.com/andrewjr1991/xiu/actions/runs/38707383288)). No GitHub tag or Release exists yet for 0.20.10 or 0.20.11.
+0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
 - CLI: `/web configure managed` and the backend menu now select Xiu managed HTTPS search directly, without downloading or launching uv/free-search. The choice persists across restarts while retaining domain rules, timeout and proxy. Health-check HTTP 403 reports that device authentication has not started and points to enterprise gateway/proxy or server access rules; it does not reset credentials or bypass access controls.
 
 ## 0.20.10 — 2026-10-15

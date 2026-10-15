@@ -1,6 +1,8 @@
 # Xiu 0.20.11
 
-0.20.11 (npm, 2026-10-15): use /web configure managed to select Xiu managed HTTPS search without launching uv/free-search. /web configure also offers a managed-search menu option. Health-check 403 now explains the failed phase and proxy/access-rule checks.
+0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
+
+运行 `/web configure managed` 可手动选择托管搜索，立即生效、重启保留，不启动本机 uv/free-search。
 
 
 0.20.9 让本机免 Key 搜索开箱即用：Windows 桌面安装包自带固定版本的 uv，CLI 没有 uv 时首次搜索自动下载同一版本并校验 SHA-256。另含 CodeQL 首扫安全修复、Windows 渠道保存提速、CLI 网页结果简化显示，以及设置页直达「工具与运行设置」。详见 [CHANGELOG](./CHANGELOG.md)。

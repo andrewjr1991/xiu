@@ -1,6 +1,6 @@
 # Xiu 0.20.11
 
-0.20.11 (npm, 2026-10-15): use /web configure managed to select Xiu managed HTTPS search without launching uv/free-search. /web configure also offers a managed-search menu option. Health-check 403 now explains the failed phase and proxy/access-rule checks.
+0.20.11 is published on [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) and npm. Select managed HTTPS search with /web configure managed; this persists across restarts and does not launch uv/free-search. All nine exact-source CI jobs and CodeQL passed. Five original CI assets were verified after upload; Windows is unsigned. The npm and CI packages contain the same 420 files, although their archive digests differ and npm gitHead records the earlier pre-commit HEAD.
 
 
 0.20.9 makes keyless local web search work out of the box: the Windows desktop installer includes a pinned uv, and the CLI downloads the same pinned, SHA-256 verified uv on first use when none is installed. It also brings the security fixes from the first CodeQL scan, faster provider saves on Windows, plainer web results in the CLI and a direct Settings entry for tool management. See [CHANGELOG](./CHANGELOG.md).

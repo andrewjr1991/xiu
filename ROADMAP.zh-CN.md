@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- **0.20.10、0.20.11 npm 已发布（2026-10-15）；GitHub 尚无对应标签/Release：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
+- **0.20.11 已发布 GitHub 与 npm：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
 
 更新于 2026-10-15。
 
@@ -35,7 +35,9 @@
 
 ## 下一步
 
-0.20.11：完成 npm 发布前检查后由维护者手动发布，回读 Registry 版本与 integrity。
+0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
+
+下一步：维护者在企业机器升级后确认托管搜索选择持久化；其余 Computer Use 和外部设备验收继续按下文跟进。
 
 发布保持手动。0.20.9 已发布 GitHub 与 npm。Computer Use 后续（优先级 7）中不依赖 Windows 的代码项已完成（#51–#53），剩余的真机验证、快捷键分级范围和是否做桥程序完整性校验需要维护者决定。之后可选的方向：后台任务停止前校验进程启动时间以防 PID 复用（评估 S5，Linux 可本地验证，Windows 需额外进程查询）；桌面网页页签的 DNS 重绑定窗口（S3）；`assertTrustedSender` 的单测（S6；`security-policy.ts` 已有覆盖，安装包冒烟已于 #55 增加 Electron fuses 回读校验）。每项单独提 PR，一次推送一轮 CI。
 
@@ -47,8 +49,8 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | --- | --- |
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
-| 当前公开 npm 版本 | `0.20.10` |
-| 当前开发版本 | `0.20.11` 候选，尚未发布 |
+| 当前公开 npm 版本 | `0.20.11`，Registry latest 已回读 |
+| 当前开发版本 | `0.20.11` 已发布 GitHub 与 npm |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |
