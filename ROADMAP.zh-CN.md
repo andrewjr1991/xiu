@@ -12,6 +12,7 @@
 - **发布后的结构重构（main，未发布，行为不变）：** `src/cli.ts` 的斜杠命令按功能域移到 `src/commands/*-commands.ts`（Provider、插件、技能、MCP、后台任务、诊断/报告/审计、凭据、联网搜索，以及任务运行中“补充>”提示符的命令），`cli.ts` 由 3782 行降到 2075 行；`runTaskSequence` 其余部分直接读写会话状态，暂不再拆。桌面 `App.tsx` 拆出 `TaskTimeline.tsx`、`InteractiveTerminal.tsx`、`ReviewInspector.tsx`、`ProviderPicker.tsx`，由 1243 行降到 642 行。
 - **联网搜索默认本机免 Key（main，未发布）：** 维护者于 2026-10-13 选定“默认加兜底”。用本机 free-search-mcp 0.13.1（桌面安装包内置固定版本 uv，CLI 在没有 uv 时首次搜索自动下载同一版本并校验 SHA-256）（依赖全部锁定，只开放 `search` 工具），不可用或没有结果时回退 `search.jingran.vip` 托管搜索；打开网页仍由 `web_open` 完成。需要在三平台和国内网络做真实搜索验收。
 - **Anthropic 渠道适配当前 Claude 模型（main，未发布）：** 默认模型改为 `claude-opus-5-5`，能力探测在模型拒绝强制工具调用时改用 `auto` 重试，输出上限提高到 32000 并对只允许 8192 的旧模型自动回退，带工具调用的轮次按 API 要求回传不可读的思考状态（空文本签名与加密块）。`@anthropic-ai/sdk` 已升到 0.133。尚未用真实 Anthropic Key 验证，需要维护者在渠道管理里对 Anthropic 渠道点一次「测试连接」，再跑一轮带工具调用的任务。
+- **Computer Use 加固（main，未发布，待 Windows 真机验证）：** 0.20.8 复核的中等问题 C3–C6 已在代码层处理：敏感窗口标题、禁用应用和高风险控件名三份规则改为 `apps/desktop/shared/computer-use-sensitive.ts` 单一来源，C# 桥程序内嵌同一字符串并由测试保证一致，列表补充终端、远程桌面、密码管理器、结账/验证码等；桥程序在读不到指针下或焦点控件（UIA 失败、跨进程焦点、无名称的按钮/链接/菜单项上的点击或 Enter/Space）时拒绝输入并返回 `control-uninspected`，主进程只在用户单独确认这一步后才带 `allowUninspected` 重发一次，自动模式不覆盖；截图结果带控件遍历完整度（complete/partial/unavailable）回传模型并写进逐步确认框；所有授权框说明控件名称与视觉描述会返回对话模型并写入会话历史。C# 改动只经 CI 编译，行为需要维护者在 Windows 上跑一次本地 `window-computer-smoke` 与一轮真实任务。
 - **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR，安全更新单独提出。
 - **当前设计：** [0.20.9 设计](./V0.20.9_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
@@ -23,7 +24,7 @@
 4. **发布链自动化（维护者决定暂不做）。** 2026-10-13 维护者选择继续手动发布：GitHub Release 与 npm 仍按 `PUBLISHING.zh-CN.md` 由维护者手动执行。已写好的手动触发草稿工作流保留在分支 `claude/release-draft-workflow`（PR #37 已关闭），需要时可重新评估。
 5. **基础门禁（ESLint 已完成）。** `npm run lint` 以错误级运行 JavaScript/TypeScript 推荐规则，CI 在 Linux Verify 作业执行一次；开启时清理了未使用导入/变量、死接口和多余转义，无运行时行为变化。CodeQL 已本地评估（2.27.2，security-and-quality）：53 条结果中修复一处真实 ReDoS（命令分词，详见 CHANGELOG）和一处冗余条件，其余为误报（固定内容的 `executeJavaScript` 拼接、内存指纹用 SHA-256、单用户本地文件 TOCTOU、测试中的 URL 正则）。是否在仓库开启 CodeQL 默认扫描由维护者决定。
 6. **桌面审批模式切换的上下文绑定（已完成）。** `setApprovalMode` 请求现在与 Plan 一样携带 `contextId`，主进程在完全访问确认前后都校验上下文；过期的渲染进程不能再切换当前 host 的权限模式。
-7. **Computer Use 后续。** 0.20.8 复核中的中等问题（C3–C6）需要在 Windows 上验证；真实付费模型与完整实玩验收尚未完成；常用编辑/系统快捷键分级仍在设计中，暂不开放任意组合键或剪贴板。
+7. **Computer Use 后续。** 0.20.8 复核中的中等问题（C3–C6）代码层已处理（见当前状态），需要在 Windows 上验证；真实付费模型与完整实玩验收尚未完成；常用编辑/系统快捷键分级仍在设计中，暂不开放任意组合键或剪贴板。桥程序完整性校验（C8）未做。
 
 需要维护者决定或提供：
 

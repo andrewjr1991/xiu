@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   AUTOMATIC_DURATION_MS,
   AUTOMATIC_INPUT_LIMIT,
+  UNINSPECTED_CONTROL_CODE,
   inputNeedsConfirmation,
+  inspectionNotice,
+  isUninspectedControl,
   mayReuseMergedGrant,
   nextTaskBudget,
 } from "../apps/desktop/main/computer-use-policy.js";
@@ -43,4 +46,15 @@ test("renderer-originated inputs always need confirmation, even in automatic mod
   assert.equal(inputNeedsConfirmation({ automatic: true, origin: "renderer" }), true);
   assert.equal(inputNeedsConfirmation({ automatic: false, origin: "model" }), true);
   assert.equal(inputNeedsConfirmation({ automatic: false, origin: "renderer" }), true);
+});
+
+test("an unreadable control is recognised only by the helper's code, and incomplete inspection is announced", () => {
+  const refused = Object.assign(new Error("无法识别目标控件，未发送输入。"), { code: UNINSPECTED_CONTROL_CODE });
+  assert.equal(isUninspectedControl(refused), true);
+  assert.equal(isUninspectedControl(new Error("无法识别目标控件，未发送输入。")), false);
+  assert.equal(isUninspectedControl({ code: UNINSPECTED_CONTROL_CODE }), false);
+  assert.equal(inspectionNotice("complete"), undefined);
+  assert.match(inspectionNotice("partial")!, /不完整/);
+  assert.match(inspectionNotice("unavailable")!, /无法读取/);
+  assert.match(inspectionNotice(undefined)!, /无法读取/);
 });

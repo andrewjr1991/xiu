@@ -45,6 +45,9 @@ test("vision consent names actual route, uses only authorized frame and returns 
   assert.match(calls[0]!, /^Fixture channel \/ fixture-vision · https:/);
   assert.equal(calls[1], "uploaded");
   assert.match(output,/frame-fixture/);assert.match(output,/not deterministic test evidence/);assert.doesNotMatch(output,/base64|Zml4/);
+  assert.match(output,/Control inspection: unavailable; .*user is asked/);
+  const inspected = await createComputerUseTools(config, { ...host, observe: async () => ({ ...frame, inspection: "partial" }) }, { analyzeImage: async () => "visible" })[1]!.execute({prompt:"Locate"},context);
+  assert.match(inspected,/Control inspection: partial; unlisted controls may include password fields/);
 });
 
 test("discovery and selection use trusted access mode, not model arguments", async () => {

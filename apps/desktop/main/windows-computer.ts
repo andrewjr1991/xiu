@@ -2,6 +2,28 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { ComputerWindow } from "../shared/computer-use.js";
 
+/** Error codes the native helper may report; every code must have a user-facing reason here. */
+export const BRIDGE_ERROR_REASONS: Record<string, string> = {
+  "sensitive-control-denied": "检测到密码控件，已拒绝截图或输入，请由用户接管。",
+  "sensitive-window-denied": "目标属于敏感应用或标题含敏感内容，已拒绝，请由用户接管。",
+  "consequential-control-denied": "检测到删除、发送、支付或其他高风险控件，请停止并由用户操作。",
+  "control-uninspected": "无法识别目标控件，未发送输入。",
+  "element-changed-observe-again": "目标控件已变化，未发送输入，请重新观察。",
+  "target-not-foreground": "未取得目标窗口焦点。请手动切换到目标应用后重新观察。",
+  "target-occluded": "点击位置被其他窗口遮挡，未发送输入。",
+  "release-held-input": "请先松开鼠标和修饰键，再重新观察。",
+  "window-resized-observe-again": "窗口尺寸已变化，未发送输入，请重新观察。",
+  "window-identity-changed": "窗口身份或标题已变化，请重新授权。",
+  "input-blocked-or-partial-do-not-retry": "系统阻止或仅部分执行输入，结果未知，请观察实际反馈。",
+  "focus-changed-outcome-unknown": "输入时焦点发生变化，结果未知，请检查实际反馈。",
+  "window-capture-not-supported": "此应用不支持窗口截图。",
+  "window-unavailable": "目标窗口不可用或已关闭。",
+};
+
+export class ComputerBridgeError extends Error {
+  constructor(readonly code: string, message: string) { super(message); this.name = "ComputerBridgeError"; }
+}
+
 export class WindowsComputer {
   constructor(private readonly executable = fileURLToPath(new URL("../native/XiuComputerBridge.exe", import.meta.url)).replace(/app\.asar([\\/])/, "app.asar.unpacked$1")) {}
   private children = new Set<ChildProcess>();
@@ -23,20 +45,8 @@ export class WindowsComputer {
       child.once("close", () => {
         try {
           const result = JSON.parse(output);
-          const reasons: Record<string,string> = {
-            "sensitive-control-denied": "检测到密码控件，已拒绝截图或输入，请由用户接管。",
-            "consequential-control-denied": "检测到删除、发送、支付或其他高风险控件，请停止并由用户操作。",
-            "element-changed-observe-again": "目标控件已变化，未发送输入，请重新观察。",
-            "target-not-foreground": "未取得目标窗口焦点。请手动切换到目标应用后重新观察。",
-            "target-occluded": "点击位置被其他窗口遮挡，未发送输入。",
-            "release-held-input": "请先松开鼠标和修饰键，再重新观察。",
-            "window-resized-observe-again": "窗口尺寸已变化，未发送输入，请重新观察。",
-            "window-identity-changed": "窗口身份或标题已变化，请重新授权。",
-            "input-blocked-or-partial-do-not-retry": "系统阻止或仅部分执行输入，结果未知，请观察实际反馈。",
-            "focus-changed-outcome-unknown": "输入时焦点发生变化，结果未知，请检查实际反馈。",
-            "window-capture-not-supported": "此应用不支持窗口截图。",
-          };
-          result.ok ? finish(undefined, result.value as T) : finish(new Error(`${reasons[result.error] ?? "窗口不可用或输入被系统拒绝。"} 不会自动重试。`));
+          const code = typeof result.error === "string" ? result.error : "unknown";
+          result.ok ? finish(undefined, result.value as T) : finish(new ComputerBridgeError(code, `${BRIDGE_ERROR_REASONS[code] ?? "窗口不可用或输入被系统拒绝。"} 不会自动重试。`));
         } catch { finish(new Error("电脑操作未返回完整结果；不会自动重试。")); }
       });
       child.stdin.on("error", () => finish(new Error("电脑操作通信中断；不会自动重试。")));
