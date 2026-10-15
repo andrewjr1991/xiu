@@ -649,7 +649,8 @@ export const builtinTools: AgentTool[] = [
     describe: (input) => `stop background command ${String(input.id)}`,
     async execute(input) {
       const id = stringArg(input, "id");
-      await stopBackgroundProcess(id);
+      const result = await stopBackgroundProcess(id);
+      if (result.state === "interrupted") return `Background process ${id} had already exited: its recorded process numbers (${result.reusedPids.join(", ")}) now belong to unrelated programs, which were left alone. The job is recorded as interrupted.`;
       return `Background process ${id} stopped.`;
     },
   },

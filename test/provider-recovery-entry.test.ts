@@ -39,9 +39,9 @@ function safe(value: unknown, root: string) {
   assert.ok(!text.includes('"profiles"'), "no profile payload");
 }
 
-async function privateLockFixture(filename: string, pid: number, nonce: string): Promise<void> {
+async function privateLockFixture(filename: string, pid: number, nonce: string, startedAt?: string): Promise<void> {
   const handle = await fs.open(filename, "wx", 0o600);
-  try { await handle.writeFile(JSON.stringify({ pid, nonce })); await handle.sync(); }
+  try { await handle.writeFile(JSON.stringify({ pid, nonce, ...(startedAt ? { startedAt } : {}) })); await handle.sync(); }
   finally { await handle.close(); }
 }
 
@@ -265,7 +265,9 @@ test("CLI current action keeps valid settings and clearly distinguishes dead-loc
   const pid = child.pid!;
   await new Promise<void>((resolve, reject) => { child.once("exit", () => resolve()); child.once("error", reject); });
   const lock = path.join(`${f.filename}.recovery`, "write.lock");
-  await privateLockFixture(lock, pid, "fixture");
+  // The recorded start time lies an hour back, so even if Windows hands the exited child's PID to a new process the lock still reads as dead.
+  const staleStart = new Date(Date.now() - 3_600_000).toISOString();
+  await privateLockFixture(lock, pid, "fixture", staleStart);
   const output = io("RECOVER");
   const recovered = await runProviderRecoveryCommand(f.registry, { action: "recover", backupId: "current" }, output.value);
   safe(output.output, f.root);
@@ -275,7 +277,7 @@ test("CLI current action keeps valid settings and clearly distinguishes dead-loc
   assert.match(output.output.join("\n"), /Keep current settings/);
   assert.match(output.output.join("\n"), /schema 5 \(unchanged\)/);
   assert.doesNotMatch(output.output.join("\n"), /Configuration backup restored|schema 5 →/);
-  await privateLockFixture(lock, pid, "fixture-desktop");
+  await privateLockFixture(lock, pid, "fixture-desktop", staleStart);
   const desktop = new DesktopProviderRecoveryController({ registry: new ProviderRegistry(f.filename), isBusy: () => false, confirm: async (preview) => {
     assert.equal(preview.action, "keep-current");
     return true;

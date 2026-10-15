@@ -111,6 +111,9 @@ const GENERAL: Record<string, Entry> = {
   "background/stop-unconfirmed": { code: "background/stop-unconfirmed", diagnostic: "/background list",
     zh: ["后台任务的进程没能在限定时间内确认退出，任务仍标记为运行中。", "用 /background list 查看进程号，必要时在任务管理器或 ps 中手动结束。"],
     en: ["The background job's processes did not confirm exit within the time budget, so it is still marked as running.", "Check the PID with /background list and end it manually in Task Manager or with ps/kill if needed."] },
+  "background/pid-reused": { code: "background/pid-reused", diagnostic: "/background list",
+    zh: ["后台任务的进程早已退出，记录的进程号现在属于其他程序，Xiu 没有结束它们；任务已标记为中断。", "用 /background list 确认状态；不需要手动处理。"],
+    en: ["The background job's processes had already exited; the recorded process numbers now belong to unrelated programs, which were left alone. The job is recorded as interrupted.", "Check the state with /background list; nothing needs to be done by hand."] },
   cancelled: { code: "cancelled",
     zh: ["操作已取消。", "需要时重新运行。"],
     en: ["The operation was cancelled.", "Run it again when ready."] },
@@ -140,6 +143,7 @@ function entryFor(error: unknown): Entry | undefined {
   const status = items.map((item) => Number(item.status)).find((value) => Number.isInteger(value));
   if (/XIU_NODE_NOT_FOUND/.test(message)) return GENERAL["background/node-missing"];
   if (/XIU_BACKGROUND_STOP_UNCONFIRMED/.test(message)) return GENERAL["background/stop-unconfirmed"];
+  if (/XIU_BACKGROUND_PID_REUSED/.test(message)) return GENERAL["background/pid-reused"];
   if (/ is not set$|missing api key|no api key/i.test(message)) return GENERAL["credential/missing"];
   if (status === 407 || /proxy authentication required/i.test(message)) return GENERAL["network/proxy-auth"];
   if (/SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|UNABLE_TO_GET_ISSUER_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID/.test(`${codes} ${message}`)) return GENERAL["network/tls"];

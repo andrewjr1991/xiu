@@ -19,6 +19,7 @@ import {
   stopAllBackgroundProcesses,
   stopBackgroundProcess,
 } from "../src/background.js";
+import { configureProcessStartTimeProbe } from "../src/process-identity.js";
 
 const loaderUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const backgroundModuleUrl = pathToFileURL(path.resolve("src/background.ts")).href;
@@ -189,7 +190,14 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
   assert.ok(record);
   assert.equal(record.running, true);
   assert.match(backgroundProcessOutput(started.id), /ready/);
-  await stopBackgroundProcess(started.id);
+  // The worker publishes when it and its shell started, so a later stop can tell them from a reused PID.
+  const recordFile = path.join(root, (await fs.readdir(root)).find((entry) => !entry.startsWith("."))!, `${started.id}.json`);
+  const published = JSON.parse(await fs.readFile(recordFile, "utf8"));
+  for (const field of ["pidStartedAt", "childStartedAt"] as const) {
+    assert.ok(Math.abs(Date.now() - Date.parse(published[field])) < 120_000, `${field} is a recent timestamp: ${published[field]}`);
+  }
+  const stopped = await stopBackgroundProcess(started.id);
+  assert.deepEqual(stopped, { state: "cancelled", reusedPids: [] });
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(listBackgroundProcesses().find((item) => item.id === started.id)?.running, false);
 });
@@ -794,6 +802,73 @@ test("a missing-PID starting request can still be cancelled without process comm
     assert.equal(state.spawnCalls.length, 0);
     assert.equal(state.signals.length, 0);
   });
+});
+
+async function withRecordedStartTimes(file: string, startedAt: string): Promise<void> {
+  const record = JSON.parse(await fs.readFile(file, "utf8"));
+  await fs.writeFile(file, JSON.stringify({ ...record, pidStartedAt: startedAt, childStartedAt: startedAt }));
+}
+
+test("foreground stop refuses to signal PIDs that now belong to other processes and records the job as interrupted", async () => {
+  const startedAt = "2026-10-15T08:00:00.000Z";
+  const reusedAt = Date.parse(startedAt) + 3_600_000;
+  configureProcessStartTimeProbe({ sync: () => reusedAt, async: async () => reusedAt });
+  try {
+    await withMockedForegroundStop("linux", () => ({}), async ({ id, file, state }) => {
+      await withRecordedStartTimes(file, startedAt);
+      assert.deepEqual(await stopBackgroundProcess(id), { state: "interrupted", reusedPids: [100001, 100002] });
+      assert.deepEqual(state.signals, [], "no signal reaches the processes that inherited the numbers");
+      assert.deepEqual([...state.alive], [100001, 100002]);
+      const record = listBackgroundProcesses().find((item) => item.id === id);
+      assert.equal(record?.state, "interrupted");
+      assert.deepEqual(record?.failure, { stage: "stop", code: "PID_REUSED" });
+    });
+    await withMockedForegroundStop("win32", () => ({}), async ({ id, file, state }) => {
+      await withRecordedStartTimes(file, startedAt);
+      assert.deepEqual(await stopBackgroundProcess(id), { state: "interrupted", reusedPids: [100001, 100002] });
+      assert.equal(state.spawnCalls.length, 0, "taskkill is never started for a reused PID");
+    });
+  } finally { configureProcessStartTimeProbe(); }
+});
+
+test("foreground stop signals only the verified shell when the worker PID was reused", async () => {
+  const startedAt = "2026-10-15T08:00:00.000Z";
+  const at = Date.parse(startedAt);
+  const probe = (pid: number) => pid === 100001 ? at + 3_600_000 : at + 1_000;
+  configureProcessStartTimeProbe({ sync: probe, async: async (pid) => probe(pid) });
+  try {
+    await withMockedForegroundStop("linux", (state) => ({ signal: (pid, signal) => { if (pid === 100002 && signal === "SIGTERM") state.alive.delete(100002); } }), async ({ id, file, state }) => {
+      await withRecordedStartTimes(file, startedAt);
+      assert.deepEqual(await stopBackgroundProcess(id), { state: "cancelled", reusedPids: [100001] });
+      assert.deepEqual(state.signals, [[100002, "SIGTERM"]], "the group named by the reused worker PID is not signalled");
+      assert.deepEqual([...state.alive], [100001]);
+      assert.equal(listBackgroundProcesses()[0]?.state, "cancelled");
+    });
+  } finally { configureProcessStartTimeProbe(); }
+});
+
+test("records without recorded start times keep the PID-only behaviour", async () => {
+  configureProcessStartTimeProbe({ sync: () => 0, async: async () => 0 });
+  try {
+    await withMockedForegroundStop("linux", (state) => ({ signal: (pid) => { if (pid === -100001) state.alive.clear(); } }), async ({ id, state }) => {
+      assert.deepEqual(await stopBackgroundProcess(id), { state: "cancelled", reusedPids: [] });
+      assert.deepEqual(state.signals, [[-100001, "SIGTERM"]]);
+    });
+  } finally { configureProcessStartTimeProbe(); }
+});
+
+test("a running record whose PIDs were reused is listed as interrupted instead of running forever", async () => {
+  const startedAt = "2026-10-15T08:00:00.000Z";
+  configureProcessStartTimeProbe({ sync: () => Date.parse(startedAt) + 3_600_000 });
+  configureBackgroundHandoffGrace({ runningMs: 0 });
+  try {
+    await withMockedForegroundStop("linux", () => ({}), async ({ id, file }) => {
+      await withRecordedStartTimes(file, startedAt);
+      const record = listBackgroundProcesses().find((item) => item.id === id);
+      assert.equal(record?.state, "interrupted");
+      assert.equal(record?.running, false);
+    });
+  } finally { configureProcessStartTimeProbe(); configureBackgroundHandoffGrace(); }
 });
 
 test("foreground stop preserves a terminal result published while cleanup was pending", async () => {

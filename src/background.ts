@@ -11,11 +11,12 @@ import { redactSecrets } from "./secret-redaction.js";
 import { replaceFileWithRetry, withBackgroundLifecycle } from "./background-lifecycle.js";
 import { readLaunchMetadata } from "./background-metadata.js";
 import { processAlive } from "./process-liveness.js";
+import { compareStartTimes, processStartTime, processStartTimeSync, type StartTimeVerdict } from "./process-identity.js";
 
 const BACKGROUND_SCHEMA_VERSION = 1 as const;
 const MAX_PREVIEW = 240;
 const FAILURE_STAGES = new Set(["bootstrap", "worker", "shell", "output", "state-write", "worker-exit", "stop"]);
-const FAILURE_CODES = new Set(["UNKNOWN", "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "EBUSY", "EIO", "MISSING_TERMINAL", "STOP_TIMEOUT", "STOP_UNCONFIRMED", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_DLOPEN_FAILED"]);
+const FAILURE_CODES = new Set(["UNKNOWN", "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "EBUSY", "EIO", "MISSING_TERMINAL", "STOP_TIMEOUT", "STOP_UNCONFIRMED", "PID_REUSED", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ERR_DLOPEN_FAILED"]);
 
 export type BackgroundProcessState = "starting" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
@@ -29,6 +30,9 @@ export interface BackgroundProcessRecord {
   updatedAt: string;
   pid?: number;
   childPid?: number;
+  /** Wall-clock start of the worker / shell when their PIDs were published; lets a stop refuse a reused PID (S5). */
+  pidStartedAt?: string;
+  childStartedAt?: string;
   exitCode?: number | null;
   signal?: string;
   outputBytes: number;
@@ -129,7 +133,9 @@ function validRecord(value: unknown): value is BackgroundProcessRecord {
     && (item.failure === undefined || validFailure(item.failure))
     && (item.stopRequested === undefined || typeof item.stopRequested === "boolean")
     && (item.pid === undefined || (Number.isSafeInteger(item.pid) && item.pid! > 0))
-    && (item.childPid === undefined || (Number.isSafeInteger(item.childPid) && item.childPid! > 0));
+    && (item.childPid === undefined || (Number.isSafeInteger(item.childPid) && item.childPid! > 0))
+    && (item.pidStartedAt === undefined || (typeof item.pidStartedAt === "string" && Number.isFinite(Date.parse(item.pidStartedAt))))
+    && (item.childStartedAt === undefined || (typeof item.childStartedAt === "string" && Number.isFinite(Date.parse(item.childStartedAt))));
 }
 
 function readRecord(file: string): BackgroundProcessRecord | undefined {
@@ -142,15 +148,35 @@ function readRecord(file: string): BackgroundProcessRecord | undefined {
 }
 
 
-function backgroundRecordAlive(record: BackgroundProcessRecord): boolean {
-  return knownProcessTargets(record).some(processAlive);
+/**
+ * A recorded PID counts as ours only while the process that owns it started
+ * when the record says it did. Without a recorded start (records written by
+ * older versions) or without a cheap OS probe (Windows) the PID alone decides,
+ * as before; `reused` carries verdicts an asynchronous probe already reached.
+ */
+function ownedProcessAlive(pid: number | undefined, startedAt: string | undefined, reused?: ReadonlySet<number>): boolean {
+  if (!pid || reused?.has(pid) || !processAlive(pid)) return false;
+  return compareStartTimes(startedAt, processStartTimeSync(pid)) !== "mismatch";
+}
+function backgroundRecordAlive(record: BackgroundProcessRecord, reused?: ReadonlySet<number>): boolean {
+  if (ownedProcessAlive(record.pid, record.pidStartedAt, reused) || ownedProcessAlive(record.childPid, record.childStartedAt, reused)) return true;
+  // The worker's PID doubles as the process-group id. Once that PID has been
+  // reused the group can hold unrelated processes, so it is no longer evidence.
+  return process.platform !== "win32" && record.pid !== undefined && !reused?.has(record.pid)
+    && compareStartTimes(record.pidStartedAt, processStartTimeSync(record.pid)) !== "mismatch" && processAlive(-record.pid);
 }
 
 function knownPids(record: BackgroundProcessRecord): number[] {
   return [...new Set([record.pid, record.childPid].filter((pid): pid is number => pid !== undefined))];
 }
-function knownProcessTargets(record: BackgroundProcessRecord): number[] {
-  return [...knownPids(record), ...(process.platform !== "win32" && record.pid ? [-record.pid] : [])];
+/** Live PIDs whose current owner started at a different time than the recorded process. */
+async function reusedPids(record: BackgroundProcessRecord): Promise<Set<number>> {
+  const verdict = async (pid: number | undefined, startedAt: string | undefined): Promise<StartTimeVerdict> =>
+    pid && startedAt && processAlive(pid) ? compareStartTimes(startedAt, await processStartTime(pid)) : "unknown";
+  const reused = new Set<number>();
+  if (await verdict(record.pid, record.pidStartedAt) === "mismatch") reused.add(record.pid!);
+  if (record.childPid !== record.pid && await verdict(record.childPid, record.childStartedAt) === "mismatch") reused.add(record.childPid!);
+  return reused;
 }
 /**
  * Poll until every target is gone or the wall-clock budget is spent. A loaded
@@ -343,7 +369,13 @@ async function stopWindowsTree(pid: number): Promise<{ confirmed: boolean; timed
   });
 }
 
-export async function stopBackgroundProcess(id: string): Promise<void> {
+export interface BackgroundStopResult {
+  state: BackgroundProcessState;
+  /** Recorded PIDs that now belong to unrelated processes; they were left alone. */
+  reusedPids: number[];
+}
+
+export async function stopBackgroundProcess(id: string): Promise<BackgroundStopResult> {
   if (!/^[a-f0-9]{12}$/.test(id)) throw new Error("Invalid background process identifier.");
   const file = recordFile(id);
   const record = withBackgroundLifecycle(file, () => {
@@ -358,12 +390,18 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
     return next;
   });
   if (!record) throw new Error(`Unknown background process: ${id}`);
-  if (!["starting", "running"].includes(record.state)) return;
-  const pids = knownPids(record);
-  const targets = knownProcessTargets(record);
+  if (!["starting", "running"].includes(record.state)) return { state: record.state, reusedPids: [] };
+  // Signal only processes that still are the recorded ones. A PID that now
+  // belongs to another program is never signalled, and neither is the process
+  // group named by a reused worker PID.
+  const reused = await reusedPids(record);
+  const pids = knownPids(record).filter((pid) => !reused.has(pid));
+  const groupPid = record.pid !== undefined && !reused.has(record.pid) ? record.pid : undefined;
+  const targets = [...pids, ...(process.platform !== "win32" && groupPid ? [-groupPid] : [])];
   let confirmed = true;
   let timedOut = false;
-  if (targets.some(processAlive)) {
+  const ownedAlive = targets.some(processAlive);
+  if (ownedAlive) {
     if (process.platform === "win32") {
       for (const pid of pids) {
         if (!processAlive(pid)) continue;
@@ -374,28 +412,31 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
       confirmed = (await waitForProcessesExit(pids, STOP_WINDOWS_BUDGET_MS)) && confirmed;
     } else {
       let groupSignalled = false;
-      if (record.pid) {
-        try { process.kill(-record.pid, "SIGTERM"); groupSignalled = true; }
-        catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* still unconfirmed */ } }
+      if (groupPid) {
+        try { process.kill(-groupPid, "SIGTERM"); groupSignalled = true; }
+        catch { try { process.kill(groupPid, "SIGTERM"); } catch { /* still unconfirmed */ } }
+      } else for (const pid of pids) {
+        if (processAlive(pid)) try { process.kill(pid, "SIGTERM"); } catch { /* still unconfirmed */ }
       }
       if (!(await waitForProcessesExit(targets, STOP_TERM_BUDGET_MS))) {
-        if (record.pid) {
-          try { process.kill(-record.pid, "SIGKILL"); groupSignalled = true; }
+        if (groupPid) {
+          try { process.kill(-groupPid, "SIGKILL"); groupSignalled = true; }
           catch { /* fall back only to saved owned PIDs, without claiming tree confirmation */ }
         }
         if (!groupSignalled) for (const pid of pids) {
           if (processAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch { /* still unconfirmed */ }
         }
       }
-      confirmed = (await waitForProcessesExit(targets, STOP_KILL_BUDGET_MS)) && groupSignalled;
+      // Without a group to signal, confirmation rests on the owned PIDs alone.
+      confirmed = (await waitForProcessesExit(targets, STOP_KILL_BUDGET_MS)) && (groupSignalled || !groupPid);
     }
   }
   // Preserve worker completion/cancellation that arrived while stopping, and
   // recheck newly published startup PIDs before declaring cancellation.
-  withBackgroundLifecycle(file, () => {
+  return withBackgroundLifecycle(file, (): BackgroundStopResult => {
   const latest = readRecord(file);
   if (!latest) throw new Error("XIU_BACKGROUND_STOP_UNCONFIRMED: Background state is unavailable; process termination remains unknown.");
-  if (!confirmed || backgroundRecordAlive(latest)) {
+  if (!confirmed || backgroundRecordAlive(latest, reused)) {
     const code = timedOut ? "STOP_TIMEOUT" : "STOP_UNCONFIRMED";
     try {
       // A concurrent cancellation is an intent, not shutdown proof. Keep it
@@ -407,7 +448,7 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
     } catch { /* Existing active evidence remains; never manufacture cancellation. */ }
     throw new Error(`XIU_BACKGROUND_STOP_UNCONFIRMED: ${timedOut ? "Process cleanup timed out" : "Process termination could not be confirmed"}; the background task remains active or unknown.`);
   }
-  if (!["starting", "running"].includes(latest.state)) return;
+  if (!["starting", "running"].includes(latest.state)) return { state: latest.state, reusedPids: [...reused] };
   // A still-unclaimed starting request has no known PID. Cancellation remains
   // a terminal gate that the bootstrap/worker must observe before executing.
   const bytes = (() => {
@@ -416,7 +457,12 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
       return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
     } catch { return 0; }
   })();
-  atomicWrite(file, { ...latest, state: "cancelled", updatedAt: new Date().toISOString(), outputBytes: bytes });
+  // Every recorded process had already been replaced by an unrelated one: the
+  // job ended without publishing a result, so nothing was cancelled by us.
+  const alreadyGone = reused.size > 0 && !ownedAlive;
+  const state = alreadyGone ? "interrupted" as const : "cancelled" as const;
+  atomicWrite(file, { ...latest, state, updatedAt: new Date().toISOString(), outputBytes: bytes, ...(alreadyGone ? { failure: latest.failure ?? { stage: "stop" as const, code: "PID_REUSED" } } : {}) });
+  return { state, reusedPids: [...reused] };
   });
 }
 

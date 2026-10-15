@@ -28,6 +28,8 @@ async function privateFixtureWrite(filename: string, bytes: string, options?: Pa
   await fs.writeFile(filename, bytes, options);
 }
 
+// A start time no live process can match: with it, a dead owner's PID being reused by a new process still reads as dead.
+const STALE_START = new Date(Date.now() - 3_600_000).toISOString();
 async function deadPid(): Promise<number> {
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
   const pid = child.pid!;
@@ -255,7 +257,7 @@ test("active and corrupt locks refuse recovery; dead-owner recovery requires con
   await assert.rejects(f.registry.previewConfigurationRecovery(f.backupId), /write lock/);
   await privateFixtureWrite(lock, "corrupt lock");
   await assert.rejects(f.registry.previewConfigurationRecovery(f.backupId), /write lock/);
-  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture" }));
+  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture", startedAt: STALE_START }));
   const temp = path.join(f.recovery, "interrupted.tmp");
   await fs.writeFile(temp, "partial fixture data", { mode: 0o600 });
   const preview = await f.registry.previewConfigurationRecovery(f.backupId);
@@ -358,7 +360,7 @@ test("current recovery can clear a dead-owner first-write lock without creating 
   await f.registry.setRoutingEnabled(false);
   await fs.unlink(f.filename);
   const lock = path.join(f.recovery, "write.lock");
-  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture" }), { mode: 0o600 });
+  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture", startedAt: STALE_START }), { mode: 0o600 });
   const diagnostics = await f.registry.configurationDiagnostics();
   assert.ok(diagnostics.issues.includes("interrupted-write-can-keep-current"));
   assert.equal(diagnostics.backups.length, 0);
@@ -373,6 +375,21 @@ test("current recovery can clear a dead-owner first-write lock without creating 
   await assert.rejects(f.registry.confirmConfigurationRecovery(preview.token, true), /explicit confirmation/);
 });
 
+test("a live PID that started at another time than the lock owner recorded is a reused PID, not a live owner", async (t) => {
+  const f = await upgraded(t);
+  const lock = path.join(f.recovery, "write.lock");
+  // This process is alive, but the recorded owner started an hour ago: the number was reused.
+  await privateFixtureWrite(lock, JSON.stringify({ pid: process.pid, nonce: "fixture", startedAt: STALE_START }), { mode: 0o600 });
+  assert.ok((await f.registry.configurationDiagnostics()).issues.includes("interrupted-write-can-keep-current"));
+  const preview = await f.registry.previewConfigurationRecovery("current");
+  assert.equal(preview.action, "keep-current");
+  // The same PID with this process's real start time is a live owner and stays untouchable.
+  const ownStart = new Date(Date.now() - process.uptime() * 1000).toISOString();
+  await privateFixtureWrite(lock, JSON.stringify({ pid: process.pid, nonce: "live", startedAt: ownStart }));
+  await assert.rejects(f.registry.previewConfigurationRecovery("current"), /write lock/);
+  assert.equal(JSON.parse(await fs.readFile(lock, "utf8")).nonce, "live");
+});
+
 test("current recovery rejects missing, living, unknown, changed, malformed and future cases", async (t) => {
   const f = await upgraded(t);
   const lock = path.join(f.recovery, "write.lock");
@@ -382,7 +399,7 @@ test("current recovery rejects missing, living, unknown, changed, malformed and 
   await privateFixtureWrite(lock, "unknown owner");
   await assert.rejects(f.registry.previewConfigurationRecovery("current"), /write lock/);
   const pid = await deadPid();
-  await privateFixtureWrite(lock, JSON.stringify({ pid, nonce: "fixture" }));
+  await privateFixtureWrite(lock, JSON.stringify({ pid, nonce: "fixture", startedAt: STALE_START }));
   let preview = await f.registry.previewConfigurationRecovery("current");
   const changed = Buffer.from(JSON.stringify({ version: 5, profiles: [] }));
   await fs.writeFile(f.filename, changed);
@@ -393,7 +410,7 @@ test("current recovery rejects missing, living, unknown, changed, malformed and 
   await privateFixtureWrite(lock, JSON.stringify({ pid: process.pid, nonce: "new-owner" }));
   await assert.rejects(f.registry.confirmConfigurationRecovery(preview.token, true), /write lock/);
   assert.equal(JSON.parse(await fs.readFile(lock, "utf8")).nonce, "new-owner");
-  await privateFixtureWrite(lock, JSON.stringify({ pid, nonce: "fixture3" }));
+  await privateFixtureWrite(lock, JSON.stringify({ pid, nonce: "fixture3", startedAt: STALE_START }));
   await fs.writeFile(f.filename, JSON.stringify({ version: 6, profiles: [] }));
   await assert.rejects(f.registry.previewConfigurationRecovery("current"), /Unsupported provider configuration/);
   assert.ok(!(await f.registry.configurationDiagnostics()).issues.includes("interrupted-write-can-keep-current"));
@@ -405,7 +422,7 @@ test("current recovery rejects missing, living, unknown, changed, malformed and 
 test("failed dead-owner lock release does not report successful current recovery", async (t) => {
   const f = await upgraded(t);
   const lock = path.join(f.recovery, "write.lock");
-  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture" }), { mode: 0o600 });
+  await privateFixtureWrite(lock, JSON.stringify({ pid: await deadPid(), nonce: "fixture", startedAt: STALE_START }), { mode: 0o600 });
   const current = await fs.readFile(f.filename);
   const preview = await f.registry.previewConfigurationRecovery("current");
   const unlink = fs.unlink.bind(fs);
@@ -493,7 +510,7 @@ test("noncanonical backup timestamps cannot leak embedded metadata into diagnost
 test("interrupted recovery with unknown lock ownership remains explicitly blocked", async (t) => {
   const f = await upgraded(t);
   const current = await fs.readFile(f.filename);
-  await privateFixtureWrite(path.join(f.recovery, "write.lock"), JSON.stringify({ pid: await deadPid(), nonce: "fixture" }), { mode: 0o600 });
+  await privateFixtureWrite(path.join(f.recovery, "write.lock"), JSON.stringify({ pid: await deadPid(), nonce: "fixture", startedAt: STALE_START }), { mode: 0o600 });
   await privateFixtureWrite(path.join(f.recovery, "recovery.lock"), "recovery\n", { mode: 0o600 });
   for (const id of ["current", f.backupId]) await assert.rejects(f.registry.previewConfigurationRecovery(id), /write lock/);
   const diagnostics = await f.registry.configurationDiagnostics();
