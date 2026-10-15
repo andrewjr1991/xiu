@@ -1,6 +1,11 @@
 # Xiu 完整使用指南
 
-[0.20.9 已在 GitHub 发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9)。Windows 安装器内置固定版本 uv，仍未签名；npm 0.20.9 待维护者按发布指南发布同源 tarball。正式包已包含当前设计稿，不使用被拒绝的早期草稿制品。
+0.20.11：待发布。企业策略禁止启动 uv/free-search 时，在 Xiu 中运行 `/web configure managed`，直接使用 Xiu 托管 HTTPS 搜索；也可通过 `/web configure` 菜单选择「Xiu 托管搜索」。设置立即生效且重启保留，不再启动或下载本机搜索程序。`/web configure free-search` 可切回本机搜索。域名策略、超时与独立联网代理保留。
+
+`/web doctor` 若在健康检查阶段返回 HTTP 403，设备注册和 Token 请求尚未发送；请检查企业网关/代理或托管服务访问规则，必要时使用 `/web proxy set` 配置获准的联网代理。此阶段重置设备凭证无效；切换托管搜索也不能绕过服务或网络的访问限制。
+
+
+[0.20.9 已在 GitHub 发布](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9)。Windows 安装器内置固定版本 uv，仍未签名；npm 0.20.9 已发布。正式包已包含当前设计稿，不使用被拒绝的早期草稿制品。
 
 0.20.9：本机免 Key 搜索不再需要手动安装 uv（桌面安装包内置，CLI 首次使用自动下载并校验），网页结果显示更简洁，设置页可直达「工具与运行设置」。详见下文「本机免 Key 搜索：free-search」。
 

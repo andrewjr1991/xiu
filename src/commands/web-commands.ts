@@ -43,7 +43,7 @@ function webSearchSummary(settings: XiuSettings, language: UiLanguage): string {
       `local free-search-mcp ${FREE_SEARCH_VERSION} (uv is set up on first use; falls back to ${web.managedAuth === "xiu-device" ? web.baseURL : "nothing"} when unavailable)`)
     : web.baseURL;
   return [
-    localize(language, `原生联网搜索：已启用 · ${web.provider}`, `Native web search: enabled · ${web.provider}`),
+    localize(language, `原生联网搜索：已启用 · ${web.provider === "searxng" && web.managedAuth === "xiu-device" ? "Xiu 托管搜索" : web.provider}`, `Native web search: enabled · ${web.provider === "searxng" && web.managedAuth === "xiu-device" ? "Xiu managed search" : web.provider}`),
     `${localize(language, "端点", "Endpoint")}: ${endpoint}`,
     `${localize(language, "认证", "Authentication")}: ${credential}`,
     `${localize(language, "联网代理", "Web proxy")}: ${web.proxy ? localize(language, "已配置", "configured") : localize(language, "直连", "direct")}`,
@@ -204,12 +204,13 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
 
   const configureWebSearch = async (command: string): Promise<void> => {
     const requested = command.slice("/web configure".length).trim().toLowerCase();
-    let provider: WebSearchProvider | undefined;
+    let provider: WebSearchProvider | "managed" | undefined;
     if (requested) {
-      if (requested !== "free-search" && requested !== "tavily" && requested !== "brave" && requested !== "searxng") throw new Error(localize(language, "Web Search 后端仅支持 free-search、tavily、brave 或 searxng。", "Web Search provider must be free-search, tavily, brave, or searxng."));
+      if (requested !== "managed" && requested !== "free-search" && requested !== "tavily" && requested !== "brave" && requested !== "searxng") throw new Error(localize(language, "Web Search 后端仅支持 managed、free-search、tavily、brave 或 searxng。", "Web Search provider must be managed, free-search, tavily, brave, or searxng."));
       provider = requested;
     } else {
       provider = await selectTerminalOption(localize(language, "选择只读搜索后端", "Choose a read-only search provider"), [
+        { label: localize(language, "Xiu 托管搜索", "Xiu managed search"), description: localize(language, "直接通过 HTTPS 搜索，不启动 uv 或 free-search；适合限制本机程序的企业环境", "Search directly over HTTPS without starting uv or free-search; suitable for restricted enterprise machines"), value: "managed" as const },
         { label: "free-search", description: localize(language, "本机免 Key 多引擎搜索（首次使用自动准备 uv），不可用时回退 Xiu 托管搜索", "Keyless local multi-engine search (sets up uv on first use); falls back to Xiu managed search"), value: "free-search" as const },
         { label: "Tavily", description: localize(language, "面向 AI 的 HTTPS API，免费额度无需信用卡", "AI-oriented HTTPS API; free allowance without a credit card"), value: "tavily" as const },
         { label: "Brave Search", description: localize(language, "官方 HTTPS API，需要 API Key 环境变量", "Official HTTPS API; requires an API key environment variable"), value: "brave" as const },
@@ -217,6 +218,14 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
       ], language);
     }
     if (!provider) { console.log(chalk.dim(localize(language, "已取消联网搜索配置。\n", "Web search configuration cancelled.\n"))); return; }
+    if (provider === "managed") {
+      const { apiKeyEnv: _unused, ...kept } = settings.webSearch ?? {};
+      settings.webSearch = { ...kept, enabled: true, provider: "searxng", baseURL: XIU_BETA_SEARXNG_ENDPOINT, managedAuth: "xiu-device", authBaseURL: XIU_BETA_SEARCH_AUTH_ENDPOINT };
+      await settingsStore.save(settings);
+      refreshWebSearchRuntime();
+      console.log(`${chalk.green(localize(language, "已切换到 Xiu 托管搜索，不再启动本机 free-search。使用 /web doctor 检查连接与设备认证。", "Switched to Xiu managed search without local free-search. Run /web doctor to check connectivity and device authentication."))}\n${webSearchSummary(settings, language)}\n`);
+      return;
+    }
     if (provider === "free-search") {
       // Keeps domain policy, timeout and proxy; the fallback is the fixed managed service.
       const { apiKeyEnv: _unused, ...kept } = settings.webSearch ?? { enabled: true, provider, baseURL: XIU_BETA_SEARXNG_ENDPOINT };
@@ -284,7 +293,14 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
   }
   if (task === "/web doctor") {
     try { await diagnoseWebSearch(); }
-    catch (error) { console.error(chalk.red(`${localize(language, "联网搜索诊断失败", "Web search diagnostics failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) {
+      console.error(chalk.red(`${localize(language, "联网搜索诊断失败", "Web search diagnostics failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      if (error instanceof Error && error.message.startsWith("Xiu Search health check failed with HTTP 403.")) {
+        console.error(chalk.yellow(localize(language,
+          "托管搜索健康接口被拒绝（HTTP 403），尚未发送设备注册或认证请求。可能是企业网关、代理或服务端访问规则拦截；请检查 search.jingran.vip 的 HTTPS 访问，或用 /web proxy set 配置企业允许的代理。重置设备凭证不能解决此阶段的 403。",
+          "The managed health endpoint was denied before device authentication. Check enterprise gateway/proxy and server access rules; /web proxy set configures an approved proxy. Credential reset does not fix this denial.")));
+      }
+    }
     return true;
   }
   if (task === "/web devices") {

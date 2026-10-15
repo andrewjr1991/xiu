@@ -1,4 +1,7 @@
-# Xiu 0.20.9
+# Xiu 0.20.11
+
+0.20.11 (unreleased): use /web configure managed to select Xiu managed HTTPS search without launching uv/free-search. /web configure also offers a managed-search menu option. Health-check 403 now explains the failed phase and proxy/access-rule checks.
+
 
 0.20.9 让本机免 Key 搜索开箱即用：Windows 桌面安装包自带固定版本的 uv，CLI 没有 uv 时首次搜索自动下载同一版本并校验 SHA-256。另含 CodeQL 首扫安全修复、Windows 渠道保存提速、CLI 网页结果简化显示，以及设置页直达「工具与运行设置」。详见 [CHANGELOG](./CHANGELOG.md)。
 

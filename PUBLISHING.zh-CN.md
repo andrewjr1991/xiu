@@ -1,3 +1,14 @@
+## 0.20.11 npm release candidate (not published)
+
+Complete typecheck, tests, build, package inspection and package smoke successfully before publishing. The registry returned E404 for 0.20.11 on 2026-10-15.
+
+```powershell
+npm.cmd login --registry=https://registry.npmjs.org/
+npm.cmd publish --access public --tag latest --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.11 version dist.integrity --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org/
+```
+
 ## 0.20.9 正式发布记录（2026-10-15）
 
 [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 已公开，标签与全部附件精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`。[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业全部通过；Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。

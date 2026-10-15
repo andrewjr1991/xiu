@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { TaskInputQueue } from "../src/task-queue.js";
 import { handleBackgroundCommand, type BackgroundCommandContext } from "../src/commands/background-commands.js";
 import { handleCredentialCommand, type CredentialCommandContext } from "../src/commands/credential-commands.js";
@@ -10,6 +10,11 @@ import { handleReportCommand, type ReportCommandContext } from "../src/commands/
 import { handleRunningTaskCommand, incompleteTaskMessage, type RunningTaskCommandContext } from "../src/commands/running-task-commands.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/commands/skill-commands.js";
 import { handleWebCommand, type WebCommandContext } from "../src/commands/web-commands.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { SettingsStore, type XiuSettings } from "../src/settings.js";
+import { sharedFreeSearchBackend } from "../src/free-search.js";
 
 // The interactive loop tries each handler in turn, so a handler must decline input it does not own
 // without touching its context (an empty context would throw on any access).
@@ -66,6 +71,43 @@ test("web status and proxy commands print the current settings", async () => {
   assert.match(output, /Native web search: disabled/);
   assert.match(output, /Managed search credential: not applicable/);
   assert.match(output, /Independent web tools proxy: direct/);
+});
+
+test("managed search selection persists across restart and doctor never launches local search", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-managed-selection-"));
+  const store = new SettingsStore(path.join(directory, "settings.json"), {});
+  const settings: XiuSettings = { webSearch: { enabled: true, provider: "free-search", baseURL: "https://old.example", apiKeyEnv: "OLD_KEY", proxy: "http://127.0.0.1:8080/", allowedDomains: ["example.com"], blockedDomains: ["blocked.example"], timeoutMs: 9000 } };
+  let refreshes = 0;
+  let diagnoses = 0;
+  const ctx: WebCommandContext = {
+    language: "en-US", settings, settingsStore: store,
+    managedWebSearchAuth: () => undefined,
+    refreshWebSearchRuntime: () => { refreshes++; }, auditCredential: async () => {},
+  };
+  try {
+    assert.equal(await handleWebCommand("/web configure managed", ctx), true);
+    assert.equal(refreshes, 1);
+    const loaded = await store.load();
+    assert.equal(loaded.webSearch?.provider, "searxng");
+    assert.equal(loaded.webSearch?.managedAuth, "xiu-device");
+    assert.equal(loaded.webSearch?.apiKeyEnv, undefined);
+    assert.equal(loaded.webSearch?.proxy, settings.webSearch?.proxy);
+    assert.deepEqual(loaded.webSearch?.allowedDomains, ["example.com"]);
+    assert.deepEqual(loaded.webSearch?.blockedDomains, ["blocked.example"]);
+    assert.equal(loaded.webSearch?.timeoutMs, 9000);
+    // A stub doctor fails immediately: reaching it proves the local backend was skipped.
+    const { ManagedWebSearchAuth } = await import("../src/managed-web-search-auth.js");
+    const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth");
+    auth.diagnose = async () => { diagnoses++; throw new Error("test managed diagnosis"); };
+    ctx.settings = loaded;
+    ctx.managedWebSearchAuth = () => auth;
+    const localSearch = mock.method(sharedFreeSearchBackend(loaded.webSearch?.proxy), "search", async () => { throw new Error("local backend must stay idle"); });
+    try {
+      await handleWebCommand("/web doctor", ctx);
+      assert.equal(diagnoses, 1);
+      assert.equal(localSearch.mock.callCount(), 0);
+    } finally { localSearch.mock.restore(); }
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 
 test("steering prompt commands leave cancel, exit and ordinary steering to the running-task loop", async () => {

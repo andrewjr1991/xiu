@@ -122,6 +122,29 @@ test("managed search doctor checks health and authentication without exposing th
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+test("health-check 403 reports the denied phase without registering or resetting credentials", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-health-denied-"));
+  const filename = path.join(directory, "search-auth.json");
+  const original = JSON.stringify({ version: 1, installationId: "11111111-1111-4111-8111-111111111111", legacyCredential: device("a") });
+  await fs.writeFile(filename, original);
+  const calls: string[] = [];
+  const auth = new ManagedWebSearchAuth("https://search.example/xiu-auth", filename, async (url) => {
+    calls.push(url);
+    return new Response("<html>Blocked by gateway; secret-body</html>", { status: 403 });
+  }, () => 1_000_000, async () => undefined);
+  try {
+    await assert.rejects(auth.diagnose(), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /before device authentication/);
+      assert.match(error.message, /proxy/);
+      assert.doesNotMatch(error.message, /secret-body/);
+      return true;
+    });
+    assert.deepEqual(calls, ["https://search.example/xiu-auth/healthz"]);
+    assert.equal(await fs.readFile(filename, "utf8"), original);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
+
 test("managed search device listing is read-only, bounded, and redacts identifiers", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-search-auth-devices-"));
   const filename = path.join(directory, "search-auth.json");

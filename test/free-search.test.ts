@@ -193,6 +193,26 @@ test("web_search falls back to managed Xiu Search when local search fails or fin
   }
 });
 
+test("explicit managed search uses HTTPS authentication without invoking the local backend", async () => {
+  let localCalls = 0;
+  let tokenCalls = 0;
+  const tools = createWebSearchTools({ ...localFirst, provider: "searxng" }, undefined, {
+    resolveHostname: publicDns,
+    freeSearch: { search: async () => { localCalls++; throw new Error("enterprise policy blocks local programs"); } },
+    getBearerToken: async () => { tokenCalls++; return "managed-token"; },
+    fetch: async (url, init) => {
+      assert.match(url, /^https:\/\/search\.jingran\.vip\/search\?/);
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer managed-token");
+      return new Response(JSON.stringify({ results: [{ title: "Managed", url: "https://example.com/result", content: "HTTPS result" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  const result = await executeTool(tools.find((tool) => tool.name === "web_search")!, { query: "Xiu" }, context);
+  assert.equal(localCalls, 0);
+  assert.equal(tokenCalls, 1);
+  assert.match(result, /https:\/\/example\.com\/result/);
+  assert.doesNotMatch(result, /managed-token/);
+});
+
 test("web_search without a managed fallback reports the local failure", async () => {
   const { managedAuth: _managed, authBaseURL: _auth, ...withoutFallback } = localFirst;
   const tools = createWebSearchTools(withoutFallback, undefined, {

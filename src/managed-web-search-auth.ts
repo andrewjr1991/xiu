@@ -257,7 +257,12 @@ export class ManagedWebSearchAuth {
       const code = typeof cause?.code === "string" ? ` (${cause.code})` : "";
       throw new Error(`Xiu Search health check transport failed${code}.${transportGuidance(code)}`);
     }
-    if (response.status !== 200) throw Object.assign(new Error(`Xiu Search health check failed with HTTP ${response.status}.`), { status: response.status });
+    if (response.status !== 200) {
+      const guidance = response.status === 403
+        ? " The health endpoint was denied before device authentication; no device registration or token request was sent. An enterprise gateway, proxy, or server access rule may be blocking it. Check access to the Xiu Search HTTPS endpoint, use /web proxy set with an approved proxy, or ask the service administrator to check access rules. Resetting device credentials does not resolve a health-check denial."
+        : "";
+      throw Object.assign(new Error(`Xiu Search health check failed with HTTP ${response.status}.${guidance}`), { status: response.status });
+    }
     await this.getBearerToken(signal);
     return {
       health: "ok",
