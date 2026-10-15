@@ -31,7 +31,7 @@ export OPENAI_API_KEY="..."
 xiu
 ```
 
-也可以启动 `xiu` 后使用 `/providers`、`/provider add`、`/provider key` 和 `/models`。本地 Ollama、LM Studio、vLLM 以及自定义 OpenAI 兼容端点不要求使用 OpenAI 官方 Key。
+也可以启动 `xiu` 后使用 `/providers`、`/provider add`、`/provider key` 和 `/models`。`/provider add` 内置 DeepSeek、通义千问、智谱、Kimi、火山方舟、硅基流动、MiniMax 等 OpenAI 兼容服务的模板，选择后只需填 Key。本地 Ollama、LM Studio、vLLM 以及自定义 OpenAI 兼容端点不要求使用 OpenAI 官方 Key。
 
 ## 3. 完成第一个任务 / Finish a First Task
 

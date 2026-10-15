@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { selectableCapabilityModels, selectableModels } from "../../../src/model-catalog.js";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, type ProviderProfile } from "../../../src/provider-registry.js";
+import { ProviderRegistry, providerTemplates, type ProviderProfile } from "../../../src/provider-registry.js";
 import { ProviderConfigurationError } from "../../../src/provider-config-migration.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
@@ -17,6 +17,7 @@ import type {
   DesktopProviderModelsRequest,
   DesktopProviderSelectRequest,
   DesktopProviderSnapshot,
+  DesktopProviderTemplate,
   DesktopProviderTestRequest,
   DesktopProviderTestResult,
   DesktopProviderUpsertRequest,
@@ -75,9 +76,10 @@ export class DesktopProviderController {
   }
 
   snapshot(providerId?: string, discoveryError?: string): DesktopProviderSnapshot {
-    const templates: DesktopProviderUpsertRequest[] = BUILTIN_PROVIDER_PROFILES.map((profile) => ({
-      id: profile.id, name: profile.name, kind: profile.kind, model: profile.model,
-      baseURL: profile.baseURL, capabilityModels: { ...profile.capabilityModels },
+    const templates: DesktopProviderTemplate[] = providerTemplates().map((profile) => ({
+      id: profile.id, name: profile.name, kind: profile.kind, model: profile.model, preset: profile.preset,
+      // Generic kinds keep onboarding free of environment variables; vendor presets suggest the usual variable name.
+      baseURL: profile.baseURL, apiKeyEnv: profile.preset === "vendor" ? profile.apiKeyEnv : undefined, contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels },
       features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
     }));
     const allProfiles = this.registry.list();

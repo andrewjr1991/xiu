@@ -3,7 +3,7 @@ import type { Agent } from "../agent.js";
 import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { selectTerminalOption } from "../interactive-ui.js";
-import { type ProviderProfile, type ProviderRegistry, providerTemplate, UNCONFIGURED_PROVIDER_PROFILE } from "../provider-registry.js";
+import { type ProviderProfile, type ProviderRegistry, providerTemplates, UNCONFIGURED_PROVIDER_PROFILE } from "../provider-registry.js";
 import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "../provider-routing.js";
 import { probeProvider } from "../providers.js";
 import type { StatusLine } from "../status.js";
@@ -172,21 +172,36 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
   if (task === "/provider add") {
     console.log(chalk.cyan(localize(language, "添加 Provider（Key 可保存在本机配置，也可使用环境变量）", "Add a provider (save the key locally or use an environment variable)")));
     try {
-      const kind = await selectTerminalOption(localize(language, "渠道类型", "Provider type"), (["agnes", "openai", "anthropic", "ollama", "lmstudio", "vllm", "openai-compatible"] as const).map((value) => ({ label: value, value })), language);
-      if (!kind) return true;
-      const template = providerTemplate(kind);
-      const id = (await askQuestion(localize(language, "Provider ID：", "Provider ID: "))).trim();
+      // Generic kinds first, then hosted OpenAI-compatible vendor presets, then a blank compatible endpoint.
+      const templates = providerTemplates();
+      const choice = await selectTerminalOption<string>(localize(language, "渠道类型或厂商模板", "Provider type or vendor template"), [
+        ...templates.map((template) => ({
+          label: template.preset === "vendor" ? `${template.name}（OpenAI 兼容）` : template.kind,
+          description: template.preset === "vendor" ? `${template.baseURL} · ${template.model}` : template.baseURL ?? template.model,
+          value: template.id,
+        })),
+        { label: "openai-compatible", description: localize(language, "自定义 OpenAI 兼容地址", "Custom OpenAI-compatible endpoint"), value: "openai-compatible" },
+      ], language);
+      if (!choice) return true;
+      const template = templates.find((item) => item.id === choice);
+      const kind = template?.kind ?? "openai-compatible";
+      const suggestedId = template && !providerRegistry.get(template.id) ? template.id : "";
+      const id = (await askQuestion(localize(language, `Provider ID${suggestedId ? ` [${suggestedId}]` : ""}：`, `Provider ID${suggestedId ? ` [${suggestedId}]` : ""}: `))).trim() || suggestedId;
+      if (!id) throw new Error(localize(language, "Provider ID 不能为空。", "Provider ID is required."));
       if (providerRegistry.get(id)) throw new Error(localize(language, "Provider ID 已存在。", "Provider ID already exists."));
-      const name = (await askQuestion(localize(language, "显示名称：", "Display name: "))).trim() || id;
+      const name = (await askQuestion(localize(language, `显示名称 [${template?.name ?? id}]：`, `Display name [${template?.name ?? id}]: `))).trim() || template?.name || id;
       const baseURL = (await askQuestion(localize(language, `API Base URL [${template?.baseURL ?? "默认"}]：`, `API base URL [${template?.baseURL ?? "default"}]: `))).trim() || template?.baseURL;
       const model = (await askQuestion(localize(language, `默认模型 ID [${template?.model ?? ""}]：`, `Default model ID [${template?.model ?? ""}]: `))).trim() || template?.model || "";
-      const apiKeyEnv = (await askQuestion(localize(language, "密钥环境变量名（本地无认证可留空）：", "API-key environment variable (blank for unauthenticated local servers): "))).trim() || undefined;
+      // Generic kinds stay free of environment variables, as in the desktop onboarding; vendor presets suggest the usual name.
+      const envDefault = template?.preset === "vendor" ? template.apiKeyEnv : undefined;
+      const envText = (await askQuestion(localize(language, `密钥环境变量名${envDefault ? ` [${envDefault}]` : "（本地无认证可留空）"}：`, `API-key environment variable${envDefault ? ` [${envDefault}]` : " (blank for unauthenticated local servers)"}: `))).trim();
+      const apiKeyEnv = envText === "-" ? undefined : envText || envDefault;
       const apiKey = await askSecret(localize(language, "本地保存的 API Key（可留空，输入内容不会显示）：", "Locally saved API key (optional; input is hidden): ")) || undefined;
       const contextText = (await askQuestion(localize(language, "上下文窗口 Token 数（留空使用 128K）：", "Context-window tokens (blank for 128K): "))).trim();
       const visionText = (await askQuestion(localize(language, "该端点和模型确认支持视觉？[y/N]：", "Does this endpoint and model definitely support vision? [y/N]: "))).trim();
       const profile: ProviderProfile = {
         id, name, kind, model, baseURL, apiKeyEnv, apiKey,
-        contextWindow: contextText ? Number(contextText) : undefined,
+        contextWindow: contextText ? Number(contextText) : template?.contextWindow,
         capabilityModels: template?.capabilityModels,
         features: { ...(template?.features ?? { text: true, tools: true, image: false, video: false }), vision: /^(y|yes)$/i.test(visionText) },
       };
