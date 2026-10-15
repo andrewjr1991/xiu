@@ -1,91 +1,10 @@
-# Xiu 0.20.11
-
-0.20.11 is published on [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) and npm. Select managed HTTPS search with /web configure managed; this persists across restarts and does not launch uv/free-search. All nine exact-source CI jobs and CodeQL passed. Five original CI assets were verified after upload; Windows is unsigned. The npm and CI packages contain the same 420 files, although their archive digests differ and npm gitHead records the earlier pre-commit HEAD.
-
-
-0.20.9 makes keyless local web search work out of the box: the Windows desktop installer includes a pinned uv, and the CLI downloads the same pinned, SHA-256 verified uv on first use when none is installed. It also brings the security fixes from the first CodeQL scan, faster provider saves on Windows, plainer web results in the CLI and a direct Settings entry for tool management. See [CHANGELOG](./CHANGELOG.md).
-
-Released on [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) from main `961fd47e154b43747e3136843caea9ae368f0c44`, with all nine exact-source CI jobs passed. Original CI asset digests are verified; Windows is unsigned. npm 0.20.9 is published; the registry's latest, integrity and tarball digest match the release asset. The current design is included in the tarball after a packaging correction. Older release/candidate notes below are historical.
-
-0.20.8 visual testing: the vision picker supports unknown chat-model candidates, manual IDs, individual visual tests and testing all visual candidates in the current saved channel. A single batch confirmation lists destinations, model count and potential billing; serial requests show individual results and progress, with cancellation and no automatic retries. Synthetic images only; results are per-test, not permanent capability guarantees. No real paid-provider validation has been run. See the usage guide for details.
-
-Local unpublished settings update: manage channels, credentials and model capabilities directly in Settings → Models and channels. The chat model picker only selects existing models; add/edit/delete, discovery and tests are available in Settings. Trusted idle workspace and existing approval/Plan guards still apply.
-
 <div align="center">
-
-Local acceptance/editing update (unpublished): a finished computer-input round can record explicit human acceptance independently of program verification. Failed checks and raw task state are preserved; acceptance never grants permissions or carries into the next round. Restricted Shift+Home / Shift+End text selection enables replacing a selected line in one input rather than repeated Backspace. General system chords and clipboard access are not enabled.
-
-Latest local interaction candidate (2026-10-12, unpublished): Full Access confirmation now explicitly includes computer input and the actual vision destination. Within that ephemeral workspace/route grant, ordinary target selection needs no second dialog; legacy grants and other routes still require consent. A non-focus-stealing status strip shows real observation/action phases, Pause/Resume and Stop. Initial target activation and modal teardown are coordinated; input still uses the foreground mouse/keyboard, not background isolation. Earlier candidate records below are historical.
-
-Local feedback update (2026-10-12, unpublished): every computer input now observes afterward by default, with a 350 ms settling wait; observation/input feedback can wait 0–3000 ms for dynamic interfaces. Cancellation prevents late capture/upload, expired visual responses provide no actionable frame or controls, and failed feedback never replays input. The maintainer reported the Notepad task accepted; model/channel details were not recorded, and complete gameplay remains unverified. Earlier validation records below are historical.
-
-Local 0.20.8 autonomous-window candidate (unpublished): describe a goal in Computer Use. After explicit ephemeral Full Access and target-window/vision-route consent, the parent agent discovers controls, observes, acts and verifies within that scope without per-step dialogs. UI Automation control IDs are preferred; coordinates remain a fallback. Manual controls are under debugging. Automatic grants last at most 20 minutes / 100 inputs; manual grants 10 minutes / 30. Stop, task completion, workspace or vision-route changes revoke authorization. Plan, untrusted workspaces, CLI and child agents cannot use this capability. Password, payment, deletion, publication and elevated workflows are unsupported. Paid-model reliability and complete gameplay acceptance remain unverified.
-
-[0.20.7 is published on GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.7). Exact main-CI assets and five verified checksums are available. Five jobs passed; the maintainer explicitly accepted one Windows background bootstrap lstat EPERM race (1010 passed, 7 skipped, 1 failed). The original failed CLI manifest is retained. Windows is unsigned; npm publication remains pending authentication (latest 0.20.4). Older candidate notes below are historical.
-
-Unreleased local correction (2026-10-08): independently counted, persisted complete text Diffs with paginated review; managed upload thumbnails restored on their original history messages; explicit program acceptance diagnostics; and unavailable Git views for non-Git folders. Old preview-only records are clearly labelled and never reconstructed from current files. Existing source-read/security limits still apply. These changes are not included in published 0.20.6 assets; no official tag or installer has been replaced.
-
-[GitHub 0.20.6 is published](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.6) with the unsigned Windows installer, CLI tarball, local verification manifests and checksums. npm publication is still pending authentication.
-
-> 0.20.6 desktop settings release (2026-10-04): appearance and dark-surface fixes, font sizing, density, reduced motion, conversation preferences, optional background notifications and build information. The maintainer explicitly waived remote CI for this version; artifacts are built and checked locally, not inherited from previous CI. Windows remains unsigned; full-suite and cross-platform verification were not run. npm authentication is unavailable (latest: 0.20.4). Release status and exact-source asset records: [publishing guide](./PUBLISHING.zh-CN.md). Notes below are historical.
-
-Local dark-surface correction: workspace headers, inspector tabs, translucent popovers and attachment controls no longer retain light backgrounds. Six subagent avatar palettes use matte dark surfaces and coloured glyphs. Actual wide/narrow workbench screenshots and dark-surface regression checks supplement the settings-page checks.
-
-Local, unreleased desktop settings candidate (2026-10-04): system/light/dark appearance, UI/code sizing, layout density, reduced motion, conversation-follow/display preferences, send shortcut, opt-in background notifications, existing model management and build information. Preferences do not store credentials or execution grants. Timeout settings remain startup environment variables; automatic update checks are not implemented. The separately named local installer does not replace official 0.20.5 assets.
-
-> [0.20.5 GitHub release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.5): desktop refinements, task continuation, staged summaries, compact warnings and safe live output. Candidate and independent main CI each passed all six jobs; release assets come from main CI. npm publication is pending authentication (latest: 0.20.4). Windows builds remain unsigned. Earlier local-only notes below are historical.
-
-Local desktop visual refinement: quieter event headings replace bold operation counts; factual progress is borderless and empty status summaries are omitted without deleting records. History titles stay on one line, neutral surfaces reduce nested-card clutter, the workspace header is shorter, and return-to-latest floats over output. Safety controls and complete logs remain available.
-
-Local stage-summary refinement: the desktop overview no longer copies the user's request. It appears after a plan or public progress note, updates at meaningful stages, and becomes a bounded outcome summary on completion. No extra model calls. User-reported Agnes acceptance completed with 24 passing tests and two completed child agents; browser play remains manual acceptance.
-
-Local follow-output repair: desktop output follows content/layout growth without smooth-scroll interruption; scrolling upward pauses follow and exposes a “回到最新进展” button. Subagents use eight stable vector silhouettes with identity colours and status dots. Stream timeouts retain numeric-only transport counters; only the next explicit continuation uses complete-response mode, including restored sessions. No partial tools or automatic replays. 106 targeted regressions and desktop wide/narrow viewport checks passed; this does not establish an upstream fix for Agnes stalls.
-
-Local waiting-state repair: a live status stays above the desktop composer, even when the process is folded or scrolled away. Model deadlines distinguish first public text/tool arguments (600s), streaming body idle (180s, refreshed by growing content) and complete non-streaming response (900s); environment overrides are supported. Empty role headers do not start the shorter body-idle deadline. Timeout is not proof that the model was not generating. Plan tool summaries no longer suggest CLI commands, and duplicate timeout alerts are merged.
-
-Local compact-alert follow-up: execution warnings start collapsed; raw logs are plain text with bounded scrolling, not oversized Markdown. Public complete-line previews remain redacted; tool argument generation displays numeric progress only until validated completion. Active child waits do not trip the cycle detector, while failed/terminal repeated calls remain guarded. Completion gates list outstanding exact verification obligations rather than accepting weaker replacement checks. Authorized Agnes-only tests passed four protocol calls (including a 9,634-character game argument in about 40 seconds) and a small isolated three-call write/verify task. All 151 targeted tests, desktop viewports and isolated installer lifecycle checks passed; long-task and Claude/GPT upstream reliability remain unverified.
-
-Local deletion/transport repair: confirmed deletion also cleans journal-only conversations whose session file was removed manually, and stale deletion retries are harmless. A missing streamed finish marker still stops the current response without executing incomplete calls; the next user continuation uses non-streaming for that provider/model, including after restoring the failed session. This is a compatibility fallback, not a verified upstream fix or an automatic retry.
-
-Local retest follow-up: running activity and plans now open by default and respect manual collapse until the round ends. Direct-process arguments accept a bounded JSON-encoded array without shell parsing; invalid inputs include recovery examples. Fresh-workspace guidance prevents guessed missing-file reads. Missing/unsupported provider finish markers remain non-executable and receive specific diagnostics, not an unverified output-limit diagnosis. Real provider completion still needs retesting.
-
-Unreleased local repair after the 0.20.4 snake-game trial: follow-up and model changes preserve conversation history while current-task facts remain isolated. Models no longer choose child-agent turn limits; explicit host/CLI limits still apply. Model request deadlines follow the first-response/stream-idle/complete policy above (streamed tool arguments count as progress), without replaying incomplete tool calls. Plans use a compact progress pill with bounded popover details; duplicate failure notices are consolidated. This local build does not replace the formal release assets.
-
-**0.20.4 is available as a [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.4).** Includes compact per-turn activity, child-agent avatars and status, a full task overview, grouped workspace controls, history isolation, search freshness and constrained-Windows compatibility fixes. All six jobs passed for merged main source `c4113de2bf11ad1f2136464c6c6450c73d6f4f45` in [CI 37112569209](https://github.com/andrewjr1991/xiu/actions/runs/37112569209); release assets retain the original verified CI bytes. Windows full tests: 969 total, 962 passed, 7 skipped, zero failed. The Windows installer remains unsigned. npm 0.20.4 publication is delegated to the maintainer; latest was last verified as 0.20.3. Earlier local notes below are historical checkpoints, not current release status.
-
-Unreleased local follow-up: each task round has a collapsed elapsed-time/activity entry, with final replies and actionable failures outside it. Role avatars remain consistent across child-agent activity, overview and details. Workspace settings, overview, terminal and sidebar controls are grouped at the top right. History preserves per-round attribution; the overview can be fully hidden.
-
-Local subagent follow-up fixes keep history/live task views consistent and remove native button borders. Reopening the model picker explicitly reloads settings without retrying a failed write; restored settings still require restart. An unreleased corporate Windows compatibility fix selects a native ACL backend before mutations in constrained PowerShell. Existing unsafe ACLs remain blocked and are never silently repaired. The maintainer subsequently authorized a one-time owner-only ACL repair of the empty local recovery directory; read-only privacy verification passed, without changing configuration content or clearing locks. Exact-source CI and real-machine model switching acceptance remain required.
-
-Unreleased local work for **0.20.4**: chronological subagent dispatch/start/terminal updates, synchronized task details and independently confirmed cancellation. Progress ticks do not duplicate starts; historical tasks do not keep ticking or re-dispatch. Plan mode cannot cancel tasks; cancellation preserves files and Worktrees. This is not part of the published 0.20.3 assets. Computer Use remains a separate future preview.
-
-**0.20.3** is available as a [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3), with an unsigned Windows x64 installer, CLI tarball, original CI manifests and SHA256SUMS from exact source `2ad7891d8756d98001e8d6a23dc4603ccddd998d`. All six jobs passed in [CI 37099780173](https://github.com/andrewjr1991/xiu/actions/runs/37099780173); uploaded asset digests match. Managed desktop-search authentication, safe folder/SKILL.md/ZIP imports and dependency hardening are included; manual Skill, real IME and external-device acceptance passed. The unpatched build-only HTTP-cache advisory is explicitly disclosed and accepted, not fixed. npm publication is delegated to the maintainer using the same CI tarball and remains pending; GitHub publication does not update npm latest. Earlier candidate notes below are historical.
-
-Candidate **0.20.3-preview.13** adds desktop Skill imports from folders, standalone `SKILL.md`, and ZIP packages. Use Tools & Runtime Settings → Skills, preview the package and declared permissions, then explicitly confirm. Single-file import excludes siblings; use a folder or ZIP for resources. Imports never run bundled scripts or overwrite installed skills. Store discovery, remote installers and update management remain later work. Commit/push for exact-source CI is authorized; publication remains conditional on CI and the outstanding build-dependency risk decision.
-
-Maintainer acceptance passed for Skill import, real OS IME and external devices. Dependency hardening replaces fast-glob/braces with bounded tinyglobby matching and upgrades build-time sharp. CLI and both production audits are clean; desktop development audit retains the unpatched electron-builder HTTP-cache dependency advisory. This is not an audit-clean stable release; exact-commit CI remains required.
-
-Candidate **0.20.3-preview.12** adds desktop managed-search authentication using the CLI's lazy device registration and short-lived tokens. In Tools & Runtime Settings → Web Search, choose **Xiu managed search** and save; custom services still accept environment-variable references, not secrets. No enrollment occurs on startup or save. The maintainer confirmed live authentication and search work and authorized commit/push; publication is not authorized, and this patch needs its own exact-commit CI.
-
-> **0.20.3-preview.11** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.11), with an unsigned Windows x64 installer, CLI tarball and verification manifests from exact source `cc49096`. All six jobs passed in [CI 37094638003](https://github.com/andrewjr1991/xiu/actions/runs/37094638003); Windows full tests: 890 total, 883 passed, 7 skipped, zero failed. npm preview publication is authorized but blocked by local login-state persistence; stable latest remains 0.20.2. Real OS IME and external-device acceptance are pending.
-
-Local desktop UI corrections: compact bottom-aligned utility entries, consistent Execute/Plan controls, non-wrapping model action labels, a collapsible tool sidebar that retains tabs/terminal state, and a main-process-owned Xiu-styled Full Access confirmation. No permission or recovery policy is relaxed.
-
-Development candidate: the desktop composer now has an idle-only Execute / Plan read-only switch backed by the shared runtime. Plan still blocks write/execute tools under Full access; continuing history or recovering a task keeps the mode you explicitly selected. A new conversation and Provider/model reconfiguration in the same open workspace keep that selection. Closing/reopening or switching workspaces starts in Execute mode; Full access still resets on reconfiguration. IME candidate-confirmation Enter no longer submits a task or steering message; normal Enter sends and Shift+Enter inserts a newline. Automated synthetic-event coverage does not replace testing with a real OS input method.
-
-> **0.20.3-preview.10** is available as a [GitHub pre-release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.3-preview.10), with unsigned Windows x64 installer and CLI tarball. All six exact-commit CI jobs passed for `c6d6ec5` ([run](https://github.com/andrewjr1991/xiu/actions/runs/37005365523)). npm preview publication still awaits the maintainer's browser confirmation; stable `latest` remains 0.20.2. Earlier candidate descriptions below are historical. Real OS IME and external-device acceptance remain pending.
 
 # Xiu
 
-本地开发候选（未发布）：右侧任务概览汇总任务摘要、当前环境与分支、本轮子智能体、技能/MCP 调用、工作区后台进程、文件产出和来源记录。分组可折叠，无数据不占位；收起详情仍保留概览，也可完全隐藏。历史视图不借用实时环境或后台进程。
+**A terminal coding agent with reviewable changes and a Chinese-first UI, plus a Windows desktop preview.**
 
-本地未发布 UI 修正：MCP 详情默认折叠，工作台支持拖动调宽，配置恢复增加分步说明，完全访问确认窗口使用无系统标题栏的 Xiu 样式；权限与凭证边界保持不变。
-
-0.20.2 desktop preview: permission modes are Ask for approval, Approve for me (risk classification, not an AI reviewer), and Full access. Full access requires a native first-enable confirmation for each workspace opening, then automatically approves all task tools including dangerous operations and permits external file access/local troubleshooting. It is not persisted; reopening/reconfiguring or restarting resets permissions. Plan read-only, trust, MCP connection grants, credential protection and recovery replay guards remain independent. External file changes are not checkpointed or included in task Diff, and cannot be guaranteed reversible. MCP buttons, modal/titlebar alignment and desktop copy are also corrected.
-
-**A terminal coding assistant for everyday development, with reviewable changes.**
-
-Give Xiu an outcome. It inspects the repository, edits files, runs commands, verifies the result, and leaves bounded evidence you can review.
+Give Xiu a goal. It inspects the repository, edits files, runs commands, verifies the result, and leaves bounded, reviewable evidence of what it did.
 
 [![CI](https://github.com/andrewjr1991/xiu/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewjr1991/xiu/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@xiu-ai/cli)](https://www.npmjs.com/package/@xiu-ai/cli)
@@ -95,130 +14,118 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-This version is `0.20.2`. Fresh installations start with no preconfigured Providers. It adds desktop MCP management, a tabbed review workbench, child-task and categorized evidence views, and installed Node/npm compatibility. Upgrade CLI and desktop together because channel settings migrate to format 5. It adds the Windows desktop preview, persistent reviewable task changes, a controlled interactive terminal, and Provider-neutral vision, image, video, and audio model routing while preserving the cross-platform CLI. The patch release also persists capability-specific model selections, consistently bounds generated-media downloads, and fixes Windows background-process handoff.
-
-Development candidate Provider recovery: run `xiu --provider-config-diagnostics` to list metadata-only diagnostics and verified protected backups, then `xiu --provider-config-preview <backup-id>` to review one. `xiu --provider-config-recover <backup-id>` requires an interactive terminal and typed `RECOVER`; `-y`, piped input, blank input and cancellation cannot restore. The desktop sidebar has **Provider 配置诊断与恢复**, including when normal Provider startup fails, with a separate native confirmation. Close other Xiu clients first and restart after recovery. `current` is only offered for a verifiably dead-owner write lock: it keeps current settings, not a backup restore. Future schemas cannot be downgraded; system credentials are not restored.
-
-Preview.9 targets a background-directory enumeration race by tolerating only ENOENT disappearance, and corrects recovery-test write-lock owner initialization to match production. ACL policy, type checks, other errors and recovery boundaries remain unchanged. New features are paused; exact Windows proof remains pending. Existing unprotected recovery directories are not silently repaired or deleted. Background commands/output are never replayed; an unconfirmed stop retains active/unknown evidence.
+Current version **0.20.11** (2026-10-15): [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) · [npm](https://www.npmjs.com/package/@xiu-ai/cli) · [Changelog](./CHANGELOG.md). The CLI runs on Windows, macOS and Linux; the desktop app currently ships only as an unsigned Windows x64 preview installer.
 
 ## Install
 
-Requires Node.js 20.18.1 or newer.
+The CLI requires Node.js 20.18.1 or later.
 
 ```bash
 npm install -g @xiu-ai/cli
-xiu "Find the cause of the failing login test, fix it, and run the tests"
+xiu --version
 ```
 
-In Windows PowerShell, use `npm.cmd` instead of `npm` if the PowerShell shim is restricted by execution policy or ConstrainedLanguage.
+In Windows PowerShell, if `npm.ps1` is blocked by the execution policy or ConstrainedLanguage mode, use `npm.cmd` instead of `npm`. If `xiu` is not found after installing, reopen the terminal or run `xiu --update-doctor` for a read-only diagnosis.
 
-For interactive work and resumable sessions:
+Desktop preview: download `Xiu-<version>-x64-<commit>-unsigned.exe` from [Releases](https://github.com/andrewjr1991/xiu/releases/latest). The installer is per-user and needs no administrator rights. Because it is unsigned, Windows SmartScreen shows an "unknown publisher" warning.
 
-```bash
-xiu
-xiu --resume
-```
+## Quick start
 
-See the [two-page quickstart](./QUICKSTART.md) for Provider setup and common commands.
-
-## Why Xiu
-
-### Visible while it runs, reviewable afterward
-
-During a task, Xiu writes model turns, explicit user-facing summaries, tool activity, bounded results, file changes, and verification progress above the live steering editor. It does not fabricate private reasoning that the Provider API did not return.
-
-Afterward, `/report` assembles a redacted execution report from durable task records, exact session replay, diagnostics, verification evidence, and workspace-scoped security audit facts. The live view and report are different views with different retention boundaries; neither asks the model to remember what it did.
-
-### Recovery without silent side-effect replay
-
-If a process stops mid-task, Xiu records the last safe boundary and pending side effects. Operations whose result is unknown are reported and must be checked or confirmed; they are not silently replayed.
-
-### Program-enforced safety boundaries
-
-- Workspace trust is required before project instructions, project Skills, project MCP configuration, commands, or writes can affect a task.
-- Plan mode is read-only at the tool boundary.
-- Writes and execution are risk-classified; dangerous actions always require explicit confirmation.
-- Real-path confinement rejects symlink, junction, reparse-point, parent-traversal, and glob escapes.
-- Plugin content is hashed; optional Ed25519 signatures and exact local approval are independent gates.
-
-### Evidence-gated web research
-
-For current-information tasks, search snippets are discovery evidence only. Final citations must have been successfully opened, and Xiu fails rather than filling unsupported current facts from model memory.
-
-Search needs no API key. Xiu runs the open-source [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) locally: a pinned version that queries several engines at once, with only its read-only search tool enabled. It is launched with [uv](https://docs.astral.sh/uv/): the desktop installer includes a pinned uv, and the CLI uses uv from PATH or, if there is none, downloads a pinned uv once into `~/.xiu/uv` and checks its SHA-256. If local search cannot start or finds nothing, Xiu falls back to its managed search service. Pages are always opened by Xiu's own HTTPS-only fetcher. See `/web` in [USAGE.zh-CN.md](./USAGE.zh-CN.md).
-
-### Local-first records
-
-Xiu does not upload project code, sessions, audit records, or diagnostics by default. Model calls and explicitly configured web/MCP services still communicate with their configured endpoints. Update notifications are off by default, and ordinary startup performs no update check unless the user explicitly enabled that feature.
-
-## Core capabilities
-
-The unreleased 0.20.2 candidate connects stdio / Streamable HTTP MCP servers to desktop tasks through the same manager as the CLI. Open **MCP 连接与权限** to add/edit basic user configurations, review the exact permission manifest, then explicitly connect/reload. OAuth shows authorization origins/scopes, browser fallback and cancellation; Resource/Prompt browsing is bounded, redacted and read-only. Project/advanced/secret-bearing configurations remain read-only in the desktop editor; use CLI/config files for them. Connections close on workspace changes and exit. These desktop MCP features are not part of the published 0.20.1 package.
-
-The unreleased 0.20.2 candidate adds MCP, an independent searchable Diff/file-tree panel with saved execution rounds and bounded line counts, real specialist-agent task/status/result cards, and categorized background processes, tools, artifacts, source reads and verification. Children remain workspace/Worktree scoped; integration always requires confirmation and Reviewer/Tester evidence. Managed background commands and npm-based MCP servers require local Node.js, never Xiu.exe as Node. Native web research, plugins, and Provider failover/stage routing remain pending. See the [capability inventory](./ROADMAP.zh-CN.md#4-后续工程化).
-
-- Autonomous inspect/edit/verify task loop
-- OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM, and custom OpenAI-compatible profiles
-- Capability-aware Provider failover and per-stage routing
-- Provider-neutral vision, image, video, and audio model routing with guarded billable-media recovery
-- Repository map and TypeScript/JavaScript symbol, reference, and caller navigation
-- MCP stdio and Streamable HTTP, Resources, Prompts, OAuth, and permission manifests
-- Declarative plugins with digest, signature, publisher, and team-policy checks
-- Background jobs, resumable sessions, task budgets, diagnostics, and execution reports
-- Multi-agent roles with isolated Git worktrees and review-gated integration
-- Simplified Chinese and English UI and model-output contracts
-
-## Added in 0.18.0
-
-- `/check` discovers the root npm project's `typecheck`, `lint`, `test`, and `build` scripts; `/check test` runs one and `/check all` runs the available checks in order. The actual scripts and lifecycle hooks are previewed through the existing approval path. Plan mode allows discovery only; `Ctrl+C` cancels active checks.
-- `/diff` (or `/diff task`) shows changes since the current task's in-memory starting point, `/diff workspace` includes staged, unstaged, and untracked workspace changes against HEAD, and `/diff staged` compares the index with HEAD. Existing changes and uncertain attribution are labeled. Snapshots and previews are bounded; omitted files are reported, and task baselines do not survive a restart.
-- Chinese and English streamed drafts appear temporarily while a response is arriving. Redaction precedes display, code literals retain their spelling, and a draft is not a completion verdict.
-- Tool failures carry consistent status and error categories. Repeated failures can stop even when arguments change; a failed command is not progress. Verification rejects `echo test`, help/version output, and similar non-checks; another passing check cannot conceal a recorded failure, and subsequent task edits invalidate prior checks.
-- Provider histories are rebuilt from visible text and tool calls. Truncated, filtered, or unknown endings cannot be reported as completed work or execute partial tool calls.
-
-A successful script exit records an execution result, not proof that every requirement is correct. See the [usage guide](./USAGE.zh-CN.md) for command details and limits.
-
-## Platform status
-
-| Capability | Windows | macOS | Linux |
-| --- | --- | --- | --- |
-| Core CLI and Agent loop | Primary, locally verified | CI target; external acceptance pending | CI target; external acceptance pending |
-| MCP, Skills, plugins | Primary, locally verified | CI target | CI target |
-| OS credential backend | Credential Manager, opt-in | Not yet supported | Not yet supported |
-| Clipboard image attachment | Supported | Use `@path` | Use `@path` |
-| Background shell | PowerShell | `/bin/sh` path, acceptance pending | `/bin/sh` path, acceptance pending |
-
-Windows is currently the most thoroughly tested platform. CI coverage is not a substitute for real OS keyring, enterprise-policy, terminal, and OAuth migration acceptance.
-
-## Configuration and storage
-
-User settings and local records live under `~/.xiu/`; project-local Xiu state lives under `.xiu/`. Task execution can intentionally modify files inside the trusted workspace and can run explicitly approved commands, so Xiu is not a container sandbox.
-
-Set a Provider key with an environment variable or use the interactive Provider commands:
-
-```bash
-export OPENAI_API_KEY="..."
-xiu
-```
+Xiu ships with no preconfigured providers. Start it and add a model provider with `/provider add`, or set an environment variable first:
 
 ```powershell
 $env:OPENAI_API_KEY = "..."
 xiu
 ```
 
-Inside a session, type `/` to open the command palette. Useful starting points include `/providers`, `/models`, `/status`, `/diagnostics`, `/diff`, `/check`, `/report`, `/recover`, and `/help`.
+```bash
+export OPENAI_API_KEY="..."
+xiu
+```
+
+OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM and any OpenAI-compatible endpoint are supported. Local models do not need an official API key.
+
+Run it inside a Git repository:
+
+```bash
+xiu "Explain this project's entry points and how tests run, without editing files"
+xiu "Fix the failing tests, run the relevant checks, and summarize the changes"
+xiu            # interactive session
+xiu --resume   # resume a session in this workspace
+```
+
+The first time Xiu enters a directory it asks whether to trust the workspace. Until you trust it, Xiu does not read project instructions, load project extensions, write files or run commands.
+
+Type `/` in a session to open the command palette. Common commands:
+
+| Command | Purpose |
+| --- | --- |
+| `/providers`, `/provider add`, `/models` | Manage providers, keys and models |
+| `/plan on` | Read-only Plan mode: investigate before acting |
+| `/diff`, `/check`, `/report` | Review changes, run project checks, generate an execution report |
+| `/resume`, `/recover` | Resume sessions, handle interrupted tasks |
+| `/background` | Start and inspect background commands that survive disconnects |
+| `/web configure`, `/web doctor` | Configure and diagnose web search |
+| `/status`, `/diagnostics`, `/help` | Status, diagnostics and the full command list |
+
+The full command list, CLI flags and feature descriptions are in the [usage guide](./USAGE.zh-CN.md) (Chinese).
+
+## What it does
+
+- **Autonomous coding loop**: reads the project, locates the problem, edits files, runs tests / typecheck / lint / build, and iterates on the results. It detects the stack and project scripts automatically (`/check`).
+- **Reviewable**: each turn shows the model summary, tool activity, file changes and verification progress. `/report` produces a redacted execution report; `/diff` shows changes for the task, the workspace or the staging area.
+- **Recoverable**: sessions, checkpoints, crash recovery, task budgets and stall diagnostics. Side effects with unknown outcomes are reported, never silently replayed.
+- **Multiple providers**: capability probing, failover and staged routing; provider-neutral vision, image, video and audio model configuration; credentials can optionally live in Windows Credential Manager.
+- **Keyless web search**: by default Xiu runs a pinned version of the open-source [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) locally to aggregate several engines (uv is bundled in the desktop installer and downloaded and verified on first use by the CLI). When the local engine is unavailable it falls back to Xiu's managed search; where company policy forbids local subprocesses, `/web configure managed` selects managed search directly. Citations must come from pages that were actually opened; with insufficient evidence the search fails instead of guessing from memory.
+- **Extensible**: Skills, MCP (stdio / Streamable HTTP, Resources, Prompts, OAuth, exact permission manifests) and declarative plugins with digests and optional signature verification.
+- **Multi-agent**: Explorer / Implementer / Reviewer / Tester run in parallel in isolated Git worktrees; integration happens only after conflict detection, review evidence and explicit confirmation.
+- **Background jobs**: dev servers and long commands can run across terminals, with output reading and explicit cancellation.
+- **Desktop workbench (Windows preview)**: task stream, changes / files / terminal / sub-agent / evidence tabs, settings center, MCP management, provider configuration diagnostics and recovery. It also includes a controlled Windows Computer Use preview that requires the user to explicitly enable Full Access and authorize each window.
+
+## Safety model
+
+Xiu reads files and runs commands as the current OS account. It is not a container sandbox, so use it only on projects you trust. The boundaries are enforced by code and cannot be lifted by model text:
+
+- Before a workspace is trusted, no project instructions, Skills or MCP servers are loaded, and nothing is written or executed.
+- Plan mode is read-only at the tool boundary. Writes and executions are tiered by risk; dangerous actions always require explicit confirmation, and `-y` cannot skip them.
+- File access is constrained by real paths. Symlinks, junctions, reparse points and `..` / glob escapes are rejected.
+- New or changed MCP and plugin permissions must be confirmed by the user. Web pages, MCP content and project files are untrusted content.
+- Keys, tokens and other secrets are redacted from logs, sessions, reports and errors. Hidden model reasoning is neither stored nor fabricated.
+- Nothing is uploaded by default: no code, sessions, audit or diagnostics. Only model calls and the Web / MCP services you explicitly configure go over the network.
+
+The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Chinese).
+
+## Platform status
+
+| Capability | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| CLI and agent loop | Primary platform, verified on real machines | CI passes, external acceptance pending | CI passes, external acceptance pending |
+| MCP, Skills, plugins | Primary platform, verified on real machines | CI passes | CI passes |
+| System credential backend | Credential Manager (optional) | Not implemented | Not implemented |
+| Desktop workbench | x64 preview, unsigned | Not available | Not available |
+| Computer Use | Preview, requires Full Access | Not supported | Not supported |
+| Clipboard image attachments | Supported | Use `@path` | Use `@path` |
+
+## Configuration and storage
+
+- User settings, sessions and local records live in `~/.xiu/`; project-level state lives in the workspace's `.xiu/`.
+- Provider keys can come from environment variables, the local configuration file or Windows Credential Manager. Xiu stores only the references it needs and never writes keys to logs.
+- `AGENTS.md` or `XIU.md` in the project root is used as project instructions, read only after the workspace is trusted.
+- CLI flags (`--provider`, `--model`, `--proxy`, budget and context limits, and so on) are listed by `xiu --help` and in section 20 of the usage guide.
 
 ## Documentation
 
-| Document | Purpose |
+| Document | Contents |
 | --- | --- |
-| [Quickstart](./QUICKSTART.md) | Install, configure, and finish a first task |
-| [完整使用指南](./USAGE.zh-CN.md) | Complete Simplified Chinese command reference |
-| [Security boundaries](./SECURITY.zh-CN.md) | Permanent security and privacy rules |
-| [Roadmap](./ROADMAP.zh-CN.md) | Current state, current release, and next actions |
-| [Changelog](./CHANGELOG.md) | Unreleased work and released-version summary |
-| [Publishing guide](./PUBLISHING.zh-CN.md) | Maintainer release and installation gates |
-| [Contributing](./CONTRIBUTING.md) | Development and pull-request checks |
+| [Quickstart](./QUICKSTART.md) | Install, configure and finish a first task |
+| [Usage guide](./USAGE.zh-CN.md) | All commands, flags and features (Chinese) |
+| [Security and privacy boundaries](./SECURITY.zh-CN.md) | Long-lived security rules (Chinese) |
+| [Roadmap](./ROADMAP.zh-CN.md) | Current state, priorities and next steps (Chinese) |
+| [Changelog](./CHANGELOG.md) | Released version summaries |
+| [Publishing guide](./PUBLISHING.zh-CN.md) | Maintainer release process and records (Chinese) |
+| [Contributing](./CONTRIBUTING.md) | Development and pull request checks |
+
+The per-version notes from the previous README are archived in [docs/history](./docs/history/README-before-2026-10-15.md).
 
 ## Development
 
@@ -230,15 +137,11 @@ npm run lint
 npm test
 npm run build
 npm run check:docs
-npm run eval:smoke
-npm pack --dry-run --json
 npm run smoke:package
 npm run smoke:platform
 ```
 
-The v0.20.1 Windows desktop preview is packaged separately from the CLI npm package:
-
-Desktop development and packaging require Node.js 22.12.0 or newer; the published CLI keeps its Node.js 20.18.1 baseline.
+The desktop app is packaged separately. Developing and packaging it requires Node.js 22.12 or later (the released CLI still supports 20.18.1):
 
 ```bash
 npm --prefix apps/desktop ci
@@ -251,26 +154,17 @@ npm run desktop:installer:win
 npm run desktop:smoke:installer:win
 ```
 
-G5C adds a Windows x64 assisted NSIS installer plus deterministic fresh-install, Electron fuse verification, installed-startup, in-place upgrade, interrupted-restart, and uninstall acceptance. It also produces an x64 MSIX candidate and validates its package identity, full-trust manifest, executable, and block map with the Windows SDK. A normal MSIX deployment still requires Microsoft Store signing or a code-signing certificate trusted by the target devices; an unsigned local artifact is explicitly only a signing candidate. An isolated Electron UI smoke drives the real renderer at 1366×768 and 900×768 through keyboard submission, Provider/model selection, approval, a 30-turn event stream, stop, unknown-side-effect recovery gating, checkpoint restore, and terminal lifecycle; the test bridge is not included in `Xiu.exe`. Windows, Ubuntu, and macOS CLI/Desktop CI is green; the desktop remains a preview until the pending real-user and external-device matrices are complete.
-
-Desktop Provider configuration keeps chat models separate from vision, image, video, and audio models. Compatible non-Agnes vendors use their own Base URL and credential for media endpoints; they are never silently rerouted to Agnes. Desktop tasks expose the guarded media tools, generated media stays inside the trusted workspace, and small image/audio/video outputs can be previewed locally. Potentially billable generation still requires dangerous-operation approval and uses the persistent media recovery ledger.
-
-The preview runs the real shared Agent, provides the G4 review/recovery inspector, and lets an idle trusted workspace discover and select Provider models, test connectivity, and save new keys to Windows Credential Manager. The picker shows the active Provider first and hides channels that have neither a real credential nor a successfully discovered model catalog; unused keyless local presets no longer occupy the list. Discovered model catalogs are cached separately per Provider, so refreshing one Provider neither clears another nor disappears after restart. The compact composer keeps the full Provider/model identity visible and offers Ask every time, Workspace auto, and High access modes; the main process applies those modes, dangerous actions still require exact confirmation, and trust/path controls cannot be bypassed. Recent tasks can be resumed without replaying old tools; completed new tasks persist and reopen the same bounded runtime-event timeline plus a separate bounded, redacted workspace-local change report. Both live completions and historical conversations show a Codex-style change-summary card; selecting a file opens its saved bounded Diff, and Changes / This task uses the same report. Legacy tasks without a snapshot say so explicitly instead of substituting the current workspace Diff, and deleting a task removes its change snapshot without deleting project files or checkpoints. Tasks can be explicitly deleted from Xiu history, and recent workspaces can be removed without deleting their directories; both actions use an in-app confirmation sheet, require a second confirmed request at the main-process boundary, and are blocked while a task is running. Explicit new-task reset, native file/image selection, paste, and drag/drop attachments are available; the composer shows file cards and bounded image thumbnails instead of raw internal attachment paths. Each model turn shows progress: Provider-visible text is labeled as a public summary, while tool-only turns receive a clearly labeled factual summary derived only from plans, tool activity, workspace changes, and verification events. Xiu neither requests nor stores, fabricates, or exposes hidden chain-of-thought. The renderer receives credential-source status, never stored keys or Base URLs; active tasks and external writers block reconfiguration. The inspector has a real interactive Terminal backed by a main-process-owned PTY bound to the trusted workspace. Its sessionized input/output/resize API is separate from Agent command evidence, uses bounded in-memory replay and output backpressure, and is cleaned up when switching workspaces, closing the window, or quitting. Terminal activity is direct user control, does not bypass Agent approvals, and is never recorded as Agent validation evidence. Windows x64 local candidate acceptance is complete; stable cross-platform desktop validation is still pending, and the desktop is not included in the published CLI package.
+CI runs the CLI and desktop jobs on Windows, Ubuntu and macOS, plus Node 22/24 compatibility jobs, a production dependency audit and CodeQL.
 
 ## Current limitations
 
-The unreleased `0.20.2` candidate fixes preset-ID collisions: fresh CLI/desktop installations start with zero channels, vendor templates require explicit addition, and referenced legacy settings migrate without clearing user data. All user-added channels remain visible; confirmed removal of the last channel returns to setup mode. Published `0.20.1` still has the behavior described below.
-
-- In 0.20.1, preset Providers are registered even when hidden in the desktop picker, so adding an Agnes or other preset ID can fail as already present. The next priority is explicit user-added channels and zero channels on a fresh ordinary installation, including local models. This change is planned, not shipped; existing user settings must be preserved.
-- Command execution is constrained by policy and OS account permissions, not by a container sandbox.
-- Checkpoint restore covers Xiu file tools; arbitrary command and remote side effects need Git or system-specific recovery.
-- macOS Keychain and Linux Secret Service are not implemented.
-- MCP Sampling is not implemented.
-- Multi-agent conflicts are detected and preserved, not automatically resolved.
-- No public model-backed benchmark baseline has been published. The last legacy run contains 14/30 trials and remains incomplete; its constrained tool setup cannot establish product success rates. Raw results are retained, but completing that run is no longer a development gate. P0/P1 uses targeted offline scenarios and candidate checks; it does not authorize new model spend.
+- Not a container sandbox: commands run with the current account's permissions, constrained by the approval policy.
+- Checkpoints cover only Xiu's file tools. Arbitrary commands and remote side effects need Git or system-level recovery.
+- macOS Keychain, Linux Secret Service and MCP Sampling are not implemented.
+- Multi-agent conflicts are detected and preserved, not resolved automatically.
+- The desktop app is a Windows x64 preview with an unsigned installer. Computer Use does not support high-risk flows such as passwords, payments, deletion or publishing.
+- There is no public evaluation baseline on real models yet.
 
 ## License
 
 MIT © [静然](https://github.com/andrewjr1991)
-
-Desktop workbench (unreleased 0.20.2): use **＋** to open/close Changes, Files, Terminal, Agents, Data, Evidence and a Web tab; toggle split/full view. Dropdowns use a shared keyboard-accessible menu. Data rows show concise names/status/duration, with saved details on demand. The Web tab is a separate, human-operated, ephemeral public-HTTPS reader: no task bridge, shared credentials, login submission or downloads; it is not agent web search.
