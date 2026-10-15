@@ -59,6 +59,20 @@ let workerProgram: string | undefined;
 let workerSource: string | undefined;
 export function configureBackgroundRuntime(program?: string, source?: string): void { workerProgram = program; workerSource = source; }
 
+const DEFAULT_STARTING_GRACE_MS = 30_000;
+const DEFAULT_RUNNING_GRACE_MS = 10_000;
+let startingGraceMs = DEFAULT_STARTING_GRACE_MS;
+let runningGraceMs = DEFAULT_RUNNING_GRACE_MS;
+/**
+ * How long a `starting`/`running` record without a live owner stays
+ * recoverable before it is recorded as interrupted. Production keeps the
+ * defaults; tests that deliberately kill a worker shorten the wait.
+ */
+export function configureBackgroundHandoffGrace(options?: { startingMs?: number; runningMs?: number }): void {
+  startingGraceMs = options?.startingMs ?? DEFAULT_STARTING_GRACE_MS;
+  runningGraceMs = options?.runningMs ?? DEFAULT_RUNNING_GRACE_MS;
+}
+
 function workspaceIdentity(value: string): string {
   return createHash("sha256").update(path.resolve(value).replace(/\\/g, "/").toLowerCase()).digest("hex").slice(0, 24);
 }
@@ -138,20 +152,33 @@ function knownPids(record: BackgroundProcessRecord): number[] {
 function knownProcessTargets(record: BackgroundProcessRecord): number[] {
   return [...knownPids(record), ...(process.platform !== "win32" && record.pid ? [-record.pid] : [])];
 }
-async function waitForProcessesExit(pids: number[], attempts = 40): Promise<boolean> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
+/**
+ * Poll until every target is gone or the wall-clock budget is spent. A loaded
+ * host can stretch each 25 ms tick well past its nominal length, so the budget
+ * is measured in time rather than in iterations.
+ */
+async function waitForProcessesExit(pids: number[], budgetMs: number): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
     if (pids.every((pid) => !processAlive(pid))) return true;
+    if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  return pids.every((pid) => !processAlive(pid));
 }
+// The worker escalates its own group to SIGKILL one second after a TERM, so the
+// first wait must outlast that; the post-KILL wait only covers kernel teardown
+// and zombie reaping, which a busy host can still delay.
+const STOP_TERM_BUDGET_MS = 2_000;
+const STOP_KILL_BUDGET_MS = 2_000;
+// taskkill /F is immediate; this only covers process teardown after it exits.
+const STOP_WINDOWS_BUDGET_MS = 1_000;
 
 function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
   const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
   // Process creation and worker startup can be delayed substantially on loaded
   // Windows hosts. Keep the record recoverable during that bounded handoff
   // instead of prematurely converting a live launch into "interrupted".
-  const withinHandoffGrace = (record.state === "starting" && age < 30_000) || (record.state === "running" && age < 10_000);
+  const withinHandoffGrace = (record.state === "starting" && age < startingGraceMs) || (record.state === "running" && age < runningGraceMs);
   if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !backgroundRecordAlive(record)) {
     // The worker can publish its terminal record between the directory scan and
     // this liveness check. Re-read after observing the worker exit so a stale
@@ -344,14 +371,14 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
         confirmed = confirmed && result.confirmed;
         timedOut = timedOut || result.timedOut;
       }
-      confirmed = (await waitForProcessesExit(pids)) && confirmed;
+      confirmed = (await waitForProcessesExit(pids, STOP_WINDOWS_BUDGET_MS)) && confirmed;
     } else {
       let groupSignalled = false;
       if (record.pid) {
         try { process.kill(-record.pid, "SIGTERM"); groupSignalled = true; }
         catch { try { process.kill(record.pid, "SIGTERM"); } catch { /* still unconfirmed */ } }
       }
-      if (!(await waitForProcessesExit(targets))) {
+      if (!(await waitForProcessesExit(targets, STOP_TERM_BUDGET_MS))) {
         if (record.pid) {
           try { process.kill(-record.pid, "SIGKILL"); groupSignalled = true; }
           catch { /* fall back only to saved owned PIDs, without claiming tree confirmation */ }
@@ -360,7 +387,7 @@ export async function stopBackgroundProcess(id: string): Promise<void> {
           if (processAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch { /* still unconfirmed */ }
         }
       }
-      confirmed = (await waitForProcessesExit(targets)) && groupSignalled;
+      confirmed = (await waitForProcessesExit(targets, STOP_KILL_BUDGET_MS)) && groupSignalled;
     }
   }
   // Preserve worker completion/cancellation that arrived while stopping, and
