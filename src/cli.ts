@@ -22,6 +22,7 @@ import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./cred
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { formatUserFacingError } from "./user-facing-errors.js";
+import { runFirstRunWizard } from "./first-run-wizard.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
@@ -1232,6 +1233,27 @@ async function main(): Promise<void> {
     const configureStartupProvider = async (): Promise<void> => {
       if (!startupProviderError) return;
       if (!providerRegistry.list().length) {
+        // Piped sessions keep the one-line hint so scripts stay predictable; a terminal gets the three-step wizard.
+        // The wizard saves nothing until its connection test passes, so leaving it never creates a half-finished channel.
+        if (process.stdin.isTTY && process.stdout.isTTY) {
+          const outcome = await runFirstRunWizard({
+            language,
+            registry: providerRegistry,
+            env: process.env,
+            probe: async (profile) => {
+              const probed = await probeProvider(profileConfig(profile));
+              return { models: probed.models, discoveryError: probed.discoveryError };
+            },
+            activate: (profile, model) => switchProviderProfile(profile, true, model),
+            io: {
+              select: (title, options) => selectTerminalOption(title, options, language),
+              ask: askQuestion,
+              askSecret,
+              log: (line) => console.log(`${line}\n`),
+            },
+          });
+          if (outcome.status === "configured") { startupProviderError = undefined; return; }
+        }
         console.log(chalk.yellow(localize(language, "尚未添加任何渠道。请输入 /provider add，选择 Agnes、OpenAI、本地模型或兼容服务；无需先设置环境变量。\n", "No Providers added. Enter /provider add to choose Agnes, OpenAI, a local model, or a compatible service. Environment variables are optional.\n")));
         return;
       }
