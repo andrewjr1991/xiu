@@ -23,6 +23,7 @@ import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, 
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
+import { collectDoctorReport, doctorHasHardFailure, formatDoctorReport } from "./doctor.js";
 import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
@@ -184,6 +185,7 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/credentials forget", "删除一个 Provider 的所有本地 Key 副本", "Delete every local key copy for one Provider"),
     item("/status", "查看 Token、调用、耗时和索引", "Show tokens, calls, time, and index stats"),
     item("/update", "显式检查 npm 最新版本并显示升级命令", "Explicitly check npm latest and show the upgrade command"),
+    item("/doctor", "一份只读诊断报告：安装、渠道、联网搜索、代理与证书、PowerShell", "One read-only report: installation, providers, web search, proxy and certificates, PowerShell"),
     item("/update doctor", "诊断运行环境、命令来源、npm prefix、包和官方 Registry", "Diagnose runtime, command resolution, npm prefix, package integrity, and the official registry"),
     item("/update status", "查看更新提醒、缓存与自动行为边界", "Show update reminder, cache, and automatic behavior status"),
     item("/update notifications on", "启用非阻塞更新提醒（24 小时缓存）", "Enable non-blocking update reminders (24-hour cache)"),
@@ -229,6 +231,7 @@ const program = new Command()
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
   .option("--update-doctor", "run read-only update and installation diagnostics, then exit", false)
+  .option("--doctor", "print the read-only diagnostics report (same as `xiu doctor`), then exit", false)
   .option("--provider-config-diagnostics", "list safe Provider configuration diagnostics and recovery backups, then exit", false)
   .option("--provider-config-preview <backup-id>", "preview Provider backup recovery (or current for dead-lock cleanup), then exit")
   .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
@@ -279,6 +282,16 @@ async function main(): Promise<void> {
   }
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
+  if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
+    try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+    catch { /* The report then describes environment and legacy credentials only. */ }
+    const report = await collectDoctorReport({ version: packageJson.version, settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()) });
+    console.log(`${formatDoctorReport(report, language)}\n`);
+    process.exitCode = doctorHasHardFailure(report) ? 1 : 0;
+    return;
+  }
   if (options.updateDoctor) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     const result = await runUpdateDoctorOnce({ currentVersion: packageJson.version, language });
@@ -2069,6 +2082,18 @@ async function main(): Promise<void> {
       const updateCommand = await updateCommands.execute(task);
       if (updateCommand.handled) {
         for (const message of updateCommand.messages) printUpdateMessage(message);
+        continue;
+      }
+      if (task === "/doctor") {
+        status.start(localize(language, "正在生成诊断报告", "Collecting diagnostics"));
+        try {
+          const report = await collectDoctorReport({ version: packageJson.version, settings, registry: providerRegistry, cwd: config.cwd, sensitive: config.apiKey ? [config.apiKey] : [] });
+          status.stop();
+          console.log(`${formatDoctorReport(report, language)}\n`);
+        } catch (error) {
+          status.stop();
+          console.error(chalk.red(`${formatUserFacingError(localize(language, "诊断报告生成失败", "Could not build the diagnostics report"), error, language)}\n`));
+        }
         continue;
       }
       if (task === "/help") {

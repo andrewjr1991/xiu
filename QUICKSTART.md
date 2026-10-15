@@ -9,10 +9,10 @@ npm install -g @xiu-ai/cli
 xiu --version
 ```
 
-如果安装后仍运行旧版本，可执行只读诊断：
+安装后遇到任何问题，先跑一份只读诊断报告（安装、渠道、联网搜索、代理与证书；已脱敏，可直接贴给维护者）：
 
 ```bash
-xiu --update-doctor
+xiu doctor
 ```
 
 ## 2. 配置 Provider / Configure a Provider
