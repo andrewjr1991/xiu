@@ -68,7 +68,7 @@ Type `/` in a session to open the command palette. Common commands:
 | `/web configure`, `/web doctor` | Configure and diagnose web search |
 | `/status`, `/diagnostics`, `/help` | Status, diagnostics and the full command list |
 
-The full command list, CLI flags and feature descriptions are in the [usage guide](./USAGE.zh-CN.md) (Chinese).
+The full command list and CLI flags are in the [command reference](./docs/guide/commands.zh-CN.md) (Chinese); feature descriptions are in the [usage guide index](./USAGE.zh-CN.md) and the condensed [English guide](./docs/guide/en/README.md).
 
 ## What it does
 
@@ -111,14 +111,15 @@ The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Ch
 - User settings, sessions and local records live in `~/.xiu/`; project-level state lives in the workspace's `.xiu/`.
 - Provider keys can come from environment variables, the local configuration file or Windows Credential Manager. Xiu stores only the references it needs and never writes keys to logs.
 - `AGENTS.md` or `XIU.md` in the project root is used as project instructions, read only after the workspace is trusted.
-- CLI flags (`--provider`, `--model`, `--proxy`, budget and context limits, and so on) are listed by `xiu --help` and in section 20 of the usage guide.
+- CLI flags (`--provider`, `--model`, `--proxy`, budget and context limits, and so on) are listed by `xiu --help` and in the [command reference](./docs/guide/commands.zh-CN.md).
 
 ## Documentation
 
 | Document | Contents |
 | --- | --- |
 | [Quickstart](./QUICKSTART.md) | Install, configure and finish a first task |
-| [Usage guide](./USAGE.zh-CN.md) | All commands, flags and features (Chinese) |
+| [Usage guide index](./USAGE.zh-CN.md) | One page per topic (Chinese): getting started, providers, permissions, sessions, extensions, media, background jobs, web search, command reference, troubleshooting, desktop |
+| [English guide](./docs/guide/en/README.md) | Condensed English user guide |
 | [Security and privacy boundaries](./SECURITY.zh-CN.md) | Long-lived security rules (Chinese) |
 | [Roadmap](./ROADMAP.zh-CN.md) | Current state, priorities and next steps (Chinese) |
 | [Changelog](./CHANGELOG.md) | Released version summaries |

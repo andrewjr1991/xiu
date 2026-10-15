@@ -83,4 +83,4 @@ xiu
 - 结果未知的副作用不会在恢复或重试时静默重放。
 - 项目代码默认不上传到 Xiu 自己的服务，但模型 Provider 会收到完成请求所需的上下文；请按组织政策选择 Provider。
 
-完整中文说明见 [USAGE.zh-CN.md](./USAGE.zh-CN.md)。
+完整中文说明见[使用指南目录](./USAGE.zh-CN.md)，英文精简版见 [English guide](./docs/guide/en/README.md)。

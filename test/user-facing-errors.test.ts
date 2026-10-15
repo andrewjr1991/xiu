@@ -67,9 +67,9 @@ test("unknown errors keep their redacted message as the cause and never leak sec
 });
 
 test("every explanation code is documented in the usage guide", async () => {
-  const usage = await fs.readFile(new URL("../USAGE.zh-CN.md", import.meta.url), "utf8");
+  const usage = await fs.readFile(new URL("../docs/guide/troubleshooting.zh-CN.md", import.meta.url), "utf8");
   const catalog = errorCatalog();
   assert.ok(catalog.length >= 25);
   assert.equal(new Set(catalog.map((entry) => entry.code)).size, catalog.length, "codes are unique");
-  for (const entry of catalog) assert.ok(usage.includes(`\`${entry.code}\``), `USAGE.zh-CN.md must document ${entry.code}`);
+  for (const entry of catalog) assert.ok(usage.includes(`\`${entry.code}\``), `docs/guide/troubleshooting.zh-CN.md must document ${entry.code}`);
 });
