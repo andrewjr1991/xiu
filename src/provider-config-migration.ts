@@ -3,10 +3,9 @@ import fs from "node:fs/promises";
 import { constants, type Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { compareStartTimes, processStartTime } from "./process-identity.js";
+import { compareStartTimes, currentProcessStartedAt, processStartTime } from "./process-identity.js";
 
 /** When this process started, recorded in the lock so a later reader can tell this PID from one the OS reused. */
-function ownerStartedAt(): string { return new Date(Date.now() - process.uptime() * 1000).toISOString(); }
 
 export const PROVIDER_CONFIGURATION_VERSION = 5;
 export const PROVIDER_CONFIGURATION_COMPATIBILITY_NOTICE = "Provider schema v5 requires matching upgraded CLI and desktop clients. Close all other Xiu clients before recovery; older clients do not honor this version's write lock.";
@@ -149,7 +148,7 @@ export class ProviderConfigurationStorage {
         await beforeTakeover?.();
         await fs.unlink(this.lock);
       } else if (await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
-      try { await this.writeExclusive(this.lock, Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID(), startedAt: ownerStartedAt() }))); owned = true; }
+      try { await this.writeExclusive(this.lock, Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID(), startedAt: currentProcessStartedAt() }))); owned = true; }
       catch (error) { throw unsafeOr(error, "busy"); }
       if (!recoveryOwned && await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
       return await run();

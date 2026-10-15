@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { Agent } from "../src/agent.js";
 import { recoveryContinuation, renameTaskRunFile, safeTaskPreview, TaskRunJournal, taskOperationSignature, taskToolSideEffect } from "../src/task-run.js";
+import { processStartTime } from "../src/process-identity.js";
 import type { AgentTool, ModelProvider } from "../src/types.js";
 
 async function fixture() {
@@ -119,12 +120,33 @@ test("refuses a concurrent task owned by another live process", async (t) => {
   const record = await item.journal.begin({ sessionId: "session-live", task: "live", providerId: "p", model: "m" });
   const file = path.join(item.journalRoot, item.journal.workspaceId, `${record.runId}.json`);
   record.ownerPid = process.ppid;
+  // The parent is the live owner here, so the record must carry its real start time (or none, as older records do).
+  const parentStartedAt = await processStartTime(process.ppid);
+  if (parentStartedAt === undefined) delete record.ownerStartedAt; else record.ownerStartedAt = new Date(parentStartedAt).toISOString();
   await fs.writeFile(file, `${JSON.stringify(record)}\n`);
   const next = new TaskRunJournal(item.workspace, item.journalRoot);
   await assert.rejects(
     () => next.begin({ sessionId: "session-other", task: "other", providerId: "p", model: "m" }),
     /Another Xiu process/,
   );
+});
+
+test("a recorded owner PID that now belongs to another process is treated as gone, not as a live owner", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const record = await item.journal.begin({ sessionId: "session-reused", task: "reused", providerId: "p", model: "m" });
+  const directory = path.join(item.journalRoot, item.journal.workspaceId);
+  // The parent process is alive, but it did not start in 2000: the PID has been handed to someone else.
+  const stale = { ownerPid: process.ppid, ownerStartedAt: "2000-01-01T00:00:00.000Z" };
+  await fs.writeFile(path.join(directory, `${record.runId}.json`), `${JSON.stringify({ ...record, ...stale })}\n`);
+  const lockFile = path.join(directory, ".active.lock");
+  await fs.writeFile(lockFile, `${JSON.stringify({ ...JSON.parse(await fs.readFile(lockFile, "utf8")), ...stale })}\n`);
+  const next = new TaskRunJournal(item.workspace, item.journalRoot);
+  assert.equal((await next.lockStatus()).live, false);
+  assert.equal((await next.interrupted())?.runId, record.runId);
+  await assert.rejects(() => next.begin({ sessionId: "session-other", task: "other", providerId: "p", model: "m" }), /explicit resume or abandon/);
+  const resumed = await next.begin({ sessionId: "session-reused", task: "continue", providerId: "p", model: "m", resumedFrom: record.runId });
+  assert.equal(resumed.resumedFrom, record.runId);
 });
 
 test("atomically grants only one concurrent starter for a workspace", async (t) => {
