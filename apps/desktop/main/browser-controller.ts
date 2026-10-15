@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { BrowserWindow, session, WebContentsView } from "electron";
 import { validatePublicWebUrl } from "../../../src/web-search.js";
 import type { DesktopBrowserRequest, DesktopBrowserState } from "../shared/protocol.js";
+import { BrowserNetworkPolicy } from "./browser-network-policy.js";
 
 /** Human-operated, ephemeral HTTPS reader. No preload, task bridge or agent access. */
 export class DesktopBrowserController {
   private view?: WebContentsView;
   private state: DesktopBrowserState = this.empty();
   private generation = 0;
+  /** The last top-level navigation the network policy cancelled, so `did-fail-load` can say why. */
+  private blocked?: { url: string; message: string };
   constructor(private readonly window: BrowserWindow, private readonly emit: (state: DesktopBrowserState) => void, private readonly validateUrl = (url: string) => validatePublicWebUrl(url, {})) {}
   private empty(): DesktopBrowserState { return { url: "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; }
   private update(): DesktopBrowserState {
@@ -20,10 +23,15 @@ export class DesktopBrowserController {
     isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     isolated.setPermissionCheckHandler(() => false);
     isolated.on("will-download", (event) => event.preventDefault());
+    // Resolve through this session's own (Chromium) resolver so the policy check
+    // and the connection share one DNS answer; see BrowserNetworkPolicy.
+    const policy = new BrowserNetworkPolicy((hostname) => isolated.resolveHost(hostname).then((resolved) => resolved.endpoints.map((endpoint) => endpoint.address)));
     isolated.webRequest.onBeforeRequest((details, callback) => {
-      if (!['GET', 'HEAD'].includes(details.method)) { callback({ cancel: true }); return; }
       // Check every subresource and redirect, not only the address bar.
-      void this.validateUrl(details.url).then(() => callback({ cancel: false }), () => callback({ cancel: true }));
+      void policy.check(details.url, details.method).then((verdict) => {
+        if (verdict !== "allow" && details.resourceType === "mainFrame") this.blocked = { url: details.url, message: BrowserNetworkPolicy.message(verdict) };
+        callback({ cancel: verdict !== "allow" });
+      }, () => callback({ cancel: true }));
     });
     const view = new WebContentsView({ webPreferences: { session: isolated, nodeIntegration: false, nodeIntegrationInWorker: false, nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: true, webSecurity: true, allowRunningInsecureContent: false, webviewTag: false, navigateOnDragDrop: false, devTools: false } });
     const contents = view.webContents;
@@ -36,7 +44,12 @@ export class DesktopBrowserController {
     contents.on("did-navigate", () => this.update());
     contents.on("did-navigate-in-page", () => this.update());
     contents.on("page-title-updated", () => this.update());
-    contents.on("did-fail-load", (_event, code, _description, _url, mainFrame) => { if (mainFrame && code !== -3) { this.state.error = "网页无法加载，请检查网址或网络。"; this.update(); } });
+    contents.on("did-fail-load", (_event, code, _description, url, mainFrame) => {
+      if (!mainFrame || code === -3) return;
+      this.state.error = this.blocked?.url === url ? this.blocked.message : "网页无法加载，请检查网址或网络。";
+      this.blocked = undefined;
+      this.update();
+    });
     this.window.contentView.addChildView(view); view.setVisible(false);
     this.view = view; return view;
   }
