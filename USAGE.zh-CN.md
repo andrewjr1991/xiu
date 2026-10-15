@@ -1451,6 +1451,44 @@ xiu --help
 
 ## 二十二、常见问题
 
+### 22.0 错误提示的格式与错误码
+
+从 0.21 起，渠道配置、连接测试、联网搜索和后台任务的失败按统一格式显示，最多四行：第一行是出错的操作和一句人话原因，第二行“下一步”说明你可以做什么，第三行“诊断”给出一条只读命令（有的话），第四行“详情”保留错误码和脱敏后的原始信息，方便反馈给维护者。Key、Token 等秘密在任何一行都不会出现。
+
+下表是全部错误码。`unknown` 表示 Xiu 没有识别出原因，此时第一行直接显示脱敏后的原始信息。
+
+| 错误码 | 原因 | 下一步 |
+| --- | --- | --- |
+| `provider-config/unsafe` | 渠道配置文件或它所在的目录不是普通文件，可能被替换成链接、被其他程序占用，或所在目录不可写。 | 关闭其他 Xiu 窗口后重试；仍失败请运行诊断命令，并把输出发给维护者。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/changed` | 另一个 Xiu 窗口或桌面端刚修改了渠道配置，本次改动没有保存。 | 重新打开渠道设置（CLI 为 /providers）核对最新配置后再操作。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/busy` | 渠道配置正在被另一个 Xiu 进程写入，或上次写入中断后留下了锁。 | 关闭其他 Xiu 窗口后重试；如果没有其他窗口，运行诊断命令按提示处理中断的写入。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/size-limit` | 渠道配置文件超过 4 MiB 的安全上限，没有写入。 | 检查是否有程序往 ~/.xiu/providers.json 里写了额外内容。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/backup` | 要恢复的配置备份缺失、损坏或无法校验，配置没有改动。 | 运行诊断命令查看可用备份，再选择一个完好的备份恢复。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/unsupported` | 渠道配置是更新版本的 Xiu 写入的格式，这个版本读不懂，配置没有改动。 | 把 CLI 和桌面端升级到同一版本后再试。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/invalid` | 渠道配置文件内容无效，Xiu 没有改动它。 | 运行诊断命令查看问题；需要时从备份恢复。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/confirmation` | 恢复操作需要先预览，再在有效期内明确确认。 | 重新运行恢复预览，然后按提示确认。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/restart` | 渠道配置刚从备份恢复，这个 Xiu 进程还在用旧状态。 | 退出并重新打开 Xiu。 |
+| `provider-config/reload` | 上一次保存渠道配置失败，或配置在别处被修改，Xiu 没有自动重试。 | 重新打开渠道设置（CLI 为 /providers）读取最新配置后再改。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/write-unverified` | 渠道配置写入后没能回读确认，文件可能已更新也可能没有。 | 运行诊断命令确认当前内容后再决定是否重做。（诊断：`xiu --provider-config-diagnostics`） |
+| `provider-config/io` | 读写渠道配置文件时出错，已有备份保留。 | 检查 ~/.xiu 是否可写、是否被安全软件拦截，然后运行诊断命令。（诊断：`xiu --provider-config-diagnostics`） |
+| `credential/missing` | 这个渠道还没有可用的 API Key。 | 在渠道设置里保存 Key（CLI 为 /provider key），或先设置渠道对应的环境变量。 |
+| `http/401` | 服务拒绝了这个 API Key：Key 错误、已过期，或不属于这个地址。 | 核对 Key 和 Base URL 是否来自同一个服务商，然后重新保存 Key（CLI 为 /provider key）。 |
+| `http/403` | 服务拒绝访问：账号没有这个模型的权限，或企业网关/代理拦截了请求。 | 在服务商控制台确认模型权限；公司网络请检查网关规则或用 --proxy 指定允许的代理。 |
+| `http/404` | 地址或模型名不对：服务上没有这个接口或模型。 | 检查 Base URL 是否以 /v1 等正确路径结尾，再刷新模型列表（CLI 为 /models）选择一个存在的模型。 |
+| `http/400` | 服务不接受这次请求的参数，常见原因是模型名拼错或模型不支持工具调用。 | 从刷新后的模型列表（CLI 为 /models）里选择服务返回的模型名；如果仍失败，换一个支持工具调用的模型。 |
+| `http/409` | 服务报告请求与当前状态冲突。 | 稍后重试；持续出现请查看 /diagnostics。 |
+| `http/429` | 请求过于频繁或额度用完，服务暂时限流。 | 等一会再试，或在服务商控制台检查余额与速率限制。 |
+| `http/5xx` | 服务端出错，不是本机配置问题。 | 稍后重试；持续出现请查看服务商状态页。 |
+| `network/dns` | 找不到这个服务器地址：域名拼写错误，或本机 DNS/代理无法解析它。 | 核对 Base URL 的域名；公司网络请用 --proxy 或 /web proxy set 指定代理。 |
+| `network/refused` | 连接被拒绝：目标服务没有在这个地址和端口上运行。 | 本地模型请先启动 Ollama、LM Studio 或 vLLM，并核对端口。 |
+| `network/tls` | HTTPS 证书不受信任，通常是公司网关替换了证书。Xiu 没有关闭证书校验。 | 把企业根证书加入系统信任或 NODE_EXTRA_CA_CERTS，或改用允许的代理。 |
+| `network/proxy-auth` | 代理服务器要求认证（HTTP 407）。 | 在代理地址中带上账号密码，或换用不需要认证的代理。 |
+| `network/timeout` | 连接或响应超时，服务没有在限定时间内回应。 | 检查网络和代理设置后重试；本地模型可能还在加载。 |
+| `network/unreachable` | 无法建立网络连接。 | 检查网络、防火墙和代理设置后重试。 |
+| `background/node-missing` | 后台任务需要本机安装的 Node.js，但没有找到。 | 安装 Node.js 22 或更高版本后重试。 |
+| `background/stop-unconfirmed` | 后台任务的进程没能在限定时间内确认退出，任务仍标记为运行中。 | 用 /background list 查看进程号，必要时在任务管理器或 ps 中手动结束。（诊断：`/background list`） |
+| `cancelled` | 操作已取消。 | 需要时重新运行。 |
+
 ### 22.1 `xiu` 不是内部或外部命令
 
 重新打开 PowerShell，然后检查：

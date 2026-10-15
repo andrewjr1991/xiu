@@ -4,6 +4,7 @@ import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { classifyCommand } from "../tools.js";
+import { formatUserFacingError } from "../user-facing-errors.js";
 
 export interface BackgroundCommandContext {
   config: AgentConfig;
@@ -52,7 +53,7 @@ export async function handleBackgroundCommand(task: string, ctx: BackgroundComma
           else console.log(chalk.dim(localize(language, "已保留后台任务。\n", "Background job kept running.\n")));
         }
       } else console.log(chalk.yellow(localize(language, "用法：/background [list] | start <命令> | read <ID> [游标] | cancel <ID>\n", "Usage: /background [list] | start <command> | read <id> [cursor] | cancel <id>\n")));
-    } catch (error) { console.error(chalk.red(`${localize(language, "后台任务操作失败", "Background job operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "后台任务操作失败", "Background job operation failed"), error, language, { diagnostic: "/background list" })}\n`)); }
     return true;
   }
   return false;

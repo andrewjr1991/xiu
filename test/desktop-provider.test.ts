@@ -56,8 +56,8 @@ test("explicit picker refresh reloads changed settings without replaying selecti
   await other.load();
   await other.setActive("office", "other-client-model");
   const saved = await fs.readFile(item.registryFile, "utf8");
-  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /其他客户端修改/);
-  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /重新打开模型选择器/);
+  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /另一个 Xiu 窗口或桌面端刚修改了渠道配置/);
+  await assert.rejects(item.controller.select({ providerId: "office", model: "requested-model" }), /重新打开渠道设置/);
   const refreshed = await item.controller.refresh();
   assert.equal(refreshed.activeModel, "other-client-model");
   assert.equal(await fs.readFile(item.registryFile, "utf8"), saved);
@@ -68,9 +68,9 @@ test("explicit picker refresh reloads changed settings without replaying selecti
 test("configuration reload and recovery restart remain distinct, bounded non-secret errors", () => {
   const reload = providerConfigurationMessage(new ProviderConfigurationError("reload", "private-path-canary"));
   const restart = providerConfigurationMessage(new ProviderConfigurationError("restart", "secret-canary"));
-  assert.match(reload!, /重新打开模型选择器/);
-  assert.doesNotMatch(reload!, /必须退出|private-path-canary/);
-  assert.match(restart!, /必须退出.*重新打开/);
+  assert.match(reload!, /重新打开渠道设置/);
+  assert.doesNotMatch(reload!, /退出|private-path-canary/);
+  assert.match(restart!, /退出并重新打开/);
   assert.doesNotMatch(restart!, /secret-canary/);
 });
 
