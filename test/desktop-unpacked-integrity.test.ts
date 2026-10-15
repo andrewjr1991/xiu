@@ -38,10 +38,12 @@ test("a packaged component is verified against the manifest and every failure re
 });
 
 test("components resolve to app.asar.unpacked only inside a packaged build, and development paths are not checked", async (t) => {
-  const packaged = unpackedComponentLocation("native/XiuComputerBridge.exe", pathToFileURL(path.join(path.sep, "Xiu", "resources", "app.asar", "dist", "main", "index.js")).href);
+  // path.resolve keeps the drive letter on Windows, which pathToFileURL adds to a bare "\\Xiu" root.
+  const install = path.resolve(path.sep, "Xiu", "resources");
+  const packaged = unpackedComponentLocation("native/XiuComputerBridge.exe", pathToFileURL(path.join(install, "app.asar", "dist", "main", "index.js")).href);
   assert.equal(packaged.packaged, true);
-  assert.equal(packaged.path, path.join(path.sep, "Xiu", "resources", "app.asar.unpacked", "dist", "native", "XiuComputerBridge.exe"));
-  assert.equal(packaged.manifestPath, path.join(path.sep, "Xiu", "resources", "app.asar", "dist", "main", "unpacked-manifest.json"));
+  assert.equal(packaged.path, path.join(install, "app.asar.unpacked", "dist", "native", "XiuComputerBridge.exe"));
+  assert.equal(packaged.manifestPath, path.join(install, "app.asar", "dist", "main", "unpacked-manifest.json"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-unpacked-dev-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const moduleUrl = pathToFileURL(path.join(root, "dist", "main", "index.js")).href;
