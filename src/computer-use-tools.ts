@@ -39,7 +39,8 @@ export function createComputerUseTools(config: AgentConfig, host: ComputerUseHos
   const label = computerVisionRoute(config);
   const observe = async (prompt: string, signal?: AbortSignal) => {
     if (config.providerFeatures?.vision === false || config.capabilities?.vision === "") throw new Error("Configured provider has no vision capability.");
-    const backend = suppliedBackend ?? createMediaBackend(config);
+    // One upload per confirmed frame: SDK retries would resend the same screenshot (and bill again) without consent.
+    const backend = suppliedBackend ?? createMediaBackend(config, { maxRetries: 0 });
     if (!backend.analyzeImage) throw new Error("Configured provider has no vision capability.");
     const frame = await host.observe(label, signal);
     const capturedAt = frame.capturedAt === undefined ? Date.now() : Date.parse(frame.capturedAt);
