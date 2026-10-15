@@ -11,10 +11,13 @@ test("desktop preferences defaults are non-secret and conservative", () => {
   assert.equal(defaultPreferences.theme, "system");
   assert.equal(defaultPreferences.notifyComplete, false);
   assert.equal(defaultPreferences.sound, false);
+  assert.equal(defaultPreferences.terminalHidesSecrets, true, "the interactive terminal hides credential variables unless the user turns that off");
 });
 test("desktop preferences reject unknown authority, credentials and invalid values", () => {
   for (const value of [{ fullAccess: true }, { apiKey: "canary" }, { theme: ["dark"] }, { density: 1 }, { fontSize: 99 }, { codeSize: 12.5 }, { sound: "true" }, [], null]) assert.throws(() => parsePreferences(value));
   assert.equal(parsePreferences({ theme: "dark", sendKey: "ctrl-enter" }).theme, "dark");
+  assert.equal(parsePreferences({ terminalHidesSecrets: false }).terminalHidesSecrets, false);
+  assert.throws(() => parsePreferences({ terminalHidesSecrets: "false" }));
 });
 test("desktop preferences persist and serialize saves without touching workspace", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-prefs-"));

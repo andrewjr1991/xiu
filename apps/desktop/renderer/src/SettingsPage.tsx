@@ -31,7 +31,7 @@ export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, 
   const toggle = (key: keyof DesktopPreferences, title: string, description: string) => row(title, description,
     <button role="switch" aria-label={title} aria-checked={value[key] === true} className="setting-switch" disabled={saving} onClick={() => change(key, !value[key])}><i /></button>);
   const resetKeys: Array<keyof DesktopPreferences> = section === "外观" ? ["theme", "fontSize", "codeSize", "density", "reducedMotion"]
-    : section === "对话与运行" ? ["autoFollow", "processExpanded", "alertsExpanded", "sendKey"]
+    : section === "对话与运行" ? ["autoFollow", "processExpanded", "alertsExpanded", "sendKey", "terminalHidesSecrets"]
     : section === "通知" ? ["notifyComplete", "notifyFailure", "notifyApproval", "sound"] : [];
   return <section className="settings-page" role="dialog" aria-modal="true" aria-labelledby="settings-heading" onKeyDown={(event) => {
     if (event.key === "Escape") { event.stopPropagation(); if (!(event.target as HTMLElement).closest('[role="listbox"]')) onClose(); }
@@ -59,6 +59,7 @@ export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, 
         {toggle("processExpanded", "运行时展开过程", "只改变默认展示，随时可以手动展开或收起。")}
         {toggle("alertsExpanded", "默认展开运行提醒", "关闭时提醒折叠成一行，历史错误不会被删除。")}
         {row("发送快捷键", "输入法候选确认不会提交；Shift+Enter 始终换行。", <Select aria-label="发送快捷键" value={value.sendKey} disabled={saving} onChange={(e) => change("sendKey", e.target.value as DesktopPreferences["sendKey"])}><option value="enter">Enter 发送</option><option value="ctrl-enter">Ctrl / ⌘ + Enter 发送</option></Select>)}
+        {toggle("terminalHidesSecrets", "终端隐藏凭据变量", "交互终端不继承名称含 API_KEY、TOKEN、SECRET、PASSWORD 的环境变量和已配置渠道的 Key 变量，终端顶部会列出被隐藏的名称。关闭后终端里的命令能读到这些 Key，与系统终端相同；只影响你手动运行的命令，不影响 Agent 的命令工具。")}
         {row("联网检索、模型路由与 Skills", toolsDisabled ? "请先打开可信工作区，并结束正在运行的任务。也可点工作区右上角齿轮进入。" : "在「工具与运行设置」中管理，也可点工作区右上角齿轮进入。", <button className="setting-action" disabled={toolsDisabled} onClick={onTools}>打开</button>)}
       </div><details className="settings-advanced"><summary>高级：模型等待时间</summary><p>当前默认：首次正文 600 秒、流式正文停顿 180 秒、完整响应 900 秒。不是整个任务的总时限。延长等待不保证渠道正常，残缺工具不会执行，也不会自动重试。</p><p>本批暂保留启动环境变量入口：XIU_MODEL_FIRST_RESPONSE_SECONDS、XIU_MODEL_STREAM_IDLE_SECONDS、XIU_MODEL_COMPLETE_SECONDS。设置数字后重启生效。</p></details></>}
       {section === "通知" && <><p className="settings-lead">仅在 Xiu 不在前台时发送。通知不包含需求、路径、代码或模型回复，系统通知权限仍由操作系统控制。</p><div className="settings-group">
