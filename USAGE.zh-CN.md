@@ -1948,7 +1948,7 @@ npm run desktop:installer:msix:win
 npm run desktop:smoke:installer:msix:win
 ```
 
-`desktop:installer:win` 在 `apps/desktop/release/` 生成 Windows x64 辅助安装器；默认按当前用户安装，不要求提权，不自动创建桌面快捷方式，卸载时保留用户数据。`desktop:smoke:installer:win` 使用隔离的应用数据目录和含空格、中文的安装路径，自动验证全新安装、安装物启动、覆盖升级、异常中断后重启和静默卸载。`desktop:smoke:ui` 使用不进入正式包的测试桥驱动真实 Renderer，覆盖 1366×768、900px 窄窗、键盘提交、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原和终端生命周期。
+`desktop:installer:win` 在 `apps/desktop/release/` 生成 Windows x64 辅助安装器；默认按当前用户安装，不要求提权，不自动创建桌面快捷方式，卸载时保留用户数据。`desktop:smoke:installer:win` 使用隔离的应用数据目录和含空格、中文的安装路径，自动验证全新安装、安装后 `Xiu.exe` 的 Electron fuses（RunAsNode、NODE_OPTIONS、`--inspect` 关闭；Cookie 加密、ASAR 完整性校验、仅从 ASAR 加载开启）、安装物启动、覆盖升级、异常中断后重启和静默卸载。`desktop:smoke:ui` 使用不进入正式包的测试桥驱动真实 Renderer，覆盖 1366×768、900px 窄窗、键盘提交、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原和终端生命周期。
 
 `desktop:installer:msix:win` 同目录生成 Windows x64 `.msix`，`desktop:smoke:installer:msix:win` 使用 Windows SDK `MakeAppx.exe` 解包并核验包身份、x64/full-trust 清单、主程序和块映射。MSIX 与 NSIS 的签名要求不同：Windows 正常部署要求 MSIX 使用目标设备信任的代码签名证书，或交由 Microsoft Store 签名。构建机没有发布证书时只生成待签名候选，不能把结构 smoke 误报为可直接安装；发布/企业分发时通过 electron-builder 支持的 `CSC_LINK` 与 `CSC_KEY_PASSWORD` 注入证书，私钥和密码不得写入仓库、日志或产物目录。
 
