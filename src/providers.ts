@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
-import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ModelStreamProgress, ToolCall, ToolDefinition } from "./types.js";
+import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ModelStreamProgress, ThinkingReplayBlock, ToolCall, ToolDefinition } from "./types.js";
 import { SafeRequestCache } from "./request-cache.js";
 import { createTrustedDispatcher } from "./trusted-dispatcher.js";
 
@@ -306,8 +306,29 @@ class OpenAIProvider implements ModelProvider {
   }
 }
 
+/**
+ * Room for the model's reasoning as well as its answer: on current Claude models thinking is
+ * always on and counts against max_tokens, so 8192 truncates ordinary turns. Older models that
+ * cap output lower reject the larger value with a 400 naming max_tokens; the provider then
+ * retries once at the old limit and keeps it.
+ */
+const ANTHROPIC_MAX_TOKENS = 32_000;
+const ANTHROPIC_LEGACY_MAX_TOKENS = 8192;
+
+function anthropicThinkingReplay(content: Anthropic.ContentBlock[]): ThinkingReplayBlock[] | undefined {
+  const blocks: ThinkingReplayBlock[] = [];
+  for (const block of content) {
+    // Readable reasoning is never kept; a signature cannot be replayed without its text, so such a block is dropped whole.
+    if (block.type === "thinking" && block.thinking === "" && block.signature) blocks.push({ type: "thinking", thinking: "", signature: block.signature });
+    else if (block.type === "redacted_thinking") blocks.push({ type: "redacted_thinking", data: block.data });
+  }
+  return blocks.length ? blocks : undefined;
+}
+
 class AnthropicProvider implements ModelProvider {
   private client: Anthropic;
+  private maxTokens = ANTHROPIC_MAX_TOKENS;
+  private replayThinking = true;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
     const dispatcher = createTrustedDispatcher(config.proxy);
@@ -320,15 +341,33 @@ class AnthropicProvider implements ModelProvider {
     });
   }
 
+  /**
+   * Runs a request, adapting once per kind of rejection the API explains: an output limit below
+   * ANTHROPIC_MAX_TOKENS, or thinking blocks the conversation no longer matches (the documented
+   * recovery is to strip every thinking block and retry once). Both adaptations stick for the
+   * rest of this provider's life, so each turn pays for them at most once.
+   */
+  private async withAdaptations<T>(attempt: (params: { max_tokens: number; replayThinking: boolean }) => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await attempt({ max_tokens: this.maxTokens, replayThinking: this.replayThinking });
+      } catch (error) {
+        if (!(error instanceof Anthropic.BadRequestError)) throw error;
+        if (this.maxTokens > ANTHROPIC_LEGACY_MAX_TOKENS && /max_tokens/i.test(error.message)) { this.maxTokens = ANTHROPIC_LEGACY_MAX_TOKENS; continue; }
+        if (this.replayThinking && /thinking|signature/i.test(error.message)) { this.replayThinking = false; continue; }
+        throw error;
+      }
+    }
+  }
+
   async complete(system: string, messages: ConversationMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<AssistantTurn> {
-    const formatted = this.formatMessages(messages);
-    const response = await this.client.messages.create({
+    const response = await this.withAdaptations(({ max_tokens, replayThinking }) => this.client.messages.create({
       model: this.config.model,
-      max_tokens: 8192,
+      max_tokens,
       system: this.cacheableSystem(system),
-      messages: formatted,
+      messages: this.formatMessages(messages, replayThinking),
       tools: this.formatTools(tools),
-    }, { signal });
+    }, { signal }));
     return this.parseResponse(response);
   }
 
@@ -347,27 +386,40 @@ class AnthropicProvider implements ModelProvider {
 
   async probeToolSupport(signal?: AbortSignal): Promise<boolean> {
     const name = "xiu_capability_probe";
-    const response = await this.client.messages.create({
-      model: this.config.model,
-      max_tokens: 64,
-      messages: [{ role: "user", content: "Call the provided capability probe with value OK." }],
-      tools: [{
-        name, description: "An inert capability probe. It performs no action.",
-        input_schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
-      }],
-      tool_choice: { type: "tool", name },
-    }, { signal });
-    return response.content.some((block) => block.type === "tool_use" && block.name === name);
+    const request = async (tool_choice: Anthropic.ToolChoice): Promise<boolean> => {
+      const response = await this.client.messages.create({
+        model: this.config.model,
+        max_tokens: 1024,
+        messages: [{ role: "user", content: "Call the xiu_capability_probe tool with value OK. Do not answer in plain text; this request only verifies structured tool calling." }],
+        tools: [{
+          name, description: "An inert capability probe. It performs no action.",
+          input_schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
+        }],
+        tool_choice,
+      }, { signal });
+      return response.content.some((block) => block.type === "tool_use" && block.name === name);
+    };
+    try {
+      if (await request({ type: "tool", name })) return true;
+    } catch (error) {
+      // Current Claude models reject a forced tool choice outright; they still call the tool when asked.
+      if (!(error instanceof Anthropic.BadRequestError) || !/tool_choice/i.test(error.message)) throw error;
+    }
+    return request({ type: "auto" });
   }
 
   async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal, onProgress?: (progress?: ModelStreamProgress) => void): Promise<AssistantTurn> {
-    const stream = this.client.messages.stream({
+    return this.withAdaptations(({ max_tokens, replayThinking }) => this.streamOnce({
       model: this.config.model,
-      max_tokens: 8192,
+      max_tokens,
       system: this.cacheableSystem(system),
-      messages: this.formatMessages(messages),
+      messages: this.formatMessages(messages, replayThinking),
       tools: this.formatTools(tools),
-    }, { signal });
+    }, onTextDelta, signal, onProgress));
+  }
+
+  private async streamOnce(params: Anthropic.MessageStreamParams, onTextDelta: (delta: string) => void, signal: AbortSignal | undefined, onProgress: ((progress?: ModelStreamProgress) => void) | undefined): Promise<AssistantTurn> {
+    const stream = this.client.messages.stream(params, { signal });
     stream.on("text", (text) => onTextDelta(text));
     let chunks = 0, textCharacters = 0, argumentCharacters = 0;
     const argumentBlocks = new Map<number, { name: string; json: string }>();
@@ -401,13 +453,15 @@ class AnthropicProvider implements ModelProvider {
     }
   }
 
-  private formatMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
+  private formatMessages(messages: ConversationMessage[], replayThinking: boolean): Anthropic.MessageParam[] {
     const formatted: Anthropic.MessageParam[] = [];
     for (const message of messages) {
       if (message.role === "user") formatted.push({ role: "user", content: message.content });
       else if (message.role === "assistant") {
         const calls = historyToolCalls(message);
-        formatted.push({ role: "assistant", content: calls.length ? anthropicAssistantContent(message.content, calls) : message.content });
+        // The API requires the turn's own thinking blocks back, verbatim and first, when it also carries tool calls.
+        const thinking = replayThinking ? message.thinkingReplay ?? [] : [];
+        formatted.push({ role: "assistant", content: calls.length ? [...thinking, ...anthropicAssistantContent(message.content, calls)] : message.content });
       }
       else if (message.role === "tool") {
         const result: Anthropic.ToolResultBlockParam = { type: "tool_result", tool_use_id: message.toolCallId!, content: message.content };
@@ -439,10 +493,12 @@ class AnthropicProvider implements ModelProvider {
         id: block.id, name: block.name, input: parseToolInput(block.input, block.name),
       }))
       : [];
+    const thinkingReplay = toolCalls.length ? anthropicThinkingReplay(response.content) : undefined;
     return {
       text,
       toolCalls,
       raw: anthropicAssistantContent(text, toolCalls),
+      ...(thinkingReplay ? { thinkingReplay } : {}),
       finishReason,
       usage: {
         inputTokens,

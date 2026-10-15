@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ConversationMessage } from "./types.js";
+import type { ConversationMessage, ThinkingReplayBlock } from "./types.js";
 import type { TaskPlan } from "./plan.js";
 import { restoreTaskDiagnostics, type TaskDiagnosticSnapshot } from "./diagnostics.js";
 import { localize, type UiLanguage } from "./i18n.js";
@@ -193,6 +193,7 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
         content: text,
         raw: event.raw,
         toolCalls: Array.isArray(event.toolCalls) ? event.toolCalls as ConversationMessage["toolCalls"] : undefined,
+        thinkingReplay: restoredThinkingReplay(event.thinkingReplay),
       });
       if (replayTurn && text.trim()) replayTurn.response = text;
     }
@@ -254,6 +255,17 @@ export async function loadSession(cwd: string, requested?: string): Promise<Rest
 function inferInputKind(task: string): SessionReplayTurn["inputKind"] {
   if (/^(?:Continue the unfinished task|Continue the task that paused for user input|继续此前因等待用户回答|继续未完成任务)/i.test(task.trim())) return "system";
   return "task";
+}
+
+/** Accepts only the opaque block shapes Xiu itself persists; anything readable is left behind. */
+function restoredThinkingReplay(value: unknown): ThinkingReplayBlock[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const blocks: ThinkingReplayBlock[] = [];
+  for (const block of value as Array<Record<string, unknown>>) {
+    if (block?.type === "thinking" && block.thinking === "" && typeof block.signature === "string") blocks.push({ type: "thinking", thinking: "", signature: block.signature });
+    else if (block?.type === "redacted_thinking" && typeof block.data === "string") blocks.push({ type: "redacted_thinking", data: block.data });
+  }
+  return blocks.length ? blocks : undefined;
 }
 
 export function estimateConversationTokens(messages: ConversationMessage[]): number {

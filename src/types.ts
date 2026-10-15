@@ -12,10 +12,20 @@ export interface ToolCall {
   input: Record<string, unknown>;
 }
 
+/**
+ * Opaque reasoning state an Anthropic model requires back verbatim when the same assistant turn
+ * carried tool calls. Never readable reasoning: only an empty-text block's signature, or an
+ * encrypted redacted block. A block that arrived with readable text is dropped instead.
+ */
+export type ThinkingReplayBlock =
+  | { type: "thinking"; thinking: ""; signature: string }
+  | { type: "redacted_thinking"; data: string };
+
 export interface AssistantTurn {
   text: string;
   toolCalls: ToolCall[];
   raw: unknown;
+  thinkingReplay?: ThinkingReplayBlock[];
   usage?: ModelUsage;
   finishReason?: "stop" | "tool_calls" | "length" | "content_filter" | "unknown";
   protocolIssue?: "missing_finish_reason" | "unsupported_finish_reason";
@@ -50,6 +60,7 @@ export interface ConversationMessage {
   toolName?: string;
   raw?: unknown;
   toolCalls?: ToolCall[];
+  thinkingReplay?: ThinkingReplayBlock[];
 }
 
 export interface ModelProvider {

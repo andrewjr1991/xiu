@@ -111,7 +111,7 @@ export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
     features: { text: true, tools: true, vision: true, image: true, video: true, audio: true }, builtin: true,
   },
   {
-    id: "anthropic", name: "Anthropic", kind: "anthropic", model: "claude-sonnet-4-20250514",
+    id: "anthropic", name: "Anthropic", kind: "anthropic", model: "claude-opus-5-5",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     features: { text: true, tools: true, vision: true, image: false, video: false }, builtin: true,
   },

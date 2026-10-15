@@ -37,6 +37,28 @@ test("a closed session can be loaded and continued in the same project", async (
   assert.equal((await listSessions(cwd)).length, 1);
 });
 
+test("opaque thinking replay survives a session restore while readable blocks do not", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-thinking-replay-"));
+  const replay = [{ type: "thinking" as const, thinking: "" as const, signature: "sig-opaque" }, { type: "redacted_thinking" as const, data: "enc-opaque" }];
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete() {
+      calls += 1;
+      if (calls === 1) return { text: "checking", toolCalls: [{ id: "call-1", name: "missing_tool", input: {} }], raw: [], thinkingReplay: replay, finishReason: "tool_calls" as const };
+      return { text: "done", toolCalls: [], raw: [], finishReason: "stop" as const };
+    },
+  };
+  await new Agent({ config: config(cwd), provider, tools: [], approve: async () => true }).run("try a tool");
+  const session = (await listSessions(cwd))[0]!;
+  const tampered = (await fs.readFile(session.file, "utf8")).replace('"signature":"sig-opaque"', '"thinking":"leaked reasoning","signature":"sig-opaque"');
+  await fs.writeFile(session.file, tampered, "utf8");
+  const restored = await loadSession(cwd);
+  const assistant = restored.messages.find((message) => message.role === "assistant" && message.toolCalls?.length);
+  assert.ok(assistant);
+  assert.deepEqual(assistant.thinkingReplay, [{ type: "redacted_thinking", data: "enc-opaque" }]);
+  assert.doesNotMatch(JSON.stringify(restored.messages), /leaked reasoning/);
+});
+
 test("sessions are isolated by workspace", async () => {
   const first = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-a-"));
   const second = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-project-b-"));

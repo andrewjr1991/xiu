@@ -5,7 +5,11 @@ import type { AvailableModel } from "./types.js";
 const BUILTIN_MODELS: Record<ProviderName, AvailableModel[]> = {
   agnes: [{ id: "agnes-2.5-flash", name: "Agnes 2.5 Flash", description: "Xiu default text and vision model", source: "builtin" }],
   openai: [{ id: "gpt-5", name: "GPT-5", description: "Xiu default OpenAI model", source: "builtin" }],
-  anthropic: [{ id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", description: "Xiu default Anthropic model", source: "builtin" }],
+  anthropic: [
+    { id: "claude-opus-5-5", name: "Claude Opus 5.5", description: "Xiu default Anthropic model", source: "builtin" },
+    { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", description: "Faster Anthropic model", source: "builtin" },
+    { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", description: "Smallest Anthropic model", source: "builtin" },
+  ],
   "openai-compatible": [],
   ollama: [],
   lmstudio: [],

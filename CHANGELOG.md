@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Anthropic: works with current Claude models. The built-in default is now `claude-opus-5-5` (with `claude-sonnet-5-5` and `claude-haiku-5-5` as built-in candidates); the capability probe retries with `tool_choice: auto` when a model rejects a forced tool call; requests allow 32,000 output tokens so always-on reasoning no longer truncates answers, falling back once to 8,192 for models that cap lower; and tool-calling turns replay the opaque thinking state the API requires (empty-text signatures and encrypted blocks only, never readable reasoning), stripping it once if the API rejects it. Upgraded `@anthropic-ai/sdk` 0.57 → 0.133 (Dependabot #47).
+
 ## 0.20.9 — 2026-10-15
 
 Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) from `961fd47e154b43747e3136843caea9ae368f0c44`; all nine exact-source CI jobs passed. Windows CLI: 1164 tests, 1155 passed, 9 skipped, no failures. Fixed the npm file list to include the current design and added a regression before publication; the earlier draft was never public. Five original CI assets and uploaded digests verified. Windows unsigned; npm 0.20.9 is published from the same tarball (latest and integrity verified).

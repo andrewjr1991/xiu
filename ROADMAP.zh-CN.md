@@ -11,6 +11,7 @@
 - **0.20.8 包含的安全修复：** 命令按实际执行片段分级（修复组合命令跳过审批和 Plan 只读的问题）；电脑操作自动额度按父任务累计、渲染进程输入逐步确认；Linux 僵尸进程视为已退出；MCP 客户端升级到 2.3.1（GHSA-6qxp-vccf-f47h）。
 - **发布后的结构重构（main，未发布，行为不变）：** `src/cli.ts` 的斜杠命令按功能域移到 `src/commands/*-commands.ts`（Provider、插件、技能、MCP、后台任务、诊断/报告/审计、凭据、联网搜索，以及任务运行中“补充>”提示符的命令），`cli.ts` 由 3782 行降到 2075 行；`runTaskSequence` 其余部分直接读写会话状态，暂不再拆。桌面 `App.tsx` 拆出 `TaskTimeline.tsx`、`InteractiveTerminal.tsx`、`ReviewInspector.tsx`、`ProviderPicker.tsx`，由 1243 行降到 642 行。
 - **联网搜索默认本机免 Key（main，未发布）：** 维护者于 2026-10-13 选定“默认加兜底”。用本机 free-search-mcp 0.13.1（桌面安装包内置固定版本 uv，CLI 在没有 uv 时首次搜索自动下载同一版本并校验 SHA-256）（依赖全部锁定，只开放 `search` 工具），不可用或没有结果时回退 `search.jingran.vip` 托管搜索；打开网页仍由 `web_open` 完成。需要在三平台和国内网络做真实搜索验收。
+- **Anthropic 渠道适配当前 Claude 模型（main，未发布）：** 默认模型改为 `claude-opus-5-5`，能力探测在模型拒绝强制工具调用时改用 `auto` 重试，输出上限提高到 32000 并对只允许 8192 的旧模型自动回退，带工具调用的轮次按 API 要求回传不可读的思考状态（空文本签名与加密块）。`@anthropic-ai/sdk` 已升到 0.133。尚未用真实 Anthropic Key 验证，需要维护者在渠道管理里对 Anthropic 渠道点一次「测试连接」，再跑一轮带工具调用的任务。
 - **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR，安全更新单独提出。
 - **当前设计：** [0.20.9 设计](./V0.20.9_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
