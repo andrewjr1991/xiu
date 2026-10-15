@@ -238,6 +238,8 @@ xiu --update-doctor
 
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
+从 0.21 起，`xiu doctor`（等价于 `xiu --doctor`，交互模式中为 `/doctor`）把上述更新诊断、`--provider-config-diagnostics`、联网搜索配置、代理与证书检查合并成一份只读报告，分为“安装与运行环境 / 模型渠道 / 联网搜索 / 代理与证书 / Windows / 系统”六段：每个渠道只显示类型、模型、地址主机名和 Key 来源（环境变量名、系统凭据、本机配置文件或缺失），不显示 Key；代理地址里的账号密码替换为 `***`，多个代理变量指向不同地址时给出警告并说明更新检查、联网搜索、模型请求各自读哪个设置；检测 `NODE_TLS_REJECT_UNAUTHORIZED=0`（标为错误）、`NODE_EXTRA_CA_CERTS` 文件是否存在、访问 npm Registry 时的证书替换（企业网关）或 HTTP 403；Windows 上读取 PowerShell 语言模式与执行策略，受限语言模式提示用 `npm.cmd`；Node 20 会提示已停止维护。报告不发起搜索、不发送凭证、不修改任何文件，只有更新诊断原有的 npm Registry 只读查询会联网；在线测试仍用 `/provider test` 与 `/web doctor`。存在错误时退出码为 1。
+
 ## 三、配置 Provider 与模型
 
 Xiu v0.10 支持 Agnes、OpenAI、Anthropic、Ollama、LM Studio、vLLM 和自定义 OpenAI-compatible 服务。云端服务需要各自的 API Key；本地服务不要求云端 Key。
@@ -1388,6 +1390,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `/diagnostics` | 查看当前或最近任务诊断 |
 | `/status` | 查看模型、Token、调用和耗时 |
 | `/update` | 显式检查 npm 官方最新版并显示更新指导，不自动安装 |
+| `/doctor` | 一份只读诊断报告：安装、渠道、联网搜索、代理与证书、PowerShell；已脱敏，可直接贴给维护者 |
 | `/update doctor` | 只读诊断运行时、命令来源、npm prefix、包完整性、更新代理、缓存和官方 Registry |
 | `/update status` | 查看更新提醒开关、24 小时缓存和行为边界 |
 | `/update notifications on` | 显式开启非阻塞更新提醒 |
@@ -1433,6 +1436,7 @@ Xiu 会按稳定 ID 找到原记录，并且只允许三种恢复动作：复用
 | `--version` | 显示版本 |
 | `--check-update` | 显式检查 npm 官方最新版并安全退出 |
 | `--update-doctor` | 执行只读分发、命令解析与更新诊断并安全退出；本地硬错误返回非零退出码 |
+| `--doctor` / `xiu doctor` | 输出合并的只读诊断报告（安装、渠道、联网搜索、代理与证书、PowerShell）并退出；存在错误时返回 1 |
 | `--help` | 显示命令行帮助 |
 
 查看当前版本实际支持的参数：
