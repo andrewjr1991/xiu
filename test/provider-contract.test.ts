@@ -171,7 +171,7 @@ test("OpenAI complete maps finish reasons and removes non-public raw fields", as
   }
 });
 
-test("Anthropic complete maps terminal states and never retains thinking blocks", async () => {
+test("Anthropic complete maps terminal states and never retains readable thinking", async () => {
   for (const [reason, expected] of [
     ["end_turn", "stop"], ["stop_sequence", "stop"], ["tool_use", "tool_calls"],
     ["max_tokens", "length"], ["refusal", "content_filter"], ["pause_turn", "unknown"], [null, "unknown"],
@@ -180,8 +180,12 @@ test("Anthropic complete maps terminal states and never retains thinking blocks"
       const result = await provider.complete("system", [{ role: "user", content: "hello" }], []);
       assert.equal(result.finishReason, expected);
       assert.equal(result.text, "visible answer");
-      assert.deepEqual(result.toolCalls, expected === "stop" || expected === "tool_calls" ? calls : []);
-      assert.doesNotMatch(JSON.stringify(result), /canary|thinking|signature/);
+      const executable = expected === "stop" || expected === "tool_calls";
+      assert.deepEqual(result.toolCalls, executable ? calls : []);
+      // Only the encrypted block is kept, and only beside tool calls the API will ask about; the readable block is dropped whole.
+      assert.deepEqual(result.thinkingReplay, executable ? [{ type: "redacted_thinking", data: "redacted-canary" }] : undefined);
+      assert.doesNotMatch(JSON.stringify({ ...result, thinkingReplay: undefined }), /canary|thinking|signature/);
+      assert.doesNotMatch(JSON.stringify(result), /hidden-reasoning-canary|signature-canary/);
     });
   }
 });

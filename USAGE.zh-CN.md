@@ -307,7 +307,7 @@ $env:XIU_PROVIDER = 'anthropic'
 $env:ANTHROPIC_API_KEY = '你的实际 API Key'
 ```
 
-默认模型是 `claude-sonnet-4-20250514`。
+默认模型是 `claude-opus-5-5`；内置候选还包括 `claude-sonnet-5-5` 和 `claude-haiku-5-5`，刷新模型会列出该 Key 可用的全部模型。
 
 ### 3.4 Ollama、LM Studio 和 vLLM
 

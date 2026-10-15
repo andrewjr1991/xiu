@@ -687,8 +687,8 @@ export class Agent {
       if (response.text && !streamed && response.toolCalls.length > 0) this.events.onText?.(response.text);
       if (streamed && response.text) this.events.onTextStreamEnd?.();
       if (response.text) this.events.onAssistantTurn?.(response.text, response.toolCalls.length > 0);
-      this.messages.push({ role: "assistant", content: response.text, raw: response.raw, toolCalls: response.toolCalls });
-      await this.log(sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, usage: response.usage });
+      this.messages.push({ role: "assistant", content: response.text, raw: response.raw, toolCalls: response.toolCalls, thinkingReplay: response.thinkingReplay });
+      await this.log(sessionPath, { type: "assistant", turn, text: response.text, raw: response.raw, toolCalls: response.toolCalls, thinkingReplay: response.thinkingReplay, usage: response.usage });
       if (modelOperation) {
         await this.taskRunJournal?.finishOperation(modelOperation, "succeeded", `assistant turn ${turn} persisted`);
         await this.taskRunJournal?.recoveryPoint("assistant", `assistant turn ${turn} completed`, modelOperation);

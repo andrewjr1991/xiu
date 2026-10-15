@@ -98,7 +98,7 @@ export function resolveConfig(options: {
   }
 
   const defaultModel = provider === "anthropic"
-    ? "claude-sonnet-4-20250514"
+    ? "claude-opus-5-5"
     : provider === "agnes"
       ? "agnes-2.5-flash"
       : provider === "openai" ? "gpt-5" : "local-model";
