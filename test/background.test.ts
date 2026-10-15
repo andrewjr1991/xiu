@@ -10,6 +10,7 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import {
   backgroundProcessOutput,
+  configureBackgroundHandoffGrace,
   configureBackgroundWorkspace,
   configureBackgroundRuntime,
   listBackgroundProcesses,
@@ -71,6 +72,24 @@ async function waitForTerminal(id: string) {
 }
 function removeBackgroundTestRoot(root: string): Promise<void> {
   return fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+}
+/**
+ * Cleanup must not fail a test whose body already passed. If the foreground
+ * cannot confirm a stop within its budget on a loaded host, kill the owned
+ * groups directly and let the stop re-check them once.
+ */
+async function stopAllForCleanup(): Promise<void> {
+  try { await stopAllBackgroundProcesses(); return; }
+  catch (error) {
+    if (!/XIU_BACKGROUND_STOP_(?:UNCONFIRMED|TIMEOUT)/.test(String(error))) throw error;
+  }
+  for (const item of listBackgroundProcesses()) {
+    if (!item.running || !item.pid) continue;
+    if (process.platform !== "win32") try { process.kill(-item.pid, "SIGKILL"); } catch {}
+    try { process.kill(item.pid, "SIGKILL"); } catch {}
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await stopAllBackgroundProcesses();
 }
 
 test("workspace cleanup tolerates a launch artifact disappearing after enumeration or inspection", async (t) => {
@@ -156,7 +175,7 @@ test("workspace cleanup retains its artifact name, age, regular-file, and symlin
 test("background commands can be listed, inspected, and stopped", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(async () => { await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
+  t.after(async () => { await stopAllForCleanup(); await removeBackgroundTestRoot(root); });
   const command = process.platform === "win32"
     ? "Write-Output 'ready'; while ($true) { Start-Sleep -Seconds 1 }"
     : "node -e \"console.log('ready'); setInterval(() => {}, 1000)\"";
@@ -178,7 +197,7 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
 test("background state and output cursors survive a new foreground manager", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-resume-"));
   configureBackgroundWorkspace(process.cwd(), root);
-  t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
+  t.after(async () => { configureBackgroundWorkspace(process.cwd(), root); await stopAllForCleanup(); await removeBackgroundTestRoot(root); });
   // The foreground must read the first cursor before the worker emits the
   // second chunk. A fixed delay lets a loaded CI runner consume both at once.
   const signal = path.join(root, "emit-second");
@@ -240,7 +259,7 @@ test("a detached job survives the launcher process exiting and is discoverable b
   const workload = path.join(workspace, "survive.mjs");
   await fs.writeFile(workload, "console.log('survived');\nsetInterval(() => {}, 1000);\n", "utf8");
   const command = nodeCommand(workload);
-  t.after(async () => { configureBackgroundWorkspace(workspace, root); await stopAllBackgroundProcesses(); await removeBackgroundTestRoot(root); });
+  t.after(async () => { configureBackgroundWorkspace(workspace, root); await stopAllForCleanup(); await removeBackgroundTestRoot(root); });
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   const script = [
     `import { writeSync } from "node:fs";`,
@@ -445,7 +464,9 @@ fs.renameSync = function(from, to) {
 
 test("exhausted terminal metadata writes retain bounded failure evidence without replay", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-terminal-denied-"));
-  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  t.after(() => { configureBackgroundRuntime(); configureBackgroundHandoffGrace(); return removeBackgroundTestRoot(root); });
+  // The worker dies on purpose here; do not wait the production 10 s handoff grace.
+  configureBackgroundHandoffGrace({ runningMs: 1_000 });
   const marker = path.join(root, "command-count");
   const faultCount = path.join(root, "fault-count");
   const workload = path.join(root, "once.mjs");
@@ -480,7 +501,9 @@ fs.renameSync = function(from, to) {
 
 test("an asynchronous output persistence error is recorded without exposing exception text", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-output-error-"));
-  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  t.after(() => { configureBackgroundRuntime(); configureBackgroundHandoffGrace(); return removeBackgroundTestRoot(root); });
+  // The worker dies on purpose here; do not wait the production 10 s handoff grace.
+  configureBackgroundHandoffGrace({ runningMs: 1_000 });
   const workload = path.join(root, "output.mjs");
   await fs.writeFile(workload, "console.log('trigger-output-write');\n");
   const source = await createFaultWorker(root, `
@@ -505,7 +528,9 @@ fs.appendFileSync = function(file) {
 
 test("a zero worker exit without terminal publication is not command success", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-missing-terminal-"));
-  t.after(() => { configureBackgroundRuntime(); return removeBackgroundTestRoot(root); });
+  t.after(() => { configureBackgroundRuntime(); configureBackgroundHandoffGrace(); return removeBackgroundTestRoot(root); });
+  // The worker dies on purpose here; do not wait the production 10 s handoff grace.
+  configureBackgroundHandoffGrace({ runningMs: 1_000 });
   const workload = path.join(root, "output.mjs");
   await fs.writeFile(workload, "console.log('output-is-not-completion');\n");
   const source = await createFaultWorker(root, `
@@ -584,10 +609,12 @@ test("output failure cannot finish a TERM-ignoring command before its owned proc
     }
     return true;
   };
+  configureBackgroundHandoffGrace({ runningMs: 1_000 });
   t.after(async () => {
+    configureBackgroundHandoffGrace();
     configureBackgroundRuntime();
     configureBackgroundWorkspace(root, root);
-    await stopAllBackgroundProcesses();
+    await stopAllForCleanup();
     if (await alive()) try { process.kill(workloadPid!, "SIGKILL"); } catch {}
     await removeBackgroundTestRoot(root);
   });

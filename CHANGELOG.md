@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Background tasks: stopping a task now waits by wall clock instead of by a fixed number of polls (2 s after TERM, which outlasts the worker's own 1 s escalation, then 2 s after KILL on POSIX; Windows keeps a 1 s confirmation), so a loaded host no longer reports `XIU_BACKGROUND_STOP_UNCONFIRMED` for a tree that is already dying. Tests that deliberately kill a worker shorten the recovery grace through `configureBackgroundHandoffGrace`, and the suite's cleanup kills owned groups directly before failing; `test/background.test.ts` runs in about half the time.
 - Docs: `README.md` and `README.zh-CN.md` are rewritten as short, parallel overviews (install, quick start, capabilities, safety model, platform status, documentation map, development, limitations). The previous per-version READMEs are archived under `docs/history/`. `QUICKSTART.md` no longer describes the zero-provider first run as an unreleased candidate.
 
 ## 0.20.11 — 2026-10-15
