@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSecrets } from "./secret-redaction.js";
+import { compareStartTimes, currentProcessStartedAt, processStartTime } from "./process-identity.js";
 import type { RuntimeEvent } from "./runtime/protocol.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
@@ -58,6 +59,8 @@ export interface TaskRunRecord {
   updatedAt: string;
   finishedAt?: string;
   ownerPid: number;
+  /** Start time of the owning process; lets recovery tell a reused PID from a live owner (S5). Absent in older records. */
+  ownerStartedAt?: string;
   ownerInstance: string;
   operations: TaskRunOperation[];
   recoveryPoints: TaskRecoveryPoint[];
@@ -95,6 +98,7 @@ interface TaskRunLock {
   workspaceId: string;
   runId: string;
   ownerPid: number;
+  ownerStartedAt?: string;
   ownerInstance: string;
   createdAt: string;
 }
@@ -217,7 +221,7 @@ export class TaskRunJournal {
     if (this.current?.status === "running") throw new Error("A task run is already active in this Xiu process.");
     const existing = (await this.recoverableRecords())[0];
     if (existing && existing.runId !== options.resumedFrom) {
-      if (existing.ownerPid !== process.pid && this.processAlive(existing.ownerPid)) {
+      if (existing.ownerPid !== process.pid && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
         throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
       }
       throw new Error("An interrupted task requires an explicit resume or abandon decision before starting another task.");
@@ -237,6 +241,7 @@ export class TaskRunJournal {
       startedAt: now,
       updatedAt: now,
       ownerPid: process.pid,
+      ownerStartedAt: currentProcessStartedAt(),
       ownerInstance: this.instanceId,
       operations: [],
       recoveryPoints: [],
@@ -355,7 +360,7 @@ export class TaskRunJournal {
   async interrupted(): Promise<InterruptedTaskRun | undefined> {
     const record = (await this.recoverableRecords())[0];
     if (!record) return undefined;
-    if (record.ownerPid !== process.pid && this.processAlive(record.ownerPid)) return undefined;
+    if (record.ownerPid !== process.pid && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) return undefined;
     const interruptedOperations = record.operations.filter((operation) => operation.status === "started").map((operation) => ({ ...operation, status: "unknown" as const }));
     const pendingSideEffects = interruptedOperations.filter((operation) => operation.sideEffect !== "none");
     return {
@@ -454,7 +459,7 @@ export class TaskRunJournal {
     }
     return {
       active: true,
-      live: this.processAlive(lock.ownerPid!),
+      live: await this.ownerAlive(lock.ownerPid!, typeof lock.ownerStartedAt === "string" ? lock.ownerStartedAt : undefined),
       runId: lock.runId,
       ownerPid: lock.ownerPid,
       ownedHere: lock.ownerPid === process.pid && lock.ownerInstance === this.instanceId,
@@ -513,6 +518,7 @@ export class TaskRunJournal {
       workspaceId: this.workspaceId,
       runId,
       ownerPid: process.pid,
+      ownerStartedAt: currentProcessStartedAt(),
       ownerInstance: this.instanceId,
       createdAt: new Date().toISOString(),
     };
@@ -536,7 +542,7 @@ export class TaskRunJournal {
         const takeoverConfirmed = resumedFrom === existing.runId;
         const existingRecord = await this.read(existing.runId).catch(() => undefined);
         const terminal = existingRecord && existingRecord.status !== "running";
-        if (this.processAlive(existing.ownerPid) && !takeoverConfirmed && !terminal) {
+        if (await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt) && !takeoverConfirmed && !terminal) {
           throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
         }
         await fs.unlink(file);
@@ -572,10 +578,17 @@ export class TaskRunJournal {
       .slice(0, 320);
   }
 
-  private processAlive(pid: number): boolean {
+  /**
+   * A recorded owner is alive only while the process holding its PID started
+   * when the record says it did; a PID the OS has since reused is not an
+   * owner. Records without a start time (older versions) and hosts where the
+   * start time cannot be read fall back to the PID alone.
+   */
+  private async ownerAlive(pid: number, startedAt?: string): Promise<boolean> {
     if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-    try { process.kill(pid, 0); return true; }
+    try { process.kill(pid, 0); }
     catch { return false; }
+    return compareStartTimes(startedAt, await processStartTime(pid)) !== "mismatch";
   }
 }
 

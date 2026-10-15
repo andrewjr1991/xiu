@@ -111,3 +111,8 @@ export function compareStartTimes(recorded: string | undefined, observed: number
   if (!Number.isFinite(expected)) return "unknown";
   return Math.abs(observed - expected) <= START_TIME_TOLERANCE_MS ? "match" : "mismatch";
 }
+
+/** When this process started, in the form lock and journal records store for a later `compareStartTimes`. */
+export function currentProcessStartedAt(): string {
+  return new Date(Date.now() - process.uptime() * 1000).toISOString();
+}
