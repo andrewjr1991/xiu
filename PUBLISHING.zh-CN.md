@@ -1,3 +1,30 @@
+## 0.20.9 正式发布记录（2026-10-15）
+
+[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 已公开，标签与全部附件精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`。[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业全部通过；Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。
+
+初始版本提交 80f3fc3 的 CI 虽通过，发布检查发现 npm 文件清单仍引用已删除的 0.20.8 设计，实际 tarball 缺少当前设计稿。已修正清单并加入回归，重新跑精确提交 CI，解包核对 420 个文件且只有 `V0.20.9_DESIGN.zh-CN.md`。旧草稿未公开，已删除，旧文件及 rejected 摘要保留本地；只更新了本次未发布标签，不修改任何已发布版本。
+
+最终五份附件直接采用新 main CI 原始 tarball、Windows NSIS、两份 manifest 和 SHA256SUMS，上传后大小/SHA256 回读全部一致：
+
+- CLI：`apps/desktop/release/xiu-ai-cli-0.20.9-961fd47e154b43747e3136843caea9ae368f0c44.tgz`，904334 字节，SHA256 `71ff3ded760dfac054852f62d7b40779cc98bd8361dc2cf1a3840264136db82e`。
+- Windows：`apps/desktop/release/Xiu-0.20.9-x64-961fd47e154b43747e3136843caea9ae368f0c44-unsigned.exe`，140832028 字节，SHA256 `1feb8f8dce1875dd417b01299a9242442945006ec5e1dcab18c12193fea70610`，`NotSigned`。
+- tarball integrity：`sha512-o8doGYHtbtrUNcYsiDbDj4hbqZhKn1f28SxBRkJ9lPTfbAlCIP0W/5RxFtBfqVKPI/obiGU8znJzY9fGa7VHNQ==`。
+
+最终 CI 安装器再次通过本地全新安装、启动、内置 uv、覆盖升级、中断重启及卸载六项。标准 win-unpacked 也已按该源码重建，独立本地安装器 `Xiu-0.20.9-local-release-961fd47-x64.exe` 的 10 项 dist 一致性和原生启动通过；正式附件不混用本地重建物。真实国内网络搜索、付费模型和外部设备验证仍独立待办，构建期已知告警及未签名状态保留。
+
+npm 本轮未发布。官方 Registry 明确返回 0.20.9 E404，latest 仍为 0.20.8。仅当下面版本查询明确返回 E404 时继续 publish；认证/网络错误不能视为版本不存在，已有版本绝不覆盖，不重新 npm pack：
+
+```powershell
+Set-Location 'D:\QoderWork Project\AGENT'
+npm.cmd login --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.9 version --registry=https://registry.npmjs.org/
+npm.cmd publish 'apps/desktop/release/xiu-ai-cli-0.20.9-961fd47e154b43747e3136843caea9ae368f0c44.tgz' --access public --tag latest --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli@0.20.9 version dist.integrity --registry=https://registry.npmjs.org/
+npm.cmd view @xiu-ai/cli dist-tags --json --registry=https://registry.npmjs.org/
+```
+
+发布后核对 version/latest 均为 0.20.9、integrity 与上文相同。后续仅文档补记使用 `[skip ci]`，不移动正式标签或替换制品。以下为历史记录，不覆盖本节状态。
+
 ## 0.20.8 正式发布记录（2026-10-13）
 
 [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 已公开，标签与五份附件精确源提交为 `d36c488fc5706277562d3018a23907761440d124`。[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业通过（CLI/桌面三平台、Node 22/24、生产依赖审计）；Windows CLI 全量 1117 项中 1109 通过、8 跳过、0 失败。发布直接使用同一 main 的原始 CI tarball、未签名 NSIS、两份 manifest 和 SHA256SUMS；上传后大小与摘要逐项回读通过，不重新打包或替换正式资产。

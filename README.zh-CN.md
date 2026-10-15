@@ -2,7 +2,7 @@
 
 0.20.9 让本机免 Key 搜索开箱即用：Windows 桌面安装包自带固定版本的 uv，CLI 没有 uv 时首次搜索自动下载同一版本并校验 SHA-256。另含 CodeQL 首扫安全修复、Windows 渠道保存提速、CLI 网页结果简化显示，以及设置页直达「工具与运行设置」。详见 [CHANGELOG](./CHANGELOG.md)。
 
-[GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 已发布：Windows Computer Use 受控预览、子智能体执行明细、等待回答、内嵌模型设置、批量视觉检测及安全/可靠性修正。[main CI](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业通过；Windows 安装器未签名，电脑操作仍占用前台鼠标键盘，不支持高风险流程。npm 本轮未发布，手工同源 tarball 命令见发布指南。下面的本地未发布说明保留为开发历史。
+[GitHub 0.20.9](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 已发布，精确源提交 `961fd47` 的九项 CI 全部通过；原始 CI 制品上传摘要已核验，npm 包已包含当前设计稿。Windows 安装器未签名，npm 0.20.9 由维护者另行发布，命令见发布指南。以下旧版及本地候选说明保留为历史。
 
 本地未发布设置增量：模型与渠道直接在「设置 → 模型与渠道」配置，不再二次跳转；聊天模型菜单只选择已有模型，不提供编辑、凭据或测试操作。仍需可信且空闲的工作区，既有审批与 Plan 边界不变。
 
