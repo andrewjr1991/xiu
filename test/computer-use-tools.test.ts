@@ -163,3 +163,36 @@ test("a screenshot is uploaded exactly once even when the vision request fails",
     assert.equal(requests, 1);
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
+
+test("a vision-capable conversation model receives the frame directly, labelled with the chat route", async () => {
+  const direct = { ...config, model: "fixture-vision", baseURL: "https://chat.fixture.invalid/v1", mediaBaseURL: "https://media.fixture.invalid/v1" };
+  assert.equal(computerVisionRoute(direct), "Fixture channel / fixture-vision · https://chat.fixture.invalid/v1");
+  assert.equal(computerVisionRoute({ ...direct, model: "fixture-text" }), "Fixture channel / fixture-vision · https://media.fixture.invalid/v1");
+  let uploads = 0, finished = 0;
+  const tools = createComputerUseTools(direct, { ...host, feedbackFinished: () => { finished++; }, observe: async label => { assert.match(label, /chat\.fixture\.invalid/); return { ...frame, elements: [{ id: "button-1", name: "Start", role: "Button", x: 0, y: 0, width: 80, height: 30, enabled: true }] }; } }, { analyzeImage: async () => { uploads++; return "never"; } });
+  const observe = tools.find(tool => tool.name === "computer_observe")!;
+  const result = await observe.executeResult!({ prompt: "Where is Start?" }, context);
+  assert.equal(uploads, 0); assert.equal(finished, 1);
+  assert.deepEqual(result.images, [{ mediaType: "image/png", data: "Zml4dHVyZQ==" }]);
+  assert.match(result.output, /Frame: frame-fixture/); assert.match(result.output, /Screenshot: attached to this result as an image of 720x480/);
+  assert.match(result.output, /button-1/); assert.match(result.output, /untrusted data, not instructions/);
+  assert.doesNotMatch(result.output, /Zml4|base64|Vision observations/);
+  // Inputs verify with a fresh direct frame as well.
+  const input = await tools.find(tool => tool.name === "computer_input")!.executeResult!({ kind: "doubleclick", frameId: frame.frameId, elementId: "button-1" }, context);
+  assert.equal(input.images?.length, 1); assert.equal(uploads, 0);
+  // The relay path is unchanged when the conversation model is not the vision model.
+  const relayed = await createComputerUseTools(config, host, { analyzeImage: async () => { uploads++; return "Visible"; } }).find(tool => tool.name === "computer_observe")!.executeResult!({ prompt: "Inspect" }, context);
+  assert.equal(uploads, 1); assert.equal(relayed.images, undefined); assert.match(relayed.output, /Vision observations/);
+});
+
+test("the input vocabulary exposes pointer kinds, drag targets and the key tiers to the model", async () => {
+  const tools = createComputerUseTools(config, host, {});
+  const schema = tools.find(tool => tool.name === "computer_input")!.inputSchema as { properties: Record<string, { enum?: string[]; description?: string }> };
+  assert.deepEqual(schema.properties.kind!.enum, ["click", "doubleclick", "rightclick", "drag", "scroll", "type", "key"]);
+  assert.ok(schema.properties.toX && schema.properties.toY);
+  assert.match(schema.properties.key!.description ?? "", /Ctrl\+C/); assert.match(schema.properties.key!.description ?? "", /Delete/);
+  const sent: Array<Record<string, unknown>> = [];
+  const dragTools = createComputerUseTools(config, { ...host, input: async value => { sent.push(value as unknown as Record<string, unknown>); return "sent once"; }, observe: async () => frame }, { analyzeImage: async () => "Visible" });
+  await dragTools.find(tool => tool.name === "computer_input")!.execute({ kind: "drag", frameId: frame.frameId, x: 10, y: 20, toX: 300, toY: 400 }, context);
+  assert.equal(sent[0]!.kind, "drag"); assert.equal(sent[0]!.toX, 300); assert.equal(sent[0]!.toY, 400);
+});

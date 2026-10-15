@@ -1,4 +1,5 @@
 /** Pure Computer Use authorization policy, kept free of Electron so it can be unit tested. */
+import type { InputTier } from "../shared/computer-use-inputs.js";
 
 export const AUTOMATIC_DURATION_MS = 20 * 60_000;
 export const AUTOMATIC_INPUT_LIMIT = 100;
@@ -33,8 +34,40 @@ export function nextTaskBudget(previous: ComputerTaskBudget | undefined, task: s
  * issues. An input that arrives through the renderer IPC is never covered by
  * that grant, so a compromised renderer cannot act inside the model's window.
  */
-export function inputNeedsConfirmation(options: { automatic: boolean; origin: "model" | "renderer" }): boolean {
-  return !options.automatic || options.origin === "renderer";
+export function inputNeedsConfirmation(options: { automatic: boolean; origin: "model" | "renderer"; tier?: InputTier }): boolean {
+  return !options.automatic || options.origin === "renderer" || options.tier === "confirm";
+}
+
+/** Longest edge a frame may have when it reaches a model; vendors downscale above this anyway and reject multi-megabyte images. */
+export const FRAME_MAX_EDGE = 1568;
+/** Encoded size above which a frame is re-encoded as JPEG even when it needs no downscaling. */
+export const FRAME_MAX_BYTES = 4_500_000;
+
+/** Frame pixels per client pixel for a window of the given client size: 1 for ordinary windows, less for large ones. */
+export function frameScale(width: number, height: number, maxEdge = FRAME_MAX_EDGE): number {
+  const longest = Math.max(width, height);
+  return longest > maxEdge ? maxEdge / longest : 1;
+}
+
+export function scaledSize(width: number, height: number, scale: number): { width: number; height: number } {
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+/** Control rectangles in frame pixels, so element IDs and image coordinates share one space. */
+export function scaleElements<T extends { x: number; y: number; width: number; height: number }>(elements: T[], scale: number): T[] {
+  if (scale === 1) return elements;
+  return elements.map(element => ({ ...element, x: Math.floor(element.x * scale), y: Math.floor(element.y * scale), width: Math.max(1, Math.round(element.width * scale)), height: Math.max(1, Math.round(element.height * scale)) }));
+}
+
+/** A frame coordinate back in client pixels, clamped to the client area. */
+export function toClientCoordinate(value: number, scale: number, clientExtent: number): number {
+  return Math.min(clientExtent - 1, Math.max(0, Math.round(value / scale)));
+}
+
+/** Approximate decoded byte length of a base64 data URL. */
+export function dataUrlBytes(dataUrl: string): number {
+  const comma = dataUrl.indexOf(",");
+  return Math.floor(((dataUrl.length - comma - 1) * 3) / 4);
 }
 
 /** Native helper error code: the control under the pointer or in focus could not be identified. */

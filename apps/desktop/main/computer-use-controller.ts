@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, session } from "electron";
+import { BrowserWindow, dialog, nativeImage, session } from "electron";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { previewReviewFile } from "../../../src/runtime/review.js";
@@ -9,12 +9,13 @@ import type { ComputerElement, ComputerInput, ComputerWindow } from "../shared/c
 import { WindowsComputer } from "./windows-computer.js";
 import { confirmComputerAction } from "./full-access-dialog.js";
 import { ComputerStatusWindow } from "./computer-status-window.js";
-import { AUTOMATIC_INPUT_LIMIT, MANUAL_DURATION_MS, MANUAL_INPUT_LIMIT, inputNeedsConfirmation, inspectionNotice, isUninspectedControl, mayReuseMergedGrant, nextTaskBudget, type ComputerTaskBudget } from "./computer-use-policy.js";
+import { AUTOMATIC_INPUT_LIMIT, FRAME_MAX_BYTES, MANUAL_DURATION_MS, MANUAL_INPUT_LIMIT, dataUrlBytes, frameScale, inputNeedsConfirmation, inspectionNotice, isUninspectedControl, mayReuseMergedGrant, nextTaskBudget, scaleElements, scaledSize, toClientCoordinate, type ComputerTaskBudget } from "./computer-use-policy.js";
+import { POINTER_KINDS, inputTier } from "../shared/computer-use-inputs.js";
 import { isBlockedApp, isSensitiveWindowTitle } from "../shared/computer-use-sensitive.js";
 import type { ControlInspection } from "../shared/computer-use.js";
 
 /** What leaves the machine besides the screenshot; shown in every consent dialog (0.20.8 review C4). */
-const DISCLOSURE = "窗口里的控件名称和视觉模型的文字描述会返回给当前对话模型并写入会话历史；截图本身不写历史。";
+const DISCLOSURE = "截图只发送到上述渠道（支持视觉的对话模型会直接看到截图，否则由独立视觉请求转述）；窗口里的控件名称和视觉描述会返回给当前对话模型并写入会话历史；截图本身只在内存中保留最新一帧，不写历史、不保存。";
 
 const assetTypes: Record<string, string> = { ".html": "text/html", ".htm": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg" };
 const CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -37,14 +38,29 @@ export class ComputerUseController {
   private generation = 0;
   private opening = false;
   private openingWorkspace?: string;
-  private mergedGrant?: { workspace: string; provider: string };
+  /** User-confirmed automatic operation for one workspace and vision route; set by the Full Access dialog or the panel's own dialog, never by the model. */
+  private automaticGrant?: { workspace: string; provider: string };
+  /** Client size of the current frame; model-facing coordinates are frame pixels (client × scale). */
+  private client?: { width: number; height: number; scale: number };
   // Survives stop() so re-selecting a window cannot reset the automatic allowance.
   private taskBudget?: ComputerTaskBudget;
   private readonly indicator: ComputerStatusWindow;
   private paused = false;
   constructor(private readonly owner: BrowserWindow, native?: WindowsComputer, stop?: () => void) { this.native = native ?? new WindowsComputer(); this.indicator = new ComputerStatusWindow(stop ?? (() => this.stop()), () => this.togglePause()); }
-  grantFullAccess(workspace: string, provider: string): void { this.mergedGrant = { workspace, provider }; }
-  revokeFullAccess(): void { this.mergedGrant = undefined; this.stop(); }
+  grantFullAccess(workspace: string, provider: string): void { this.grantAutomatic(workspace, provider); }
+  grantAutomatic(workspace: string, provider: string): void { this.automaticGrant = { workspace, provider }; this.value = { ...this.value, automaticGranted: true }; }
+  revokeFullAccess(): void { this.revokeAutomatic(); }
+  revokeAutomatic(): void { this.automaticGrant = undefined; this.stop(); }
+  private automaticGrantMatches(workspace: string, provider: string): boolean { return this.automaticGrant?.workspace === workspace && this.automaticGrant.provider === provider; }
+  /** The panel's own way into automatic mode: one main-process dialog, in memory only, same limits and revocation as the Full Access route. */
+  async requestAutomatic(workspace: string, provider: string): Promise<ComputerUseState> {
+    this.retainWorkspace(workspace);
+    const generation = this.generation;
+    const accepted = await confirmComputerAction(this.owner, "允许 Xiu 在本工作区自动操作窗口？", `视觉渠道/模型与发送目的地：${provider}\n开启后，本工作区的任务在你选定目标窗口时不再逐步弹窗：连续截图发送到上述渠道、点击/双击/右键、普通文本、滚动和一级按键自动执行；拖拽、Ctrl+C/V/S 等二级输入和无法识别的控件仍每次单独确认。可能改变应用数据，不能保证撤销。\n${DISCLOSURE}\n每个任务最多 20 分钟或 100 步；任务结束、切换工作区、更换视觉渠道、关闭应用或点“撤销自动授权”即失效，不写入设置，不能从历史恢复。这不包含工作区外文件或命令权限。`, this.authority.signal);
+    if (!accepted || generation !== this.generation) return { ...this.value };
+    this.grantAutomatic(workspace, provider);
+    return { ...this.value };
+  }
   private phase(phase: string): void { if (this.selected) { const current = this.paused ? "已暂停" : phase; this.value = { ...this.value, phase: current, provider: this.automaticProvider }; this.indicator.update(current, this.selected.app, this.automaticProvider, this.paused); } }
   togglePause(): void { if (this.selected) { this.paused = !this.paused; this.phase(this.paused ? "已暂停" : "等待下一步"); } }
   private async waitForResume(signal?: AbortSignal): Promise<void> {
@@ -70,10 +86,11 @@ export class ComputerUseController {
     const picked = this.candidates.find(window => window.handle === handle);
     if (!picked || !this.activeTask) throw new Error("请先发现当前窗口；只能为正在运行的父任务请求授权。");
     const task = this.activeTask, generation = this.generation;
-    const automatic = fullAccess;
-    const grantMatches = this.mergedGrant?.workspace === workspace && this.mergedGrant.provider === provider;
+    // Automatic mode comes from a user-confirmed grant (Full Access dialog or the panel's own dialog) or a trusted Full Access context; never from the model.
+    const grantMatches = this.automaticGrantMatches(workspace, provider);
+    const automatic = fullAccess || grantMatches;
     const merged = mayReuseMergedGrant({ automatic, grantMatches, budget: this.taskBudget, task, now: Date.now() });
-    const accepted = merged || await confirmComputerAction(this.owner, automatic ? "允许 Xiu 自动操作此窗口？" : "授权此任务的目标窗口", `${picked.app} · ${picked.title}\n视觉渠道/模型与发送目的地：${provider}\n${automatic ? "在你已确认的完全访问模式下，允许本任务连续截图并发送上述渠道、点击、普通文本输入和滚动，不再逐步弹窗。可能改变应用数据，不能保证撤销。" : "截图发送和每步输入仍分别确认。要连续自动操作，请在任务开始前由用户开启完全访问权限。"}\n${DISCLOSURE}\n仅此窗口，不是整个桌面。请关闭密码、聊天、付款及其他敏感内容。不支持密码、支付、删除、发布、安装或系统设置流程；发现这些步骤必须停止交给用户。无法识别的控件每次都会单独询问。\n${automatic ? "20 分钟或 100 步" : "10 分钟或 30 步"}到期、窗口身份变化或标题变为敏感内容、任务结束或停止即撤销，不能从历史恢复。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
+    const accepted = merged || await confirmComputerAction(this.owner, automatic ? "允许 Xiu 自动操作此窗口？" : "授权此任务的目标窗口", `${picked.app} · ${picked.title}\n视觉渠道/模型与发送目的地：${provider}\n${automatic ? "在你已确认的自动操作授权下，允许本任务连续截图并发送上述渠道、点击/双击/右键、普通文本输入、滚动和一级按键，不再逐步弹窗；拖拽、Ctrl+C/V/S 等二级输入仍每次确认。可能改变应用数据，不能保证撤销。" : "截图发送和每步输入仍分别确认。要连续自动操作，请在任务开始前在“电脑操作”面板开启自动操作授权。"}\n${DISCLOSURE}\n仅此窗口，不是整个桌面。请关闭密码、聊天、付款及其他敏感内容。不支持密码、支付、删除、发布、安装或系统设置流程；发现这些步骤必须停止交给用户。无法识别的控件每次都会单独询问。\n${automatic ? "20 分钟或 100 步" : "10 分钟或 30 步"}到期、窗口身份变化或标题变为敏感内容、任务结束或停止即撤销，不能从历史恢复。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
     if (!accepted || signal?.aborted || generation !== this.generation || this.activeTask !== task) throw new Error("窗口授权已取消或任务变化。");
     const current = (await this.native.list()).find(window => window.handle === picked.handle && window.pid === picked.pid && window.started === picked.started && window.title === picked.title);
     if (!current || !this.allowed(current) || generation !== this.generation || signal?.aborted) throw new Error("窗口已变化，请重新发现。");
@@ -125,31 +142,49 @@ export class ComputerUseController {
     catch (error) { if (generation === this.generation) this.stop(); throw error; }
     if (generation !== this.generation || !this.allowed(frame)) { this.stop(); throw new Error("目标窗口身份或敏感状态已变化，请重新授权。"); }
     this.selected = { handle: frame.handle, pid: frame.pid, started: frame.started, app: frame.app, title: frame.title, width: frame.width, height: frame.height };
-    this.value = { ...this.value, state: "observing", target: frame, screenshot: frame.screenshot, elements: frame.elements ?? [], inspection: frame.inspection ?? "unavailable", frameId: randomUUID(), width: frame.width, height: frame.height, capturedAt: new Date().toISOString() };
+    const scaled = this.scaleFrame(frame.screenshot, frame.width, frame.height);
+    this.client = { width: frame.width, height: frame.height, scale: scaled.scale };
+    this.value = { ...this.value, state: "observing", target: frame, screenshot: scaled.screenshot, elements: scaleElements(frame.elements ?? [], scaled.scale), inspection: frame.inspection ?? "unavailable", frameId: randomUUID(), width: scaled.width, height: scaled.height, scale: scaled.scale, capturedAt: new Date().toISOString() };
     // Never retain a second screenshot inside metadata.
     this.value.target = { ...this.selected };
     return { ...this.value };
   }
+  /** Large windows are downscaled and oversized encodings re-encoded as JPEG before a frame reaches any model; dimensions and controls follow the same scale. */
+  private scaleFrame(screenshot: string, width: number, height: number): { screenshot: string; width: number; height: number; scale: number } {
+    const scale = frameScale(width, height);
+    if (scale === 1 && dataUrlBytes(screenshot) <= FRAME_MAX_BYTES) return { screenshot, width, height, scale };
+    const size = scaledSize(width, height, scale);
+    let image = nativeImage.createFromDataURL(screenshot);
+    if (image.isEmpty()) throw new Error("窗口截图无法解码，请重新观察。");
+    if (scale < 1) image = image.resize({ ...size, quality: "good" });
+    const png = image.toPNG();
+    const encoded = png.length <= FRAME_MAX_BYTES ? `data:image/png;base64,${png.toString("base64")}` : `data:image/jpeg;base64,${image.toJPEG(85).toString("base64")}`;
+    return { screenshot: encoded, ...size, scale };
+  }
   async input(workspace: string, input: ComputerInput, signal?: AbortSignal, origin: "model" | "renderer" = "model"): Promise<string> {
     await this.waitForResume(signal);
     this.retainWorkspace(workspace); const target = this.activeTarget(), generation = this.generation;
-    if (!input || !["click", "scroll", "type", "key"].includes(input.kind) || input.frameId !== this.value.frameId || !this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图已失效，请重新观察后操作。");
+    const tier = input ? inputTier(input) : undefined;
+    if (!tier) throw new Error("不支持该输入或快捷键。只允许一级/二级按键，不支持 Win、Alt 组合或系统快捷键。");
+    if (input.frameId !== this.value.frameId || !this.value.capturedAt || !this.client || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图已失效，请重新观察后操作。");
     const limit = this.automaticProvider ? AUTOMATIC_INPUT_LIMIT : MANUAL_INPUT_LIMIT;
     if (++this.inputs > limit) { this.stop(); throw new Error(`本次窗口授权已达 ${limit} 步，请重新授权。`); }
     const budget = this.taskBudget;
     if (this.automaticProvider && budget && budget.task === this.boundTask) budget.inputs = this.inputs;
     if (input.elementId !== undefined) {
-      if (input.kind !== "click") throw new Error("控件定位只用于点击；输入前先点击并观察焦点。");
+      if (!["click", "doubleclick", "rightclick"].includes(input.kind)) throw new Error("控件定位只用于点击；输入前先点击并观察焦点。");
       const element = this.value.elements?.find(element => element.id === input.elementId);
       if (!element || !element.enabled) throw new Error("控件已失效，请重新观察。");
       input = { ...input, x: Math.floor(element.x + element.width / 2), y: Math.floor(element.y + element.height / 2) };
     }
-    if (["click", "scroll"].includes(input.kind) && (!Number.isInteger(input.x) || !Number.isInteger(input.y) || input.x! < 0 || input.y! < 0 || input.x! >= this.value.width! || input.y! >= this.value.height!)) throw new Error("坐标必须位于最新截图内。");
+    const inside = (x: unknown, y: unknown) => Number.isInteger(x) && Number.isInteger(y) && (x as number) >= 0 && (y as number) >= 0 && (x as number) < this.value.width! && (y as number) < this.value.height!;
+    if (POINTER_KINDS.includes(input.kind) && !inside(input.x, input.y)) throw new Error("坐标必须位于最新截图内。");
+    if (input.kind === "drag" && (!inside(input.toX, input.toY) || (input.toX === input.x && input.toY === input.y))) throw new Error("拖拽终点必须位于最新截图内且不同于起点。");
     if (input.kind === "scroll" && (!Number.isInteger(input.delta) || !input.delta || Math.abs(input.delta) > 1200)) throw new Error("滚动量超限。");
     if (input.kind === "type" && (typeof input.text !== "string" || !input.text || input.text.length > 500 || /[\x00-\x1f\x7f]/.test(input.text))) throw new Error("仅允许 1–500 字普通文本，不允许控制字符。");
-    if (input.kind === "key" && !["Enter", "Tab", "Escape", "Backspace", "Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Shift+Home", "Shift+End"].includes(input.key ?? "")) throw new Error("不支持系统快捷键。");
-    const detail = input.kind === "type" ? `输入文本：${input.text}` : input.kind === "key" ? `按键：${input.key}` : `${input.kind === "click" ? "左键单击" : `滚动 ${input.delta}`}：(${input.x}, ${input.y})`;
-    const confirm = inputNeedsConfirmation({ automatic: Boolean(this.automaticProvider), origin });
+    const pointerLabel = { click: "左键单击", doubleclick: "左键双击", rightclick: "右键单击", drag: "拖拽", scroll: `滚动 ${input.delta}` }[input.kind as Exclude<ComputerInput["kind"], "type" | "key">];
+    const detail = input.kind === "type" ? `输入文本：${input.text}` : input.kind === "key" ? `按键：${input.key}${tier === "confirm" ? "（二级，每次确认）" : ""}` : input.kind === "drag" ? `拖拽：(${input.x}, ${input.y}) → (${input.toX}, ${input.toY})（二级，每次确认）` : `${pointerLabel}：(${input.x}, ${input.y})`;
+    const confirm = inputNeedsConfirmation({ automatic: Boolean(this.automaticProvider), origin, tier });
     const notice = inspectionNotice(this.value.inspection);
     const accepted = !confirm || await confirmComputerAction(this.owner, "确认此步窗口操作", `${target.app} · ${target.title}\n${detail}\n${notice ? `${notice}\n` : ""}请确认该操作不涉及密码、支付、删除、发布或系统设置。输入和点击可能不可撤销；只执行一次。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
     if (!accepted || signal?.aborted || generation !== this.generation) throw new Error("窗口操作已取消。");
@@ -161,10 +196,12 @@ export class ComputerUseController {
     const current = windows.find(window => window.handle === target.handle && window.pid === target.pid && window.started === target.started);
     if (!current || !this.allowed(current) || generation !== this.generation || signal?.aborted) { this.stop(); throw new Error("窗口已变化，未执行输入。"); }
     this.selected = current;
-    const width = this.value.width, height = this.value.height;
+    // The helper works in client pixels: map frame coordinates back and hand it the client size it must still match.
+    const { width, height, scale } = this.client;
+    const client = (value: number | undefined, extent: number) => value === undefined ? undefined : toClientCoordinate(value, scale, extent);
     this.value = { ...this.value, frameId: undefined }; // Consume before side effects; unknown outcomes are never replayed.
     this.phase("正在操作");
-    const send = (allowUninspected: boolean) => this.native.request({ ...current, action: input.kind, width, height, elementId: input.elementId, x: input.x, y: input.y, delta: input.delta, text: input.text, key: input.key, allowUninspected }, signal);
+    const send = (allowUninspected: boolean) => this.native.request({ ...current, action: input.kind, width, height, elementId: input.elementId, x: client(input.x, width), y: client(input.y, height), toX: client(input.toX, width), toY: client(input.toY, height), delta: input.delta, text: input.text, key: input.key, allowUninspected }, signal);
     try {
       try { await send(false); }
       catch (error) {
@@ -181,12 +218,12 @@ export class ComputerUseController {
         this.phase("正在操作");
         await send(true);
       }
-      this.record(({ click: "点击", type: "输入普通文本", key: "按键", scroll: "滚动" })[input.kind]); this.phase("等待界面反馈");
+      this.record(({ click: "点击", doubleclick: "双击", rightclick: "右键", drag: "拖拽", type: "输入普通文本", key: "按键", scroll: "滚动" })[input.kind]); this.phase("等待界面反馈");
     }
     catch (error) { if (generation === this.generation) this.stop(); throw new Error(`${error instanceof Error ? error.message : "窗口输入失败。"} 本次授权已撤销。`); }
     return "已发送一次窗口输入；不代表界面结果已验证。请重新观察，检查实际反馈。";
   }
-  retainWorkspace(workspace?: string): void { if (this.mergedGrant && this.mergedGrant.workspace !== workspace) this.mergedGrant = undefined; if (this.root && this.root !== workspace || this.openingWorkspace && this.openingWorkspace !== workspace) this.stop(); }
+  retainWorkspace(workspace?: string): void { if (this.automaticGrant && this.automaticGrant.workspace !== workspace) { this.automaticGrant = undefined; this.value = { ...this.value, automaticGranted: false }; } if (this.root && this.root !== workspace || this.openingWorkspace && this.openingWorkspace !== workspace) this.stop(); }
   stop(): ComputerUseState {
     this.generation++;
     clearTimeout(this.expiryTimer); this.expiryTimer = undefined;
@@ -195,13 +232,14 @@ export class ComputerUseController {
     this.indicator.close();
     this.paused = false;
     const target = this.target;
-    this.target = undefined; this.root = undefined; this.value = { state: "idle" };
+    this.target = undefined; this.root = undefined; this.client = undefined; this.value = { state: "idle", automaticGranted: Boolean(this.automaticGrant) };
     if (target && !target.isDestroyed()) target.destroy();
     return { ...this.value };
   }
   async control(workspace: string, request: ComputerUseRequest, planMode: boolean): Promise<ComputerUseState> {
     this.retainWorkspace(workspace);
     if (request?.action === "stop") return this.stop();
+    if (request?.action === "automatic-revoke") { this.revokeAutomatic(); return { ...this.value }; }
     if (request?.action === "state") {
       if (this.selected) {
         const generation = this.generation;

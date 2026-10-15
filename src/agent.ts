@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { retainLatestImages } from "./tool-images.js";
 import { ModelRequestSilenceError, watchModelRequest } from "./model-request-watchdog.js";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -993,7 +994,8 @@ export class Agent {
         this.taskDiagnostics?.finishTool(diagnosticOutcome, result);
         this.recordToolEvidence(call.name, call.input, result);
         const contextResult = this.boundToolContext(result);
-        this.messages.push({ role: "tool", content: contextResult, toolCallId: call.id, toolName: call.name });
+        // Images stay in memory for the model only; the log below carries the text.
+        this.messages.push({ role: "tool", content: contextResult, toolCallId: call.id, toolName: call.name, ...(structured.images?.length ? { images: structured.images } : {}) });
         await this.log(sessionPath, {
           type: "tool",
           turn,
@@ -1522,6 +1524,7 @@ export class Agent {
       let requestWasStream = false;
       let streamProgress = { chunks: 0, textCharacters: 0, argumentCharacters: 0 };
       const operation = operationOverride ?? `turn ${this.currentTurn}`;
+      retainLatestImages(this.messages);
       const estimatedInput = estimateConversationTokens(this.messages);
       this.taskDiagnostics?.beginModel(operation, attempt);
       try {

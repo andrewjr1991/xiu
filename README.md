@@ -80,7 +80,7 @@ The full command list and CLI flags are in the [command reference](./docs/guide/
 - **Extensible**: Skills, MCP (stdio / Streamable HTTP, Resources, Prompts, OAuth, exact permission manifests) and declarative plugins with digests and optional signature verification.
 - **Multi-agent**: Explorer / Implementer / Reviewer / Tester run in parallel in isolated Git worktrees; integration happens only after conflict detection, review evidence and explicit confirmation.
 - **Background jobs**: dev servers and long commands can run across terminals, with output reading and explicit cancellation.
-- **Desktop workbench (Windows preview)**: task stream, changes / files / terminal / sub-agent / evidence tabs, settings center, MCP management, provider configuration diagnostics and recovery. It also includes a controlled Windows Computer Use preview that requires the user to explicitly enable Full Access and authorize each window.
+- **Desktop workbench (Windows preview)**: task stream, changes / files / terminal / sub-agent / evidence tabs, settings center, MCP management, provider configuration diagnostics and recovery. It also includes a controlled Windows Computer Use preview: the user authorizes each window, and continuous operation needs a separate, in-memory automatic grant (or Full Access).
 
 ## Safety model
 
@@ -103,7 +103,7 @@ The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Ch
 | MCP, Skills, plugins | Primary platform, verified on real machines | CI passes | CI passes |
 | System credential backend | Credential Manager (optional) | Not implemented | Not implemented |
 | Desktop workbench | x64 preview, unsigned | Not available | Not available |
-| Computer Use | Preview, requires Full Access | Not supported | Not supported |
+| Computer Use | Preview, per-window authorization | Not supported | Not supported |
 | Clipboard image attachments | Supported | Use `@path` | Use `@path` |
 
 ## Configuration and storage
