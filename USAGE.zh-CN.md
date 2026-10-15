@@ -326,9 +326,25 @@ $env:ANTHROPIC_API_KEY = '你的实际 API Key'
 
 切换时 Xiu 会读取服务的模型列表。如果预设尚未指定真实模型，会选用发现到的第一个模型；随后可输入 `/models` 选择其他模型。是否支持工具调用或视觉仍取决于具体服务启动参数和模型，Xiu 不会仅凭模型名称自动宣称支持。
 
-### 3.5 自定义 OpenAI-compatible 服务
+### 3.5 自定义 OpenAI-compatible 服务与国内厂商模板
 
-输入 `/provider add`，依次填写 Provider ID、显示名称、Base URL、默认模型、密钥环境变量名、可选的本地 Key、上下文窗口和视觉能力。示例环境变量：
+输入 `/provider add`，先选择渠道类型或厂商模板，再依次填写 Provider ID、显示名称、Base URL、默认模型、密钥环境变量名、可选的本地 Key、上下文窗口和视觉能力；带方括号的默认值直接回车即可采用。
+
+常见国内服务都提供 OpenAI 兼容接口，Xiu 内置以下模板（桌面端在“新增渠道 → 厂商模板”中选择）。模板只预填地址、一个当前常用的默认模型和惯用的环境变量名，来源是各厂商 2026-10 的公开 API 文档；每个字段都可以修改，Xiu 不内置任何 Key，也不会在你保存之前注册渠道。模型名以厂商控制台为准，保存后用 `/models` 刷新即可看到该 Key 可用的全部模型。
+
+| 模板 | Base URL | 默认模型 | Key 环境变量 |
+| --- | --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` | `DEEPSEEK_API_KEY` |
+| 通义千问（阿里云百炼） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-coder-plus` | `DASHSCOPE_API_KEY` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` | `ZHIPUAI_API_KEY` |
+| Kimi（Moonshot） | `https://api.moonshot.cn/v1` | `kimi-k2-turbo-preview` | `MOONSHOT_API_KEY` |
+| 火山方舟（豆包） | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-250615` | `ARK_API_KEY` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3.1` | `SILICONFLOW_API_KEY` |
+| MiniMax | `https://api.minimaxi.com/v1` | `MiniMax-M2` | `MINIMAX_API_KEY` |
+
+模板默认只声明文本与工具调用；是否真正支持工具和视觉仍由切换时的能力探测决定，火山方舟等要求使用接入点 ID 的服务请把默认模型改成控制台里的接入点。
+
+示例环境变量：
 
 ```powershell
 $env:OFFICE_MODEL_KEY = '你的实际 API Key'

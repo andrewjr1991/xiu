@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Docs: `README.md` and `README.zh-CN.md` are rewritten as short, parallel overviews (install, quick start, capabilities, safety model, platform status, documentation map, development, limitations). The previous per-version READMEs are archived under `docs/history/`. `QUICKSTART.md` no longer describes the zero-provider first run as an unreleased candidate.
+- Providers: `/provider add` and the desktop "新增渠道" form offer vendor templates for DeepSeek, Qwen (DashScope compatible mode), Zhipu GLM, Kimi (Moonshot), Volcengine Ark, SiliconFlow and MiniMax. A template prefills the OpenAI-compatible base URL, a current default model and the usual key environment-variable name from the vendor's public documentation; every field stays editable, nothing is registered until saved, and no key ships with Xiu. The CLI flow now shows defaults in brackets (ID, name, environment variable) so a vendor channel needs only the key.
 
 ## 0.20.11 — 2026-10-15
 

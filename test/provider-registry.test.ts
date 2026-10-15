@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, providerTemplate, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile } from "../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, providerTemplate, providerTemplateById, providerTemplates, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile, VENDOR_PROVIDER_TEMPLATES } from "../src/provider-registry.js";
 import { WindowsSystemCredentialStore } from "../src/system-credential-store.js";
 
 class FakeCredentialEntry {
@@ -499,4 +499,32 @@ test("an interrupted migration keeps a non-secret intent and safely resumes", as
   assert.equal(resumed.get("ollama")?.apiKey, "resume-secret");
   const completed = JSON.parse(await fs.readFile(filename, "utf8")) as { credentialMigrationIntents?: Record<string, unknown> };
   assert.deepEqual(completed.credentialMigrationIntents ?? {}, {});
+});
+
+test("vendor templates are editable OpenAI-compatible presets that ship no credentials", async () => {
+  const ids = VENDOR_PROVIDER_TEMPLATES.map((template) => template.id);
+  assert.deepEqual(ids, ["deepseek", "qwen", "zhipu", "kimi", "ark", "siliconflow", "minimax"]);
+  assert.equal(new Set([...ids, ...BUILTIN_PROVIDER_PROFILES.map((profile) => profile.id)]).size, ids.length + BUILTIN_PROVIDER_PROFILES.length, "preset IDs must not collide with built-in kinds");
+  for (const template of VENDOR_PROVIDER_TEMPLATES) {
+    assert.equal(template.kind, "openai-compatible", template.id);
+    assert.match(template.baseURL ?? "", /^https:\/\//, template.id);
+    assert.match(template.apiKeyEnv ?? "", /^[A-Z][A-Z0-9_]*_API_KEY$/, template.id);
+    assert.equal(template.apiKey, undefined, template.id);
+    assert.equal(template.builtin, undefined, template.id);
+    assert.equal(template.features.vision, false, "vision is opt-in until the user confirms it");
+    assert.deepEqual(validateProviderProfile(template).baseURL, template.baseURL);
+  }
+  const all = providerTemplates();
+  assert.deepEqual(all.filter((template) => template.preset === "kind").map((template) => template.id), BUILTIN_PROVIDER_PROFILES.map((profile) => profile.id));
+  assert.ok(all.every((template) => !template.builtin), "templates are suggestions, not built-in registrations");
+  assert.equal(providerTemplateById("deepseek")?.apiKeyEnv, "DEEPSEEK_API_KEY");
+  assert.equal(providerTemplateById("missing"), undefined);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-provider-vendor-"));
+  const registry = new ProviderRegistry(path.join(directory, "providers.json"));
+  await registry.load();
+  assert.equal(registry.get("deepseek"), undefined, "a preset is not registered until the user adds it");
+  const { preset: _preset, ...profile } = providerTemplateById("deepseek")!;
+  await registry.upsert({ ...profile, id: "my-deepseek" });
+  assert.equal(registry.get("my-deepseek")?.baseURL, "https://api.deepseek.com/v1");
+  assert.equal(registry.get("deepseek"), undefined);
 });

@@ -74,9 +74,10 @@ test("CLI fresh setup adds the Agnes template without reserved-ID collisions and
   const { cwd, userDirectory, processes } = await fixture(t);
   const app = await launch(processes, cwd, userDirectory);
   app.write("/provider add");
-  await app.readUntil("Provider ID: ");
+  // Without a TTY the selector takes the first template (Agnes); its ID and name are offered as defaults.
+  await app.readUntil("Provider ID [agnes]: ");
   app.write("agnes");
-  await app.readUntil("Display name: ");
+  await app.readUntil("Display name [Agnes]: ");
   app.write("My Agnes");
   await app.readUntil("API base URL [https://apihub.agnes-ai.com/v1]: ");
   app.write("");
