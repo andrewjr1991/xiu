@@ -18,7 +18,7 @@ Current version **0.20.11** (2026-10-15): [GitHub Release](https://github.com/an
 
 ## Install
 
-The CLI requires Node.js 20.18.1 or later.
+The CLI requires Node.js 20.18.1 or later; Node.js 22 LTS is recommended. Node 20 reached end of life on 2026-04-30, 0.21 prints a one-line notice when started on it, and 0.22 will require Node.js 22.12 or later.
 
 ```bash
 npm install -g @xiu-ai/cli

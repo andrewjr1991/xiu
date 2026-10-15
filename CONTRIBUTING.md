@@ -4,7 +4,7 @@ Xiu is currently Windows-first, but changes should remain portable unless a plat
 
 ## Development setup
 
-Use Node.js 20.18.1 or newer:
+Use Node.js 22 LTS (20.18.1 is the minimum until 0.22; Node 20 is end of life):
 
 ```bash
 npm ci

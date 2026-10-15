@@ -18,7 +18,7 @@
 
 ## 安装
 
-CLI 需要 Node.js 20.18.1 或更高版本。
+CLI 需要 Node.js 20.18.1 或更高版本，推荐 Node.js 22 LTS：Node 20 已于 2026-04-30 停止维护，0.21 在 Node 20 上启动时会打印一行提示，0.22 起要求 Node.js 22.12 或更高版本。
 
 ```bash
 npm install -g @xiu-ai/cli

@@ -23,6 +23,7 @@ import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, 
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
+import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
@@ -446,6 +447,8 @@ async function main(): Promise<void> {
     } else {
       renderWelcome(config, packageJson.version, skillRegistry.list().length);
     }
+    const deprecation = nodeDeprecationNotice(process.versions.node, language);
+    if (deprecation) console.log(chalk.yellow(`${deprecation}\n`));
 
     const windowsDirectory = process.env.WINDIR;
     if (windowsDirectory && config.cwd.toLowerCase() === path.join(windowsDirectory, "System32").toLowerCase()) {

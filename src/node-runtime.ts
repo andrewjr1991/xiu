@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { localize, type UiLanguage } from "./i18n.js";
 
 /** Electron's executable is not Node (the production RunAsNode fuse is disabled). */
 export async function resolveNodeRuntime(environment: NodeJS.ProcessEnv = process.env): Promise<string> {
@@ -16,4 +17,13 @@ export async function resolveNodeRuntime(environment: NodeJS.ProcessEnv = proces
     if ((await fs.stat(candidate).catch(() => undefined))?.isFile()) return candidate;
   }
   throw new Error("XIU_NODE_NOT_FOUND: Install Node.js or add its directory to the user PATH, then restart Xiu.");
+}
+
+/** Node 20 reached end of life on 2026-04-30; Xiu 0.22 raises `engines` to 22.12. One line, once per start, nothing else changes. */
+export function nodeDeprecationNotice(version: string, language: UiLanguage): string | undefined {
+  const major = Number(/^v?(\d+)/.exec(version.trim())?.[1] ?? 0);
+  if (major !== 20) return undefined;
+  return localize(language,
+    `提示：当前 Node.js ${version} 已于 2026-04-30 停止维护。Xiu 0.22 起要求 Node.js 22.12 或更高版本，请尽早升级到 Node 22 LTS 后重新安装 @xiu-ai/cli。`,
+    `Notice: Node.js ${version} reached end of life on 2026-04-30. Xiu 0.22 will require Node.js 22.12 or newer; upgrade to Node 22 LTS and reinstall @xiu-ai/cli.`);
 }

@@ -2,7 +2,7 @@
 
 ## 1. 安装 / Install
 
-需要 Node.js 20.18.1 或更高版本。
+需要 Node.js 20.18.1 或更高版本，推荐 22 LTS（Node 20 已停止维护，0.22 起要求 22.12）。
 
 ```bash
 npm install -g @xiu-ai/cli
