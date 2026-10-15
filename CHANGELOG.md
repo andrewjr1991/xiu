@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Docs: `README.md` and `README.zh-CN.md` are rewritten as short, parallel overviews (install, quick start, capabilities, safety model, platform status, documentation map, development, limitations). The previous per-version READMEs are archived under `docs/history/`. `QUICKSTART.md` no longer describes the zero-provider first run as an unreleased candidate.
+
 ## 0.20.11 — 2026-10-15
 
 0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
