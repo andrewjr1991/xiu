@@ -89,7 +89,11 @@ const taskController = new DesktopTaskController((event) => {
 });
 const terminalController = new DesktopTerminalController((event) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(desktopChannels.terminalEvent, event);
-}, (file, args, options) => spawnPty(file, args, options));
+}, (file, args, options) => spawnPty(file, args, options), undefined, async () => ({
+  hideSecrets: preferencesStore.value.terminalHidesSecrets,
+  // Provider key variables are hidden by name even when they do not look like secrets; the values stay in the registry.
+  secretNames: await getProviderController().then((provider) => provider.secretEnvironmentNames(), () => []),
+}));
 let providerController: Promise<DesktopProviderController> | undefined;
 const providerRecoveryController = new DesktopProviderRecoveryController({
   isBusy: () => !taskController.canChangeWorkspace() || terminalController.snapshot().state === "running",

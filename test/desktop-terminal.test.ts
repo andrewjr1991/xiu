@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DesktopTerminalController, controlledShell, type TerminalPty, type TerminalPtyFactory } from "../apps/desktop/main/terminal-controller.js";
+import { DesktopTerminalController, controlledShell, environmentNotice, isSecretEnvironmentVariable, terminalEnvironment, type TerminalPty, type TerminalPtyFactory } from "../apps/desktop/main/terminal-controller.js";
 import { desktopTerminalVisuals } from "../apps/desktop/renderer/src/terminal-visuals.js";
 import type { DesktopTerminalEvent } from "../apps/desktop/shared/protocol.js";
 
@@ -116,6 +116,74 @@ test("desktop terminal reports child exit and closes cleanly on workspace lifecy
   controller.stopAll("workspace switched");
   assert.equal(second.kills, 1);
   assert.deepEqual(controller.snapshot(item.canonical), { state: "idle", message: "workspace switched" });
+});
+
+test("terminal environment hides credential-looking variables by default and keeps the shell usable", () => {
+  const base = {
+    PATH: "/usr/bin", HOME: "/home/u", LANG: "zh_CN.UTF-8", SystemRoot: "C:\\Windows", TOKENIZERS_PARALLELISM: "false",
+    HTTPS_PROXY: "http://user:proxy-pass@proxy.corp.example:8080", NO_PROXY: "localhost",
+    OPENAI_API_KEY: "sk-canary-openai", DASHSCOPE_API_KEY: "canary-dashscope", GITHUB_TOKEN: "ghp_canary", AWS_SECRET_ACCESS_KEY: "canary-aws",
+    DB_PASSWORD: "canary-db", NPM_CONFIG__AUTHTOKEN: "canary-npm", ARTIFACTORY_AUTH: "canary-auth", AUTHORIZATION: "Bearer canary",
+    MY_GATEWAY_KEY: "canary-gateway", NODE_OPTIONS: "--inspect", ELECTRON_RUN_AS_NODE: "1",
+  };
+  const filtered = terminalEnvironment({ hideSecrets: true, secretNames: ["MY_GATEWAY_KEY"] }, base);
+  assert.deepEqual(filtered.hidden, ["ARTIFACTORY_AUTH", "AUTHORIZATION", "AWS_SECRET_ACCESS_KEY", "DASHSCOPE_API_KEY", "DB_PASSWORD", "GITHUB_TOKEN", "MY_GATEWAY_KEY", "NPM_CONFIG__AUTHTOKEN", "OPENAI_API_KEY"]);
+  for (const name of filtered.hidden) assert.equal(filtered.env[name], undefined, name);
+  assert.equal(filtered.env.PATH, "/usr/bin");
+  assert.equal(filtered.env.HTTPS_PROXY, base.HTTPS_PROXY, "proxy variables stay even when they embed credentials; the proxy does not work without them");
+  assert.equal(filtered.env.TOKENIZERS_PARALLELISM, "false");
+  assert.equal(filtered.env.TERM, "xterm-256color");
+  assert.equal(filtered.env.NODE_OPTIONS, undefined);
+  assert.doesNotMatch(JSON.stringify(filtered.env), /canary/);
+  const notice = environmentNotice(filtered)!;
+  assert.match(notice, /隐藏 9 个 Key\/Token 类环境变量：ARTIFACTORY_AUTH、AUTHORIZATION、AWS_SECRET_ACCESS_KEY、DASHSCOPE_API_KEY、DB_PASSWORD、GITHUB_TOKEN 等 9 个/);
+  assert.match(notice, /终端隐藏凭据变量/);
+  assert.doesNotMatch(notice, /canary/);
+
+  const inherited = terminalEnvironment({ hideSecrets: false, secretNames: ["MY_GATEWAY_KEY"] }, base);
+  assert.deepEqual(inherited.hidden, []);
+  assert.equal(inherited.env.OPENAI_API_KEY, "sk-canary-openai");
+  assert.equal(inherited.env.NODE_OPTIONS, undefined, "Electron-only variables are always removed");
+  assert.match(environmentNotice(inherited)!, /按你的设置，本终端继承了 9 个 Key\/Token 类环境变量/);
+  assert.doesNotMatch(environmentNotice(inherited)!, /canary/);
+  assert.equal(environmentNotice(terminalEnvironment({ hideSecrets: true }, { PATH: "/usr/bin" })), undefined, "nothing to say when nothing looked like a secret");
+
+  assert.equal(isSecretEnvironmentVariable("SSH_AUTH_SOCK"), false);
+  assert.equal(isSecretEnvironmentVariable("JAVA_HOME"), false);
+  assert.equal(isSecretEnvironmentVariable("HF_TOKEN"), true);
+  assert.equal(isSecretEnvironmentVariable("XIU_BETA_SEARXNG_TOKEN"), true);
+});
+
+test("desktop terminal applies the environment policy at start and fails closed when the policy is unreadable", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const canary = "XIU_TEST_TERMINAL_API_KEY";
+  process.env[canary] = "canary-terminal-key";
+  t.after(() => { delete process.env[canary]; });
+  const run = async (policy: () => Promise<{ hideSecrets: boolean }>) => {
+    const pty = new FakePty();
+    let spawned: Parameters<TerminalPtyFactory> | undefined;
+    const events: DesktopTerminalEvent[] = [];
+    const controller = new DesktopTerminalController(events.push.bind(events), (...args) => { spawned = args; return pty; }, () => ({ file: "shell", args: [], label: "shell" }), policy);
+    const snapshot = await controller.start(item.root);
+    await new Promise((resolve) => setImmediate(resolve));
+    const output = events.filter((event) => event.kind === "output").map((event) => (event as { data: string }).data).join("");
+    controller.stopAll();
+    return { env: spawned![2].env, output, replay: controller.snapshot(item.canonical), snapshot };
+  };
+  const hidden = await run(async () => ({ hideSecrets: true }));
+  assert.equal(hidden.env[canary], undefined);
+  assert.match(hidden.output, /已对本终端隐藏 \d+ 个 Key\/Token 类环境变量：/);
+  assert.doesNotMatch(hidden.output, /canary-terminal-key/);
+  assert.match(hidden.snapshot.output ?? "", /已对本终端隐藏/, "the notice is part of the replay a reopened pane receives");
+
+  const inherited = await run(async () => ({ hideSecrets: false }));
+  assert.equal(inherited.env[canary], "canary-terminal-key");
+  assert.match(inherited.output, /按你的设置，本终端继承了/);
+  assert.doesNotMatch(inherited.output, /canary-terminal-key/);
+
+  const unreadable = await run(async () => { throw new Error("preferences unavailable"); });
+  assert.equal(unreadable.env[canary], undefined, "an unreadable policy hides secrets rather than inheriting them");
 });
 
 test("controlled shell ignores arbitrary SHELL values", () => {

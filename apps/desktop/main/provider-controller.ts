@@ -136,6 +136,13 @@ export class DesktopProviderController {
   }
 
   /** Explicit picker refresh reloads configuration; never retries a mutation or clears recovery locks. */
+  /** Names of the environment variables that configured profiles read their keys from; values never leave the registry. */
+  secretEnvironmentNames(): string[] {
+    const names = new Set<string>();
+    for (const profile of this.registry.list()) if (profile.apiKeyEnv) names.add(profile.apiKeyEnv);
+    return [...names];
+  }
+
   async refresh(): Promise<DesktopProviderSnapshot> {
     try { await this.registry.load?.(); return this.snapshot(); }
     catch (error) { throw new Error(providerConfigurationMessage(error) ?? "无法读取渠道配置，请查看配置诊断；配置未被重置。"); }

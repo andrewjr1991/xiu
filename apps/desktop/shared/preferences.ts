@@ -13,11 +13,14 @@ export interface DesktopPreferences {
   notifyFailure: boolean;
   notifyApproval: boolean;
   sound: boolean;
+  /** The interactive terminal drops environment variables whose names look like credentials (S4). Off inherits everything. */
+  terminalHidesSecrets: boolean;
 }
 export const defaultPreferences: DesktopPreferences = {
   theme: "system", fontSize: 14, codeSize: 12, density: "comfortable", reducedMotion: false,
   autoFollow: true, processExpanded: true, alertsExpanded: false, sendKey: "enter",
   notifyComplete: false, notifyFailure: false, notifyApproval: false, sound: false,
+  terminalHidesSecrets: true,
 };
 export function parsePreferences(value: unknown): DesktopPreferences {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("无效的桌面偏好。");

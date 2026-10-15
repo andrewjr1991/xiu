@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { IDisposable, IPty } from "node-pty";
+import { isSecretField } from "../../../src/secret-redaction.js";
 import type {
   DesktopTerminalEvent,
   DesktopTerminalResizeRequest,
@@ -69,11 +70,47 @@ export function controlledShell(platform = process.platform, env = process.env):
     : { file: "/bin/sh", args: [], label: "sh" };
 }
 
-function terminalEnvironment(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
+/** Names that match the generic secret pattern but carry no credential, so the user's shell keeps them. */
+const ALWAYS_INHERITED = new Set(["TOKENIZERS_PARALLELISM"]);
+/** Credential names the generic pattern misses: npm's `_auth`/`_authToken` settings and other `*_AUTH` variables. */
+const ALWAYS_HIDDEN = /^NPM_CONFIG_.*AUTH|(?:^|_)AUTH$/i;
+const MAX_LISTED_VARIABLES = 6;
+
+export interface TerminalEnvironmentPolicy {
+  /** Default: drop credential-looking variables. The user can turn it off in Settings; it never affects the Agent's command tool. */
+  hideSecrets: boolean;
+  /** Extra names to treat as credentials, such as the `apiKeyEnv` of configured provider profiles. */
+  secretNames?: Iterable<string>;
+}
+
+/** True for `*API_KEY*`, `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*AUTHORIZATION*`, `*COOKIE*`, `*CREDENTIAL*`, `*_AUTH` and the names the caller adds (configured provider key variables). */
+export function isSecretEnvironmentVariable(name: string, extra?: ReadonlySet<string>): boolean {
+  if (extra?.has(name)) return true;
+  if (ALWAYS_INHERITED.has(name)) return false;
+  return ALWAYS_HIDDEN.test(name) || isSecretField(name);
+}
+
+export function terminalEnvironment(policy: TerminalEnvironmentPolicy, base: Record<string, string | undefined> = process.env): { env: Record<string, string | undefined>; secretLike: string[]; hidden: string[] } {
+  const env: Record<string, string | undefined> = { ...base, TERM: "xterm-256color", COLORTERM: "truecolor" };
   delete env.NODE_OPTIONS;
   delete env.ELECTRON_RUN_AS_NODE;
-  return env;
+  const extra = new Set(policy.secretNames ?? []);
+  const secretLike = Object.keys(env).filter((name) => env[name] !== undefined && isSecretEnvironmentVariable(name, extra)).sort();
+  if (!policy.hideSecrets) return { env, secretLike, hidden: [] };
+  for (const name of secretLike) delete env[name];
+  return { env, secretLike, hidden: secretLike };
+}
+
+function listVariables(names: string[]): string {
+  const shown = names.slice(0, MAX_LISTED_VARIABLES).join("、");
+  return names.length > MAX_LISTED_VARIABLES ? `${shown} 等 ${names.length} 个` : shown;
+}
+
+/** One grey line at the top of the terminal so the user knows why a tool cannot see its key, or that keys were inherited by choice. */
+export function environmentNotice(result: { secretLike: string[]; hidden: string[] }): string | undefined {
+  if (result.hidden.length) return `\x1b[90m[Xiu：已对本终端隐藏 ${result.hidden.length} 个 Key/Token 类环境变量：${listVariables(result.hidden)}。需要时可在 设置 › 对话与运行 关闭「终端隐藏凭据变量」]\x1b[0m\r\n`;
+  if (result.secretLike.length) return `\x1b[90m[Xiu：按你的设置，本终端继承了 ${result.secretLike.length} 个 Key/Token 类环境变量：${listVariables(result.secretLike)}]\x1b[0m\r\n`;
+  return undefined;
 }
 
 export class DesktopTerminalController {
@@ -84,6 +121,7 @@ export class DesktopTerminalController {
     private readonly emit: (event: DesktopTerminalEvent) => void,
     private readonly factory: TerminalPtyFactory,
     private readonly shell = controlledShell,
+    private readonly policy: () => TerminalEnvironmentPolicy | Promise<TerminalEnvironmentPolicy> = () => ({ hideSecrets: true }),
   ) {}
 
   snapshot(workspace?: string): DesktopTerminalSnapshot {
@@ -105,6 +143,10 @@ export class DesktopTerminalController {
     const size = dimensions(request);
     const selected = this.shell();
     const id = randomUUID();
+    let policy: TerminalEnvironmentPolicy;
+    try { policy = await this.policy(); }
+    catch { policy = { hideSecrets: true }; } // An unreadable policy never widens what the shell inherits.
+    const environment = terminalEnvironment(policy);
     let pty: TerminalPty;
     try {
       pty = this.factory(selected.file, selected.args, {
@@ -112,7 +154,7 @@ export class DesktopTerminalController {
         cols: size.cols,
         rows: size.rows,
         cwd: canonical,
-        env: terminalEnvironment(),
+        env: environment.env,
         ...(process.platform === "win32" ? { useConpty: true } : {}),
       });
     } catch (error) {
@@ -128,6 +170,8 @@ export class DesktopTerminalController {
     session.disposables.push(pty.onData((data) => this.enqueue(session, data)));
     session.disposables.push(pty.onExit(({ exitCode, signal }) => this.onExit(session, exitCode, signal)));
     this.emit({ sessionId: id, sequence: ++session.sequence, kind: "state", snapshot: this.activeSnapshot(false) });
+    const notice = environmentNotice(environment);
+    if (notice) this.enqueue(session, notice);
     return this.activeSnapshot(true);
   }
 
