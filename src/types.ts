@@ -53,6 +53,16 @@ export interface AvailableModel {
   providerId?: string;
 }
 
+/**
+ * An image a tool hands to the model together with its text result. It lives in the
+ * in-memory conversation only: the session log, task journal and UI receive the text.
+ */
+export interface ToolImage {
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  /** Base64 image bytes without the data-URL prefix. */
+  data: string;
+}
+
 export interface ConversationMessage {
   role: "user" | "assistant" | "tool";
   content: string;
@@ -61,6 +71,8 @@ export interface ConversationMessage {
   raw?: unknown;
   toolCalls?: ToolCall[];
   thinkingReplay?: ThinkingReplayBlock[];
+  /** Images attached to a tool result for the model; only the latest ones stay attached (see tool-images.ts). */
+  images?: ToolImage[];
 }
 
 export interface ModelProvider {
@@ -99,6 +111,8 @@ export interface ToolResult {
   exitCode?: number;
   retryable: boolean;
   sideEffectState: "none" | "possible" | "unknown";
+  /** Images for the model only; never written to the session log or shown as text. */
+  images?: ToolImage[];
 }
 
 export interface ApprovalRequest {

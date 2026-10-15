@@ -43,6 +43,10 @@ class ComputerBridge {
   const string SensitiveWindowTitlePattern=@"密码|口令|凭证|凭据|支付|付款|结账|收银|钱包|银行|验证码|登录|登入|管理员|password|passcode|passkey|credential|payment|checkout|wallet|bank|verification code|one.?time code|sign.?in|log.?in|administrator";
   const string BlockedAppPattern=@"^(xiu|codex|credentialuibroker|consent|systemsettings|taskmgr|cmd|powershell|pwsh|windowsterminal|openconsole|conhost|putty|kitty|mintty|mstsc|regedit|mmc|secpol|gpedit|explorer|keepass|keepassxc|1password|bitwarden|lastpass|dashlane|enpass)$";
   const string ConsequentialControlPattern=@"delete|remove|purchase|payment|pay now|checkout|send|publish|install|uninstall|password|sign.?in|log.?in|permission|grant access|删除|移除|付款|支付|购买|结账|发送|发布|安装|卸载|密码|登录|权限|授权";
+  // Shared with apps/desktop/shared/computer-use-inputs.ts; test/computer-use-inputs.test.ts fails when the copies diverge.
+  static readonly string[] Tier1Keys={"Enter","Tab","Escape","Backspace","Delete","Space","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown","F2","Shift+Home","Shift+End","Ctrl+A","Ctrl+Z"};
+  static readonly string[] Tier2Keys={"Ctrl+C","Ctrl+V","Ctrl+S","Ctrl+Y"};
+  static readonly string[] EditorOnlyKeys={"Shift+Home","Shift+End","Ctrl+A","Ctrl+Z","Ctrl+C","Ctrl+V","Ctrl+Y"};
   static Dictionary<string,object> req;
   static string inspection="unavailable";
   // Only an explicit per-step user confirmation in the main process sets this; automatic mode never does.
@@ -155,7 +159,8 @@ class ComputerBridge {
       }
       Target(); return info;
     }
-    if(action!="activate"&&action!="click"&&action!="scroll"&&action!="type"&&action!="key")throw new Exception("invalid-action");
+    bool pointer=action=="click"||action=="doubleclick"||action=="rightclick"||action=="drag"||action=="scroll";
+    if(action!="activate"&&!pointer&&action!="type"&&action!="key")throw new Exception("invalid-action");
     if(action!="activate"&&(N("width")!=w||N("height")!=hgt))throw new Exception("window-resized-observe-again");
     // Never emit global shortcuts or type while another app/modifier owns input.
     foreach(int key in new int[]{1,2,4,5,6,16,17,18,91,92})if(GetAsyncKeyState(key)<0)throw new Exception("release-held-input");
@@ -175,10 +180,17 @@ class ComputerBridge {
     if(action=="activate")return new {activated=true};
     Rect latest;if(!GetClientRect(target,out latest)||latest.right!=w||latest.bottom!=hgt)throw new Exception("window-resized-observe-again");
     foreach(int key in new int[]{1,2,4,5,6,16,17,18,91,92})if(GetAsyncKeyState(key)<0)throw new Exception("release-held-input");
-    if(action=="click"||action=="scroll") {
+    if(pointer) {
       int x=N("x"),y=N("y"); if(x<0||y<0||x>=w||y>=hgt)throw new Exception("point-outside-target");
       var p=new Point{x=x,y=y};if(!ClientToScreen(target,ref p))throw new Exception("point-unavailable");
       if(GetAncestor(WindowFromPoint(p),2)!=target)throw new Exception("target-occluded");
+      // A drag ends inside the same window and on an unoccluded point too; nothing moves until both ends are checked.
+      Point q=new Point();
+      if(action=="drag") {
+        int tx=N("toX"),ty=N("toY"); if(tx<0||ty<0||tx>=w||ty>=hgt||(tx==x&&ty==y))throw new Exception("point-outside-target");
+        q=new Point{x=tx,y=ty};if(!ClientToScreen(target,ref q))throw new Exception("point-unavailable");
+        if(GetAncestor(WindowFromPoint(q),2)!=target)throw new Exception("target-occluded");
+      }
       bool uninspected=false;
       try {
         var element=AutomationElement.FromPoint(new System.Windows.Point(p.x,p.y));
@@ -199,26 +211,44 @@ class ComputerBridge {
       var desktop=System.Windows.Forms.SystemInformation.VirtualScreen;
       int ax=(int)((long)(p.x-desktop.Left)*65535/Math.Max(1,desktop.Width-1)),ay=(int)((long)(p.y-desktop.Top)*65535/Math.Max(1,desktop.Height-1));
       var input=new List<Input>();input.Add(M(ax,ay,0,0xC001));
-      if(action=="click"){input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));}
-      else {int delta=N("delta");if(delta==0||Math.Abs(delta)>1200)throw new Exception("invalid-scroll");input.Add(M(0,0,unchecked((uint)delta),0x800));}
-      Send(input.ToArray());
+      if(action=="click"){input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));Send(input.ToArray());}
+      else if(action=="doubleclick"){input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));Send(input.ToArray());}
+      else if(action=="rightclick"){input.Add(M(0,0,0,8));input.Add(M(0,0,0,16));Send(input.ToArray());}
+      else if(action=="drag") {
+        int bx=(int)((long)(q.x-desktop.Left)*65535/Math.Max(1,desktop.Width-1)),by=(int)((long)(q.y-desktop.Top)*65535/Math.Max(1,desktop.Height-1));
+        // Press, move through the midpoint, release: applications need separate messages to recognise a drag.
+        input.Add(M(0,0,0,2));Send(input.ToArray());
+        try {
+          System.Threading.Thread.Sleep(40);Send(new Input[]{M((ax+bx)/2,(ay+by)/2,0,0xC001)});
+          System.Threading.Thread.Sleep(40);Send(new Input[]{M(bx,by,0,0xC001)});
+          System.Threading.Thread.Sleep(40);Send(new Input[]{M(0,0,0,4)});
+        } catch {var release=new Input[]{M(0,0,0,4)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
+      }
+      else {int delta=N("delta");if(delta==0||Math.Abs(delta)>1200)throw new Exception("invalid-scroll");input.Add(M(0,0,unchecked((uint)delta),0x800));Send(input.ToArray());}
     } else if(action=="type") {
       CheckFocusedControl(target,false);
       string text=S("text");if(text.Length<1||text.Length>500)throw new Exception("text-length-limit");
       var keys=new List<Input>();foreach(char c in text){if(char.IsControl(c))throw new Exception("control-text-denied");keys.Add(K(0,c,4));keys.Add(K(0,c,6));}Send(keys.ToArray());
     } else {
-      string pressed=S("key");
-      CheckFocusedControl(target,pressed=="Enter"||pressed=="Space");
-      var keys=new Dictionary<string,ushort>{{"Enter",13},{"Tab",9},{"Escape",27},{"Backspace",8},{"Space",32},{"ArrowLeft",37},{"ArrowUp",38},{"ArrowRight",39},{"ArrowDown",40},{"Home",36},{"End",35},{"PageUp",33},{"PageDown",34}};
-      string key=pressed;
-      if(key=="Shift+Home"||key=="Shift+End") {
+      string key=S("key");
+      if(Array.IndexOf(Tier1Keys,key)<0&&Array.IndexOf(Tier2Keys,key)<0)throw new Exception("shortcut-denied");
+      CheckFocusedControl(target,key=="Enter"||key=="Space");
+      var keys=new Dictionary<string,ushort>{{"Enter",13},{"Tab",9},{"Escape",27},{"Backspace",8},{"Delete",46},{"Space",32},{"ArrowLeft",37},{"ArrowUp",38},{"ArrowRight",39},{"ArrowDown",40},{"Home",36},{"End",35},{"PageUp",33},{"PageDown",34},{"F2",113}};
+      if(Array.IndexOf(EditorOnlyKeys,key)>=0) {
+        // Selection, select-all, undo/redo and clipboard combinations only reach a focused text editor of the target process.
         var focused=AutomationElement.FocusedElement;
-        if(focused==null||focused.Current.ProcessId!=N("pid")||(focused.Current.ControlType!=ControlType.Edit&&focused.Current.ControlType!=ControlType.Document))throw new Exception("text-selection-requires-edit-control");
+        if(focused==null||focused.Current.ProcessId!=N("pid")||(focused.Current.ControlType!=ControlType.Edit&&focused.Current.ControlType!=ControlType.Document))throw new Exception("editor-control-required");
+      }
+      if(key.StartsWith("Shift+")) {
         ushort selectedKey=key=="Shift+Home"?(ushort)36:(ushort)35;
         try {Send(new Input[]{K(160,42,0),K(selectedKey,0,1),K(selectedKey,0,3),K(160,42,2)});}
         catch {var release=new Input[]{K(160,42,2)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
+      } else if(key.StartsWith("Ctrl+")) {
+        ushort letter=(ushort)key[5];
+        try {Send(new Input[]{K(162,29,0),K(letter,0,0),K(letter,0,2),K(162,29,2)});}
+        catch {var release=new Input[]{K(162,29,2)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
       } else {
-        if(!keys.ContainsKey(key))throw new Exception("shortcut-denied");ushort k=keys[key];Send(new Input[]{K(k,0,0),K(k,0,2)});
+        ushort k=keys[key];Send(new Input[]{K(k,0,0),K(k,0,2)});
       }
     }
     // Win32 input is global, not an OS sandbox. A focus race has unknown outcome: never replay.
@@ -229,7 +259,7 @@ class ComputerBridge {
     Console.InputEncoding=Encoding.UTF8;Console.OutputEncoding=new UTF8Encoding(false);SetProcessDPIAware();
     try{string line=Console.ReadLine();if(line==null||line.Length>16000)throw new Exception("invalid-request");req=json.Deserialize<Dictionary<string,object>>(line);Console.WriteLine(json.Serialize(new{ok=true,value=Run()}));return 0;}
     catch(Exception e){
-      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-capture-too-large","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected"};
+      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-capture-too-large","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected","editor-control-required"};
       string code=Array.IndexOf(codes,e.Message)>=0?e.Message:"window-action-unavailable-or-identity-changed";
       Console.WriteLine(json.Serialize(new{ok=false,error=code}));return 1;
     }

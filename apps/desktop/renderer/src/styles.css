@@ -182,6 +182,9 @@ button, input, textarea { font: inherit; }
 .computer-use-panel p { line-height: 1.7; }
 .computer-use-panel img { display: block; max-width: 100%; margin-top: 16px; border-radius: 8px; }
 .computer-use-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.computer-use-panel button.secondary { color: var(--muted); }
+.computer-use-panel button.active { border-color: var(--text); font-weight: 650; }
+.computer-click-kind { margin-top: 8px; }
 .return-to-latest { grid-area: 1 / 1; z-index: 3; align-self: end; justify-self: center; margin: 12px; border: 1px solid var(--tone-dfe4ea, #dfe4ea); border-radius: 20px; background: var(--tone-fff, #fff); color: var(--tone-526176, #526176); box-shadow: 0 3px 12px #17203312; padding: 6px 12px; font-size: calc(11px * var(--ui-scale, 1)); cursor: pointer; }
 .agent-avatar svg { width: 20px; height: 20px; }
 .task-welcome { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; text-align: center; }

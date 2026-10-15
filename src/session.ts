@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { IMAGE_TOKEN_ESTIMATE } from "./tool-images.js";
 import path from "node:path";
 import type { ConversationMessage, ThinkingReplayBlock } from "./types.js";
 import type { TaskPlan } from "./plan.js";
@@ -272,7 +273,8 @@ export function estimateConversationTokens(messages: ConversationMessage[]): num
   return messages.reduce((sum, message) => {
     const contentTokens = estimateTextTokens(message.content);
     const rawTokens = message.raw === undefined ? 0 : estimateTextTokens(JSON.stringify(message.raw));
-    return sum + Math.max(contentTokens, rawTokens) + 4;
+    const imageTokens = (message.images?.length ?? 0) * IMAGE_TOKEN_ESTIMATE;
+    return sum + Math.max(contentTokens, rawTokens) + imageTokens + 4;
   }, 0);
 }
 

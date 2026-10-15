@@ -81,7 +81,7 @@ const taskController = new DesktopTaskController((event) => {
     windows: () => check().discover(workspace),
     select: (handle, provider, fullAccess, signal) => check().selectForModel(workspace, handle, provider, fullAccess, signal),
     observe: (provider, signal) => check().observeForModel(workspace, provider, signal),
-    input: (input, signal) => check().input(workspace, input, signal),
+    input: (input, signal) => check().input(workspace, input as import("../shared/computer-use.js").ComputerInput, signal),
     feedbackFinished: () => check().feedbackFinished(),
     status: () => { const target = check().selectedStatus(); return target; },
   } });
@@ -176,6 +176,13 @@ function registerIpc(): void {
       const workspace = controller.trustedWorkspacePath();
       if (request?.action !== "state") await taskController.assertCanUseTerminal(workspace);
       const connection = await taskController.connect(workspace, 0);
+      if (request?.action === "automatic") {
+        // The grant names the actual vision destination; a workspace without one cannot be granted automatic operation.
+        if (connection.runtime.snapshot.planMode === true) throw new Error("Plan 只读模式不能开启自动电脑操作。");
+        const route = await taskController.computerVisionRoute(workspace);
+        if (!route) throw new Error("当前渠道没有视觉能力，不能开启自动电脑操作。");
+        return computerUseController!.requestAutomatic(workspace, route);
+      }
       return computerUseController!.control(workspace, request, connection.runtime.snapshot.planMode === true);
     });
   });
