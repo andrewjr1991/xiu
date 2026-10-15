@@ -115,12 +115,24 @@ if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
     $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
     $stage = 'verify-owner'
     $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
+    if ($env:XIU_PROVIDER_INITIALIZE -eq '1' -and $sddl -match '^O:BAG:') {
+      # An elevated process, or a domain policy for Administrators members,
+      # makes Windows give a newly created object the Administrators group as
+      # its owner. Only a newly created empty object reaches initialization,
+      # so set its owner to the current user, as the full-language backend
+      # does with SetOwner. Setting the owner to oneself needs WRITE_OWNER on
+      # the object only, not SeRestorePrivilege. Any other owner is still
+      # rejected, never taken over, and existing objects are never changed.
+      $stage = 'initialize-owner'
+      & "$env:SystemRoot\System32\icacls.exe" $p /setowner ('*' + $sid) /q | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Owner initialization failed' }
+      $stage = 'verify-owner'
+      $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
+    }
     if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:' -or $Matches[1] -ne $sid) { throw 'Owner mismatch' }
     if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
       # Only newly created empty objects reach initialization. Remove inherited
       # ACEs, grant the current SID, and preserve Group/SACL metadata.
-      # Do not request WRITE_OWNER/SeRestorePrivilege just to set the existing
-      # owner to itself. A different owner is rejected, never taken over.
       $stage = 'initialize-protection'
       & "$env:SystemRoot\System32\icacls.exe" $p /inheritance:r /q | Out-Null
       if ($LASTEXITCODE -ne 0) { throw 'Protection initialization failed' }

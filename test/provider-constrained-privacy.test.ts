@@ -5,14 +5,18 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
-import { PROVIDER_WINDOWS_PRIVACY_SCRIPT, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, verifyProviderWindowsPrivacy, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureCategory } from "../src/provider-config-migration.js";
+import { PROVIDER_WINDOWS_PRIVACY_SCRIPT, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment, providerWindowsPrivacyFailureStage, providerWindowsPrivacyFailureCategory } from "../src/provider-config-migration.js";
 
 const run = promisify(execFile);
 const script = PROVIDER_WINDOWS_PRIVACY_SCRIPT.replace("if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage')", "if ($true)");
 
 test("constrained backend preserves strict ACL checks without forbidden method calls or PATH helpers", () => {
   const backend = script.slice(script.indexOf("if ($true)"), script.indexOf("function Get-XiuPrivacyFailureCategory"));
-  assert.doesNotMatch(backend, /::|\.SetOwner|\.GetOwner|\.GetAccessRules|\/setowner/i);
+  assert.doesNotMatch(backend, /::|\.SetOwner|\.GetOwner|\.GetAccessRules/i);
+  // The owner is set only while initializing a newly created object that
+  // Windows gave to the Administrators group; existing objects are never taken over.
+  assert.equal((backend.match(/\/setowner/gi) ?? []).length, 1);
+  assert.match(backend, /if \(\$env:XIU_PROVIDER_INITIALIZE -eq '1' -and \$sddl -match '\^O:BAG:'\) \{[^}]*\/setowner \('\*' \+ \$sid\)/);
   assert.match(backend, /SystemRoot\\System32\\icacls\.exe/);
   assert.match(backend, /SystemRoot\\System32\\whoami\.exe/);
   assert.match(backend, /XIU_PROVIDER_INITIALIZE -eq '1'/);
@@ -49,14 +53,13 @@ test("native constrained ACL backend initializes empty objects, verifies read-on
   for (const directory of [true, false]) {
     const target = path.join(root, directory ? "directory" : "file");
     if (directory) await fs.mkdir(target); else await fs.writeFile(target, "");
-    // Elevated FullLanguage CI can create objects owned by Administrators.
-    // Establish fixture ownership using the normal backend first. In real
-    // constrained mode initialize directly, with no ownership takeover.
-    if (mode.stdout.trim() === "FullLanguage") await verifyProviderWindowsPrivacy(target, directory, true);
+    // Elevated CI creates objects owned by Administrators (O:BA), exactly
+    // like an elevated or policy-managed user machine: the constrained backend
+    // must initialize such a fresh object itself, without the normal backend.
     const descriptor = await run(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoProfile", "-NonInteractive", "-Command", "(Get-Acl -LiteralPath $env:XIU_TEST_TARGET).Sddl -replace 'S-1-[0-9]+(?:-[0-9]+)+','SID'"], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment({ ...process.env, XIU_TEST_TARGET: target }) });
     // Synthetic empty fixtures only, with all numeric identities removed.
     assert.match(descriptor.stdout.trim(), /^[A-Z0-9:;()]+$/i);
-    t.diagnostic(`${directory ? "directory" : "file"} descriptor shape: ${descriptor.stdout.trim()}`);
+    t.diagnostic(`${mode.stdout.trim()} ${directory ? "directory" : "file"} descriptor shape: ${descriptor.stdout.trim()}`);
     assert.equal((await invoke(target, directory, true)).stdout.trim(), "XIU_ACL_V1:ok");
     assert.equal((await invoke(target, directory, false)).stdout.trim(), "XIU_ACL_V1:ok");
     // A deliberately broadened isolated fixture must be rejected, not repaired.
