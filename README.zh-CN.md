@@ -68,7 +68,7 @@ xiu --resume   # 恢复本工作区的会话
 | `/web configure`、`/web doctor` | 配置和诊断联网搜索 |
 | `/status`、`/diagnostics`、`/help` | 状态、诊断与完整命令列表 |
 
-完整命令、启动参数和各功能说明见[使用指南](./USAGE.zh-CN.md)。
+全部命令与启动参数见[命令速查](./docs/guide/commands.zh-CN.md)，各功能说明见[使用指南目录](./USAGE.zh-CN.md)。
 
 ## 能做什么
 
@@ -111,14 +111,15 @@ Xiu 用当前操作系统账号读写文件和运行命令，不是容器沙箱�
 - 用户设置、会话和本地记录位于 `~/.xiu/`；项目级状态位于工作区的 `.xiu/`。
 - 渠道 Key 可来自环境变量、本机配置文件或 Windows 凭据管理器；Xiu 只保存必要的引用，不把 Key 写进日志。
 - 项目根目录的 `AGENTS.md` 或 `XIU.md` 会作为项目指令，在工作区信任后读取。
-- 启动参数（`--provider`、`--model`、`--proxy`、预算与上下文限制等）见 `xiu --help` 和使用指南第二十节。
+- 启动参数（`--provider`、`--model`、`--proxy`、预算与上下文限制等）见 `xiu --help` 和[命令速查](./docs/guide/commands.zh-CN.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
 | [快速上手](./QUICKSTART.md) | 安装、配置并完成第一个任务 |
-| [完整使用指南](./USAGE.zh-CN.md) | 全部命令、参数与能力说明 |
+| [使用指南目录](./USAGE.zh-CN.md) | 按功能分篇：上手、渠道、权限、会话、扩展、媒体、后台、联网搜索、命令速查、常见问题、桌面 |
+| [English guide](./docs/guide/en/README.md) | 英文精简版使用指南 |
 | [安全与隐私边界](./SECURITY.zh-CN.md) | 跨版本长期有效的安全规则 |
 | [路线图](./ROADMAP.zh-CN.md) | 当前状态、优先级和下一步 |
 | [变更日志](./CHANGELOG.md) | 已发布版本摘要 |

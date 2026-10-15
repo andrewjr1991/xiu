@@ -16,12 +16,9 @@
     "QUICKSTART.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "PUBLISHING.zh-CN.md",
     "USAGE.zh-CN.md",
-    "ROADMAP.zh-CN.md",
     "SECURITY.zh-CN.md",
-    "V0.20.11_DESIGN.zh-CN.md",
-    "docs/development-progress.md"
+    "docs/guide"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

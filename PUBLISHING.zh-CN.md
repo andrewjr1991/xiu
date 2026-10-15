@@ -554,7 +554,7 @@ npm.cmd pack --dry-run
 检查输出时应重点确认：
 
 - 包名和版本号正确。
-- 包含 `dist`、`README.md`、`USAGE.zh-CN.md`、`PUBLISHING.zh-CN.md`、`ROADMAP.zh-CN.md`、`SECURITY.zh-CN.md`、当前版本设计文档和 `package.json`。
+- 包含 `dist`、`README.md`、`README.zh-CN.md`、`QUICKSTART.md`、`USAGE.zh-CN.md`（指南目录）、`docs/guide/`（分篇指南与英文精简版）、`SECURITY.zh-CN.md`、`CHANGELOG.md` 和 `package.json`。2026-10-15 起 `PUBLISHING.zh-CN.md`、`ROADMAP.zh-CN.md`、当前版本设计文档和 `docs/development-progress.md` 只留在仓库，不再打进 npm 包，发布时也不必再改 `files` 里的设计稿文件名（`npm run check:docs` 会检查这些约束）。
 - 不包含 `.env`、API Key、`.xiu/sessions`、测试项目、日志或个人文件。
 - `dist/cli.js` 已生成。
 - 如果版本新增可选原生依赖，应在真正位于项目目录之外的两个干净目录分别执行普通安装和 `--omit=optional` 安装；普通安装要验证对应能力，省略可选依赖时也必须能启动并给出可解释的降级状态。

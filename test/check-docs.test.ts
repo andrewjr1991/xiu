@@ -7,16 +7,17 @@ import test from "node:test";
 
 const script = path.resolve("scripts/check-docs.mjs");
 const version = "0.20.3-preview.1";
-test("the npm package includes exactly the current release design", async () => {
+test("the npm package ships the user-facing documents and keeps maintainer documents in the repository", async () => {
   const manifest = JSON.parse(await readFile("package.json", "utf8")) as { version: string; files: string[] };
   const design = `V${manifest.version}_DESIGN.zh-CN.md`;
-  assert.deepEqual(manifest.files.filter((name) => /^V.*_DESIGN\.zh-CN\.md$/.test(name)), [design]);
-  assert.ok((await readFile(design, "utf8")).length > 0);
+  assert.ok((await readFile(design, "utf8")).length > 0, "the current design document exists at the repository root");
+  assert.deepEqual(manifest.files.filter((name) => /^V.*_DESIGN\.zh-CN\.md$/.test(name) || /^(PUBLISHING|ROADMAP)\.zh-CN\.md$/.test(name) || name === "docs/development-progress.md"), []);
+  for (const required of ["README.md", "README.zh-CN.md", "QUICKSTART.md", "USAGE.zh-CN.md", "SECURITY.zh-CN.md", "docs/guide"]) assert.ok(manifest.files.includes(required), `files must include ${required}`);
 });
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "xiu-docs-check-"));
-  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version }));
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version, files: ["README.md", "USAGE.zh-CN.md", "SECURITY.zh-CN.md", "docs/guide"] }));
   for (const name of ["README.md", "README.zh-CN.md", "QUICKSTART.md", "CONTRIBUTING.md", "CHANGELOG.md", "ROADMAP.zh-CN.md", "SECURITY.zh-CN.md", "USAGE.zh-CN.md", "PUBLISHING.zh-CN.md"]) {
     await writeFile(path.join(root, name), `npm install -g @xiu-ai/cli\n| 当前开发版本 | \`${version}\` |\n不伪造 Provider API 未返回的隐藏思维链\n## 当前状态\n## 当前优先级\n## 下一步\n`);
   }
