@@ -271,6 +271,7 @@ test("slow read-only recovery diagnostics leave active task stop and approval co
 });
 
 test("CLI current action keeps valid settings and clearly distinguishes dead-lock cleanup from restore", async (t) => {
+  useRealWindowsAcl(t); // this test verifies the settings file's real DACL below
   const f = await fixture(t);
   const current = '{"version":5,"profiles":[]}';
   await fs.writeFile(f.filename, current);
