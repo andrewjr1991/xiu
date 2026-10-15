@@ -36,3 +36,24 @@ export function nextTaskBudget(previous: ComputerTaskBudget | undefined, task: s
 export function inputNeedsConfirmation(options: { automatic: boolean; origin: "model" | "renderer" }): boolean {
   return !options.automatic || options.origin === "renderer";
 }
+
+/** Native helper error code: the control under the pointer or in focus could not be identified. */
+export const UNINSPECTED_CONTROL_CODE = "control-uninspected";
+
+/**
+ * The native helper refuses to click or submit when it cannot read the target
+ * control (UI Automation failure, cross-process focus, or an actionable control
+ * without a name), because the password and consequential-control checks would
+ * otherwise silently pass. Only an explicit per-step user confirmation may let
+ * that one input through; automatic mode never covers it.
+ */
+export function isUninspectedControl(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === UNINSPECTED_CONTROL_CODE;
+}
+
+/** User-facing note for a frame whose control inspection was not complete. */
+export function inspectionNotice(inspection: "complete" | "partial" | "unavailable" | undefined): string | undefined {
+  if (inspection === "complete") return undefined;
+  if (inspection === "partial") return "本帧控件信息不完整（遍历到达上限），未列出的部分可能含密码框或高风险控件。";
+  return "本帧无法读取控件信息，程序不能识别密码框或高风险控件。";
+}

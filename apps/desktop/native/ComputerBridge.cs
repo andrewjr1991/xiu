@@ -39,7 +39,16 @@ class ComputerBridge {
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   static JavaScriptSerializer json=new JavaScriptSerializer { MaxJsonLength=12000000 };
+  // Shared with apps/desktop/shared/computer-use-sensitive.ts; test/computer-use-sensitive.test.ts fails when the copies diverge.
+  const string SensitiveWindowTitlePattern=@"密码|口令|凭证|凭据|支付|付款|结账|收银|钱包|银行|验证码|登录|登入|管理员|password|passcode|passkey|credential|payment|checkout|wallet|bank|verification code|one.?time code|sign.?in|log.?in|administrator";
+  const string BlockedAppPattern=@"^(xiu|codex|credentialuibroker|consent|systemsettings|taskmgr|cmd|powershell|pwsh|windowsterminal|openconsole|conhost|putty|kitty|mintty|mstsc|regedit|mmc|secpol|gpedit|explorer|keepass|keepassxc|1password|bitwarden|lastpass|dashlane|enpass)$";
+  const string ConsequentialControlPattern=@"delete|remove|purchase|payment|pay now|checkout|send|publish|install|uninstall|password|sign.?in|log.?in|permission|grant access|删除|移除|付款|支付|购买|结账|发送|发布|安装|卸载|密码|登录|权限|授权";
   static Dictionary<string,object> req;
+  static string inspection="unavailable";
+  // Only an explicit per-step user confirmation in the main process sets this; automatic mode never does.
+  static bool AllowUninspected() { return req.ContainsKey("allowUninspected")&&req["allowUninspected"] is bool&&(bool)req["allowUninspected"]; }
+  static readonly string[] Verdicts={"sensitive-control-denied","consequential-control-denied","element-changed-observe-again","control-uninspected"};
+  static bool IsVerdict(Exception e) { return Array.IndexOf(Verdicts,e.Message)>=0; }
   static string S(string k) { return req.ContainsKey(k)?Convert.ToString(req[k]):""; }
   static int N(string k) { return Convert.ToInt32(req[k]); }
   static Dictionary<string,object> Info(IntPtr h) {
@@ -53,7 +62,7 @@ class ComputerBridge {
     IntPtr h=new IntPtr(long.Parse(S("handle")));
     if(!IsWindow(h)||!IsWindowVisible(h)||IsIconic(h)||GetAncestor(h,2)!=h)throw new Exception("window-unavailable");
     var i=Info(h);
-    if(Regex.IsMatch(Convert.ToString(i["title"]),"password|payment|sign.?in|log.?in|credential|密码|付款|支付|登录|凭据",RegexOptions.IgnoreCase))throw new Exception("sensitive-control-denied");
+    if(Regex.IsMatch(Convert.ToString(i["title"]),SensitiveWindowTitlePattern,RegexOptions.IgnoreCase)||Regex.IsMatch(Convert.ToString(i["app"]),BlockedAppPattern,RegexOptions.IgnoreCase))throw new Exception("sensitive-window-denied");
     if(Convert.ToString(i["pid"])!=S("pid")||Convert.ToString(i["started"])!=S("started"))throw new Exception("window-identity-changed");
     return h;
   }
@@ -62,14 +71,17 @@ class ComputerBridge {
   static Input M(int x,int y,uint data,uint flags) { return new Input {type=0,u=new Union {mouse=new Mouse {dx=x,dy=y,data=data,flags=flags}}}; }
   static string ElementId(AutomationElement element) { return string.Join(".",Array.ConvertAll(element.GetRuntimeId(),v=>v.ToString())); }
   // Bounded control traversal. Never read edit values, password names or document text.
+  // Sets `inspection` to "complete" only when every reachable control was visited within the bounds.
   static List<object> Elements(IntPtr target) {
+    inspection="unavailable";
     var items=new List<object>();var queue=new Queue<AutomationElement>();
     Point origin=new Point();ClientToScreen(target,ref origin);
     var root=AutomationElement.FromHandle(target);queue.Enqueue(root);int visited=0;
     var clock=Stopwatch.StartNew();
     while(queue.Count>0&&visited++<400&&items.Count<100&&clock.ElapsedMilliseconds<1500) {
       var element=queue.Dequeue();var current=element.Current;
-      if(current.ProcessId!=N("pid"))continue;
+      // Controls hosted by another process (for example UWP frames) cannot be inspected here.
+      if(current.ProcessId!=N("pid")){inspection="partial";continue;}
       if(current.IsPassword)throw new Exception("sensitive-control-denied");
       var rect=current.BoundingRectangle;
       if(element!=root&&!current.IsOffscreen&&!rect.IsEmpty&&rect.Width>0&&rect.Height>0) {
@@ -79,16 +91,30 @@ class ComputerBridge {
       }
       var child=TreeWalker.ControlViewWalker.GetFirstChild(element);int siblings=0;
       while(child!=null&&siblings++<100&&queue.Count<400){queue.Enqueue(child);child=TreeWalker.ControlViewWalker.GetNextSibling(child);}
+      if(child!=null)inspection="partial";
     }
+    if(inspection!="partial")inspection=queue.Count==0?"complete":"partial";
     return items;
   }
-  static void CheckFocusedControl(IntPtr target) {
-    var focused=AutomationElement.FocusedElement;
-    if(focused!=null&&focused.Current.ProcessId==N("pid"))CheckControl(focused);
+  // Typing and submit keys go to the focused control. When it cannot be inspected, the password and
+  // consequential checks cannot run, so the input is refused unless the user confirmed this step.
+  static void CheckFocusedControl(IntPtr target,bool submit) {
+    AutomationElement focused=null;
+    try { focused=AutomationElement.FocusedElement; if(focused!=null&&focused.Current.ProcessId!=N("pid"))focused=null; }
+    catch(Exception e) { if(IsVerdict(e))throw; focused=null; }
+    if(focused==null) { if(!AllowUninspected())throw new Exception("control-uninspected"); return; }
+    CheckControl(focused);
+    if(submit&&Nameless(focused)&&!AllowUninspected())throw new Exception("control-uninspected");
   }
   static void CheckControl(AutomationElement element) {
     if(element.Current.IsPassword)throw new Exception("sensitive-control-denied");
-    if(Regex.IsMatch(element.Current.Name??"","delete|remove|purchase|payment|pay now|send|publish|install|password|sign.?in|log.?in|permission|删除|移除|付款|支付|购买|发送|发布|安装|密码|登录|权限",RegexOptions.IgnoreCase))throw new Exception("consequential-control-denied");
+    if(Regex.IsMatch(element.Current.Name??"",ConsequentialControlPattern,RegexOptions.IgnoreCase))throw new Exception("consequential-control-denied");
+  }
+  // An actionable control without a name cannot be matched against the consequential-control list.
+  static bool Nameless(AutomationElement element) {
+    var current=element.Current;var type=current.ControlType;
+    if(type!=ControlType.Button&&type!=ControlType.Hyperlink&&type!=ControlType.MenuItem&&type!=ControlType.SplitButton)return false;
+    return string.IsNullOrWhiteSpace(current.Name);
   }
   static object Run() {
     string action=S("action");
@@ -101,7 +127,8 @@ class ComputerBridge {
     if(w<1||hgt<1||w>7680||hgt>4320)throw new Exception("unsupported-window-size");
     if(action=="status")return info;
     if(action=="capture") {
-      try { info["elements"]=Elements(target); } catch(Exception e) { if(e.Message=="sensitive-control-denied")throw; info["elements"]=new object[0]; }
+      try { info["elements"]=Elements(target); } catch(Exception e) { if(e.Message=="sensitive-control-denied")throw; info["elements"]=new object[0]; inspection="unavailable"; }
+      info["inspection"]=inspection;
       using(var bitmap=new Bitmap(w,hgt)) {
         using(var g=Graphics.FromImage(bitmap)) {var dc=g.GetHdc();try {if(!PrintWindow(target,dc,3))throw new Exception("window-capture-not-supported");}finally{g.ReleaseHdc(dc);}}
         bool visible=false;for(int yy=0;yy<hgt;yy+=Math.Max(1,hgt/24))for(int xx=0;xx<w;xx+=Math.Max(1,w/24)){var c=bitmap.GetPixel(xx,yy);if(c.R!=0||c.G!=0||c.B!=0)visible=true;}
@@ -134,15 +161,22 @@ class ComputerBridge {
       int x=N("x"),y=N("y"); if(x<0||y<0||x>=w||y>=hgt)throw new Exception("point-outside-target");
       var p=new Point{x=x,y=y};if(!ClientToScreen(target,ref p))throw new Exception("point-unavailable");
       if(GetAncestor(WindowFromPoint(p),2)!=target)throw new Exception("target-occluded");
+      bool uninspected=false;
       try {
         var element=AutomationElement.FromPoint(new System.Windows.Point(p.x,p.y));
+        if(element==null)throw new Exception("control-uninspected");
         if(element.Current.ProcessId!=N("pid"))throw new Exception("element-changed-observe-again");
         if(S("elementId")!=""&&ElementId(element)!=S("elementId"))throw new Exception("element-changed-observe-again");
         CheckControl(element);
+        uninspected=Nameless(element);
       } catch(Exception e) {
-        if(S("elementId")!=""||e.Message=="sensitive-control-denied"||e.Message=="consequential-control-denied"||e.Message=="element-changed-observe-again")throw;
+        if(e.Message=="sensitive-control-denied"||e.Message=="consequential-control-denied"||e.Message=="element-changed-observe-again")throw;
+        // A control the model identified by ID must still be readable at its own position.
+        if(S("elementId")!="")throw new Exception("element-changed-observe-again");
         // Canvas applications may expose no accessible element. Coordinates still obey window bounds.
+        uninspected=true;
       }
+      if(uninspected&&!AllowUninspected())throw new Exception("control-uninspected");
       // Absolute virtual desktop coordinates support negative-origin multi-monitor layouts.
       var desktop=System.Windows.Forms.SystemInformation.VirtualScreen;
       int ax=(int)((long)(p.x-desktop.Left)*65535/Math.Max(1,desktop.Width-1)),ay=(int)((long)(p.y-desktop.Top)*65535/Math.Max(1,desktop.Height-1));
@@ -151,13 +185,14 @@ class ComputerBridge {
       else {int delta=N("delta");if(delta==0||Math.Abs(delta)>1200)throw new Exception("invalid-scroll");input.Add(M(0,0,unchecked((uint)delta),0x800));}
       Send(input.ToArray());
     } else if(action=="type") {
-      CheckFocusedControl(target);
+      CheckFocusedControl(target,false);
       string text=S("text");if(text.Length<1||text.Length>500)throw new Exception("text-length-limit");
       var keys=new List<Input>();foreach(char c in text){if(char.IsControl(c))throw new Exception("control-text-denied");keys.Add(K(0,c,4));keys.Add(K(0,c,6));}Send(keys.ToArray());
     } else {
-      CheckFocusedControl(target);
+      string pressed=S("key");
+      CheckFocusedControl(target,pressed=="Enter"||pressed=="Space");
       var keys=new Dictionary<string,ushort>{{"Enter",13},{"Tab",9},{"Escape",27},{"Backspace",8},{"Space",32},{"ArrowLeft",37},{"ArrowUp",38},{"ArrowRight",39},{"ArrowDown",40},{"Home",36},{"End",35},{"PageUp",33},{"PageDown",34}};
-      string key=S("key");
+      string key=pressed;
       if(key=="Shift+Home"||key=="Shift+End") {
         var focused=AutomationElement.FocusedElement;
         if(focused==null||focused.Current.ProcessId!=N("pid")||(focused.Current.ControlType!=ControlType.Edit&&focused.Current.ControlType!=ControlType.Document))throw new Exception("text-selection-requires-edit-control");
@@ -176,7 +211,7 @@ class ComputerBridge {
     Console.InputEncoding=Encoding.UTF8;Console.OutputEncoding=new UTF8Encoding(false);SetProcessDPIAware();
     try{string line=Console.ReadLine();if(line==null||line.Length>16000)throw new Exception("invalid-request");req=json.Deserialize<Dictionary<string,object>>(line);Console.WriteLine(json.Serialize(new{ok=true,value=Run()}));return 0;}
     catch(Exception e){
-      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-unavailable","sensitive-control-denied","element-changed-observe-again","consequential-control-denied"};
+      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected"};
       string code=Array.IndexOf(codes,e.Message)>=0?e.Message:"window-action-unavailable-or-identity-changed";
       Console.WriteLine(json.Serialize(new{ok=false,error=code}));return 1;
     }

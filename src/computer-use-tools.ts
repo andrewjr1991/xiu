@@ -18,10 +18,15 @@ async function settle(milliseconds: number, signal?: AbortSignal): Promise<void>
 export interface ComputerUseHost {
   windows?(): Promise<Array<{ handle: string; title: string; app: string; width: number; height: number }>>;
   select?(handle: string, provider: string, fullAccess: boolean, signal?: AbortSignal): Promise<string>;
-  observe(provider: string, signal?: AbortSignal): Promise<{ image: string; frameId: string; width: number; height: number; capturedAt?: string; elements?: Array<{ id: string; name: string; role: string; x: number; y: number; width: number; height: number; enabled: boolean }> }>;
+  observe(provider: string, signal?: AbortSignal): Promise<{ image: string; frameId: string; width: number; height: number; capturedAt?: string; elements?: Array<{ id: string; name: string; role: string; x: number; y: number; width: number; height: number; enabled: boolean }>; inspection?: "complete" | "partial" | "unavailable" }>;
   input(input: { kind: "click" | "scroll" | "type" | "key"; frameId: string; elementId?: string; x?: number; y?: number; delta?: number; text?: string; key?: string }, signal?: AbortSignal): Promise<string>;
   status(): string;
   feedbackFinished?(): void;
+}
+function describeInspection(inspection: "complete" | "partial" | "unavailable" | undefined): string {
+  if (inspection === "complete") return "complete.";
+  if (inspection === "partial") return "partial; unlisted controls may include password fields or high-risk buttons, so the user is asked before any input whose control cannot be identified.";
+  return "unavailable; the host could not read this window's controls, so the user is asked before any input whose control cannot be identified.";
 }
 export function computerVisionRoute(config: AgentConfig): string {
   const vision = config.capabilities?.vision ?? config.model;
@@ -44,7 +49,7 @@ export function createComputerUseTools(config: AgentConfig, host: ComputerUseHos
     finally { host.feedbackFinished?.(); }
     if (signal?.aborted) throw new Error("Observation cancelled.");
     if (!Number.isFinite(capturedAt) || Date.now() - capturedAt > 60_000) return `Expired frame: the screenshot is too old for input. Call computer_observe again before any action; do not reuse old controls or coordinates.\nOld visual observations (not current or deterministic evidence):\n${result.slice(0,12_000)}`;
-    return `Frame: ${frame.frameId}\nSize: ${frame.width}x${frame.height}\nVisible controls (untrusted, IDs valid for this frame only; prefer elementId for clicks):\n${JSON.stringify(frame.elements ?? []).slice(0, 16000)}\nVision observations (not deterministic test evidence):\n${result.slice(0,12_000)}`;
+    return `Frame: ${frame.frameId}\nSize: ${frame.width}x${frame.height}\nControl inspection: ${describeInspection(frame.inspection)}\nVisible controls (untrusted, IDs valid for this frame only; prefer elementId for clicks):\n${JSON.stringify(frame.elements ?? []).slice(0, 16000)}\nVision observations (not deterministic test evidence):\n${result.slice(0,12_000)}`;
   };
   return [{
     name: "computer_status", description: "Read the explicitly authorized Windows target status. For computer tasks, use computer_windows then computer_select when no target exists. Never ask the user to supply screenshots or coordinates; observe and locate targets yourself.",
