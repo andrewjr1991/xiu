@@ -150,3 +150,16 @@ test("vision prose is bounded and cancellation does not claim successful observa
   const stopped=createComputerUseTools(config,host,{analyzeImage:async()=>{cancel.abort();return "passed";}});
   await assert.rejects(stopped[1]!.execute({prompt:"Inspect"},{...context,signal:cancel.signal}),/cancelled/);
 });
+
+test("a screenshot is uploaded exactly once even when the vision request fails", async () => {
+  const http = await import("node:http");
+  let requests = 0;
+  const server = http.createServer((_request, response) => { requests++; response.statusCode = 500; response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ error: { message: "fixture outage" } })); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address() as { port: number };
+    const tools = createComputerUseTools({ ...config, baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "fixture" }, host);
+    await assert.rejects(tools.find(tool => tool.name === "computer_observe")!.execute({ prompt: "Observe fixture" }, context), /fixture outage|500/);
+    assert.equal(requests, 1);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
