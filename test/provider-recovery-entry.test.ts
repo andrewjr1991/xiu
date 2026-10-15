@@ -8,6 +8,7 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { providerWindowsPrivacyFailureStage, verifyProviderWindowsPrivacy } from "../src/provider-config-migration.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommandIO } from "../src/commands/provider-recovery.js";
 import { DesktopProviderRecoveryController } from "../apps/desktop/main/provider-recovery-controller.js";
+import { useRealWindowsAcl } from "./helpers/windows-acl.js";
 
 const canary = "fixture_jE73r!M-only-not-a-real-key";
 async function fixture(t: TestContext) {
@@ -136,6 +137,8 @@ async function cli(home: string, args: string[]) {
 }
 
 test("real CLI early flags bypass broken startup and --yes cannot approve piped recovery", async (t) => {
+  // The spawned CLI verifies the exact owner-only DACL of files this process creates.
+  useRealWindowsAcl(t);
   const f = await fixture(t);
   await fs.writeFile(path.join(f.directory, "settings.json"), `broken ${canary}`);
   const diagnostics = await cli(f.root, ["--provider-config-diagnostics"]);
@@ -268,6 +271,7 @@ test("slow read-only recovery diagnostics leave active task stop and approval co
 });
 
 test("CLI current action keeps valid settings and clearly distinguishes dead-lock cleanup from restore", async (t) => {
+  useRealWindowsAcl(t); // this test verifies the settings file's real DACL below
   const f = await fixture(t);
   const current = '{"version":5,"profiles":[]}';
   await fs.writeFile(f.filename, current);

@@ -442,6 +442,7 @@ test("current recovery rejects missing, living, unknown, changed, malformed and 
 });
 
 test("Windows backups and replacement settings inherit only the owner DACL", { skip: process.platform !== "win32" }, async (t) => {
+  useRealWindowsAcl(t); // the readback below inspects the DACL the registry really applied
   const f = await upgraded(t);
   const script = `$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; foreach ($p in @($env:XIU_TEST_CONFIG,$env:XIU_TEST_DIRECTORY,$env:XIU_TEST_BACKUP)) { $acl=Get-Acl -LiteralPath $p; $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]); if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl') { throw 'Unsafe fixture ACL' } }`;
   await runFixturePowerShell("readback", script, { ...process.env, XIU_TEST_CONFIG: f.filename, XIU_TEST_DIRECTORY: f.recovery, XIU_TEST_BACKUP: path.join(f.recovery, `${f.backupId}.json`) });
