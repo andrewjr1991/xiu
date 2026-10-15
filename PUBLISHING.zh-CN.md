@@ -1,6 +1,6 @@
-## 0.20.11 npm release candidate (not published)
+## 0.20.11 npm 发布记录（2026-10-15）
 
-Complete typecheck, tests, build, package inspection and package smoke successfully before publishing. The registry returned E404 for 0.20.11 on 2026-10-15.
+维护者已于 2026-10-15 08:43 UTC 发布 npm 0.20.11（此前 08:18 UTC 发布 0.20.10）。Registry `latest` 为 0.20.11，integrity `sha512-YZORUuf4SxFFhBAbpgJrD+o6KOEzn8UfWr2tEaJruyAWBYFqYf7wPjqb3vVTEQUFNA4YZ1w7Ojt+eszYqI7cag==`；线程已把 tarball 解包与 main `c0ba7fd` 本地 `npm pack` 逐文件比对，完全一致（tarball 内记录的 gitHead 为更早的 5e22e79，因打包发生在提交之前）。main `c0ba7fd` 的 [CI 38707383288](https://github.com/andrewjr1991/xiu/actions/runs/38707383288) 九作业全部通过。GitHub 尚无 v0.20.10 / v0.20.11 标签与 Release；如需与 0.20.9 一样补 Release，请维护者打标签并上传 CI 制品。发布前检查命令保留如下：
 
 ```powershell
 npm.cmd login --registry=https://registry.npmjs.org/

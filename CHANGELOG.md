@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.20.11 (unreleased candidate)
+## 0.20.11 — 2026-10-15
+
+Published to npm by the maintainer from main `c0ba7fda8624bde8dcf4940ab1288d7f911db3d2` (the tarball's recorded `gitHead` is the earlier 5e22e79 because it was packed before the commit; its contents match a pack of c0ba7fd file for file). Registry `latest` is 0.20.11, integrity `sha512-YZORUuf4SxFFhBAbpgJrD+o6KOEzn8UfWr2tEaJruyAWBYFqYf7wPjqb3vVTEQUFNA4YZ1w7Ojt+eszYqI7cag==`. All nine CI jobs passed on c0ba7fd ([run 38707383288](https://github.com/andrewjr1991/xiu/actions/runs/38707383288)). No GitHub tag or Release exists yet for 0.20.10 or 0.20.11.
 - CLI: `/web configure managed` and the backend menu now select Xiu managed HTTPS search directly, without downloading or launching uv/free-search. The choice persists across restarts while retaining domain rules, timeout and proxy. Health-check HTTP 403 reports that device authentication has not started and points to enterprise gateway/proxy or server access rules; it does not reset credentials or bypass access controls.
 
 ## 0.20.10 — 2026-10-15

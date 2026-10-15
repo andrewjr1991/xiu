@@ -1,6 +1,6 @@
 # Xiu 0.20.11
 
-0.20.11 (unreleased): use /web configure managed to select Xiu managed HTTPS search without launching uv/free-search. /web configure also offers a managed-search menu option. Health-check 403 now explains the failed phase and proxy/access-rule checks.
+0.20.11 (npm, 2026-10-15): use /web configure managed to select Xiu managed HTTPS search without launching uv/free-search. /web configure also offers a managed-search menu option. Health-check 403 now explains the failed phase and proxy/access-rule checks.
 
 
 0.20.9 makes keyless local web search work out of the box: the Windows desktop installer includes a pinned uv, and the CLI downloads the same pinned, SHA-256 verified uv on first use when none is installed. It also brings the security fixes from the first CodeQL scan, faster provider saves on Windows, plainer web results in the CLI and a direct Settings entry for tool management. See [CHANGELOG](./CHANGELOG.md).
