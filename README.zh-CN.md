@@ -43,7 +43,7 @@ export OPENAI_API_KEY="..."
 xiu
 ```
 
-支持 OpenAI、Anthropic、Agnes、Ollama、LM Studio、vLLM 和任意 OpenAI 兼容服务；本地模型不需要官方 Key。
+支持 OpenAI、Anthropic、Agnes、Ollama、LM Studio、vLLM 和任意 OpenAI 兼容服务，并内置 DeepSeek、通义千问、智谱、Kimi、火山方舟、硅基流动、MiniMax 的模板（只预填地址和模型，不含 Key）；本地模型不需要官方 Key。
 
 在 Git 仓库里运行：
 

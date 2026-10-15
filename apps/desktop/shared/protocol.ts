@@ -107,6 +107,8 @@ export interface DesktopProviderUpsertRequest {
   features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
 }
 export interface DesktopProviderDeleteRequest { providerId: string; confirmed: true }
+/** A suggestion for the new-channel form. `vendor` presets are hosted OpenAI-compatible services; nothing is registered until saved. */
+export interface DesktopProviderTemplate extends DesktopProviderUpsertRequest { preset?: "kind" | "vendor" }
 
 export interface DesktopModelOption {
   id: string;
@@ -118,7 +120,7 @@ export interface DesktopModelOption {
 }
 
 export interface DesktopProviderSnapshot {
-  templates?: DesktopProviderUpsertRequest[];
+  templates?: DesktopProviderTemplate[];
   activeProviderId: string;
   activeModel: string;
   profiles: DesktopProviderProfile[];

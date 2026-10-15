@@ -43,7 +43,7 @@ export OPENAI_API_KEY="..."
 xiu
 ```
 
-OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM and any OpenAI-compatible endpoint are supported. Local models do not need an official API key.
+OpenAI, Anthropic, Agnes, Ollama, LM Studio, vLLM and any OpenAI-compatible endpoint are supported, with templates for DeepSeek, Qwen (DashScope), Zhipu GLM, Kimi, Volcengine Ark, SiliconFlow and MiniMax that prefill only the address and model, never a key. Local models do not need an official API key.
 
 Run it inside a Git repository:
 

@@ -129,10 +129,44 @@ export const BUILTIN_PROVIDER_PROFILES: readonly ProviderProfile[] = [
   },
 ];
 
+/**
+ * Vendor presets for OpenAI-compatible services that are common for Chinese
+ * users. They only prefill the base URL, a current default model and the
+ * usual environment-variable name, taken from each vendor's public API
+ * documentation as of 2026-10; users can edit every field. Xiu ships no keys
+ * and never registers a preset until the user adds it.
+ */
+export const VENDOR_PROVIDER_TEMPLATES: readonly ProviderProfile[] = [
+  { id: "deepseek", name: "DeepSeek", kind: "openai-compatible", model: "deepseek-chat", baseURL: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_API_KEY", contextWindow: 128_000, features: textAndTools() },
+  { id: "qwen", name: "通义千问（阿里云百炼）", kind: "openai-compatible", model: "qwen3-coder-plus", baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", apiKeyEnv: "DASHSCOPE_API_KEY", features: textAndTools() },
+  { id: "zhipu", name: "智谱 GLM", kind: "openai-compatible", model: "glm-4.6", baseURL: "https://open.bigmodel.cn/api/paas/v4", apiKeyEnv: "ZHIPUAI_API_KEY", features: textAndTools() },
+  { id: "kimi", name: "Kimi（Moonshot）", kind: "openai-compatible", model: "kimi-k2-turbo-preview", baseURL: "https://api.moonshot.cn/v1", apiKeyEnv: "MOONSHOT_API_KEY", features: textAndTools() },
+  { id: "ark", name: "火山方舟（豆包）", kind: "openai-compatible", model: "doubao-seed-1-6-250615", baseURL: "https://ark.cn-beijing.volces.com/api/v3", apiKeyEnv: "ARK_API_KEY", features: textAndTools() },
+  { id: "siliconflow", name: "硅基流动", kind: "openai-compatible", model: "deepseek-ai/DeepSeek-V3.1", baseURL: "https://api.siliconflow.cn/v1", apiKeyEnv: "SILICONFLOW_API_KEY", features: textAndTools() },
+  { id: "minimax", name: "MiniMax", kind: "openai-compatible", model: "MiniMax-M2", baseURL: "https://api.minimaxi.com/v1", apiKeyEnv: "MINIMAX_API_KEY", features: textAndTools() },
+];
+
+export interface ProviderTemplate extends ProviderProfile {
+  /** `kind`: one generic template per provider type; `vendor`: a hosted OpenAI-compatible service preset. */
+  preset: "kind" | "vendor";
+}
+
+/** Every template the add-provider flows offer, generic kinds first. None is registered until the user saves it. */
+export function providerTemplates(): ProviderTemplate[] {
+  return [
+    ...BUILTIN_PROVIDER_PROFILES.map((profile) => structuredClone({ ...profile, builtin: false, preset: "kind" as const })),
+    ...VENDOR_PROVIDER_TEMPLATES.map((profile) => structuredClone({ ...profile, builtin: false, preset: "vendor" as const })),
+  ];
+}
+
 /** Templates are suggestions only; they do not register providers or reserve IDs. */
 export function providerTemplate(kind: ProviderName): ProviderProfile | undefined {
   const template = BUILTIN_PROVIDER_PROFILES.find((profile) => profile.kind === kind);
   return template ? structuredClone({ ...template, builtin: false }) : undefined;
+}
+
+export function providerTemplateById(id: string): ProviderTemplate | undefined {
+  return providerTemplates().find((template) => template.id === id);
 }
 
 /** Inert host identity for configuration screens. Never sent to a provider. */

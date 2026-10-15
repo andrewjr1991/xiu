@@ -87,6 +87,12 @@ test("desktop fresh onboarding adds Agnes without an environment variable and ca
   assert.equal(empty.activeProviderId, "");
   const template = empty.templates!.find((profile) => profile.id === "agnes")!;
   assert.equal(template.apiKeyEnv, undefined);
+  assert.equal(template.preset, "kind");
+  const vendor = empty.templates!.find((profile) => profile.id === "deepseek")!;
+  assert.equal(vendor.preset, "vendor");
+  assert.equal(vendor.kind, "openai-compatible");
+  assert.equal(vendor.apiKeyEnv, "DEEPSEEK_API_KEY");
+  assert.equal(vendor.apiKey, undefined, "templates never carry credentials");
   const saved = await controller.upsert({ ...template, apiKey: "fresh-key-canary" });
   assert.equal(saved.activeProviderId, "agnes");
   assert.equal(saved.profiles[0]?.credential.source, "system");
