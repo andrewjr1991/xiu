@@ -22,7 +22,7 @@ function writeRecord(record) {
   try {
     fs.writeFileSync(temporary, JSON.stringify(record) + "\n", { flag: "wx", mode: 0o600 });
     replaceFileWithRetry(fs, temporary, request.recordFile);
-  } finally { try { fs.unlinkSync(temporary); } catch {} }
+  } finally { try { fs.unlinkSync(temporary); } catch { /* already renamed into place */ } }
 }
 function fail(error) {
   try {
@@ -40,11 +40,11 @@ function fail(error) {
       outputBytes: fs.statSync(request.outputFile).size });
     });
   } catch { /* Unwritable or unsafe storage must never trigger command execution. */ }
-  finally { try { fs.unlinkSync(requestFile); } catch {} }
+  finally { try { fs.unlinkSync(requestFile); } catch { /* the manager sweeps stale request files */ } }
   process.exitCode = 1;
 }
 (async () => {
-  try { fs.unlinkSync(__filename); } catch {}
+  try { fs.unlinkSync(__filename); } catch { /* the manager sweeps stale bootstrap files */ }
   request = JSON.parse(fs.readFileSync(requestFile, "utf8"));
   const claimed = lifecycleGate(fs, request.recordFile, () => {
     const current = readRecord();
@@ -52,7 +52,7 @@ function fail(error) {
     writeRecord({ ...current, pid: process.pid, updatedAt: new Date().toISOString() });
     return true;
   });
-  if (!claimed) { try { fs.unlinkSync(requestFile); } catch {} return; }
+  if (!claimed) { try { fs.unlinkSync(requestFile); } catch { /* cancelled before claim; the manager sweeps it */ } return; }
   if (loader) await import(loader);
   await import(source);
 })().catch(fail);
