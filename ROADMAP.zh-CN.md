@@ -33,7 +33,7 @@
 
 ## 下一步
 
-发布保持手动。0.20.9 已发布 GitHub 与 npm。Computer Use 后续（优先级 7）中不依赖 Windows 的代码项已完成（#51–#53），剩余的真机验证、快捷键分级范围和是否做桥程序完整性校验需要维护者决定。之后可选的方向：后台任务停止前校验进程启动时间以防 PID 复用（评估 S5，Linux 可本地验证，Windows 需额外进程查询）；桌面网页页签的 DNS 重绑定窗口（S3）；`security-policy.ts` 与 `assertTrustedSender` 的单测（S6）。每项单独提 PR，一次推送一轮 CI。
+发布保持手动。0.20.9 已发布 GitHub 与 npm。Computer Use 后续（优先级 7）中不依赖 Windows 的代码项已完成（#51–#53），剩余的真机验证、快捷键分级范围和是否做桥程序完整性校验需要维护者决定。之后可选的方向：后台任务停止前校验进程启动时间以防 PID 复用（评估 S5，Linux 可本地验证，Windows 需额外进程查询）；桌面网页页签的 DNS 重绑定窗口（S3）；`assertTrustedSender` 的单测（S6；`security-policy.ts` 已有覆盖，安装包冒烟已于 #55 增加 Electron fuses 回读校验）。每项单独提 PR，一次推送一轮 CI。
 
 ## 1. 项目定位
 
