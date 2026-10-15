@@ -13,13 +13,13 @@ import { SettingsStore } from "../settings.js";
 import { SkillRegistry, createSkillTools } from "../skills.js";
 import { createWindowsSystemCredentialStore } from "../system-credential-store.js";
 import { TaskRunJournal } from "../task-run.js";
-import { builtinTools } from "../tools.js";
+import { builtinTools, createBackgroundTools } from "../tools.js";
 import type { ApprovalRequest, ModelProvider } from "../types.js";
 import { AgentRuntimeAdapter } from "./agent-adapter.js";
 import { XiuRuntime } from "./xiu-runtime.js";
 import { createMcpManager, WorkspaceMcpService } from "./mcp-service.js";
 import { MultiAgentCoordinator, createMultiAgentTools, requireCompletedSubagent, selectSubagentTools } from "../multi-agent.js";
-import { configureBackgroundRuntime, configureBackgroundWorkspace, listBackgroundProcesses } from "../background.js";
+import { BackgroundManager, type BackgroundProcessSummary } from "../background.js";
 import { resolveNodeRuntime } from "../node-runtime.js";
 import { createWorkspaceWebSearchTools } from "./workspace-web-search.js";
 import { createProviderPolicy } from "./provider-policy.js";
@@ -39,7 +39,7 @@ export interface WorkspaceAgentHost {
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
   mcp?: WorkspaceMcpService;
   coordinator?: MultiAgentCoordinator;
-  background?: () => ReturnType<typeof listBackgroundProcesses>;
+  background?: () => BackgroundProcessSummary[];
   close?: () => Promise<void>;
 }
 
@@ -123,14 +123,15 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     approvalTail = next.catch(() => false);
     return next;
   };
-  const desktopDeferredTools = new Set(["start_background_command", "list_background_commands", "read_background_output", "stop_background_command"]);
-  configureBackgroundWorkspace(workspace, options.backgroundRoot);
-  configureBackgroundRuntime(await resolveNodeRuntime().catch(() => undefined));
+  // One manager per workspace host: a second desktop workspace gets its own.
+  const background = new BackgroundManager({ workspace, storageRoot: options.backgroundRoot, workerProgram: await resolveNodeRuntime().catch(() => undefined) });
+  background.prepareWorkspace();
   const initialMediaTools = createMediaTools(config);
   const initialComputerTools = options.computerUse ? createComputerUseTools(config, options.computerUse) : [];
   const mediaNames = new Set(initialMediaTools.map((tool) => tool.name));
   const tools = [
     ...builtinTools,
+    ...createBackgroundTools(background),
     ...createProjectIndexTools(projectIndex),
     ...createPlanTools(planManager),
     ...createSkillTools(skillRegistry),
@@ -160,7 +161,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     const childIndex = new ProjectIndex(context.cwd);
     await childIndex.initialize();
     const childPlan = new TaskPlanManager(undefined, task.mode === "shared_readonly", language);
-    const childTools = selectSubagentTools([...builtinTools.filter((tool) => !desktopDeferredTools.has(tool.name)), ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)], task.mode);
+    const childTools = selectSubagentTools([...builtinTools, ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)], task.mode);
     const child = new Agent({
       config: childConfig,
       provider: options.provider ?? createProvider(childConfig),
@@ -252,6 +253,6 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       agent.setAccessMode(mode === "full" ? "full" : "workspace");
     },
     management, sanitize,
-    coordinator, background: () => listBackgroundProcesses().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
+    coordinator, background: () => background.list().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
   };
 }

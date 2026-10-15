@@ -57,33 +57,43 @@ interface BackgroundRequest {
   command: string;
 }
 
-let workspace = process.cwd();
-let storageRoot = path.join(os.homedir(), ".xiu", "background");
-let workerProgram: string | undefined;
-let workerSource: string | undefined;
-export function configureBackgroundRuntime(program?: string, source?: string): void { workerProgram = program; workerSource = source; }
 
+const DEFAULT_STORAGE_ROOT = (): string => path.join(os.homedir(), ".xiu", "background");
 const DEFAULT_STARTING_GRACE_MS = 30_000;
 const DEFAULT_RUNNING_GRACE_MS = 10_000;
-let startingGraceMs = DEFAULT_STARTING_GRACE_MS;
-let runningGraceMs = DEFAULT_RUNNING_GRACE_MS;
-/**
- * How long a `starting`/`running` record without a live owner stays
- * recoverable before it is recorded as interrupted. Production keeps the
- * defaults; tests that deliberately kill a worker shorten the wait.
- */
-export function configureBackgroundHandoffGrace(options?: { startingMs?: number; runningMs?: number }): void {
-  startingGraceMs = options?.startingMs ?? DEFAULT_STARTING_GRACE_MS;
-  runningGraceMs = options?.runningMs ?? DEFAULT_RUNNING_GRACE_MS;
+
+export interface BackgroundManagerOptions {
+  /** The workspace whose jobs this manager owns. Records are keyed by its identity. */
+  workspace: string;
+  /** Where per-workspace job stores live. Defaults to `~/.xiu/background`. */
+  storageRoot?: string;
+  /** Node executable that runs the detached worker. Defaults to this process; Electron hosts must supply a real Node. */
+  workerProgram?: string;
+  /** Worker module override, used by packaged desktop builds and tests. */
+  workerSource?: string;
+  /**
+   * How long a `starting`/`running` record without a live owner stays
+   * recoverable before it is recorded as interrupted. Production keeps the
+   * defaults; tests that deliberately kill a worker shorten the wait.
+   */
+  handoffGrace?: { startingMs?: number; runningMs?: number };
 }
+
+export interface BackgroundProcessSummary {
+  id: string;
+  pid?: number;
+  command: string;
+  state: BackgroundProcessState;
+  running: boolean;
+  elapsedMs: number;
+  outputBytes: number;
+  failure?: BackgroundProcessRecord["failure"];
+}
+
 
 function workspaceIdentity(value: string): string {
   return createHash("sha256").update(path.resolve(value).replace(/\\/g, "/").toLowerCase()).digest("hex").slice(0, 24);
 }
-
-function workspaceDirectory(): string { return path.join(storageRoot, workspaceIdentity(workspace)); }
-function recordFile(id: string): string { return path.join(workspaceDirectory(), `${id}.json`); }
-function outputFile(id: string): string { return path.join(workspaceDirectory(), `${id}.log`); }
 
 function atomicWrite(file: string, value: unknown): void {
   ensureSafeDirectory(path.dirname(file));
@@ -109,9 +119,10 @@ function validFailure(value: unknown): value is NonNullable<BackgroundProcessRec
   const failure = value as NonNullable<BackgroundProcessRecord["failure"]>;
   return Object.keys(failure).length === 2 && FAILURE_STAGES.has(failure.stage) && FAILURE_CODES.has(failure.code);
 }
-function readFailure(id: string): BackgroundProcessRecord["failure"] {
+
+function readFailure(recordPath: string): BackgroundProcessRecord["failure"] {
   try {
-    const file = recordFile(id).replace(/\.json$/, ".failure.json");
+    const file = recordPath.replace(/\.json$/, ".failure.json");
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256) return undefined;
     const failure: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -199,150 +210,12 @@ const STOP_KILL_BUDGET_MS = 2_000;
 // taskkill /F is immediate; this only covers process teardown after it exits.
 const STOP_WINDOWS_BUDGET_MS = 1_000;
 
-function refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
-  const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
-  // Process creation and worker startup can be delayed substantially on loaded
-  // Windows hosts. Keep the record recoverable during that bounded handoff
-  // instead of prematurely converting a live launch into "interrupted".
-  const withinHandoffGrace = (record.state === "starting" && age < startingGraceMs) || (record.state === "running" && age < runningGraceMs);
-  if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !backgroundRecordAlive(record)) {
-    // The worker can publish its terminal record between the directory scan and
-    // this liveness check. Re-read after observing the worker exit so a stale
-    // in-memory "running" snapshot can never overwrite completed evidence.
-    try { return withBackgroundLifecycle(recordFile(record.id), () => {
-    const latest = readRecord(recordFile(record.id));
-    if (!latest || latest.state !== record.state || latest.updatedAt !== record.updatedAt || latest.pid !== record.pid || backgroundRecordAlive(latest)) return latest ?? record;
-    const failure = readFailure(record.id);
-    const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(record.id), ...(failure ? { failure } : {}) };
-    atomicWrite(recordFile(record.id), next);
-    return next;
-    }); } catch { return record; } // Unknown lock ownership is not terminal proof.
-  }
-  const size = outputSize(record.id);
-  return size === record.outputBytes ? record : { ...record, outputBytes: size };
-}
-
-function outputSize(id: string): number {
+function outputSize(file: string): number {
   try {
-    const stat = fs.lstatSync(outputFile(id));
+    const stat = fs.lstatSync(file);
     return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
   } catch { return 0; }
 }
-
-function workerInvocation(requestFile: string, bootstrapFile: string): { program: string; args: string[] } {
-  if (process.versions.electron && !workerProgram) throw new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime.");
-  const source = (workerSource ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
-  if (workerSource || fs.existsSync(source)) return { program: workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, pathToFileURL(source).href] };
-  const development = new URL("./background-worker.ts", import.meta.url).href;
-  // Resolve from this installation, never from the user's current directory.
-  const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-  return { program: workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, development, loader] };
-}
-
-export function configureBackgroundWorkspace(cwd: string, root = path.join(os.homedir(), ".xiu", "background")): void {
-  workspace = path.resolve(cwd);
-  storageRoot = path.resolve(root);
-  ensureSafeDirectory(workspaceDirectory());
-  const cutoff = Date.now() - 5 * 60_000;
-  for (const name of fs.readdirSync(workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.(?:request\.json|bootstrap\.cjs)$/.test(item))) {
-    const file = path.join(workspaceDirectory(), name);
-    try {
-      const stat = readLaunchMetadata(() => fs.lstatSync(file), () => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); });
-      if (stat?.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
-    } catch (error) {
-      // A worker or another manager can remove a launch artifact after this
-      // scan's readdir or lstat. Only an already-missing entry is harmless.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-}
-
-export function startBackgroundProcess(command: string, cwd = workspace): { id: string; pid?: number } {
-  if (!command.trim()) throw new Error("Background command cannot be empty.");
-  configureBackgroundWorkspace(cwd, storageRoot);
-  const id = randomUUID().replace(/-/g, "").slice(0, 12);
-  const directory = workspaceDirectory();
-  ensureSafeDirectory(directory);
-  const requestFile = path.join(directory, `.${id}.request.json`);
-  const bootstrapFile = path.join(directory, `.${id}.bootstrap.cjs`);
-  const now = new Date().toISOString();
-  const record: BackgroundProcessRecord = {
-    version: BACKGROUND_SCHEMA_VERSION,
-    id,
-    workspaceId: workspaceIdentity(workspace),
-    commandPreview: redactSecrets(command).replace(/\s+/g, " ").trim().slice(0, MAX_PREVIEW),
-    state: "starting",
-    startedAt: now,
-    updatedAt: now,
-    outputBytes: 0,
-  };
-  const request: BackgroundRequest = { version: BACKGROUND_SCHEMA_VERSION, recordFile: recordFile(id), outputFile: outputFile(id), cwd: workspace, command };
-  const invocation = workerInvocation(requestFile, bootstrapFile);
-  atomicWrite(recordFile(id), record);
-  fs.writeFileSync(requestFile, `${JSON.stringify(request)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  const failLaunch = (error: unknown): void => {
-    for (const file of [requestFile, bootstrapFile]) try { fs.unlinkSync(file); } catch { /* best effort */ }
-    // Capture paths now; another foreground workspace can be selected before
-    // spawn's asynchronous error event arrives.
-    withBackgroundLifecycle(request.recordFile, () => {
-    const current = readRecord(request.recordFile);
-    if (!current || current.state !== "starting") return;
-    const code = (error as NodeJS.ErrnoException)?.code;
-    const safeCode = ["ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM"].includes(code ?? "") ? code! : "UNKNOWN";
-    atomicWrite(request.recordFile, { ...current, state: "failed", updatedAt: new Date().toISOString(), failure: { stage: "bootstrap", code: safeCode } });
-    });
-  };
-  try {
-    fs.writeFileSync(bootstrapFile, BACKGROUND_BOOTSTRAP_SOURCE, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    const child = spawn(invocation.program, invocation.args, { detached: true, windowsHide: true, stdio: "ignore" });
-    child.once("error", (error) => { try { failLaunch(error); } catch { /* storage unavailable; don't crash the foreground */ } });
-    child.unref();
-    // The worker exclusively owns state transitions after spawn. A parent-side
-    // write here can race with, and overwrite, the worker's terminal record.
-    return { id, pid: child.pid };
-  } catch (error) {
-    failLaunch(error);
-    throw error;
-  }
-}
-
-export function listBackgroundProcesses(): Array<{ id: string; pid?: number; command: string; state: BackgroundProcessState; running: boolean; elapsedMs: number; outputBytes: number; failure?: BackgroundProcessRecord["failure"] }> {
-  let names: string[];
-  try { names = fs.readdirSync(workspaceDirectory()); }
-  catch { return []; }
-  return names.filter((name) => /^[a-f0-9]{12}\.json$/.test(name))
-    .map((name) => readRecord(path.join(workspaceDirectory(), name)))
-    .filter((record): record is BackgroundProcessRecord => Boolean(record))
-    .map(refresh)
-    .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
-    .map((record) => ({
-      id: record.id, pid: record.pid, command: record.commandPreview, state: record.state,
-      running: record.state === "starting" || record.state === "running",
-      elapsedMs: Math.max(0, Date.now() - Date.parse(record.startedAt)), outputBytes: record.outputBytes,
-      ...(record.failure ? { failure: record.failure } : {}),
-    }));
-}
-
-export function readBackgroundProcessOutput(id: string, cursor = 0, maximumBytes = 40_000): BackgroundOutputPage {
-  const record = readRecord(recordFile(id));
-  if (!record) throw new Error(`Unknown background process: ${id}`);
-  const file = outputFile(id);
-  const size = outputSize(id);
-  const safeCursor = Math.max(0, Math.min(Number.isSafeInteger(cursor) ? cursor : 0, size));
-  const start = Math.max(safeCursor, size - maximumBytes);
-  let text = "";
-  if (size > start) {
-    const descriptor = fs.openSync(file, "r");
-    try {
-      const buffer = Buffer.alloc(size - start);
-      fs.readSync(descriptor, buffer, 0, buffer.length, start);
-      text = buffer.toString("utf8");
-    } finally { fs.closeSync(descriptor); }
-  }
-  return { id, text: text || "No output yet.", cursor: start, nextCursor: size, outputBytes: size, state: refresh(record).state };
-}
-
-export function backgroundProcessOutput(id: string): string { return readBackgroundProcessOutput(id).text; }
 
 async function stopWindowsTree(pid: number): Promise<{ confirmed: boolean; timedOut: boolean }> {
   return new Promise((resolve) => {
@@ -375,98 +248,267 @@ export interface BackgroundStopResult {
   reusedPids: number[];
 }
 
-export async function stopBackgroundProcess(id: string): Promise<BackgroundStopResult> {
-  if (!/^[a-f0-9]{12}$/.test(id)) throw new Error("Invalid background process identifier.");
-  const file = recordFile(id);
-  const record = withBackgroundLifecycle(file, () => {
-    const current = readRecord(file);
-    if (!current) throw new Error(`Unknown background process: ${id}`);
-    if (!["starting", "running"].includes(current.state)) return current;
-    // Claim and cancellation use the same gate. An unclaimed launch can never
-    // publish a PID after this terminal write; a claimed worker sees stop intent
-    // before spawning, or has already published its owned shell PID.
-    const next = { ...current, stopRequested: true, ...(!current.pid && !current.childPid ? { state: "cancelled" as const } : {}), updatedAt: new Date().toISOString() };
-    atomicWrite(file, next);
-    return next;
-  });
-  if (!record) throw new Error(`Unknown background process: ${id}`);
-  if (!["starting", "running"].includes(record.state)) return { state: record.state, reusedPids: [] };
-  // Signal only processes that still are the recorded ones. A PID that now
-  // belongs to another program is never signalled, and neither is the process
-  // group named by a reused worker PID.
-  const reused = await reusedPids(record);
-  const pids = knownPids(record).filter((pid) => !reused.has(pid));
-  const groupPid = record.pid !== undefined && !reused.has(record.pid) ? record.pid : undefined;
-  const targets = [...pids, ...(process.platform !== "win32" && groupPid ? [-groupPid] : [])];
-  let confirmed = true;
-  let timedOut = false;
-  const ownedAlive = targets.some(processAlive);
-  if (ownedAlive) {
-    if (process.platform === "win32") {
-      for (const pid of pids) {
-        if (!processAlive(pid)) continue;
-        const result = await stopWindowsTree(pid);
-        confirmed = confirmed && result.confirmed;
-        timedOut = timedOut || result.timedOut;
+/**
+ * Owns the background jobs of one workspace. Every host (the CLI, each desktop
+ * workspace) holds its own instance, so nothing about the active workspace,
+ * storage root or worker runtime lives in module state (R4). The on-disk store
+ * is the shared truth: two managers over the same workspace see the same jobs.
+ */
+export class BackgroundManager {
+  readonly workspace: string;
+  readonly storageRoot: string;
+  private readonly workerProgram: string | undefined;
+  private readonly workerSource: string | undefined;
+  private readonly startingGraceMs: number;
+  private readonly runningGraceMs: number;
+
+  constructor(options: BackgroundManagerOptions) {
+    this.workspace = path.resolve(options.workspace);
+    this.storageRoot = path.resolve(options.storageRoot ?? DEFAULT_STORAGE_ROOT());
+    this.workerProgram = options.workerProgram;
+    this.workerSource = options.workerSource;
+    this.startingGraceMs = options.handoffGrace?.startingMs ?? DEFAULT_STARTING_GRACE_MS;
+    this.runningGraceMs = options.handoffGrace?.runningMs ?? DEFAULT_RUNNING_GRACE_MS;
+  }
+
+  private workspaceDirectory(): string { return path.join(this.storageRoot, workspaceIdentity(this.workspace)); }
+  private recordFile(id: string): string { return path.join(this.workspaceDirectory(), `${id}.json`); }
+  private outputFile(id: string): string { return path.join(this.workspaceDirectory(), `${id}.log`); }
+
+  /**
+   * Creates this workspace's store and removes launch artifacts older than
+   * five minutes that a crashed launcher left behind. `start()` calls it, so a
+   * host only needs it to surface storage problems early.
+   */
+  prepareWorkspace(): void {
+    ensureSafeDirectory(this.workspaceDirectory());
+    const cutoff = Date.now() - 5 * 60_000;
+    for (const name of fs.readdirSync(this.workspaceDirectory()).filter((item) => /^\.[a-f0-9]{12}\.(?:request\.json|bootstrap\.cjs)$/.test(item))) {
+      const file = path.join(this.workspaceDirectory(), name);
+      try {
+        const stat = readLaunchMetadata(() => fs.lstatSync(file), () => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); });
+        if (stat?.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(file);
+      } catch (error) {
+        // A worker or another manager can remove a launch artifact after this
+        // scan's readdir or lstat. Only an already-missing entry is harmless.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      confirmed = (await waitForProcessesExit(pids, STOP_WINDOWS_BUDGET_MS)) && confirmed;
-    } else {
-      let groupSignalled = false;
-      if (groupPid) {
-        try { process.kill(-groupPid, "SIGTERM"); groupSignalled = true; }
-        catch { try { process.kill(groupPid, "SIGTERM"); } catch { /* still unconfirmed */ } }
-      } else for (const pid of pids) {
-        if (processAlive(pid)) try { process.kill(pid, "SIGTERM"); } catch { /* still unconfirmed */ }
-      }
-      if (!(await waitForProcessesExit(targets, STOP_TERM_BUDGET_MS))) {
-        if (groupPid) {
-          try { process.kill(-groupPid, "SIGKILL"); groupSignalled = true; }
-          catch { /* fall back only to saved owned PIDs, without claiming tree confirmation */ }
-        }
-        if (!groupSignalled) for (const pid of pids) {
-          if (processAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch { /* still unconfirmed */ }
-        }
-      }
-      // Without a group to signal, confirmation rests on the owned PIDs alone.
-      confirmed = (await waitForProcessesExit(targets, STOP_KILL_BUDGET_MS)) && (groupSignalled || !groupPid);
     }
   }
-  // Preserve worker completion/cancellation that arrived while stopping, and
-  // recheck newly published startup PIDs before declaring cancellation.
-  return withBackgroundLifecycle(file, (): BackgroundStopResult => {
-  const latest = readRecord(file);
-  if (!latest) throw new Error("XIU_BACKGROUND_STOP_UNCONFIRMED: Background state is unavailable; process termination remains unknown.");
-  if (!confirmed || backgroundRecordAlive(latest, reused)) {
-    const code = timedOut ? "STOP_TIMEOUT" : "STOP_UNCONFIRMED";
-    try {
-      // A concurrent cancellation is an intent, not shutdown proof. Keep it
-      // cancellable if a known owned PID/group is still live. Preserve genuine
-      // completed/failed evidence rather than rewriting it from a stop request.
-      if (["starting", "running", "cancelled"].includes(latest.state)) {
-        atomicWrite(file, { ...latest, state: latest.state === "cancelled" ? "running" : latest.state, updatedAt: new Date().toISOString(), failure: latest.failure ?? { stage: "stop", code } });
-      }
-    } catch { /* Existing active evidence remains; never manufacture cancellation. */ }
-    throw new Error(`XIU_BACKGROUND_STOP_UNCONFIRMED: ${timedOut ? "Process cleanup timed out" : "Process termination could not be confirmed"}; the background task remains active or unknown.`);
-  }
-  if (!["starting", "running"].includes(latest.state)) return { state: latest.state, reusedPids: [...reused] };
-  // A still-unclaimed starting request has no known PID. Cancellation remains
-  // a terminal gate that the bootstrap/worker must observe before executing.
-  const bytes = (() => {
-    try {
-      const stat = fs.lstatSync(path.join(path.dirname(file), `${id}.log`));
-      return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
-    } catch { return 0; }
-  })();
-  // Every recorded process had already been replaced by an unrelated one: the
-  // job ended without publishing a result, so nothing was cancelled by us.
-  const alreadyGone = reused.size > 0 && !ownedAlive;
-  const state = alreadyGone ? "interrupted" as const : "cancelled" as const;
-  atomicWrite(file, { ...latest, state, updatedAt: new Date().toISOString(), outputBytes: bytes, ...(alreadyGone ? { failure: latest.failure ?? { stage: "stop" as const, code: "PID_REUSED" } } : {}) });
-  return { state, reusedPids: [...reused] };
-  });
-}
 
-/** Explicit test/admin cleanup. Normal Xiu shutdown deliberately does not call this. */
-export async function stopAllBackgroundProcesses(): Promise<void> {
-  await Promise.all(listBackgroundProcesses().filter((item) => item.running).map((item) => stopBackgroundProcess(item.id)));
+  private refresh(record: BackgroundProcessRecord): BackgroundProcessRecord {
+    const age = Date.now() - Date.parse(record.state === "starting" ? record.startedAt : record.updatedAt);
+    // Process creation and worker startup can be delayed substantially on loaded
+    // Windows hosts. Keep the record recoverable during that bounded handoff
+    // instead of prematurely converting a live launch into "interrupted".
+    const withinHandoffGrace = (record.state === "starting" && age < this.startingGraceMs) || (record.state === "running" && age < this.runningGraceMs);
+    if ((record.state === "starting" || record.state === "running") && !withinHandoffGrace && !backgroundRecordAlive(record)) {
+      // The worker can publish its terminal record between the directory scan and
+      // this liveness check. Re-read after observing the worker exit so a stale
+      // in-memory "running" snapshot can never overwrite completed evidence.
+      try { return withBackgroundLifecycle(this.recordFile(record.id), () => {
+      const latest = readRecord(this.recordFile(record.id));
+      if (!latest || latest.state !== record.state || latest.updatedAt !== record.updatedAt || latest.pid !== record.pid || backgroundRecordAlive(latest)) return latest ?? record;
+      const failure = readFailure(this.recordFile(record.id));
+      const next = { ...record, state: "interrupted" as const, updatedAt: new Date().toISOString(), outputBytes: outputSize(this.outputFile(record.id)), ...(failure ? { failure } : {}) };
+      atomicWrite(this.recordFile(record.id), next);
+      return next;
+      }); } catch { return record; } // Unknown lock ownership is not terminal proof.
+    }
+    const size = outputSize(this.outputFile(record.id));
+    return size === record.outputBytes ? record : { ...record, outputBytes: size };
+  }
+
+  private workerInvocation(requestFile: string, bootstrapFile: string): { program: string; args: string[] } {
+    if (process.versions.electron && !this.workerProgram) throw new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime.");
+    const source = (this.workerSource ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+    if (this.workerSource || fs.existsSync(source)) return { program: this.workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, pathToFileURL(source).href] };
+    const development = new URL("./background-worker.ts", import.meta.url).href;
+    // Resolve from this installation, never from the user's current directory.
+    const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+    return { program: this.workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, development, loader] };
+  }
+
+  start(command: string): { id: string; pid?: number } {
+    if (!command.trim()) throw new Error("Background command cannot be empty.");
+    this.prepareWorkspace();
+    const id = randomUUID().replace(/-/g, "").slice(0, 12);
+    const directory = this.workspaceDirectory();
+    ensureSafeDirectory(directory);
+    const requestFile = path.join(directory, `.${id}.request.json`);
+    const bootstrapFile = path.join(directory, `.${id}.bootstrap.cjs`);
+    const now = new Date().toISOString();
+    const record: BackgroundProcessRecord = {
+      version: BACKGROUND_SCHEMA_VERSION,
+      id,
+      workspaceId: workspaceIdentity(this.workspace),
+      commandPreview: redactSecrets(command).replace(/\s+/g, " ").trim().slice(0, MAX_PREVIEW),
+      state: "starting",
+      startedAt: now,
+      updatedAt: now,
+      outputBytes: 0,
+    };
+    const request: BackgroundRequest = { version: BACKGROUND_SCHEMA_VERSION, recordFile: this.recordFile(id), outputFile: this.outputFile(id), cwd: this.workspace, command };
+    const invocation = this.workerInvocation(requestFile, bootstrapFile);
+    atomicWrite(this.recordFile(id), record);
+    fs.writeFileSync(requestFile, `${JSON.stringify(request)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    const failLaunch = (error: unknown): void => {
+      for (const file of [requestFile, bootstrapFile]) try { fs.unlinkSync(file); } catch { /* best effort */ }
+      // Capture paths now; another foreground workspace can be selected before
+      // spawn's asynchronous error event arrives.
+      withBackgroundLifecycle(request.recordFile, () => {
+      const current = readRecord(request.recordFile);
+      if (!current || current.state !== "starting") return;
+      const code = (error as NodeJS.ErrnoException)?.code;
+      const safeCode = ["ENOENT", "EACCES", "EPERM", "EAGAIN", "ENOMEM"].includes(code ?? "") ? code! : "UNKNOWN";
+      atomicWrite(request.recordFile, { ...current, state: "failed", updatedAt: new Date().toISOString(), failure: { stage: "bootstrap", code: safeCode } });
+      });
+    };
+    try {
+      fs.writeFileSync(bootstrapFile, BACKGROUND_BOOTSTRAP_SOURCE, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      const child = spawn(invocation.program, invocation.args, { detached: true, windowsHide: true, stdio: "ignore" });
+      child.once("error", (error) => { try { failLaunch(error); } catch { /* storage unavailable; don't crash the foreground */ } });
+      child.unref();
+      // The worker exclusively owns state transitions after spawn. A parent-side
+      // write here can race with, and overwrite, the worker's terminal record.
+      return { id, pid: child.pid };
+    } catch (error) {
+      failLaunch(error);
+      throw error;
+    }
+  }
+
+  list(): BackgroundProcessSummary[] {
+    let names: string[];
+    try { names = fs.readdirSync(this.workspaceDirectory()); }
+    catch { return []; }
+    return names.filter((name) => /^[a-f0-9]{12}\.json$/.test(name))
+      .map((name) => readRecord(path.join(this.workspaceDirectory(), name)))
+      .filter((record): record is BackgroundProcessRecord => Boolean(record))
+      .map((record) => this.refresh(record))
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+      .map((record) => ({
+        id: record.id, pid: record.pid, command: record.commandPreview, state: record.state,
+        running: record.state === "starting" || record.state === "running",
+        elapsedMs: Math.max(0, Date.now() - Date.parse(record.startedAt)), outputBytes: record.outputBytes,
+        ...(record.failure ? { failure: record.failure } : {}),
+      }));
+  }
+
+  readOutput(id: string, cursor = 0, maximumBytes = 40_000): BackgroundOutputPage {
+    const record = readRecord(this.recordFile(id));
+    if (!record) throw new Error(`Unknown background process: ${id}`);
+    const file = this.outputFile(id);
+    const size = outputSize(this.outputFile(id));
+    const safeCursor = Math.max(0, Math.min(Number.isSafeInteger(cursor) ? cursor : 0, size));
+    const start = Math.max(safeCursor, size - maximumBytes);
+    let text = "";
+    if (size > start) {
+      const descriptor = fs.openSync(file, "r");
+      try {
+        const buffer = Buffer.alloc(size - start);
+        fs.readSync(descriptor, buffer, 0, buffer.length, start);
+        text = buffer.toString("utf8");
+      } finally { fs.closeSync(descriptor); }
+    }
+    return { id, text: text || "No output yet.", cursor: start, nextCursor: size, outputBytes: size, state: this.refresh(record).state };
+  }
+
+  output(id: string): string { return this.readOutput(id).text; }
+
+  async stop(id: string): Promise<BackgroundStopResult> {
+    if (!/^[a-f0-9]{12}$/.test(id)) throw new Error("Invalid background process identifier.");
+    const file = this.recordFile(id);
+    const record = withBackgroundLifecycle(file, () => {
+      const current = readRecord(file);
+      if (!current) throw new Error(`Unknown background process: ${id}`);
+      if (!["starting", "running"].includes(current.state)) return current;
+      // Claim and cancellation use the same gate. An unclaimed launch can never
+      // publish a PID after this terminal write; a claimed worker sees stop intent
+      // before spawning, or has already published its owned shell PID.
+      const next = { ...current, stopRequested: true, ...(!current.pid && !current.childPid ? { state: "cancelled" as const } : {}), updatedAt: new Date().toISOString() };
+      atomicWrite(file, next);
+      return next;
+    });
+    if (!record) throw new Error(`Unknown background process: ${id}`);
+    if (!["starting", "running"].includes(record.state)) return { state: record.state, reusedPids: [] };
+    // Signal only processes that still are the recorded ones. A PID that now
+    // belongs to another program is never signalled, and neither is the process
+    // group named by a reused worker PID.
+    const reused = await reusedPids(record);
+    const pids = knownPids(record).filter((pid) => !reused.has(pid));
+    const groupPid = record.pid !== undefined && !reused.has(record.pid) ? record.pid : undefined;
+    const targets = [...pids, ...(process.platform !== "win32" && groupPid ? [-groupPid] : [])];
+    let confirmed = true;
+    let timedOut = false;
+    const ownedAlive = targets.some(processAlive);
+    if (ownedAlive) {
+      if (process.platform === "win32") {
+        for (const pid of pids) {
+          if (!processAlive(pid)) continue;
+          const result = await stopWindowsTree(pid);
+          confirmed = confirmed && result.confirmed;
+          timedOut = timedOut || result.timedOut;
+        }
+        confirmed = (await waitForProcessesExit(pids, STOP_WINDOWS_BUDGET_MS)) && confirmed;
+      } else {
+        let groupSignalled = false;
+        if (groupPid) {
+          try { process.kill(-groupPid, "SIGTERM"); groupSignalled = true; }
+          catch { try { process.kill(groupPid, "SIGTERM"); } catch { /* still unconfirmed */ } }
+        } else for (const pid of pids) {
+          if (processAlive(pid)) try { process.kill(pid, "SIGTERM"); } catch { /* still unconfirmed */ }
+        }
+        if (!(await waitForProcessesExit(targets, STOP_TERM_BUDGET_MS))) {
+          if (groupPid) {
+            try { process.kill(-groupPid, "SIGKILL"); groupSignalled = true; }
+            catch { /* fall back only to saved owned PIDs, without claiming tree confirmation */ }
+          }
+          if (!groupSignalled) for (const pid of pids) {
+            if (processAlive(pid)) try { process.kill(pid, "SIGKILL"); } catch { /* still unconfirmed */ }
+          }
+        }
+        // Without a group to signal, confirmation rests on the owned PIDs alone.
+        confirmed = (await waitForProcessesExit(targets, STOP_KILL_BUDGET_MS)) && (groupSignalled || !groupPid);
+      }
+    }
+    // Preserve worker completion/cancellation that arrived while stopping, and
+    // recheck newly published startup PIDs before declaring cancellation.
+    return withBackgroundLifecycle(file, (): BackgroundStopResult => {
+    const latest = readRecord(file);
+    if (!latest) throw new Error("XIU_BACKGROUND_STOP_UNCONFIRMED: Background state is unavailable; process termination remains unknown.");
+    if (!confirmed || backgroundRecordAlive(latest, reused)) {
+      const code = timedOut ? "STOP_TIMEOUT" : "STOP_UNCONFIRMED";
+      try {
+        // A concurrent cancellation is an intent, not shutdown proof. Keep it
+        // cancellable if a known owned PID/group is still live. Preserve genuine
+        // completed/failed evidence rather than rewriting it from a stop request.
+        if (["starting", "running", "cancelled"].includes(latest.state)) {
+          atomicWrite(file, { ...latest, state: latest.state === "cancelled" ? "running" : latest.state, updatedAt: new Date().toISOString(), failure: latest.failure ?? { stage: "stop", code } });
+        }
+      } catch { /* Existing active evidence remains; never manufacture cancellation. */ }
+      throw new Error(`XIU_BACKGROUND_STOP_UNCONFIRMED: ${timedOut ? "Process cleanup timed out" : "Process termination could not be confirmed"}; the background task remains active or unknown.`);
+    }
+    if (!["starting", "running"].includes(latest.state)) return { state: latest.state, reusedPids: [...reused] };
+    // A still-unclaimed starting request has no known PID. Cancellation remains
+    // a terminal gate that the bootstrap/worker must observe before executing.
+    const bytes = (() => {
+      try {
+        const stat = fs.lstatSync(path.join(path.dirname(file), `${id}.log`));
+        return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
+      } catch { return 0; }
+    })();
+    // Every recorded process had already been replaced by an unrelated one: the
+    // job ended without publishing a result, so nothing was cancelled by us.
+    const alreadyGone = reused.size > 0 && !ownedAlive;
+    const state = alreadyGone ? "interrupted" as const : "cancelled" as const;
+    atomicWrite(file, { ...latest, state, updatedAt: new Date().toISOString(), outputBytes: bytes, ...(alreadyGone ? { failure: latest.failure ?? { stage: "stop" as const, code: "PID_REUSED" } } : {}) });
+    return { state, reusedPids: [...reused] };
+    });
+  }
+
+  /** Explicit test/admin cleanup. Normal Xiu shutdown deliberately does not call this. */
+  async stopAll(): Promise<void> {
+    await Promise.all(this.list().filter((item) => item.running).map((item) => this.stop(item.id)));
+  }
 }

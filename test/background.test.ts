@@ -8,21 +8,36 @@ import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import test from "node:test";
-import {
-  backgroundProcessOutput,
-  configureBackgroundHandoffGrace,
-  configureBackgroundWorkspace,
-  configureBackgroundRuntime,
-  listBackgroundProcesses,
-  readBackgroundProcessOutput,
-  startBackgroundProcess,
-  stopAllBackgroundProcesses,
-  stopBackgroundProcess,
-} from "../src/background.js";
+import { BackgroundManager, type BackgroundManagerOptions } from "../src/background.js";
 import { configureProcessStartTimeProbe } from "../src/process-identity.js";
 
 const loaderUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 const backgroundModuleUrl = pathToFileURL(path.resolve("src/background.ts")).href;
+
+// Each test stands in for one host process and holds one manager. The shared
+// helpers below (waitForTerminal, stopAllForCleanup) act on whichever manager
+// the running test configured, so swapping it mirrors a host restart.
+let options: BackgroundManagerOptions = { workspace: process.cwd(), storageRoot: path.join(os.tmpdir(), "xiu-background-unconfigured") };
+let manager = new BackgroundManager(options);
+function configureBackgroundWorkspace(cwd: string, root: string): void {
+  options = { ...options, workspace: cwd, storageRoot: root };
+  manager = new BackgroundManager(options);
+  manager.prepareWorkspace();
+}
+function configureBackgroundRuntime(program?: string, source?: string): void {
+  options = { ...options, workerProgram: program, workerSource: source };
+  manager = new BackgroundManager(options);
+}
+function configureBackgroundHandoffGrace(grace?: BackgroundManagerOptions["handoffGrace"]): void {
+  options = { ...options, handoffGrace: grace };
+  manager = new BackgroundManager(options);
+}
+const startBackgroundProcess = (command: string) => manager.start(command);
+const listBackgroundProcesses = () => manager.list();
+const readBackgroundProcessOutput = (id: string, cursor?: number) => manager.readOutput(id, cursor);
+const backgroundProcessOutput = (id: string) => manager.output(id);
+const stopBackgroundProcess = (id: string) => manager.stop(id);
+const stopAllBackgroundProcesses = () => manager.stopAll();
 
 test("cancellation before bootstrap claims its PID permanently gates a delayed launch", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-unclaimed-"));
@@ -38,7 +53,7 @@ test("cancellation before bootstrap claims its PID permanently gates a delayed l
     return Object.assign(new EventEmitter(), { unref() {} });
   });
   syncBuiltinESMExports();
-  const job = startBackgroundProcess(nodeCommand(script), root);
+  const job = startBackgroundProcess(nodeCommand(script));
   await stopBackgroundProcess(job.id);
   t.mock.restoreAll(); syncBuiltinESMExports();
   assert.ok(launch);
@@ -180,7 +195,7 @@ test("background commands can be listed, inspected, and stopped", async (t) => {
   const command = process.platform === "win32"
     ? "Write-Output 'ready'; while ($true) { Start-Sleep -Seconds 1 }"
     : "node -e \"console.log('ready'); setInterval(() => {}, 1000)\"";
-  const started = startBackgroundProcess(command, process.cwd());
+  const started = startBackgroundProcess(command);
   // Parallel test workers can delay a new PowerShell + Node process well past
   // two seconds on loaded Windows hosts. Poll with a bounded wall-clock budget.
   for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(started.id).includes("ready"); attempt++) {
@@ -211,7 +226,7 @@ test("background state and output cursors survive a new foreground manager", asy
   const signal = path.join(root, "emit-second");
   const worker = `const fs=require('node:fs');console.log('first');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(signal)})){clearInterval(timer);console.log('second');}},50);setTimeout(()=>{clearInterval(timer);},60000);`;
   const encoded = Buffer.from(worker).toString("base64");
-  const started = startBackgroundProcess(`node -e "eval(Buffer.from('${encoded}','base64').toString())"`, process.cwd());
+  const started = startBackgroundProcess(`node -e "eval(Buffer.from('${encoded}','base64').toString())"`);
   for (let attempt = 0; attempt < 300 && !backgroundProcessOutput(started.id).includes("first"); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const first = readBackgroundProcessOutput(started.id, 0);
   assert.match(first.text, /first/);
@@ -232,7 +247,7 @@ test("completed detached commands retain exit evidence", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-complete-"));
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
-  const started = startBackgroundProcess("node -e \"console.log('done')\"", process.cwd());
+  const started = startBackgroundProcess("node -e \"console.log('done')\"");
   for (let attempt = 0; attempt < 300; attempt++) {
     const record = listBackgroundProcesses().find((item) => item.id === started.id);
     if (record && !record.running) {
@@ -249,7 +264,7 @@ test("rapid detached commands cannot have terminal evidence overwritten by the l
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-rapid-"));
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
-  const started = Array.from({ length: 8 }, (_, index) => startBackgroundProcess(`node -e "console.log(${index})"`, process.cwd()));
+  const started = Array.from({ length: 8 }, (_, index) => startBackgroundProcess(`node -e "console.log(${index})"`));
   for (let attempt = 0; attempt < 450; attempt++) {
     const records = listBackgroundProcesses().filter((item) => started.some((entry) => entry.id === item.id));
     if (records.length === started.length && records.every((item) => !item.running)) {
@@ -271,9 +286,9 @@ test("a detached job survives the launcher process exiting and is discoverable b
   t.after(() => fs.rm(workspace, { recursive: true, force: true }));
   const script = [
     `import { writeSync } from "node:fs";`,
-    `import { configureBackgroundWorkspace, startBackgroundProcess } from ${JSON.stringify(backgroundModuleUrl)};`,
-    `configureBackgroundWorkspace(${JSON.stringify(workspace)}, ${JSON.stringify(root)});`,
-    `writeSync(1, startBackgroundProcess(${JSON.stringify(command)}, ${JSON.stringify(workspace)}).id + "\\n");`,
+    `import { BackgroundManager } from ${JSON.stringify(backgroundModuleUrl)};`,
+    `const manager = new BackgroundManager({ workspace: ${JSON.stringify(workspace)}, storageRoot: ${JSON.stringify(root)} });`,
+    `writeSync(1, manager.start(${JSON.stringify(command)}).id + "\\n");`,
     // No startup acknowledgement, grace delay, or retained pipe to the worker.
     `process.exit(0);`,
   ].join("\n");
@@ -297,7 +312,7 @@ test("persisted background previews and output redact common credential values",
   configureBackgroundWorkspace(process.cwd(), root);
   t.after(() => removeBackgroundTestRoot(root));
   const secret = "background-secret-canary";
-  const started = startBackgroundProcess(`node -e "console.log('api_key=${secret}')"`, process.cwd());
+  const started = startBackgroundProcess(`node -e "console.log('api_key=${secret}')"`);
   for (let attempt = 0; attempt < 300 && listBackgroundProcesses().find((item) => item.id === started.id)?.running; attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
   const serialized = JSON.stringify(listBackgroundProcesses()) + backgroundProcessOutput(started.id);
   assert.doesNotMatch(serialized, new RegExp(secret));
@@ -311,9 +326,9 @@ test("source background worker resolves its loader outside the repository", asyn
   const workload = path.join(root, "external.mjs");
   await fs.writeFile(workload, "console.log('external-cwd-ready');\n");
   const script = [
-    `import { configureBackgroundWorkspace, startBackgroundProcess } from ${JSON.stringify(backgroundModuleUrl)};`,
-    `configureBackgroundWorkspace(${JSON.stringify(root)}, ${JSON.stringify(root)});`,
-    `console.log(startBackgroundProcess(${JSON.stringify(nodeCommand(workload))}).id);`,
+    `import { BackgroundManager } from ${JSON.stringify(backgroundModuleUrl)};`,
+    `const manager = new BackgroundManager({ workspace: ${JSON.stringify(root)}, storageRoot: ${JSON.stringify(root)} });`,
+    `console.log(manager.start(${JSON.stringify(nodeCommand(workload))}).id);`,
   ].join("\n");
   const id = await runLauncher(script, root);
   configureBackgroundWorkspace(root, root);
@@ -330,10 +345,9 @@ test("worker import failure after immediate launcher exit leaves bounded non-sec
   await fs.writeFile(source, `throw Object.assign(new Error(${JSON.stringify(canary.repeat(10_000))}), { code: 'ERR_MODULE_NOT_FOUND' });`);
   const script = [
     `import { writeSync } from "node:fs";`,
-    `import { configureBackgroundWorkspace, configureBackgroundRuntime, startBackgroundProcess } from ${JSON.stringify(backgroundModuleUrl)};`,
-    `configureBackgroundWorkspace(${JSON.stringify(root)}, ${JSON.stringify(root)});`,
-    `configureBackgroundRuntime(${JSON.stringify(process.execPath)}, ${JSON.stringify(source)});`,
-    `writeSync(1, startBackgroundProcess("echo command-must-not-run").id + "\\n");`,
+    `import { BackgroundManager } from ${JSON.stringify(backgroundModuleUrl)};`,
+    `const manager = new BackgroundManager({ workspace: ${JSON.stringify(root)}, storageRoot: ${JSON.stringify(root)}, workerProgram: ${JSON.stringify(process.execPath)}, workerSource: ${JSON.stringify(source)} });`,
+    `writeSync(1, manager.start("echo command-must-not-run").id + "\\n");`,
     `process.exit(0);`,
   ].join("\n");
   const id = await runLauncher(script);
@@ -380,8 +394,8 @@ test("missing worker runtime records asynchronous spawn failure in its original 
 test("missing command directory fails without leaving a starting job or replaying the command", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-background-shell-error-"));
   t.after(() => removeBackgroundTestRoot(root));
-  configureBackgroundWorkspace(root, root);
-  const started = startBackgroundProcess("echo command-must-not-run", path.join(root, "missing-workspace"));
+  configureBackgroundWorkspace(path.join(root, "missing-workspace"), root);
+  const started = startBackgroundProcess("echo command-must-not-run");
   const record = await waitForTerminal(started.id);
   assert.equal(record.state, "failed");
   assert.deepEqual(record.failure, { stage: "shell", code: "ENOENT" });

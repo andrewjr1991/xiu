@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 import { Agent, BackgroundApprovalRequiredError } from "./agent.js";
 import { createProviderPolicy } from "./runtime/provider-policy.js";
-import { configureBackgroundWorkspace, listBackgroundProcesses } from "./background.js";
+import { BackgroundManager } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
@@ -46,7 +46,7 @@ import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
-import { builtinTools } from "./tools.js";
+import { builtinTools, createBackgroundTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatTaskDiagnosticSummary } from "./diagnostics.js";
@@ -369,7 +369,8 @@ async function main(): Promise<void> {
   let managedWebSearchAuth = settings.webSearch?.managedAuth === "xiu-device" && settings.webSearch.authBaseURL
     ? new ManagedWebSearchAuth(settings.webSearch.authBaseURL, undefined, createWebFetch(settings.webSearch.proxy))
     : undefined;
-  configureBackgroundWorkspace(config.cwd);
+  const background = new BackgroundManager({ workspace: config.cwd });
+  background.prepareWorkspace();
   const taskRunJournal = new TaskRunJournal(config.cwd);
   let recoverySource: InterruptedTaskRun | undefined;
   let confirmedRecoveryTask: string | undefined;
@@ -807,7 +808,7 @@ async function main(): Promise<void> {
         await childIndex.initialize();
         const childPlan = new TaskPlanManager(undefined, task.mode === "shared_readonly", language);
         const childCheckpoint = new CheckpointManager(context.cwd);
-        const candidateTools = [...builtinTools, ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)];
+        const candidateTools = [...builtinTools, ...createBackgroundTools(background), ...createProjectIndexTools(childIndex), ...createPlanTools(childPlan)];
         const childTools = selectSubagentTools(candidateTools, task.mode);
         const childAgent = new Agent({
           config: childConfig,
@@ -903,7 +904,7 @@ async function main(): Promise<void> {
     const coordinatorTools = createMultiAgentTools(coordinator);
     const buildBaseTools = (toolConfig = config) => {
       const webAuth = managedWebSearchAuth;
-      return [...builtinTools, ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, settings.webSearch?.proxy, {
+      return [...builtinTools, ...createBackgroundTools(background), ...createProjectIndexTools(projectIndex), ...createPlanTools(planManager), ...createSkillTools(skillRegistry), ...createMediaTools(toolConfig), ...createWebSearchTools(settings.webSearch, settings.webSearch?.proxy, {
         ...(webAuth ? { getBearerToken: (signal) => webAuth.getBearerToken(signal) } : {}),
       }), ...coordinatorTools];
     };
@@ -1518,7 +1519,7 @@ async function main(): Promise<void> {
         planMode: dashboard.planMode,
         mcpTools: mcpManager.tools().length,
         agents: agentRuns.reduce((count, run) => count + run.tasks.filter((task) => task.status === "running").length, 0),
-        backgroundTasks: listBackgroundProcesses().filter((item) => item.running).length,
+        backgroundTasks: background.list().filter((item) => item.running).length,
         phase: activeStep ? `${activeStep.status}:${activeStep.title}` : undefined,
         language,
       });
@@ -2040,7 +2041,7 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (await handleBackgroundCommand(task, { config, language })) continue;
+      if (await handleBackgroundCommand(task, { config, language, background })) continue;
       if (await handleReportCommand(task, { agent, config, language, securityAudit, taskRunJournal })) continue;
       if (await handleCredentialCommand(task, { auditCredential, config, ensureSystemCredentialStore, formatCredentialProbe, language, printCredentialStatus, providerRegistry, switchProviderProfile })) continue;
       if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {
@@ -2064,7 +2065,7 @@ async function main(): Promise<void> {
           `调用：模型 ${current.stats.modelCalls} / 工具 ${current.stats.toolCalls}`, `压缩次数：${current.stats.compactions}`, `活跃时间：${(current.stats.activeMs / 1000).toFixed(1)} 秒`,
           `最近任务诊断：${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "暂无"}`,
           indexStatusZh, `MCP：${mcpManager.status().filter((server) => server.state === "connected").length} 个服务 / ${mcpManager.tools().length} 个工具`,
-          `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${listBackgroundProcesses().filter((item) => item.running).length} 个运行中`,
+          `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${background.list().filter((item) => item.running).length} 个运行中`,
           `活动：${activities.list().length} 条记录（/details）`,
         ].join("\n") + "\n" : [
           `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
@@ -2074,7 +2075,7 @@ async function main(): Promise<void> {
           `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`, `Compactions: ${current.stats.compactions}`, `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,
           `Latest task diagnostics: ${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "none"}`,
           indexStatusEn, `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
-          `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`, `Background: ${listBackgroundProcesses().filter((item) => item.running).length} running`,
+          `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`, `Background: ${background.list().filter((item) => item.running).length} running`,
           `Activities: ${activities.list().length} recorded (/details)`,
         ].join("\n") + "\n");
         continue;

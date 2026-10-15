@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import fg from "./glob.js";
 import iconv from "iconv-lite";
-import { listBackgroundProcesses, readBackgroundProcessOutput, startBackgroundProcess, stopBackgroundProcess } from "./background.js";
+import type { BackgroundManager } from "./background.js";
 import { structuredExtractTools } from "./structured-extract.js";
 import type { AgentTool, ToolContext, ToolResult } from "./types.js";
 import { normalizeToolResult, toolResult, toolErrorCode } from "./tool-result.js";
@@ -593,68 +593,6 @@ export const builtinTools: AgentTool[] = [
     },
   },
   {
-    name: "start_background_command",
-    description: "Start a durable long-running command such as a development server under Xiu management. It can continue after Xiu exits; inspect or stop it explicitly with the background-process tools.",
-    risk: (input) => classifyCommand(stringArg(input, "command")) === "dangerous" ? "dangerous" : "execute",
-    changesWorkspace: (input) => classifyCommand(stringArg(input, "command")) !== "read",
-    inputSchema: {
-      type: "object",
-      properties: { command: { type: "string" } },
-      required: ["command"],
-      additionalProperties: false,
-    },
-    describe: (input) => `start in background: ${String(input.command)}`,
-    async execute(input, context) {
-      const started = startBackgroundProcess(stringArg(input, "command"), context.cwd);
-      return `Background process ${started.id} started (PID ${started.pid ?? "unknown"}).`;
-    },
-  },
-  {
-    name: "list_background_commands",
-    description: "List commands running in the background during this Xiu session.",
-    risk: "read",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    describe: () => "list background commands",
-    async execute() {
-      const running = listBackgroundProcesses();
-      return running.length ? JSON.stringify(running, null, 2) : "No background commands.";
-    },
-  },
-  {
-    name: "read_background_output",
-    description: "Read persisted output from a managed background command. Pass the returned nextCursor to fetch only new output later.",
-    risk: "read",
-    inputSchema: {
-      type: "object",
-      properties: { id: { type: "string" }, cursor: { type: "integer", minimum: 0 } },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    describe: (input) => `read background output ${String(input.id)}`,
-    async execute(input) {
-      const page = readBackgroundProcessOutput(stringArg(input, "id"), typeof input.cursor === "number" ? input.cursor : 0);
-      return truncate(JSON.stringify(page, null, 2));
-    },
-  },
-  {
-    name: "stop_background_command",
-    description: "Stop a command previously started and tracked by Xiu.",
-    risk: "execute",
-    inputSchema: {
-      type: "object",
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    },
-    describe: (input) => `stop background command ${String(input.id)}`,
-    async execute(input) {
-      const id = stringArg(input, "id");
-      const result = await stopBackgroundProcess(id);
-      if (result.state === "interrupted") return `Background process ${id} had already exited: its recorded process numbers (${result.reusedPids.join(", ")}) now belong to unrelated programs, which were left alone. The job is recorded as interrupted.`;
-      return `Background process ${id} stopped.`;
-    },
-  },
-  {
     name: "git_status",
     description: "Show concise Git repository and working-tree status without invoking a shell.",
     risk: "read",
@@ -744,6 +682,78 @@ export const builtinTools: AgentTool[] = [
     },
   },
 ];
+
+/**
+ * Background-job tools bound to one workspace's manager. Hosts add them next to
+ * `builtinTools`; the manager, not a tool argument, decides which workspace a
+ * job belongs to.
+ */
+export function createBackgroundTools(background: BackgroundManager): AgentTool[] {
+  return [
+  {
+    name: "start_background_command",
+    description: "Start a durable long-running command such as a development server under Xiu management. It can continue after Xiu exits; inspect or stop it explicitly with the background-process tools.",
+    risk: (input) => classifyCommand(stringArg(input, "command")) === "dangerous" ? "dangerous" : "execute",
+    changesWorkspace: (input) => classifyCommand(stringArg(input, "command")) !== "read",
+    inputSchema: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+      additionalProperties: false,
+    },
+    describe: (input) => `start in background: ${String(input.command)}`,
+    async execute(input) {
+      const started = background.start(stringArg(input, "command"));
+      return `Background process ${started.id} started (PID ${started.pid ?? "unknown"}).`;
+    },
+  },
+  {
+    name: "list_background_commands",
+    description: "List commands running in the background during this Xiu session.",
+    risk: "read",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    describe: () => "list background commands",
+    async execute() {
+      const running = background.list();
+      return running.length ? JSON.stringify(running, null, 2) : "No background commands.";
+    },
+  },
+  {
+    name: "read_background_output",
+    description: "Read persisted output from a managed background command. Pass the returned nextCursor to fetch only new output later.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, cursor: { type: "integer", minimum: 0 } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    describe: (input) => `read background output ${String(input.id)}`,
+    async execute(input) {
+      const page = background.readOutput(stringArg(input, "id"), typeof input.cursor === "number" ? input.cursor : 0);
+      return truncate(JSON.stringify(page, null, 2));
+    },
+  },
+  {
+    name: "stop_background_command",
+    description: "Stop a command previously started and tracked by Xiu.",
+    risk: "execute",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    describe: (input) => `stop background command ${String(input.id)}`,
+    async execute(input) {
+      const id = stringArg(input, "id");
+      const result = await background.stop(id);
+      if (result.state === "interrupted") return `Background process ${id} had already exited: its recorded process numbers (${result.reusedPids.join(", ")}) now belong to unrelated programs, which were left alone. The job is recorded as interrupted.`;
+      return `Background process ${id} stopped.`;
+    },
+  },
+  ];
+}
 
 export async function executeTool(tool: AgentTool, input: Record<string, unknown>, context: ToolContext): Promise<string> {
   return (await executeToolResult(tool, input, context)).output;
