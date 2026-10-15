@@ -31,7 +31,7 @@ Desktop preview: download `Xiu-<version>-x64-<commit>-unsigned.exe` from [Releas
 
 ## Quick start
 
-Xiu ships with no preconfigured providers. Start it and add a model provider with `/provider add`, or set an environment variable first:
+Xiu ships with no preconfigured providers. Starting `xiu` in a terminal opens a three-step wizard: choose a provider (OpenAI, Anthropic, local Ollama, or presets such as DeepSeek and Qwen) → enter the key or server URL → Xiu tests the connection and lists the models, saving the profile only after the test passes; Esc leaves nothing behind. `/provider add` adds more later. You can also set an environment variable first; the wizard lists any it detects as the first choice:
 
 ```powershell
 $env:OPENAI_API_KEY = "..."

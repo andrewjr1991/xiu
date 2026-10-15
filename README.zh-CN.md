@@ -31,7 +31,7 @@ Windows PowerShell 中若 `npm.ps1` 被执行策略或 ConstrainedLanguage 限�
 
 ## 快速开始
 
-Xiu 首次安装没有预置渠道。启动后用 `/provider add` 添加一个模型渠道，或先设置环境变量：
+Xiu 首次安装没有预置渠道。在终端里启动 `xiu` 会进入三步向导：选择渠道（OpenAI、Anthropic、本地 Ollama，或 DeepSeek、通义千问等国内模板）→ 填 Key 或服务地址 → 自动测试连接并拉取模型列表，测试通过后才保存配置，中途 Esc 退出不会留下半成品。之后随时可用 `/provider add` 再添加。也可以先设置环境变量，向导会把检测到的变量列在第一项：
 
 ```powershell
 $env:OPENAI_API_KEY = "..."
