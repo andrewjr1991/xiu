@@ -19,6 +19,21 @@ export function isTrustedRendererUrl(value: string): boolean {
   }
 }
 
+/** The parts of Electron's IpcMainInvokeEvent the trust check reads; kept structural so tests need no Electron. */
+export interface IpcSenderLike { sender: { id: number }; senderFrame?: { url: string } | null }
+
+/**
+ * Privileged channels accept only the main window's own renderer, loaded from
+ * the bundled `xiu-app://bundle` origin. `trustedContentsId` is that window's
+ * webContents id, or undefined when no main window exists, which rejects all.
+ */
+export function assertTrustedIpcSender(event: IpcSenderLike, trustedContentsId: number | undefined): void {
+  const url = event.senderFrame?.url ?? "";
+  if (trustedContentsId === undefined || event.sender.id !== trustedContentsId || !isTrustedRendererUrl(url)) {
+    throw new Error("Rejected IPC from an untrusted renderer.");
+  }
+}
+
 export function resolveRendererAsset(rendererRoot: string, pathname: string): string | undefined {
   let decoded: string;
   try { decoded = decodeURIComponent(pathname === "/" ? "/index.html" : pathname); }

@@ -69,8 +69,11 @@ export interface BackgroundManagerOptions {
   storageRoot?: string;
   /** Node executable that runs the detached worker. Defaults to this process; Electron hosts must supply a real Node. */
   workerProgram?: string;
-  /** Worker module override, used by packaged desktop builds and tests. */
-  workerSource?: string;
+  /**
+   * Worker module override, used by packaged desktop builds and tests. A
+   * function is called on every start, so a host can verify the file first.
+   */
+  workerSource?: string | (() => string);
   /**
    * How long a `starting`/`running` record without a live owner stays
    * recoverable before it is recorded as interrupted. Production keeps the
@@ -258,7 +261,7 @@ export class BackgroundManager {
   readonly workspace: string;
   readonly storageRoot: string;
   private readonly workerProgram: string | undefined;
-  private readonly workerSource: string | undefined;
+  private readonly workerSource: string | (() => string) | undefined;
   private readonly startingGraceMs: number;
   private readonly runningGraceMs: number;
 
@@ -321,8 +324,9 @@ export class BackgroundManager {
 
   private workerInvocation(requestFile: string, bootstrapFile: string): { program: string; args: string[] } {
     if (process.versions.electron && !this.workerProgram) throw new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime.");
-    const source = (this.workerSource ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
-    if (this.workerSource || fs.existsSync(source)) return { program: this.workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, pathToFileURL(source).href] };
+    const configured = typeof this.workerSource === "function" ? this.workerSource() : this.workerSource;
+    const source = (configured ?? fileURLToPath(new URL(process.versions.electron ? "./background-worker.mjs" : "./background-worker.js", import.meta.url))).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+    if (configured || fs.existsSync(source)) return { program: this.workerProgram ?? process.execPath, args: [bootstrapFile, requestFile, pathToFileURL(source).href] };
     const development = new URL("./background-worker.ts", import.meta.url).href;
     // Resolve from this installation, never from the user's current directory.
     const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;

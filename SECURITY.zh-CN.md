@@ -132,6 +132,11 @@
 - 新权限、新凭证后端和外部写入必须有失败、取消、回退和企业策略场景。
 - 测试失败、安全边界不明确或真实验收缺失时，不发布为稳定版本。
 
+### 打包组件完整性（0.21）
+
+- Windows 安装包的 `app.asar` 由 Electron fuse（EmbeddedAsarIntegrityValidation、OnlyLoadAppFromAsar）校验，但 electron-builder 按 `asarUnpack` 解到 `app.asar.unpacked/` 的文件只是普通磁盘文件。构建时把这些文件的 SHA-256 写进 asar 内的 `dist/main/unpacked-manifest.json`；主进程每次启动后台 worker（`background-worker.mjs`）或 Windows 电脑操作桥程序（`XiuComputerBridge.exe`）前，先读取解包副本并与清单比对，清单缺失、条目缺失、文件不可读或哈希不一致都拒绝启动并提示重新安装，不回退到未校验的副本。
+- 该检查只覆盖 Xiu 自己启动的两个组件；`node-pty` 的原生模块由 Node 直接加载，不在清单内。它也不是代码签名：能替换 asar 的攻击者同样能替换清单，签名仍待证书。开发目录（未打包）没有解包副本，不做检查。
+
 ### 桌面手动网页页签（0.20.2 未发布候选）
 
 该页签不是 Agent WebSearch，也不向任务提供网页正文或执行接口。主进程持有独立的非持久 WebContentsView，关闭 Node 集成，启用 sandbox/contextIsolation/webSecurity，不注入 preload；它不能调用受信 Renderer 的 IPC、MCP、凭据、文件或命令工具。网页网络请求和重定向逐次复用公开 HTTPS URL/DNS 门禁，仅允许 GET/HEAD；门禁解析域名用的是该页签会话自己的 Chromium 解析器（`session.resolveHost`），检查与随后的连接共用同一份 DNS 应答缓存，而不是 Node 与 Chromium 各查一次；域名一旦解析到本机或私网地址，本次网页会话内对它的所有请求都被取消，改回公网地址也不恢复。残余窗口是缓存条目在检查与连接之间过期，以及解析器本身被劫持；由于页签只接受 HTTPS 且开启 webSecurity，到达任何地址都仍须通过该域名的证书校验。新窗口、下载和权限请求拒绝。不得将其宣传为完整浏览器、可登录浏览器或 OS 安全沙箱。会话不共享 Xiu 渠道凭据，关闭后清理临时存储。应用确认弹窗/菜单出现和页签切换时隐藏网页视图，避免远程内容覆盖可信操作区。既有 Agent 搜索只读、来源不可信以及任务审批/Plan/检查点边界不变。
