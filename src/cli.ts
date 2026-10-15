@@ -21,6 +21,7 @@ import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
+import { formatUserFacingError } from "./user-facing-errors.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
@@ -300,7 +301,7 @@ async function main(): Promise<void> {
   const ensureSystemCredentialStore = async () => systemCredentialStore ??= await createWindowsSystemCredentialStore("provider-api-key");
   try { await providerRegistry.load(); }
   catch (error) {
-    console.error("Provider configuration could not be loaded. Inspect it without starting a task: xiu --provider-config-diagnostics");
+    console.error(formatUserFacingError("Provider configuration could not be loaded", error, "en-US", { diagnostic: "xiu --provider-config-diagnostics" }));
     throw error;
   }
   const pluginRegistry = new PluginRegistry(path.resolve(options.cwd ?? process.cwd()), undefined, packageJson.version);
@@ -1223,7 +1224,7 @@ async function main(): Promise<void> {
         return true;
       } catch (error) {
         status.stop();
-        console.error(chalk.red(`${localize(language, "Provider 连接失败", "Provider connection failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        console.error(chalk.red(`${formatUserFacingError(localize(language, "Provider 连接失败", "Provider connection failed"), error, language, { sensitive: profile.apiKey ? [profile.apiKey] : [], diagnostic: "/provider test" })}\n`));
         return false;
       }
     };
@@ -1272,7 +1273,7 @@ async function main(): Promise<void> {
           if (!saved) throw new Error(localize(language, "Provider 配置不存在。", "Provider profile not found."));
           if (await switchProviderProfile(saved, true, config.model)) startupProviderError = undefined;
         } catch (error) {
-          console.error(chalk.red(`${localize(language, "配置 Provider 失败", "Could not configure provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          console.error(chalk.red(`${formatUserFacingError(localize(language, "配置 Provider 失败", "Could not configure provider"), error, language)}\n`));
         }
         return;
       }

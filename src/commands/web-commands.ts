@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { localize, type UiLanguage } from "../i18n.js";
+import { formatUserFacingError } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { ManagedWebSearchAuth } from "../managed-web-search-auth.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
@@ -288,13 +289,13 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
 
   if (task === "/web" || task === "/web status") {
     try { await printWebSearchStatus(ctx); }
-    catch (error) { console.error(chalk.red(`${localize(language, "读取联网搜索状态失败", "Could not read web search status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "读取联网搜索状态失败", "Could not read web search status"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   if (task === "/web doctor") {
     try { await diagnoseWebSearch(); }
     catch (error) {
-      console.error(chalk.red(`${localize(language, "联网搜索诊断失败", "Web search diagnostics failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${formatUserFacingError(localize(language, "联网搜索诊断失败", "Web search diagnostics failed"), error, language, { diagnostic: "/web doctor" })}\n`));
       if (error instanceof Error && error.message.startsWith("Xiu Search health check failed with HTTP 403.")) {
         console.error(chalk.yellow(localize(language,
           "托管搜索健康接口被拒绝（HTTP 403），尚未发送设备注册或认证请求。可能是企业网关、代理或服务端访问规则拦截；请检查 search.jingran.vip 的 HTTPS 访问，或用 /web proxy set 配置企业允许的代理。重置设备凭证不能解决此阶段的 403。",
@@ -305,12 +306,12 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
   }
   if (task === "/web devices") {
     try { await printManagedWebSearchDevices(); }
-    catch (error) { await auditCredential("web-search-devices", "managed-search-device", "failed"); console.error(chalk.red(`${localize(language, "读取服务端设备状态失败", "Could not read server-side device status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { await auditCredential("web-search-devices", "managed-search-device", "failed"); console.error(chalk.red(`${formatUserFacingError(localize(language, "读取服务端设备状态失败", "Could not read server-side device status"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   if (task === "/web reset") {
     try { await resetManagedWebSearch(); }
-    catch (error) { console.error(chalk.red(`${localize(language, "托管搜索凭证重置失败", "Managed search credential reset failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "托管搜索凭证重置失败", "Managed search credential reset failed"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   if (task === "/web proxy") {
@@ -319,12 +320,12 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
   }
   if (task === "/web proxy set" || task.startsWith("/web proxy set ")) {
     try { await setWebProxy(task); }
-    catch (error) { console.error(chalk.red(`${localize(language, "联网代理设置失败", "Web proxy setup failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "联网代理设置失败", "Web proxy setup failed"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   if (task === "/web proxy clear") {
     try { await clearWebProxy(); }
-    catch (error) { console.error(chalk.red(`${localize(language, "联网代理清除失败", "Could not clear the web proxy")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "联网代理清除失败", "Could not clear the web proxy"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   if (task === "/web disable") {
@@ -336,7 +337,7 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
   }
   if (task === "/web configure" || task.startsWith("/web configure ")) {
     try { await configureWebSearch(task); }
-    catch (error) { console.error(chalk.red(`${localize(language, "联网搜索配置失败", "Web search configuration failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${formatUserFacingError(localize(language, "联网搜索配置失败", "Web search configuration failed"), error, language, { diagnostic: "/web doctor" })}\n`)); }
     return true;
   }
   return false;

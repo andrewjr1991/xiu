@@ -8,6 +8,7 @@ import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "../provider-rou
 import { probeProvider } from "../providers.js";
 import type { StatusLine } from "../status.js";
 import { askQuestion, askSecret } from "../terminal-prompts.js";
+import { formatUserFacingError } from "../user-facing-errors.js";
 
 export interface ProviderCommandContext {
   agent: Agent;
@@ -165,7 +166,7 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       if (selected === config.providerId) await switchProviderProfile(providerRegistry.get(selected)!, true, config.model);
       else console.log(chalk.dim(localize(language, "切换到该 Provider 时会使用此 Key。\n", "This key will be used when that provider is selected.\n")));
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "保存 Key 失败", "Could not save key")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${formatUserFacingError(localize(language, "保存 Key 失败", "Could not save key"), error, language)}\n`));
     }
     return true;
   }
@@ -195,7 +196,7 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       console.log(chalk.green(localize(language, `已保存 Provider ${id}。正在进行连接测试……`, `Saved provider ${id}. Testing the connection...`)));
       await switchProviderProfile(providerRegistry.get(id)!);
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "添加 Provider 失败", "Could not add provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${formatUserFacingError(localize(language, "添加 Provider 失败", "Could not add provider"), error, language)}\n`));
     }
     return true;
   }
@@ -248,7 +249,7 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       }
     } catch (error) {
       status.stop();
-      console.error(chalk.red(`${localize(language, "编辑 Provider 失败", "Could not edit provider")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${formatUserFacingError(localize(language, "编辑 Provider 失败", "Could not edit provider"), error, language)}\n`));
     }
     return true;
   }

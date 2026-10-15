@@ -34,8 +34,8 @@ function fixture(restored = false) {
 test("picker refresh enables a new explicit selection, never automatically retries the failed write", async () => {
   const f = fixture();
   const controller = await DesktopProviderController.create({ registry: f.registry });
-  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /配置保存失败/);
-  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /重新打开模型选择器/);
+  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /读写渠道配置文件时出错/);
+  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /重新打开渠道设置/);
   assert.deepEqual(f.state(), { loads: 0, writes: 1, model: "original" });
   assert.equal((await controller.refresh()).activeModel, "original");
   assert.deepEqual(f.state(), { loads: 1, writes: 1, model: "original" });
@@ -46,8 +46,8 @@ test("picker refresh enables a new explicit selection, never automatically retri
 test("restored configuration rejects both picker refresh and selection until restart", async () => {
   const f = fixture(true);
   const controller = await DesktopProviderController.create({ registry: f.registry });
-  await assert.rejects(controller.refresh(), /必须退出.*重新打开/);
-  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /必须退出.*重新打开/);
+  await assert.rejects(controller.refresh(), /退出并重新打开 Xiu/);
+  await assert.rejects(controller.select({ providerId: "fixture", model: "selected" }), /退出并重新打开 Xiu/);
   assert.deepEqual(f.state(), { loads: 1, writes: 0, model: "original" });
 });
 

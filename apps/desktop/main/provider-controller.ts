@@ -8,6 +8,7 @@ import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, type ProviderProfile } fro
 import { ProviderConfigurationError } from "../../../src/provider-config-migration.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
+import { summarizeUserFacingError } from "../../../src/user-facing-errors.js";
 import { createWindowsSystemCredentialStore } from "../../../src/system-credential-store.js";
 import { createWorkspaceProviderConfig } from "../../../src/runtime/workspace-agent-host.js";
 import type { AvailableModel } from "../../../src/types.js";
@@ -308,7 +309,8 @@ export class DesktopProviderController {
   }
 
   private safeError(error: unknown, profile: ProviderProfile): string {
-    return redactSecrets(error instanceof Error ? error.message : String(error), profile.apiKey ? [profile.apiKey] : []).slice(0, 800);
+    // Known HTTP/network failures become a cause and a next step; anything else is the redacted message.
+    return redactSecrets(summarizeUserFacingError(error, "zh-CN", { sensitive: profile.apiKey ? [profile.apiKey] : [] }), profile.apiKey ? [profile.apiKey] : []).slice(0, 800);
   }
 
   private modelOptions(profile: ProviderProfile, selected: string) {
@@ -357,14 +359,6 @@ export class DesktopProviderController {
 }
 
 export function providerConfigurationMessage(error: unknown): string | undefined {
-  if (!(error instanceof ProviderConfigurationError)) return undefined;
-  const messages: Record<string, string> = {
-    reload: "上次配置保存失败或配置已变化。请关闭并重新打开模型选择器，核对最新配置后再选择；未自动重试或恢复。",
-    restart: "Provider 配置已恢复，必须退出并重新打开 Xiu；重新读取不能解除此限制。",
-    changed: "渠道配置已被其他客户端修改。本次切换未提交，请重新打开模型选择器核对配置。",
-    busy: "渠道配置存在活动或中断写锁。请先关闭其他 Xiu 客户端；中断写锁只能通过配置诊断中的显式确认处理。",
-    io: "渠道配置保存失败，未自动重试或恢复。请检查文件占用或企业策略，再重新打开模型选择器核对实际配置；备份已保留。",
-    unsafe: "渠道配置存储未通过安全检查，本次操作已阻止；请查看配置诊断，不要降低文件权限。",
-  };
-  return messages[error.code] ?? "渠道配置检查失败，配置未被重置。请查看配置诊断。";
+  // Same catalog as the CLI (src/user-facing-errors.ts): cause plus next step, never the raw path or message.
+  return error instanceof ProviderConfigurationError ? summarizeUserFacingError(error, "zh-CN") : undefined;
 }
