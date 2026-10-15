@@ -16,6 +16,7 @@ await fs.mkdir(path.join(root, "user-data"));
 app.setPath("userData", path.join(root, "user-data"));
 await app.whenReady();
 let manager: InstanceType<typeof McpManager> | undefined;
+let background: InstanceType<typeof BackgroundManager> | undefined;
 try {
   // Exercise the Electron branch with a broken inherited PATH; only existing NVM installation is used.
   const inherited = process.env.PATH;
@@ -32,7 +33,7 @@ try {
   assert.equal(statuses[0]?.state, "connected");
   assert.equal(statuses[0]?.tools, 2);
   await manager.close();
-  const background = new BackgroundManager({ workspace: root, storageRoot: path.join(root, "background"), workerProgram: node, workerSource: process.env.XIU_PACKAGED_WORKER ?? path.join(repo, "apps", "desktop", "dist", "main", "background-worker.mjs") });
+  background = new BackgroundManager({ workspace: root, storageRoot: path.join(root, "background"), workerProgram: node, workerSource: process.env.XIU_PACKAGED_WORKER ?? path.join(repo, "apps", "desktop", "dist", "main", "background-worker.mjs") });
   const command = process.platform === "win32" ? `& '${node.replace(/'/g, "''")}' -e "console.log('desktop-worker-canary')"` : `"${node}" -e "console.log('desktop-worker-canary')"`;
   const processRecord = background.start(command);
   const deadline = Date.now() + 15_000;
@@ -54,13 +55,13 @@ try {
     assert.ok(result[0]!.tools >= 1);
   }
   await manager?.close();
-  await background.stopAll();
+  await background?.stopAll();
   await fs.rm(root, { recursive: true, force: true });
   await fs.writeFile(path.join(repo, ".desktop-build-temp", "runtime-node-result.json"), JSON.stringify({ passed: true }));
   app.exit(0);
 } catch (error) {
   await manager?.close();
-  await stopAllBackgroundProcesses().catch(() => undefined);
+  await background?.stopAll().catch(() => undefined);
   console.error(error instanceof Error ? error.message : "Runtime smoke failed");
   await fs.writeFile(path.join(repo, ".desktop-build-temp", "runtime-node-result.json"), JSON.stringify({ passed: false, error: error instanceof Error ? error.message : String(error) }));
   app.exit(1);
