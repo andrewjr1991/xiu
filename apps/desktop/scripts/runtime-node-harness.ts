@@ -10,12 +10,13 @@ await fs.writeFile(path.join(repo, ".desktop-build-temp", "runtime-node-result.j
 const { McpManager, resolveStdioLaunch } = await import("../../../src/mcp.js");
 const { PermissionGrantStore } = await import("../../../src/extension-permissions.js");
 const { resolveNodeRuntime } = await import("../../../src/node-runtime.js");
-const { configureBackgroundRuntime, configureBackgroundWorkspace, startBackgroundProcess, listBackgroundProcesses, readBackgroundProcessOutput, stopAllBackgroundProcesses } = await import("../../../src/background.js");
+const { BackgroundManager } = await import("../../../src/background.js");
 const root = await fs.mkdtemp(path.join(repo, ".desktop-build-temp", "electron-node-"));
 await fs.mkdir(path.join(root, "user-data"));
 app.setPath("userData", path.join(root, "user-data"));
 await app.whenReady();
 let manager: InstanceType<typeof McpManager> | undefined;
+let background: InstanceType<typeof BackgroundManager> | undefined;
 try {
   // Exercise the Electron branch with a broken inherited PATH; only existing NVM installation is used.
   const inherited = process.env.PATH;
@@ -32,14 +33,13 @@ try {
   assert.equal(statuses[0]?.state, "connected");
   assert.equal(statuses[0]?.tools, 2);
   await manager.close();
-  configureBackgroundWorkspace(root, path.join(root, "background"));
-  configureBackgroundRuntime(node, process.env.XIU_PACKAGED_WORKER ?? path.join(repo, "apps", "desktop", "dist", "main", "background-worker.mjs"));
+  background = new BackgroundManager({ workspace: root, storageRoot: path.join(root, "background"), workerProgram: node, workerSource: process.env.XIU_PACKAGED_WORKER ?? path.join(repo, "apps", "desktop", "dist", "main", "background-worker.mjs") });
   const command = process.platform === "win32" ? `& '${node.replace(/'/g, "''")}' -e "console.log('desktop-worker-canary')"` : `"${node}" -e "console.log('desktop-worker-canary')"`;
-  const processRecord = startBackgroundProcess(command, root);
+  const processRecord = background.start(command);
   const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline && listBackgroundProcesses().find((item) => item.id === processRecord.id)?.running) await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(listBackgroundProcesses().find((item) => item.id === processRecord.id)?.state, "completed");
-  assert.match(readBackgroundProcessOutput(processRecord.id).text, /desktop-worker-canary/);
+  while (Date.now() < deadline && background.list().find((item) => item.id === processRecord.id)?.running) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(background.list().find((item) => item.id === processRecord.id)?.state, "completed");
+  assert.match(background.readOutput(processRecord.id).text, /desktop-worker-canary/);
   process.env.PATH = inherited;
   console.log("Electron Node/MCP fixture/background worker: passed");
   if (process.env.XIU_MCP_REAL_CONFIG) {
@@ -55,13 +55,13 @@ try {
     assert.ok(result[0]!.tools >= 1);
   }
   await manager?.close();
-  await stopAllBackgroundProcesses();
+  await background?.stopAll();
   await fs.rm(root, { recursive: true, force: true });
   await fs.writeFile(path.join(repo, ".desktop-build-temp", "runtime-node-result.json"), JSON.stringify({ passed: true }));
   app.exit(0);
 } catch (error) {
   await manager?.close();
-  await stopAllBackgroundProcesses().catch(() => undefined);
+  await background?.stopAll().catch(() => undefined);
   console.error(error instanceof Error ? error.message : "Runtime smoke failed");
   await fs.writeFile(path.join(repo, ".desktop-build-temp", "runtime-node-result.json"), JSON.stringify({ passed: false, error: error instanceof Error ? error.message : String(error) }));
   app.exit(1);

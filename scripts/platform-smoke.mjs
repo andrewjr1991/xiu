@@ -35,7 +35,7 @@ function runLauncher(launcher, args) {
 async function waitForCompletion(background, id) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    const item = background.listBackgroundProcesses().find((candidate) => candidate.id === id);
+    const item = background.list().find((candidate) => candidate.id === id);
     if (item && !item.running) return item;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -78,16 +78,16 @@ try {
   }
   console.log("Platform smoke: command resolution passed");
 
-  const background = await import(pathToFileURL(path.join(packageRoot, "dist", "background.js")).href);
+  const { BackgroundManager } = await import(pathToFileURL(path.join(packageRoot, "dist", "background.js")).href);
   const backgroundRoot = path.join(temporaryRoot, "后台 状态");
-  background.configureBackgroundWorkspace(installRoot, backgroundRoot);
+  const background = new BackgroundManager({ workspace: installRoot, storageRoot: backgroundRoot });
   const backgroundCommand = process.platform === "win32"
     ? `& '${process.execPath.replaceAll("'", "''")}' -e "console.log('platform-unicode-通过')"`
     : `${JSON.stringify(process.execPath)} -e "console.log('platform-unicode-通过')"`;
-  const started = background.startBackgroundProcess(backgroundCommand, installRoot);
+  const started = background.start(backgroundCommand);
   const completed = await waitForCompletion(background, started.id);
   console.log(`Platform smoke: background ended as ${completed.state}`);
-  const backgroundOutput = background.readBackgroundProcessOutput(started.id).text;
+  const backgroundOutput = background.readOutput(started.id).text;
   if (completed.state !== "completed") throw new Error(`Packaged background task ended as ${completed.state}: ${backgroundOutput}`);
   if (!backgroundOutput.includes("platform-unicode-通过")) {
     throw new Error("Packaged background task lost Unicode output");
