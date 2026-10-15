@@ -20,13 +20,15 @@
 
 ## 当前优先级
 
-1. **测试文件纳入类型检查（已完成）。** 新增 `tsconfig.test.json` 与 `npm run typecheck:test`，覆盖 `src/` 与 `test/`，三平台 Verify 作业在测试前执行。原有 169 处错误已按生产配置补全测试夹具修正，未使用 `any` 或 `@ts-ignore`。
-2. **Windows 后台任务状态竞态（已修复，待观察）。** 根因是 Windows 上目标文件被其他进程（例如状态轮询）打开时，替换状态文件的 rename 会返回 EPERM/EACCES；预加载 bootstrap 与前台管理器没有重试，失败的启动因此停留在 `starting`，30 秒后被判为 `interrupted`，真实失败证据丢失。现在三处统一做有界重试，只重试元数据替换，不重跑命令。后续 Windows CI 若再出现同类失败需重新定位。
-3. **统一 Agent 装配（已完成）。** `Agent` 改为接收单个 `AgentOptions` 对象，CLI、桌面 host、子智能体、评测和测试的 86 处调用按名称传参，不再用 `undefined` 占位。CLI 与桌面的子智能体装配仍各自保留（桌面过滤延迟工具、CLI 注入技能与故障转移覆盖），暂不强行合并。
-4. **发布链自动化（维护者决定暂不做）。** 2026-10-13 维护者选择继续手动发布：GitHub Release 与 npm 仍按 `PUBLISHING.zh-CN.md` 由维护者手动执行。已写好的手动触发草稿工作流保留在分支 `claude/release-draft-workflow`（PR #37 已关闭），需要时可重新评估。
-5. **基础门禁（ESLint 已完成）。** `npm run lint` 以错误级运行 JavaScript/TypeScript 推荐规则，CI 在 Linux Verify 作业执行一次；开启时清理了未使用导入/变量、死接口和多余转义，无运行时行为变化。CodeQL 已本地评估（2.27.2，security-and-quality）：53 条结果中修复一处真实 ReDoS（命令分词，详见 CHANGELOG）和一处冗余条件，其余为误报（固定内容的 `executeJavaScript` 拼接、内存指纹用 SHA-256、单用户本地文件 TOCTOU、测试中的 URL 正则）。是否在仓库开启 CodeQL 默认扫描由维护者决定。
-6. **桌面审批模式切换的上下文绑定（已完成）。** `setApprovalMode` 请求现在与 Plan 一样携带 `contextId`，主进程在完全访问确认前后都校验上下文；过期的渲染进程不能再切换当前 host 的权限模式。
-7. **Computer Use 后续。** 0.20.8 复核中的中等问题（C3–C6）代码层已处理（见当前状态），需要在 Windows 上验证；真实付费模型与完整实玩验收尚未完成；常用编辑/系统快捷键分级仍在设计中，暂不开放任意组合键或剪贴板。截图上传已关闭 SDK 自动重试，超大窗口截图改用 JPEG 回退（C7）；桥程序完整性校验（C8）未做。
+2026-10-15 维护者确认了[后续开发计划方案](./docs/proposals/DEVELOPMENT_PLAN_2026-10-15.zh-CN.md)。评估报告中的安全与工程债项基本收口，下一阶段主线是“好用”：
+
+1. **0.21 首次体验版。** 偶发测试修复（`background.test.ts` 的 `STOP_UNCONFIRMED` 轮询改事件驱动，`lifecycleGate` 去掉 `Atomics.wait`）；`/provider add` 与桌面新增渠道增加国产 OpenAI 兼容模板（DeepSeek、通义千问、智谱、Kimi、火山方舟、硅基流动、MiniMax，只预填地址/模型/环境变量名，不占 ID、不内置 Key）；用户可见错误统一为“原因 / 下一步 / 诊断命令”三行并建立错误码表；无渠道启动时直接进入三步首次向导；`xiu doctor` 合并更新、渠道配置、联网搜索、代理与 Node 环境诊断；USAGE 按功能拆分并补英文精简版，PUBLISHING/ROADMAP/设计稿不再打进 npm 包。
+2. **Node 20 弃用（维护者 2026-10-15 决定）。** Node 20 已于 2026-04-30 停止维护。0.21 在 Node 20 上启动时打印一行弃用提示；0.22 起 `engines` 改为 `>=22.12`，随后一次性升级 chalk 6、commander 15、undici 8、openai 7、@types/node。`@napi-rs/keyring` 2 仍需维护者在 Windows 做一次 1.x 写、2.x 读的往返测试后再升。
+3. **可靠性与安全中低项（随 0.21.x 逐项单独 PR）。** 后台模块去掉模块级可变状态（R4）；空 `catch` 进诊断通道或注明理由（A5）；内置终端环境变量默认过滤 Key/Token 类并可在设置关闭（S4，维护者已选默认过滤）；后台任务停止前校验进程启动时间（S5）；网页页签每次导航重新解析并拦截私网地址（S3）；`assertTrustedSender` 单测与 asarUnpack 内 worker/桥程序启动前哈希比对（S6）。
+4. **0.22 桌面对齐与电脑操作闭环。** 按第 4 节缺口表接入联网搜索、Skills、插件、故障转移/路由，并给 IPC 加运行时校验；Computer Use 待维护者 Windows 真机跑 `window-computer-smoke` 与一轮真实任务后修正，再按一级自动 / 二级逐步确认 / 三级禁止做快捷键分级；非交互 `--json` 事件流与 `/report` 单文件 HTML 导出。
+5. **已完成并保持的项。** 测试文件纳入类型检查、Windows 后台状态竞态、统一 Agent 装配、ESLint/CodeQL、桌面审批模式上下文绑定、Computer Use C1–C7、Windows CI 缩减、Windows ACL 去除。
+
+维护者 2026-10-15 的决定：发布继续纯本地手动执行，暂不做 npm provenance；安装器签名暂无证书，有了再做；真实模型评测基线暂不启动；真实用户试用后面安排；桥程序完整性校验完整版不做（只保留上面 S6 的低成本哈希比对）。
 
 需要维护者决定或提供：
 
@@ -35,11 +37,9 @@
 
 ## 下一步
 
-0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm。标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2；CI 38707383288 九作业及同提交 CodeQL 通过。五份原始 CI 附件的大小与 SHA256 上传后回读一致；Windows 安装器未签名。npm latest 为 0.20.11，npm 包与 CI 包的 420 个文件路径和内容完全一致，但 tarball 压缩摘要不同，npm gitHead 保留发布前旧提交记录。
+0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm，标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2。README 已于同日重写为中英文同构概览（#58），旧版归档在 `docs/history/`。
 
-下一步：维护者在企业机器升级后确认托管搜索选择持久化；其余 Computer Use 和外部设备验收继续按下文跟进。
-
-发布保持手动。0.20.9 已发布 GitHub 与 npm。Computer Use 后续（优先级 7）中不依赖 Windows 的代码项已完成（#51–#53），剩余的真机验证、快捷键分级范围和是否做桥程序完整性校验需要维护者决定。之后可选的方向：后台任务停止前校验进程启动时间以防 PID 复用（评估 S5，Linux 可本地验证，Windows 需额外进程查询）；桌面网页页签的 DNS 重绑定窗口（S3）；`assertTrustedSender` 的单测（S6；`security-policy.ts` 已有覆盖，安装包冒烟已于 #55 增加 Electron fuses 回读校验）。每项单独提 PR，一次推送一轮 CI。
+下一步按当前优先级第 1 项顺序逐个提 PR，一次推送一轮 CI，CI 全绿后合并：偶发测试修复 → 国产渠道模板 → 错误信息人话化 → 首次运行向导 → `xiu doctor` → 文档分层与 npm 包瘦身。完成后发布 0.21.0（手动发布，同步 CHANGELOG、README 版本行与 `package.json` 的 `files` 中设计稿文件名）。维护者侧待办：企业机器上确认托管搜索选择持久化；Windows 真机跑一次 `window-computer-smoke`；`@napi-rs/keyring` 往返测试。
 
 ## 1. 项目定位
 
