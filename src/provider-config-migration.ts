@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import { constants, type Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { compareStartTimes, processStartTime } from "./process-identity.js";
+
+/** When this process started, recorded in the lock so a later reader can tell this PID from one the OS reused. */
+function ownerStartedAt(): string { return new Date(Date.now() - process.uptime() * 1000).toISOString(); }
 
 export const PROVIDER_CONFIGURATION_VERSION = 5;
 export const PROVIDER_CONFIGURATION_COMPATIBILITY_NOTICE = "Provider schema v5 requires matching upgraded CLI and desktop clients. Close all other Xiu clients before recovery; older clients do not honor this version's write lock.";
@@ -140,12 +144,12 @@ export class ProviderConfigurationStorage {
         try { await this.writeExclusive(recoveryLock, Buffer.from("recovery\n")); recoveryOwned = true; }
         catch (error) { throw unsafeOr(error, "busy"); }
         const stale = await this.regularFile(this.lock, 1024, true);
-        if (stale?.revision !== recoverLockRevision || !this.deadLock(stale.bytes)) throw failure("busy");
+        if (stale?.revision !== recoverLockRevision || !(await this.deadLock(stale.bytes))) throw failure("busy");
         // Reject a stale preview before consuming even its write-lock marker.
         await beforeTakeover?.();
         await fs.unlink(this.lock);
       } else if (await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
-      try { await this.writeExclusive(this.lock, Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID() }))); owned = true; }
+      try { await this.writeExclusive(this.lock, Buffer.from(JSON.stringify({ pid: process.pid, nonce: randomUUID(), startedAt: ownerStartedAt() }))); owned = true; }
       catch (error) { throw unsafeOr(error, "busy"); }
       if (!recoveryOwned && await this.regularFile(recoveryLock, 1024, true)) throw failure("busy");
       return await run();
@@ -154,12 +158,20 @@ export class ProviderConfigurationStorage {
       finally { if (recoveryOwned) await fs.unlink(recoveryLock); }
     }
   }
-  private deadLock(bytes: Buffer): boolean {
+  /**
+   * A write lock is dead only when its owner is proven gone: the PID no longer
+   * exists, or it exists but belongs to a process that started at a different
+   * time than the owner recorded (the OS reused the number). Locks written by
+   * older versions carry no start time and are judged by the PID alone.
+   */
+  private async deadLock(bytes: Buffer): Promise<boolean> {
     try {
-      const parsed = JSON.parse(bytes.toString("utf8")) as { pid?: number; nonce?: string };
+      const parsed = JSON.parse(bytes.toString("utf8")) as { pid?: number; nonce?: string; startedAt?: string };
       if (!Number.isSafeInteger(parsed.pid) || parsed.pid! <= 0 || typeof parsed.nonce !== "string") return false;
-      try { process.kill(parsed.pid!, 0); return false; }
+      try { process.kill(parsed.pid!, 0); }
       catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+      if (typeof parsed.startedAt !== "string") return false;
+      return compareStartTimes(parsed.startedAt, await processStartTime(parsed.pid!)) === "mismatch";
     } catch { return false; }
   }
 
@@ -248,7 +260,7 @@ export class ProviderConfigurationStorage {
         const names = await fs.readdir(this.directory);
         if (names.includes("write.lock") || names.includes("recovery.lock")) { result.state = "blocked"; result.issues.push("active-or-interrupted-write"); }
         if (names.includes("write.lock") && !names.includes("recovery.lock") && (!current || (current.sourceVersion !== null && current.sourceVersion >= 1 && current.sourceVersion <= 5))) {
-          try { if (current) validate(current.bytes); const lock = await this.regularFile(this.lock, 1024, true); if (lock && this.deadLock(lock.bytes)) result.issues.push("interrupted-write-can-keep-current"); }
+          try { if (current) validate(current.bytes); const lock = await this.regularFile(this.lock, 1024, true); if (lock && await this.deadLock(lock.bytes)) result.issues.push("interrupted-write-can-keep-current"); }
           catch { /* Only positively verified stale locks are recoverable. */ }
         }
         if (names.some((name) => name.endsWith(".tmp"))) result.issues.push("interrupted-temporary-write-retained");
@@ -275,7 +287,7 @@ export class ProviderConfigurationStorage {
       if (keepCurrent && current) validate(current.bytes);
       if (await this.privateDirectory(false) && await this.regularFile(path.join(this.directory, "recovery.lock"), 1024, true)) throw failure("busy");
       const lock = await this.regularFile(this.lock, 1024, true);
-      if ((keepCurrent && !lock) || (lock && !this.deadLock(lock.bytes))) throw failure("busy");
+      if ((keepCurrent && !lock) || (lock && !(await this.deadLock(lock.bytes)))) throw failure("busy");
       const preview: ProviderConfigurationRecoveryPreview = {
         action: keepCurrent ? "keep-current" : "restore-backup", token: randomUUID(), backupId,
         sourceVersion: keepCurrent ? current?.sourceVersion ?? 5 : backup!.metadata.sourceVersion!,

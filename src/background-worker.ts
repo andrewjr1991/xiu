@@ -7,12 +7,14 @@ import { redactSecrets } from "./secret-redaction.js";
 import { withBackgroundLifecycle } from "./background-lifecycle.js";
 
 interface Request { version: 1; recordFile: string; outputFile: string; cwd: string; command: string }
-interface RecordValue { version: 1; id: string; workspaceId: string; commandPreview: string; state: string; startedAt: string; updatedAt: string; pid?: number; childPid?: number; exitCode?: number | null; signal?: string; outputBytes: number; failure?: Failure; stopRequested?: boolean }
+interface RecordValue { version: 1; id: string; workspaceId: string; commandPreview: string; state: string; startedAt: string; updatedAt: string; pid?: number; childPid?: number; pidStartedAt?: string; childStartedAt?: string; exitCode?: number | null; signal?: string; outputBytes: number; failure?: Failure; stopRequested?: boolean }
 
 type FailureStage = "worker" | "shell" | "output" | "state-write" | "worker-exit";
 interface Failure { stage: FailureStage; code: string }
 const failureCodes = new Set(["ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOSPC", "EMFILE", "EAGAIN", "ENOMEM", "EBUSY", "EIO"]);
 const retryDelays = [10, 25, 50, 100, 200];
+// Our own start, so a later stop can tell this PID from a process that reused it after we exit.
+const workerStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
 const retrySignal = new Int32Array(new SharedArrayBuffer(4));
 function failureCode(error: unknown): string {
   const code = (error as NodeJS.ErrnoException)?.code;
@@ -45,7 +47,7 @@ function updateUnlocked(request: Request, fields: Partial<RecordValue>): void {
       // Re-read on every metadata retry: cancellation/terminal evidence wins.
       if (current.state !== "starting" && current.state !== "running") return;
       if (current.stopRequested) return;
-      atomicWrite(request.recordFile, { ...current, ...fields, pid: process.pid, updatedAt: new Date().toISOString(), outputBytes: (() => { try { return fs.statSync(request.outputFile).size; } catch { return 0; } })() });
+      atomicWrite(request.recordFile, { ...current, ...fields, pid: process.pid, pidStartedAt: workerStartedAt, updatedAt: new Date().toISOString(), outputBytes: (() => { try { return fs.statSync(request.outputFile).size; } catch { return 0; } })() });
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
@@ -175,6 +177,7 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, XIU_DETACHED_BACKGROUND: "1" },
   });
+  const childStartedAt = new Date().toISOString();
   const stdout = createRedactedAppender(activeRequest.outputFile);
   const stderr = createRedactedAppender(activeRequest.outputFile);
   child.stdout?.on("data", (chunk: Buffer) => guard(() => stdout.write(chunk), "output"));
@@ -206,7 +209,7 @@ try {
   });
   // All lifecycle guards must exist before state persistence can throw. A
   // startup write failure still owns a live command and must finish cleanup.
-  updateUnlocked(activeRequest, { state: "running", childPid: child.pid });
+  updateUnlocked(activeRequest, { state: "running", childPid: child.pid, childStartedAt });
   });
 } catch (error) {
   if (requestFile) try { fs.unlinkSync(requestFile); } catch { /* best effort */ }
