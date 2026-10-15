@@ -17,6 +17,7 @@ export const BRIDGE_ERROR_REASONS: Record<string, string> = {
   "input-blocked-or-partial-do-not-retry": "系统阻止或仅部分执行输入，结果未知，请观察实际反馈。",
   "focus-changed-outcome-unknown": "输入时焦点发生变化，结果未知，请检查实际反馈。",
   "window-capture-not-supported": "此应用不支持窗口截图。",
+  "window-capture-too-large": "窗口截图超过大小限制，请缩小窗口后重新观察。",
   "window-unavailable": "目标窗口不可用或已关闭。",
 };
 

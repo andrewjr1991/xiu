@@ -116,6 +116,24 @@ class ComputerBridge {
     if(type!=ControlType.Button&&type!=ControlType.Hyperlink&&type!=ControlType.MenuItem&&type!=ControlType.SplitButton)return false;
     return string.IsNullOrWhiteSpace(current.Name);
   }
+  // PNG is lossless for ordinary windows; a large or photographic 4K window falls back to JPEG so the
+  // whole reply stays under the 12 MB budget the main process accepts. Dimensions never change.
+  static string Encode(Bitmap bitmap) {
+    using(var stream=new MemoryStream()) {
+      bitmap.Save(stream,ImageFormat.Png);
+      if(stream.Length<=6000000)return "data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());
+    }
+    var codec=Array.Find(ImageCodecInfo.GetImageEncoders(),c=>c.FormatID==ImageFormat.Jpeg.Guid);
+    if(codec==null)throw new Exception("window-capture-too-large");
+    using(var parameters=new EncoderParameters(1)) {
+      parameters.Param[0]=new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,80L);
+      using(var stream=new MemoryStream()) {
+        bitmap.Save(stream,codec,parameters);
+        if(stream.Length>8500000)throw new Exception("window-capture-too-large");
+        return "data:image/jpeg;base64,"+Convert.ToBase64String(stream.ToArray());
+      }
+    }
+  }
   static object Run() {
     string action=S("action");
     if(action=="list") {
@@ -133,7 +151,7 @@ class ComputerBridge {
         using(var g=Graphics.FromImage(bitmap)) {var dc=g.GetHdc();try {if(!PrintWindow(target,dc,3))throw new Exception("window-capture-not-supported");}finally{g.ReleaseHdc(dc);}}
         bool visible=false;for(int yy=0;yy<hgt;yy+=Math.Max(1,hgt/24))for(int xx=0;xx<w;xx+=Math.Max(1,w/24)){var c=bitmap.GetPixel(xx,yy);if(c.R!=0||c.G!=0||c.B!=0)visible=true;}
         if(!visible)throw new Exception("window-capture-not-supported");
-        using(var stream=new MemoryStream()){bitmap.Save(stream,ImageFormat.Png); info["screenshot"]="data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());}
+        info["screenshot"]=Encode(bitmap);
       }
       Target(); return info;
     }
@@ -211,7 +229,7 @@ class ComputerBridge {
     Console.InputEncoding=Encoding.UTF8;Console.OutputEncoding=new UTF8Encoding(false);SetProcessDPIAware();
     try{string line=Console.ReadLine();if(line==null||line.Length>16000)throw new Exception("invalid-request");req=json.Deserialize<Dictionary<string,object>>(line);Console.WriteLine(json.Serialize(new{ok=true,value=Run()}));return 0;}
     catch(Exception e){
-      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected"};
+      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-capture-too-large","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected"};
       string code=Array.IndexOf(codes,e.Message)>=0?e.Message:"window-action-unavailable-or-identity-changed";
       Console.WriteLine(json.Serialize(new{ok=false,error=code}));return 1;
     }
