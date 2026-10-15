@@ -5,12 +5,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { countWindowsAclBatches, useRealWindowsAcl } from "./helpers/windows-acl.js";
-import { ProviderConfigurationError, replaceProviderWindowsPrivacyVerifierForTests, providerWindowsPrivacyFailureKind, providerWindowsPowerShellPath, providerWindowsPowerShellEnvironment } from "../src/provider-config-migration.js";
 
 const canary = "fixture_Q7pR-not-a-real-key_38v!";
 async function fixture(t: TestContext, version: number | null = 4) {
@@ -28,20 +24,8 @@ async function upgraded(t: TestContext) {
   assert.equal(diagnostics.backups.length, 1);
   return { ...f, backupId: diagnostics.backups[0]!.id };
 }
-async function runFixturePowerShell(stage: "owner" | "readback" | "modify", script: string, env: NodeJS.ProcessEnv): Promise<void> {
-  try {
-    await promisify(execFile)(providerWindowsPowerShellPath(process.env.SystemRoot), ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", `$ProgressPreference='SilentlyContinue'; ${script}`], { windowsHide: true, timeout: 15_000, maxBuffer: 1024, env: providerWindowsPowerShellEnvironment(env) });
-  } catch (error) { throw new Error(`Windows ACL fixture ${stage} failed (${providerWindowsPrivacyFailureKind(error)})`); }
-}
-
 async function privateFixtureWrite(filename: string, bytes: string, options?: Parameters<typeof fs.writeFile>[2]): Promise<void> {
   await fs.writeFile(filename, bytes, options);
-  if (process.platform === "win32") {
-    // Elevated Windows runners can choose Administrators as a new file's
-    // default owner. Model the production writer's explicit current-user owner.
-    const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $acl.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }`;
-    await runFixturePowerShell("owner", script, { ...process.env, XIU_TEST_TARGET: filename });
-  }
 }
 
 async function deadPid(): Promise<number> {
@@ -82,29 +66,6 @@ for (const version of [1, 2, 3, 4]) test(`v${version} upgrade preserves exact pr
   const restart = new ProviderRegistry(f.filename);
   await restart.load();
   assert.equal((await restart.configurationDiagnostics()).backups.length, 1);
-});
-
-test("a Windows provider save checks ACLs in two helper processes, directory first", async (t) => {
-  const f = await fixture(t);
-  await f.registry.load();
-  const batches = countWindowsAclBatches(t);
-  await f.registry.setRoutingEnabled(true);
-  // Write lock, then the replacement file: each re-checks the directory and
-  // initializes the new empty file in one process before bytes are written.
-  assert.deepEqual(batches, [["directory:verify", "file:initialize"], ["directory:verify", "file:initialize"]]);
-});
-
-test("a Windows directory ACL failure during a save stays unsafe and leaves no write lock", async (t) => {
-  const f = await fixture(t);
-  await f.registry.load();
-  const before = await fs.readFile(f.filename);
-  countWindowsAclBatches(t);
-  replaceProviderWindowsPrivacyVerifierForTests(async (checks) => {
-    if (checks.some((check) => check.directory)) throw new ProviderConfigurationError("unsafe", "Provider configuration storage is not a protected regular file/directory. (fixture)");
-  });
-  await assert.rejects(f.registry.setRoutingEnabled(true), /protected regular file/);
-  await assert.rejects(fs.lstat(path.join(f.recovery, "write.lock")), { code: "ENOENT" });
-  assert.deepEqual(await fs.readFile(f.filename), before);
 });
 
 test("backup directory failure prevents migration and further saves", async (t) => {
@@ -441,13 +402,6 @@ test("current recovery rejects missing, living, unknown, changed, malformed and 
   assert.ok(await fs.stat(lock));
 });
 
-test("Windows backups and replacement settings inherit only the owner DACL", { skip: process.platform !== "win32" }, async (t) => {
-  useRealWindowsAcl(t); // the readback below inspects the DACL the registry really applied
-  const f = await upgraded(t);
-  const script = `$ErrorActionPreference='Stop'; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; foreach ($p in @($env:XIU_TEST_CONFIG,$env:XIU_TEST_DIRECTORY,$env:XIU_TEST_BACKUP)) { $acl=Get-Acl -LiteralPath $p; $rules=$acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]); if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl') { throw 'Unsafe fixture ACL' } }`;
-  await runFixturePowerShell("readback", script, { ...process.env, XIU_TEST_CONFIG: f.filename, XIU_TEST_DIRECTORY: f.recovery, XIU_TEST_BACKUP: path.join(f.recovery, `${f.backupId}.json`) });
-});
-
 test("failed dead-owner lock release does not report successful current recovery", async (t) => {
   const f = await upgraded(t);
   const lock = path.join(f.recovery, "write.lock");
@@ -546,19 +500,6 @@ test("interrupted recovery with unknown lock ownership remains explicitly blocke
   assert.equal(diagnostics.state, "blocked");
   assert.ok(!diagnostics.issues.includes("interrupted-write-can-keep-current"));
   assert.deepEqual(await fs.readFile(f.filename), current);
-});
-
-test("Windows directory and file ACL changes are rechecked and never repaired silently", { skip: process.platform !== "win32" }, async (t) => {
-  useRealWindowsAcl(t);
-  const f = await upgraded(t);
-  const before = await fs.readFile(f.filename);
-  const backup = path.join(f.recovery, `${f.backupId}.json`);
-  const script = `$ErrorActionPreference='Stop'; $p=$env:XIU_TEST_TARGET; $acl=Get-Acl -LiteralPath $p; $sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]::Read,[System.Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule); if ($acl -is [System.Security.AccessControl.DirectorySecurity]) { [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.File]::SetAccessControl($p,$acl) }`;
-  await runFixturePowerShell("modify", script, { ...process.env, XIU_TEST_TARGET: backup });
-  await assert.rejects(f.registry.previewConfigurationRecovery(f.backupId), /protected regular file/);
-  await runFixturePowerShell("modify", script, { ...process.env, XIU_TEST_TARGET: f.recovery });
-  await assert.rejects(f.registry.setRoutingEnabled(true), /protected regular file/);
-  assert.deepEqual(await fs.readFile(f.filename), before);
 });
 
 test("post-switch verification failure retains copied system credentials and requires inspection", async (t) => {

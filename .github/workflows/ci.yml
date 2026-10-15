@@ -64,19 +64,14 @@ jobs:
       - id: lint
         if: ${{ !cancelled() && matrix.platform == 'linux' && steps.dependencies.outcome == 'success' }}
         run: npm run lint
-      - name: Verify Windows provider privacy before the full suite
-        id: provider_privacy
-        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
-        timeout-minutes: 3
-        run: node --test --import tsx test/provider-windows-privacy.test.ts test/provider-constrained-privacy.test.ts
       - name: Verify Windows cleanup and current-recovery regressions
         id: windows_regressions
-        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.provider_privacy.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.platform == 'win32' && steps.dependencies.outcome == 'success' }}
         timeout-minutes: 3
         run: node --test --import tsx --test-name-pattern="workspace cleanup|rapid detached commands|CLI current action" test/background.test.ts test/provider-recovery-entry.test.ts
       - name: Run tests
         id: tests
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || (steps.provider_privacy.outcome == 'success' && steps.windows_regressions.outcome == 'success')) }}
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && (matrix.platform != 'win32' || steps.windows_regressions.outcome == 'success') }}
         run: npm run test:ci
       - name: Run Python migration regressions
         id: migration

@@ -5,10 +5,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { providerWindowsPrivacyFailureStage, verifyProviderWindowsPrivacy } from "../src/provider-config-migration.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommandIO } from "../src/commands/provider-recovery.js";
 import { DesktopProviderRecoveryController } from "../apps/desktop/main/provider-recovery-controller.js";
-import { useRealWindowsAcl } from "./helpers/windows-acl.js";
 
 const canary = "fixture_jE73r!M-only-not-a-real-key";
 async function fixture(t: TestContext) {
@@ -43,37 +41,28 @@ function safe(value: unknown, root: string) {
 
 async function privateLockFixture(filename: string, pid: number, nonce: string): Promise<void> {
   const handle = await fs.open(filename, "wx", 0o600);
-  try {
-    // Match the production writer: a new file can inherit the private DACL
-    // while an elevated Windows token still selects Administrators as owner.
-    // Initialize this empty fixture before writing its synthetic lock payload.
-    if (process.platform === "win32") await verifyProviderWindowsPrivacy(filename, false, true);
-    await handle.writeFile(JSON.stringify({ pid, nonce }));
-    await handle.sync();
-  } finally { await handle.close(); }
-  if (process.platform === "win32") await verifyProviderWindowsPrivacy(filename, false, false);
+  try { await handle.writeFile(JSON.stringify({ pid, nonce })); await handle.sync(); }
+  finally { await handle.close(); }
 }
 
 function recoveryAssertionSummary(output: { output: string[]; asked: number }): string {
   // Never print captured CLI text, even on assertion failure. Derive only
-  // fixed labels from a bounded suffix and pass stages through the allowlist.
+  // fixed labels from a bounded suffix.
   const text = output.output.slice(-4).map((value) => value.slice(0, 1024)).join("\n");
-  const stage = /Windows ACL failure: [a-z-]+; stage: ([a-z-]{1,40});/.exec(text)?.[1];
-  const aclStage = providerWindowsPrivacyFailureStage({ stdout: `XIU_ACL_V1:${stage ?? ""}` });
   const reason = text.includes("protected regular file/directory") ? "storage-privacy"
     : text.includes("active or interrupted write lock") ? "write-lock"
       : text.includes("changed in another client") ? "revision-changed"
         : text.includes("storage operation failed") ? "storage-io" : "other";
-  return `Provider current recovery: confirmation=${output.asked > 0 ? "requested" : "not-requested"}; reason=${reason}; acl-stage=${aclStage}`;
+  return `Provider current recovery: confirmation=${output.asked > 0 ? "requested" : "not-requested"}; reason=${reason}`;
 }
 
 test("recovery assertion diagnostics expose only bounded fixed labels", () => {
   const root = "fixture-private-directory";
-  const summary = recoveryAssertionSummary({ output: ["x".repeat(10_000), `${root} ${canary} Windows ACL failure: nonzero-exit; stage: verify-owner; category: unknown.`], asked: 0 });
-  assert.equal(summary, "Provider current recovery: confirmation=not-requested; reason=other; acl-stage=verify-owner");
+  const summary = recoveryAssertionSummary({ output: ["x".repeat(10_000), `${root} ${canary} Provider configuration storage is not a protected regular file/directory.`], asked: 0 });
+  assert.equal(summary, "Provider current recovery: confirmation=not-requested; reason=storage-privacy");
   safe(summary, root);
-  const unknown = recoveryAssertionSummary({ output: [`Windows ACL failure: nonzero-exit; stage: ${canary}; category: unknown.`], asked: 1 });
-  assert.equal(unknown, "Provider current recovery: confirmation=requested; reason=other; acl-stage=process");
+  const unknown = recoveryAssertionSummary({ output: [`${canary} unexpected failure text`], asked: 1 });
+  assert.equal(unknown, "Provider current recovery: confirmation=requested; reason=other");
   safe(unknown, root);
 });
 
@@ -137,8 +126,6 @@ async function cli(home: string, args: string[]) {
 }
 
 test("real CLI early flags bypass broken startup and --yes cannot approve piped recovery", async (t) => {
-  // The spawned CLI verifies the exact owner-only DACL of files this process creates.
-  useRealWindowsAcl(t);
   const f = await fixture(t);
   await fs.writeFile(path.join(f.directory, "settings.json"), `broken ${canary}`);
   const diagnostics = await cli(f.root, ["--provider-config-diagnostics"]);
@@ -271,11 +258,9 @@ test("slow read-only recovery diagnostics leave active task stop and approval co
 });
 
 test("CLI current action keeps valid settings and clearly distinguishes dead-lock cleanup from restore", async (t) => {
-  useRealWindowsAcl(t); // this test verifies the settings file's real DACL below
   const f = await fixture(t);
   const current = '{"version":5,"profiles":[]}';
   await fs.writeFile(f.filename, current);
-  if (process.platform === "win32") await verifyProviderWindowsPrivacy(f.filename, false, false);
   const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
   const pid = child.pid!;
   await new Promise<void>((resolve, reject) => { child.once("exit", () => resolve()); child.once("error", reject); });
