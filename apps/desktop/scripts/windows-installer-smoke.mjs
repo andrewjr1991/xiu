@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { getCurrentFuseWire, FuseV1Options, FuseState } from "@electron/fuses";
 
 if (process.platform !== "win32") throw new Error("Windows installer smoke only runs on Windows.");
 const root = path.resolve(import.meta.dirname, "..");
@@ -17,6 +18,22 @@ const processTemp = path.join(temp, "Temp");
 const userData = path.join(temp, "UserData");
 await Promise.all([localAppData, appData, processTemp, userData].map((directory) => mkdir(directory, { recursive: true })));
 const isolatedEnv = { LOCALAPPDATA: localAppData, APPDATA: appData, TEMP: processTemp, TMP: processTemp };
+// The packaged Electron binary must keep the fuses after-pack.cjs flips; the installer must not ship an unhardened executable.
+const EXPECTED_FUSES = {
+  [FuseV1Options.RunAsNode]: FuseState.DISABLE,
+  [FuseV1Options.EnableCookieEncryption]: FuseState.ENABLE,
+  [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: FuseState.DISABLE,
+  [FuseV1Options.EnableNodeCliInspectArguments]: FuseState.DISABLE,
+  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: FuseState.ENABLE,
+  [FuseV1Options.OnlyLoadAppFromAsar]: FuseState.ENABLE,
+};
+const assertFuses = async (file) => {
+  const wire = await getCurrentFuseWire(file);
+  const wrong = Object.entries(EXPECTED_FUSES)
+    .filter(([index, expected]) => wire[Number(index)] !== expected)
+    .map(([index, expected]) => `${FuseV1Options[Number(index)]}=${String(wire[Number(index)])} (expected ${expected})`);
+  if (wrong.length > 0) throw new Error(`Installed Xiu.exe has unexpected Electron fuses: ${wrong.join(", ")}`);
+};
 const run = (file, args, env = {}) => new Promise((resolve, reject) => {
   const child = spawn(file, args, { windowsHide: true, stdio: "inherit", env: { ...process.env, ...env } });
   const timeout = setTimeout(() => { child.kill(); reject(new Error(`${path.basename(file)} timed out.`)); }, 120_000);
@@ -35,6 +52,7 @@ try {
   await run(installer, ["/S", `/D=${installDir}`], isolatedEnv);
   const executable = path.join(installDir, "Xiu.exe");
   await access(executable);
+  await assertFuses(executable);
   await run(executable, ["--smoke-test", `--user-data-dir=${userData}`], { ...isolatedEnv, XIU_DESKTOP_SMOKE_LOG: smokeLog });
   const startup = await readFile(smokeLog, "utf8");
   if (!startup.includes("load-finished")) throw new Error("Installed Xiu did not finish loading.");
@@ -54,6 +72,7 @@ try {
   await run(installer, ["/S", `/D=${installDir}`], isolatedEnv);
   await access(executable);
   if ((await readFile(sentinel, "utf8")) !== "preserve") throw new Error("In-place upgrade removed user data.");
+  await assertFuses(executable);
   await run(executable, ["--smoke-test", `--user-data-dir=${userData}`], { ...isolatedEnv, XIU_DESKTOP_SMOKE_LOG: smokeLog });
 
   await writeFile(smokeLog, "", "utf8");
@@ -71,7 +90,7 @@ try {
   await run(uninstaller, ["/S"], isolatedEnv);
   for (let attempt = 0; attempt < 600; attempt += 1) {
     try { await access(executable); await new Promise((resolve) => setTimeout(resolve, 100)); }
-    catch { passed = true; console.log(JSON.stringify({ passed: true, installer, checks: ["fresh-install", "installed-startup", "bundled-uv", "in-place-upgrade", "interrupted-restart", "uninstall"] }, null, 2)); break; }
+    catch { passed = true; console.log(JSON.stringify({ passed: true, installer, checks: ["fresh-install", "fuses", "installed-startup", "bundled-uv", "in-place-upgrade", "interrupted-restart", "uninstall"] }, null, 2)); break; }
   }
   if (!passed) throw new Error(`Uninstall did not remove Xiu.exe. Acceptance files remain at ${temp}`);
 } finally {
