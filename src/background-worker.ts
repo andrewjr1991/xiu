@@ -114,10 +114,10 @@ function stopOwnedTree(): void {
     // Keep the referenced escalation timer even after child close. Group KILL
     // also ends us; the fixed failure receipt preserves the unknown outcome.
     try { process.kill(-process.pid, "SIGTERM"); }
-    catch { try { child.kill("SIGTERM"); } catch {} }
+    catch { try { child.kill("SIGTERM"); } catch { /* the shell already exited; descendants get the KILL below */ } }
     forceTimer = setTimeout(() => {
       try { process.kill(-process.pid, "SIGKILL"); }
-      catch { try { child?.kill("SIGKILL"); } catch {} }
+      catch { try { child?.kill("SIGKILL"); } catch { /* nothing left to signal; the failure receipt stays unknown */ } }
     }, 1_000);
   }
 }

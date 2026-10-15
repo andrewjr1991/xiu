@@ -563,7 +563,7 @@ class StdioMcpConnection implements McpConnectionLike {
           clearTimeout(timer);
           this.pending.delete(id);
           signal.removeEventListener("abort", onAbort!);
-          try { this.notify("notifications/cancelled", { requestId: id, reason: "Xiu task cancelled" }); } catch {}
+          try { this.notify("notifications/cancelled", { requestId: id, reason: "Xiu task cancelled" }); } catch { /* a closed transport cannot take the courtesy notice; the call is rejected below either way */ }
           reject(new Error(`MCP call ${method} was cancelled`));
         };
       if (signal && onAbort) signal.addEventListener("abort", onAbort, { once: true });
