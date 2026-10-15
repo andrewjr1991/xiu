@@ -34,25 +34,19 @@ test("CI candidate acceptance uses original outcomes, never a masked conclusion"
   assert.equal(verificationContext("cli", "linux", steps).status, "incomplete");
 });
 
-test("Windows CLI requires the privacy preflight and cannot mask its failure", () => {
+test("Windows CLI requires the regression preflight and cannot mask its failure", () => {
   const steps: Record<string, { outcome: string; conclusion?: string }> = cliSteps();
   assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
-  steps.provider_privacy = { outcome: "failure", conclusion: "success" };
+  steps.windows_regressions = { outcome: "failure", conclusion: "success" };
   assert.equal(verificationContext("cli", "win32", steps).status, "failed");
   steps.tests = { outcome: "skipped" };
   assert.equal(verificationContext("cli", "win32", steps).checks.tests, "skipped");
   assert.equal(verificationContext("cli", "win32", steps).status, "failed");
-  steps.provider_privacy = { outcome: "success" };
-  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
-  steps.tests = { outcome: "success" };
-  assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
-  steps.windows_regressions = { outcome: "failure", conclusion: "success" };
-  assert.equal(verificationContext("cli", "win32", steps).status, "failed");
   steps.windows_regressions = { outcome: "skipped" };
   assert.equal(verificationContext("cli", "win32", steps).status, "incomplete");
+  steps.tests = { outcome: "success" };
   steps.windows_regressions = { outcome: "success" };
   assert.equal(verificationContext("cli", "win32", steps).status, "passed");
-  delete steps.provider_privacy;
   delete steps.windows_regressions;
   assert.equal(verificationContext("cli", "linux", steps).status, "passed");
 });
@@ -185,11 +179,10 @@ test("CI keeps failed checks visible and uploads candidates without publishing",
   assert.match(workflow, /xvfb-run --auto-servernum npm --prefix apps\/desktop run smoke:browser/);
   assert.match(workflow, /XIU_PACKAGE_ARCHIVE: \$\{\{ steps\.candidate\.outputs\.archive \}\}/);
   assert.match(workflow, /retention-days: 30/);
-  assert.match(workflow, /id: provider_privacy/);
-  assert.match(workflow, /node --test --import tsx test\/provider-windows-privacy\.test\.ts/);
+  assert.equal(workflow.includes("provider_privacy"), false);
   assert.match(workflow, /id: windows_regressions/);
   assert.match(workflow, /--test-name-pattern="workspace cleanup\|rapid detached commands\|CLI current action" test\/background\.test\.ts test\/provider-recovery-entry\.test\.ts/);
-  assert.match(workflow, /steps\.provider_privacy\.outcome == 'success' && steps\.windows_regressions\.outcome == 'success'/);
+  assert.match(workflow, /matrix\.platform != 'win32' \|\| steps\.windows_regressions\.outcome == 'success'/);
   const desktopWorkflow = workflow.slice(workflow.indexOf("\n  desktop:"));
   const validationIndex = desktopWorkflow.indexOf("id: ui_evidence\n");
   const uploadIndex = desktopWorkflow.indexOf("id: ui_evidence_upload\n");

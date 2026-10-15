@@ -2,15 +2,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { constants, type Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import path from "node:path";
 
 export const PROVIDER_CONFIGURATION_VERSION = 5;
 export const PROVIDER_CONFIGURATION_COMPATIBILITY_NOTICE = "Provider schema v5 requires matching upgraded CLI and desktop clients. Close all other Xiu clients before recovery; older clients do not honor this version's write lock.";
 const MAX_BYTES = 4 * 1024 * 1024;
 const BACKUP_ID = /^[a-f0-9-]{36}$/;
-const runFile = promisify(execFile);
 
 export interface ProviderConfigurationBackup {
   id: string;
@@ -36,205 +33,8 @@ export interface ProviderConfigurationRecoveryPreview {
   expiresAt: string;
   warnings: string[];
 }
-const WINDOWS_ACL_STAGES = [
-  "identity", "initialize-descriptor", "initialize-rule", "initialize-owner", "initialize-protection", "initialize-add-rule", "initialize-write",
-  "verify-read", "verify-protection", "verify-owner", "verify-rule-count", "verify-rule-identity", "verify-rule-type", "verify-rule-rights", "verify-rule-propagation", "verify-directory-inheritance",
-] as const;
-export type ProviderWindowsPrivacyFailure = "spawn" | "timeout" | "stdio-limit" | "nonzero-exit" | "process" | "protocol";
-export type ProviderWindowsPrivacyStage = typeof WINDOWS_ACL_STAGES[number] | "process-start" | "timeout" | "output-limit" | "process" | "protocol";
-const WINDOWS_ACL_CATEGORIES = ["access-denied", "privilege-not-held", "invalid-owner", "invalid-group", "invalid-descriptor", "invalid-acl", "invalid-parameter", "invalid-operation", "command-not-found", "argument", "io", "unknown"] as const;
-export type ProviderWindowsPrivacyCategory = typeof WINDOWS_ACL_CATEGORIES[number] | "unavailable";
-
-function windowsPrivacyResult(error: unknown): { stage: typeof WINDOWS_ACL_STAGES[number]; category: ProviderWindowsPrivacyCategory } | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const stdout = (error as { stdout?: unknown }).stdout;
-  if (typeof stdout !== "string" || stdout.length > 100) return undefined;
-  const match = /^XIU_ACL_V1:([a-z-]+)(?::([a-z-]+))?\r?\n?$/.exec(stdout);
-  if (!match || !(WINDOWS_ACL_STAGES as readonly string[]).includes(match[1]!) || (match[2] && !(WINDOWS_ACL_CATEGORIES as readonly string[]).includes(match[2]))) return undefined;
-  return { stage: match[1] as typeof WINDOWS_ACL_STAGES[number], category: (match[2] as ProviderWindowsPrivacyCategory | undefined) ?? "unavailable" };
-}
-
-export function providerWindowsPrivacyFailureKind(error: unknown): ProviderWindowsPrivacyFailure {
-  if (!error || typeof error !== "object") return "process";
-  const result = error as { code?: unknown; killed?: unknown };
-  if (typeof result.code === "string" && ["ENOENT", "EACCES", "EPERM", "EINVAL", "ENOEXEC"].includes(result.code)) return "spawn";
-  if (result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "stdio-limit";
-  if (result.killed === true) return "timeout";
-  return typeof result.code === "number" && Number.isInteger(result.code) && result.code !== 0 ? "nonzero-exit" : "process";
-}
-
-/** Only fixed stage identifiers can leave the subprocess boundary. Never expose stdout/stderr. */
-export function providerWindowsPrivacyFailureStage(error: unknown): ProviderWindowsPrivacyStage {
-  if (!error || typeof error !== "object") return "process";
-  const result = error as { code?: unknown; killed?: unknown; stdout?: unknown };
-  if (providerWindowsPrivacyFailureKind(error) === "spawn") return "process-start";
-  if (result.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "output-limit";
-  if (result.killed === true) return "timeout";
-  return windowsPrivacyResult(error)?.stage ?? "process";
-}
-
-export function providerWindowsPrivacyFailureCategory(error: unknown): ProviderWindowsPrivacyCategory {
-  const kind = providerWindowsPrivacyFailureKind(error);
-  return kind === "nonzero-exit" || kind === "process" ? windowsPrivacyResult(error)?.category ?? "unavailable" : "unavailable";
-}
-
-// Typed enums and constructors work in Windows PowerShell 5.1 as well as newer
-// PowerShell. One fixed stage code identifies each failed invariant without
-// returning an account name, path, ACL content, or raw PowerShell error.
-export const PROVIDER_WINDOWS_PRIVACY_SCRIPT = String.raw`
-# Suppress Windows PowerShell module-autoload progress/CLIXML before touching ACL cmdlets.
-$ProgressPreference = 'SilentlyContinue'
-$InformationPreference = 'SilentlyContinue'
-$WarningPreference = 'SilentlyContinue'
-$VerbosePreference = 'SilentlyContinue'
-$DebugPreference = 'SilentlyContinue'
-$ErrorActionPreference = 'Stop'
-# Corporate application-control policies can prohibit all non-core .NET calls.
-# Select this backend BEFORE any mutation; never retry a failed ACL write using
-# another backend. Native tools are resolved from SystemRoot, not PATH.
-if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
-  $stage = 'identity'
-  try {
-    function Get-XiuConstrainedDescriptor($acl, $currentSid, $currentAccount) {
-      $descriptor = $acl.Sddl
-      # SDDL may abbreviate the local built-in administrator as LA. Resolve it
-      # only when the OS-resolved owner account AND native current SID agree.
-      # A matching RID alone is insufficient (another domain can also use 500).
-      if ($descriptor -match '^O:LA(?=G:|D:)') {
-        if ($currentSid -notmatch '^S-1-5-21-[0-9]+-[0-9]+-[0-9]+-500$' -or $acl.Owner -ne $currentAccount) { throw 'Owner mismatch' }
-        $descriptor = $descriptor -replace '^O:LA', ('O:' + $currentSid)
-        $descriptor = $descriptor -replace ';;;LA\)', (';;;' + $currentSid + ')')
-      }
-      return $descriptor
-    }
-    $identity = & "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh
-    if ($LASTEXITCODE -ne 0 -or $identity -notmatch '^"([^"\r\n]+)","(S-1-[0-9]+(?:-[0-9]+)+)"\s*$') { throw 'Identity unavailable' }
-    $account = $Matches[1]
-    $sid = $Matches[2]
-    $p = $env:XIU_PROVIDER_PRIVATE_TARGET
-    $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
-    $stage = 'verify-owner'
-    $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
-    if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:' -or $Matches[1] -ne $sid) { throw 'Owner mismatch' }
-    if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
-      # Only newly created empty objects reach initialization. Remove inherited
-      # ACEs, grant the current SID, and preserve Group/SACL metadata.
-      # Do not request WRITE_OWNER/SeRestorePrivilege just to set the existing
-      # owner to itself. A different owner is rejected, never taken over.
-      $stage = 'initialize-protection'
-      & "$env:SystemRoot\System32\icacls.exe" $p /inheritance:r /q | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw 'Protection initialization failed' }
-      $stage = 'initialize-add-rule'
-      $grant = '*' + $sid + ':F'
-      if ($isDirectory) { $grant = '*' + $sid + ':(OI)(CI)F' }
-      & "$env:SystemRoot\System32\icacls.exe" $p /grant:r $grant /q | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw 'Rule initialization failed' }
-    }
-    $stage = 'verify-read'
-    $sddl = Get-XiuConstrainedDescriptor (Get-Acl -LiteralPath $p) $sid $account
-    $stage = 'verify-owner'
-    if ($sddl -notmatch '^O:(S-1-[0-9]+(?:-[0-9]+)+)G:') { throw 'Owner unavailable' }
-    if ($Matches[1] -ne $sid) { throw 'Owner mismatch' }
-    $stage = 'verify-rule-rights'
-    # Exact DACL grammar: protected, one allow ACE, full control, current SID.
-    # Reject extra/deny/callback/inherit-only rules and unknown descriptor forms.
-    if ($sddl -notmatch 'D:(P(?:AI|AR)*)(\(A;([^;]*);FA;;;(S-1-[0-9]+(?:-[0-9]+)+)\))(?:S:|$)') { throw 'DACL mismatch' }
-    $flags = $Matches[3]
-    if ($Matches[4] -ne $sid) { throw 'Rule identity mismatch' }
-    $stage = 'verify-directory-inheritance'
-    if (($isDirectory -and $flags -ne 'OICI') -or (!$isDirectory -and $flags -ne '')) { throw 'Inheritance mismatch' }
-    Write-Output 'XIU_ACL_V1:ok'
-    exit 0
-  } catch {
-    Write-Output ('XIU_ACL_V1:' + $stage + ':unknown')
-    exit 1
-  }
-}
-function Get-XiuPrivacyFailureCategory([System.Exception] $exception) {
-  $fallback = 'unknown'
-  # Inspect at most eight wrappers; only fixed categories can leave this process.
-  for ($depth = 0; $null -ne $exception -and $depth -lt 8; $depth++) {
-    if ($exception -is [System.Management.Automation.CommandNotFoundException]) { return 'command-not-found' }
-    $code = 0
-    if ($exception -is [System.ComponentModel.Win32Exception]) { $code = $exception.NativeErrorCode }
-    elseif (($exception.HResult -band 0x7fff0000) -eq 0x00070000) { $code = $exception.HResult -band 0xffff }
-    switch ($code) {
-      5 { return 'access-denied' }
-      87 { return 'invalid-parameter' }
-      1307 { return 'invalid-owner' }
-      1308 { return 'invalid-group' }
-      1314 { return 'privilege-not-held' }
-      1336 { return 'invalid-acl' }
-      1338 { return 'invalid-descriptor' }
-    }
-    if ($exception -is [System.Security.AccessControl.PrivilegeNotHeldException]) { return 'privilege-not-held' }
-    if ($exception -is [System.UnauthorizedAccessException] -or $exception -is [System.Security.SecurityException]) { $fallback = 'access-denied' }
-    elseif ($fallback -eq 'unknown' -and $exception -is [System.ArgumentException]) { $fallback = 'argument' }
-    elseif ($fallback -eq 'unknown' -and $exception -is [System.InvalidOperationException]) { $fallback = 'invalid-operation' }
-    elseif ($fallback -eq 'unknown' -and $exception -is [System.IO.IOException]) { $fallback = 'io' }
-    $exception = $exception.InnerException
-  }
-  return $fallback
-}
-$stage = 'identity'
-try {
-  $p = $env:XIU_PROVIDER_PRIVATE_TARGET
-  $isDirectory = $env:XIU_PROVIDER_DIRECTORY -eq '1'
-  $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-  $full = [System.Security.AccessControl.FileSystemRights]::FullControl
-  $allow = [System.Security.AccessControl.AccessControlType]::Allow
-  $none = [System.Security.AccessControl.PropagationFlags]::None
-  $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-  if ($env:XIU_PROVIDER_INITIALIZE -eq '1') {
-    $stage = 'initialize-descriptor'
-    if ($isDirectory) { $acl = [System.Security.AccessControl.DirectorySecurity]::new() }
-    else { $acl = [System.Security.AccessControl.FileSecurity]::new() }
-    $stage = 'initialize-rule'
-    if ($isDirectory) { $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $inherit, $none, $allow) }
-    else { $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $full, $allow) }
-    $stage = 'initialize-owner'
-    $acl.SetOwner($sid)
-    $stage = 'initialize-protection'
-    $acl.SetAccessRuleProtection($true, $false)
-    $stage = 'initialize-add-rule'
-    $acl.AddAccessRule($rule)
-    $stage = 'initialize-write'
-    # Framework persistence writes only modified Owner and Access sections.
-    # Set-Acl instead copies every section and can request unrelated audit
-    # privileges. Leave Group and SACL untouched; do not retry a denied write.
-    if ($isDirectory) { [System.IO.Directory]::SetAccessControl($p, $acl) }
-    else { [System.IO.File]::SetAccessControl($p, $acl) }
-  }
-  $stage = 'verify-read'
-  $acl = Get-Acl -LiteralPath $p
-  $stage = 'verify-protection'
-  if ($isDirectory -and !$acl.AreAccessRulesProtected) { throw 'ACL check failed' }
-  $stage = 'verify-owner'
-  if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'ACL check failed' }
-  $stage = 'verify-rule-count'
-  $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
-  if ($rules.Count -ne 1) { throw 'ACL check failed' }
-  $stage = 'verify-rule-identity'
-  if ($rules[0].IdentityReference.Value -ne $sid.Value) { throw 'ACL check failed' }
-  $stage = 'verify-rule-type'
-  if ($rules[0].AccessControlType -ne $allow) { throw 'ACL check failed' }
-  $stage = 'verify-rule-rights'
-  if ($rules[0].FileSystemRights -ne $full) { throw 'ACL check failed' }
-  $stage = 'verify-rule-propagation'
-  if ($rules[0].PropagationFlags -ne $none) { throw 'ACL check failed' }
-  $stage = 'verify-directory-inheritance'
-  if ($isDirectory -and $rules[0].InheritanceFlags -ne $inherit) { throw 'ACL check failed' }
-  [Console]::Out.WriteLine('XIU_ACL_V1:ok')
-  exit 0
-} catch {
-  $category = Get-XiuPrivacyFailureCategory $_.Exception
-  [Console]::Out.WriteLine('XIU_ACL_V1:' + $stage + ':' + $category)
-  exit 1
-}
-`;
-
 export class ProviderConfigurationError extends Error {
-  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false, readonly privacyStage?: ProviderWindowsPrivacyStage, readonly privacyFailure?: ProviderWindowsPrivacyFailure, readonly privacyCategory?: ProviderWindowsPrivacyCategory) { super(message); this.name = "ProviderConfigurationError"; }
+  constructor(readonly code: string, message: string, readonly replacementMayHaveCommitted = false) { super(message); this.name = "ProviderConfigurationError"; }
 }
 function failure(code: string): ProviderConfigurationError {
   const messages: Record<string, string> = {
@@ -252,100 +52,7 @@ function failure(code: string): ProviderConfigurationError {
   return new ProviderConfigurationError(code, messages[code] ?? messages.io!);
 }
 
-/** Resolve the fixed OS helper without consulting the workspace or PATH. */
-export function providerWindowsPowerShellPath(systemRoot: string | undefined): string {
-  const root = systemRoot?.replace(/\//g, "\\");
-  // SystemRoot must identify a local, drive-absolute directory. Do not accept
-  // drive-relative, UNC/device, traversal, or Win32-aliased path components.
-  const components = root?.slice(3).replace(/\\$/, "").split("\\");
-  if (!root || !/^[a-z]:\\/i.test(root) || /[\x00-\x1f<>"|?*:]/.test(root.slice(2)) || !components?.length || components.some((part) => !part || part === "." || part === ".." || /[ .]$/.test(part))) {
-    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL helper location is unavailable or invalid.`, false, "process-start", "spawn", "unavailable");
-  }
-  return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-}
-
-/** Let Windows PowerShell build its own module path, rather than inherit PS7 modules through Node. */
-export function providerWindowsPowerShellEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"));
-}
-
-export async function verifyProviderWindowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
-  return verifyProviderWindowsPrivacyBatch([{ target, directory, initialize }]);
-}
-
-export interface ProviderWindowsPrivacyCheck { target: string; directory: boolean; initialize: boolean }
-const MAX_WINDOWS_PRIVACY_BATCH = 4;
-
-/**
- * Run the unchanged single-object check once per object, in order, inside one
- * PowerShell process. Each check still reads the current ACL; only the process
- * start is shared. The first failure exits the process, so later objects are
- * neither verified nor initialized.
- */
-export function providerWindowsPrivacyBatchScript(count: number): string {
-  if (!Number.isSafeInteger(count) || count < 2 || count > MAX_WINDOWS_PRIVACY_BATCH) throw new RangeError("Invalid Windows ACL batch size");
-  // Success returns to the next object; failure keeps `exit 1` and ends the batch.
-  const body = PROVIDER_WINDOWS_PRIVACY_SCRIPT.replace(/^(\s*)exit 0$/gm, "$1return");
-  if (/^\s*exit 0$/m.test(body) || (body.match(/^\s*return$/gm) ?? []).length !== 2) throw new Error("Unexpected Windows ACL script shape");
-  const calls = Array.from({ length: count }, (_, index) => `$env:XIU_PROVIDER_PRIVATE_TARGET = $env:XIU_PROVIDER_PRIVATE_TARGET_${index}\n$env:XIU_PROVIDER_DIRECTORY = $env:XIU_PROVIDER_DIRECTORY_${index}\n$env:XIU_PROVIDER_INITIALIZE = $env:XIU_PROVIDER_INITIALIZE_${index}\nInvoke-XiuProviderPrivacyCheck`);
-  return `function Invoke-XiuProviderPrivacyCheck {\n${body}\n}\n${calls.join("\n")}\n`;
-}
-
-export async function verifyProviderWindowsPrivacyBatch(checks: readonly ProviderWindowsPrivacyCheck[]): Promise<void> {
-  if (checks.length < 1 || checks.length > MAX_WINDOWS_PRIVACY_BATCH) throw new RangeError("Invalid Windows ACL batch size");
-  try {
-    const executable = providerWindowsPowerShellPath(process.env.SystemRoot);
-    const variables: NodeJS.ProcessEnv = {};
-    let script = PROVIDER_WINDOWS_PRIVACY_SCRIPT;
-    if (checks.length === 1) {
-      const [check] = checks;
-      Object.assign(variables, { XIU_PROVIDER_PRIVATE_TARGET: path.resolve(check!.target), XIU_PROVIDER_DIRECTORY: check!.directory ? "1" : "0", XIU_PROVIDER_INITIALIZE: check!.initialize ? "1" : "0" });
-    } else {
-      script = providerWindowsPrivacyBatchScript(checks.length);
-      checks.forEach((check, index) => Object.assign(variables, { [`XIU_PROVIDER_PRIVATE_TARGET_${index}`]: path.resolve(check.target), [`XIU_PROVIDER_DIRECTORY_${index}`]: check.directory ? "1" : "0", [`XIU_PROVIDER_INITIALIZE_${index}`]: check.initialize ? "1" : "0" }));
-    }
-    const env = providerWindowsPowerShellEnvironment({ ...process.env, ...variables });
-    let result: { stdout: string };
-    try { result = await runFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-Command", script], { windowsHide: true, timeout: 15_000 * checks.length, maxBuffer: 1024 * checks.length, env }); }
-    catch (error) { throw lastWindowsPrivacyResult(error, checks.length); }
-    const lines = result.stdout.split(/\r?\n/);
-    if (lines.at(-1) === "") lines.pop();
-    if (lines.length !== checks.length || lines.some((line) => line !== "XIU_ACL_V1:ok")) throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: protocol; stage: protocol.`, false, "protocol", "protocol");
-  } catch (error) {
-    if (error instanceof ProviderConfigurationError) throw error;
-    const stage = providerWindowsPrivacyFailureStage(error);
-    const kind = providerWindowsPrivacyFailureKind(error);
-    const category = providerWindowsPrivacyFailureCategory(error);
-    throw new ProviderConfigurationError("unsafe", `${failure("unsafe").message} Windows ACL failure: ${kind}; stage: ${stage}; category: ${category}.`, false, stage, kind, category);
-  }
-}
-
-/** A failed batch reports earlier objects' ok lines first; classify only its final result line. */
-function lastWindowsPrivacyResult(error: unknown, count: number): unknown {
-  if (count === 1 || !error || typeof error !== "object") return error;
-  const stdout = (error as { stdout?: unknown }).stdout;
-  if (typeof stdout !== "string") return error;
-  const lines = stdout.split(/\r?\n/);
-  if (lines.at(-1) === "") lines.pop();
-  const last = lines.pop();
-  // Anything but earlier successes before the final line is a protocol failure.
-  if (last === undefined || lines.length >= count || lines.some((line) => line !== "XIU_ACL_V1:ok")) return Object.assign(error, { stdout: "" });
-  return Object.assign(error, { stdout: `${last}\n` });
-}
-
-export type ProviderWindowsPrivacyVerifier = (checks: readonly ProviderWindowsPrivacyCheck[]) => Promise<void>;
-let windowsPrivacyVerifier: ProviderWindowsPrivacyVerifier = verifyProviderWindowsPrivacyBatch;
-/**
- * Test harness only: each storage ACL check starts Windows PowerShell, which
- * makes the full suite far slower on Windows. The suite swaps in a stand-in;
- * the real check keeps its own tests. Product code never calls this, and a
- * test asserts that.
- */
-export function replaceProviderWindowsPrivacyVerifierForTests(verifier?: ProviderWindowsPrivacyVerifier): void {
-  windowsPrivacyVerifier = verifier ?? verifyProviderWindowsPrivacyBatch;
-}
-
-/** A failed ACL check (including the directory re-check in a lock write) stays "unsafe"; other failures map to `code`. */
+/** A storage check that already failed as "unsafe" stays "unsafe"; other failures map to `code`. */
 function unsafeOr(error: unknown, code: string): ProviderConfigurationError {
   return error instanceof ProviderConfigurationError && error.code === "unsafe" ? error : failure(code);
 }
@@ -375,8 +82,10 @@ export class ProviderConfigurationStorage {
     let stat: Stats;
     try { stat = await fs.lstat(filename); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    // On Windows the user profile directory's default permissions protect
+    // these files, as they do for other tools' credential files; no ACL is
+    // inspected or changed. POSIX private objects must stay owner-only.
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maximum || (process.platform !== "win32" && (stat.uid !== process.getuid?.() || (privateFile && (stat.mode & 0o077) !== 0)))) throw failure("unsafe");
-    if (process.platform === "win32" && privateFile) await this.windowsPrivacy(filename, false, false);
     const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       const opened = await handle.stat();
@@ -394,30 +103,16 @@ export class ProviderConfigurationStorage {
     catch (error) { throw error instanceof ProviderConfigurationError ? error : failure("io"); }
   }
 
-  private windowsPrivacy(target: string, directory: boolean, initialize: boolean): Promise<void> {
-    return windowsPrivacyVerifier([{ target, directory, initialize }]);
-  }
-
-  /**
-   * On Windows a caller may pass `deferWindowsCheck` only when its next step
-   * is `writeExclusive`, which re-checks this directory's ACL in the same
-   * PowerShell process that initializes the new file, before any bytes are
-   * written. A newly created directory is always initialized here.
-   */
-  private async privateDirectory(create: boolean, deferWindowsCheck = false): Promise<boolean> {
-    let created = false;
+  private async privateDirectory(create: boolean): Promise<boolean> {
     if (create) {
       await fs.mkdir(path.dirname(this.filename), { recursive: true, mode: 0o700 });
-      try { await fs.mkdir(this.directory, { mode: 0o700 }); created = true; }
+      try { await fs.mkdir(this.directory, { mode: 0o700 }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
     }
     let stat: Stats;
     try { stat = await fs.lstat(this.directory); }
     catch (error) { if (!create && (error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
     if (!stat.isDirectory() || stat.isSymbolicLink() || (process.platform !== "win32" && (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0))) throw failure("unsafe");
-    // Windows mode bits do not protect secrets. Never cache ACL verification:
-    // an existing directory can keep its identity while its ACL changes.
-    if (process.platform === "win32" && (created || !deferWindowsCheck)) await this.windowsPrivacy(this.directory, true, created);
     return true;
   }
 
@@ -427,33 +122,16 @@ export class ProviderConfigurationStorage {
     try { await handle.sync(); } finally { await handle.close(); }
   }
   private async writeExclusive(filename: string, bytes: Buffer): Promise<void> {
-    // Directory type and ownership checks; on Windows its ACL is re-checked
-    // below together with the new file, still before any bytes are written.
-    if (process.platform === "win32") await this.privateDirectory(false, true);
     const handle = await fs.open(filename, "wx", 0o600);
-    let initialized = process.platform !== "win32";
-    try {
-      // Explicit per-file ACLs also protect against later parent ACL changes.
-      // Initialize only a newly created empty file, before writing any bytes.
-      if (!initialized) {
-        await windowsPrivacyVerifier([{ target: this.directory, directory: true, initialize: false }, { target: filename, directory: false, initialize: true }]);
-        initialized = true;
-      }
-      await handle.writeFile(bytes); await handle.sync();
-    }
-    finally {
-      await handle.close();
-      // Never leave an empty, unprotected marker (such as a write lock) behind.
-      if (!initialized) await fs.unlink(filename).catch(() => undefined);
-    }
+    try { await handle.writeFile(bytes); await handle.sync(); }
+    finally { await handle.close(); }
   }
   async assertCurrent(expected: ProviderConfigurationSnapshot | undefined): Promise<void> {
     if ((await this.read())?.revision !== expected?.revision) throw failure("changed");
   }
 
   private async withLock<T>(run: () => Promise<T>, recoverLockRevision?: string, beforeTakeover?: () => Promise<void>): Promise<T> {
-    // An existing directory's ACL is checked by the lock write that follows.
-    await this.privateDirectory(true, true);
+    await this.privateDirectory(true);
     const recoveryLock = path.join(this.directory, "recovery.lock");
     let recoveryOwned = false;
     let owned = false;
