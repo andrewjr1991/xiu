@@ -23,7 +23,8 @@ import { useBundledUv } from "../../../src/free-search.js";
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
 import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
-import { isTrustedRendererUrl, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
+import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
+import { verifiedComponentPath } from "./unpacked-integrity.js";
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "xiu-app",
@@ -75,7 +76,8 @@ const taskController = new DesktopTaskController((event) => {
     if (controller.trustedWorkspacePath() !== workspace || !computerUseController || host.runtime.snapshot().planMode) throw new Error("电脑操作授权不可用；Plan 或工作区已变化。");
     return computerUseController;
   };
-  const host = await createWorkspaceAgentHost(workspace, { computerUse: {
+  // Packaged builds verify the unpacked worker against the asar manifest on every start (S6).
+  const host = await createWorkspaceAgentHost(workspace, { backgroundWorkerSource: () => verifiedComponentPath("main/background-worker.mjs"), computerUse: {
     windows: () => check().discover(workspace),
     select: (handle, provider, fullAccess, signal) => check().selectForModel(workspace, handle, provider, fullAccess, signal),
     observe: (provider, signal) => check().observeForModel(workspace, provider, signal),
@@ -128,10 +130,7 @@ function serializeWriterStart<T>(operation: () => Promise<T>, recovery = false):
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent, recovery = false): void {
-  const url = event.senderFrame?.url ?? "";
-  if (!mainWindow || event.sender.id !== mainWindow.webContents.id || !isTrustedRendererUrl(url)) {
-    throw new Error("Rejected IPC from an untrusted renderer.");
-  }
+  assertTrustedIpcSender(event, mainWindow?.webContents.id);
   if (!recovery) providerRecoveryController.assertCanContinue();
 }
 

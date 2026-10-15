@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { verifiedComponentPath } from "./unpacked-integrity.js";
 import { fileURLToPath } from "node:url";
 import type { ComputerWindow } from "../shared/computer-use.js";
 
@@ -26,12 +27,19 @@ export class ComputerBridgeError extends Error {
 }
 
 export class WindowsComputer {
-  constructor(private readonly executable = fileURLToPath(new URL("../native/XiuComputerBridge.exe", import.meta.url)).replace(/app\.asar([\\/])/, "app.asar.unpacked$1")) {}
+  private readonly executable: string;
+  /** Runs before every spawn; the packaged default compares the unpacked bridge with the asar manifest (S6). */
+  private readonly verify: () => void;
+  constructor(executable?: string, verify?: () => void) {
+    this.executable = executable ?? fileURLToPath(new URL("../native/XiuComputerBridge.exe", import.meta.url)).replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+    this.verify = verify ?? (executable ? () => undefined : () => { verifiedComponentPath("native/XiuComputerBridge.exe"); });
+  }
   private children = new Set<ChildProcess>();
   stop(): void { for (const child of this.children) child.kill(); this.children.clear(); }
   async request<T>(request: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     if (process.platform !== "win32" || signal?.aborted) throw new Error("电脑操作不可用或已取消。");
     return new Promise((resolve, reject) => {
+      try { this.verify(); } catch (error) { reject(error); return; }
       const child = spawn(this.executable, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
       this.children.add(child);
       let output = "", settled = false;

@@ -79,7 +79,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
  * Electron dependency, so the execution and approval authority remains in the
  * shared Node runtime rather than the renderer.
  */
-export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; journalRoot?: string; computerUse?: ComputerUseHost } = {}): Promise<WorkspaceAgentHost> {
+export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; computerUse?: ComputerUseHost } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
   try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
@@ -124,7 +124,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     return next;
   };
   // One manager per workspace host: a second desktop workspace gets its own.
-  const background = new BackgroundManager({ workspace, storageRoot: options.backgroundRoot, workerProgram: await resolveNodeRuntime().catch(() => undefined) });
+  const background = new BackgroundManager({ workspace, storageRoot: options.backgroundRoot, workerProgram: await resolveNodeRuntime().catch(() => undefined), workerSource: options.backgroundWorkerSource });
   background.prepareWorkspace();
   const initialMediaTools = createMediaTools(config);
   const initialComputerTools = options.computerUse ? createComputerUseTools(config, options.computerUse) : [];

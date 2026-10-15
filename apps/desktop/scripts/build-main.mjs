@@ -1,5 +1,6 @@
 import { build } from "esbuild";
-import { mkdir, rm, readFile } from "node:fs/promises";
+import { mkdir, rm, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import "./build-computer-bridge.mjs";
 
@@ -40,3 +41,14 @@ await build({
   outfile: localPath("../dist/main/background-worker.mjs"),
   bundle: true, platform: "node", format: "esm", target: "node22",
 });
+
+// SHA-256 of every file electron-builder unpacks next to app.asar (see
+// `asarUnpack`), shipped inside the asar as dist/main/unpacked-manifest.json so
+// the main process can verify the unpacked copies before starting them (S6).
+const distUrl = new URL("../dist/", import.meta.url);
+const nativeExecutables = (await readdir(new URL("native/", distUrl)).catch(() => [])).filter((name) => name.endsWith(".exe")).sort().map((name) => `native/${name}`);
+const files = {};
+for (const relative of ["main/background-worker.mjs", ...nativeExecutables]) {
+  files[relative] = createHash("sha256").update(await readFile(new URL(relative, distUrl))).digest("hex");
+}
+await writeFile(new URL("main/unpacked-manifest.json", distUrl), `${JSON.stringify({ version: 1, files }, null, 2)}\n`);
