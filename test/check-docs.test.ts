@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 const script = path.resolve("scripts/check-docs.mjs");
 const version = "0.20.3-preview.1";
+test("the npm package includes exactly the current release design", async () => {
+  const manifest = JSON.parse(await readFile("package.json", "utf8")) as { version: string; files: string[] };
+  const design = `V${manifest.version}_DESIGN.zh-CN.md`;
+  assert.deepEqual(manifest.files.filter((name) => /^V.*_DESIGN\.zh-CN\.md$/.test(name)), [design]);
+  assert.ok((await readFile(design, "utf8")).length > 0);
+});
+
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "xiu-docs-check-"));
   await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "@xiu-ai/cli", version }));
