@@ -14,7 +14,7 @@ const npmCli = process.env.npm_execpath && existsSync(process.env.npm_execpath)
 if (!existsSync(npmCli)) throw new Error("Could not locate the npm CLI used to run the package smoke test");
 
 function runNpm(args, options = {}) {
-  return execFileSync(process.execPath, [npmCli, ...args], { timeout: 180_000, windowsHide: true, ...options });
+  return execFileSync(process.execPath, [npmCli, ...args], { timeout: 360_000, windowsHide: true, ...options });
 }
 
 try {
@@ -40,7 +40,7 @@ try {
     "--package-lock=false",
     "--registry=https://registry.npmjs.org",
     `--cache=${path.join(temporaryRoot, "npm-cache")}`,
-    "--fetch-retries=1",
+    "--fetch-retries=2",
     "--fetch-timeout=60000",
     archive,
   ], { cwd: installRoot, stdio: "inherit" });
