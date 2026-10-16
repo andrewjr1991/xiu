@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computerVisionRoute, createComputerUseTools, type ComputerUseHost } from "../src/computer-use-tools.js";
+import { FRAME_TTL_MS, computerVisionRoute, createComputerUseTools, describeElements, type ComputerUseHost } from "../src/computer-use-tools.js";
 import type { AgentConfig } from "../src/config.js";
 import type { ToolContext } from "../src/types.js";
 
@@ -107,7 +107,7 @@ test("cancelling after input prevents delayed feedback but never repeats the sen
 });
 
 test("slow vision responses do not expose expired frame IDs as actionable", async () => {
-  const tools=createComputerUseTools(config,{...host,observe:async()=>({...frame,capturedAt:new Date(Date.now()-61000).toISOString()})},{analyzeImage:async()=>"Visible old result"});
+  const tools=createComputerUseTools(config,{...host,observe:async()=>({...frame,capturedAt:new Date(Date.now()-FRAME_TTL_MS-1000).toISOString()})},{analyzeImage:async()=>"Visible old result"});
   const result=await tools[1]!.execute({prompt:"Inspect"},context);
   assert.match(result,/expired/i);assert.doesNotMatch(result,/Frame: frame-fixture/);
 });
@@ -219,4 +219,20 @@ test("the host's own dialogs replace the generic approval only for steps they co
   await run("computer_windows", {});
   await executeToolResult(createComputerUseTools(config, host, {}).find(tool => tool.name === "computer_input")!, { kind: "click", frameId: frame.frameId, x: 1, y: 1 }, approving);
   assert.deepEqual(approvals.slice(2), ["discover application windows for computer task", "perform one target-window input within confirmed scope"]);
+});
+
+test("control listings are one line per control, never cut mid-entry, and frames stay valid for three minutes", async () => {
+  const element = (index: number) => ({ id: `42.${index}.-2147483646.${index}`, name: index === 0 ? "Editable  field" : `Menu item ${index}`, role: index === 0 ? "ControlType.Document" : "ControlType.MenuItem", x: index, y: 10, width: 300, height: 20, enabled: index !== 1 });
+  const listing = describeElements([element(0), element(1)]);
+  assert.equal(listing, "42.0.-2147483646.0 | Document | Editable field | 0,10 300x20\n42.1.-2147483646.1 | MenuItem | Menu item 1 | 1,10 300x20 | disabled");
+  const many = describeElements(Array.from({ length: 400 }, (_, index) => element(index)));
+  const lines = many.split("\n");
+  assert.ok(many.length <= 16_100 && lines.length < 400);
+  assert.match(lines.at(-1)!, /^… \d+ more controls not listed/);
+  for (const line of lines.slice(0, -1)) assert.match(line, /^42\.\d+\.-2147483646\.\d+ \| /);
+  assert.equal(describeElements([]), "(none readable)");
+  assert.equal(FRAME_TTL_MS, 180_000);
+  // A frame just under the limit is still actionable in relay mode.
+  const fresh = createComputerUseTools(config, { ...host, observe: async () => ({ ...frame, capturedAt: new Date(Date.now() - FRAME_TTL_MS + 5_000).toISOString() }) }, { analyzeImage: async () => "Visible" });
+  assert.match(await fresh[1]!.execute({ prompt: "Inspect" }, context), /Frame: frame-fixture/);
 });

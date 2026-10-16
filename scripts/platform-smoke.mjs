@@ -17,7 +17,7 @@ const npmCli = process.env.npm_execpath && existsSync(process.env.npm_execpath) 
 if (!existsSync(npmCli)) throw new Error("Could not locate npm CLI for platform smoke test");
 
 function npm(args, options = {}) {
-  return execFileSync(process.execPath, [npmCli, ...args], { timeout: 180_000, windowsHide: true, ...options });
+  return execFileSync(process.execPath, [npmCli, ...args], { timeout: 360_000, windowsHide: true, ...options });
 }
 
 function runLauncher(launcher, args) {
@@ -57,6 +57,7 @@ try {
   npm([
     "install", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false",
     `--cache=${path.join(temporaryRoot, "npm-cache")}`,
+    "--fetch-retries=2", "--fetch-timeout=60000",
     archive,
   ], { cwd: installRoot, stdio: "inherit" });
   console.log("Platform smoke: package installed");
