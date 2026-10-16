@@ -84,6 +84,10 @@ const taskController = new DesktopTaskController((event) => {
     input: (input, signal) => check().input(workspace, input as import("../shared/computer-use.js").ComputerInput, signal),
     feedbackFinished: () => check().feedbackFinished(),
     status: () => { const target = check().selectedStatus(); return target; },
+    confirms: (step) => {
+      try { return check().confirms(step); }
+      catch { return false; } // No trusted controller for this workspace (Plan or workspace change): keep the generic approval.
+    },
   } });
   const close = host.close;
   host.close = async () => { computerUseController?.revokeFullAccess(); await close?.(); };

@@ -783,7 +783,7 @@ export async function executeToolResult(tool: AgentTool, input: Record<string, u
       if (entries.some(name => classifyCommand(scripts[name]!) === "dangerous" || /\b(?:npm\s+(?:publish|unpublish)|git\s+push\b.*--force)/i.test(scripts[name]!))) risk = "dangerous";
     } catch (error) { return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure", { errorCode: "invalid_input" }); }
   }
-  if (risk !== "read") {
+  if (risk !== "read" && tool.hostConfirmed?.(input) !== true) {
     let preview: string | undefined;
     try { preview = scriptPreview || await tool.preview?.(input, context); }
     catch (error) { return toolResult(`Tool error: ${error instanceof Error ? error.message : String(error)}`, "failure", { errorCode: toolErrorCode(String(error)) }); }

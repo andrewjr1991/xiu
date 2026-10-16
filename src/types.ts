@@ -143,6 +143,13 @@ export interface AgentTool extends ToolDefinition {
   maxAttempts?: number;
   /** Enables an explicit "always allow for this session" choice for this exact operation family. */
   approvalScope?: string | ((input: Record<string, unknown>) => string | undefined);
+  /**
+   * True when a trusted host has already obtained the user's confirmation for this exact operation through
+   * its own dialog (for example the desktop's Computer Use target/step/automatic-grant dialogs), so the generic
+   * approval prompt would only repeat it. Decided by host code from host state, never from model arguments;
+   * Plan mode, risk classification and journaling are unaffected.
+   */
+  hostConfirmed?(input: Record<string, unknown>): boolean;
   describe(input: Record<string, unknown>): string;
   validate?(input: Record<string, unknown>): void;
   preview?(input: Record<string, unknown>, context: ToolContext): Promise<string>;

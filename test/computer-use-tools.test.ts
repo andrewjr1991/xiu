@@ -196,3 +196,27 @@ test("the input vocabulary exposes pointer kinds, drag targets and the key tiers
   await dragTools.find(tool => tool.name === "computer_input")!.execute({ kind: "drag", frameId: frame.frameId, x: 10, y: 20, toX: 300, toY: 400 }, context);
   assert.equal(sent[0]!.kind, "drag"); assert.equal(sent[0]!.toX, 300); assert.equal(sent[0]!.toY, 400);
 });
+
+test("the host's own dialogs replace the generic approval only for steps they cover", async () => {
+  const { executeToolResult } = await import("../src/tools.js");
+  const approvals: string[] = [];
+  const approving = { ...context, approve: async (request: { description: string }) => { approvals.push(request.description); return true; } };
+  const covered = new Set<string>();
+  const tools = createComputerUseTools(config, { ...host, windows: async () => [], select: async () => "authorized", confirms: step => covered.has(step) }, { analyzeImage: async () => "Visible" });
+  const run = (name: string, input: Record<string, unknown>) => executeToolResult(tools.find(tool => tool.name === name)!, input, approving);
+  // No target yet: observe and input go through the generic approval; selection is always the controller's dialog.
+  await run("computer_input", { kind: "click", frameId: frame.frameId, x: 1, y: 1 });
+  await run("computer_observe", { prompt: "Inspect" });
+  covered.add("select");
+  await run("computer_select", { handle: "42" });
+  assert.deepEqual(approvals, ["perform one target-window input within confirmed scope", "observe target window within confirmed vision scope"]);
+  // Authorized target: the controller confirms each step itself (or holds the user's automatic grant).
+  covered.add("observe"); covered.add("input");
+  assert.equal((await run("computer_input", { kind: "click", frameId: frame.frameId, x: 1, y: 1 })).status, "success");
+  assert.equal((await run("computer_observe", { prompt: "Inspect" })).status, "success");
+  assert.equal(approvals.length, 2);
+  // Discovery and a host without the hook keep the generic approval.
+  await run("computer_windows", {});
+  await executeToolResult(createComputerUseTools(config, host, {}).find(tool => tool.name === "computer_input")!, { kind: "click", frameId: frame.frameId, x: 1, y: 1 }, approving);
+  assert.deepEqual(approvals.slice(2), ["discover application windows for computer task", "perform one target-window input within confirmed scope"]);
+});
