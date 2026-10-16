@@ -197,6 +197,22 @@ test("the input vocabulary exposes pointer kinds, drag targets and the key tiers
   assert.equal(sent[0]!.kind, "drag"); assert.equal(sent[0]!.toX, 300); assert.equal(sent[0]!.toY, 400);
 });
 
+test("a blank or misplaced elementId never blocks type/key and is dropped before reaching the host", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const tools = createComputerUseTools(config, { ...host, input: async value => { sent.push(value as unknown as Record<string, unknown>); return "sent once"; }, observe: async () => frame }, { analyzeImage: async () => "Visible" });
+  const input = tools.find(tool => tool.name === "computer_input")!;
+  const typed = await input.execute({ kind: "type", frameId: frame.frameId, text: "hello", elementId: "" }, context);
+  assert.doesNotMatch(typed, /ignored/);
+  await input.execute({ kind: "type", frameId: frame.frameId, text: "hello", elementId: null }, context);
+  const targeted = await input.execute({ kind: "key", frameId: frame.frameId, key: "Enter", elementId: "button-1" }, context);
+  assert.match(targeted, /elementId is ignored for type\/key; the input went to the focused control/);
+  await input.execute({ kind: "click", frameId: frame.frameId, x: 1, y: 2, elementId: "  " }, context);
+  await input.execute({ kind: "click", frameId: frame.frameId, elementId: "button-1" }, context);
+  assert.deepEqual(sent.map(value => "elementId" in value ? value.elementId : "absent"), ["absent", "absent", "absent", "absent", "button-1"]);
+  const schema = input.inputSchema as { properties: Record<string, { description?: string }> };
+  assert.match(schema.properties.elementId!.description ?? "", /Omit for type, key/);
+});
+
 test("the host's own dialogs replace the generic approval only for steps they cover", async () => {
   const { executeToolResult } = await import("../src/tools.js");
   const approvals: string[] = [];

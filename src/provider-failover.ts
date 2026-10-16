@@ -36,5 +36,16 @@ export function isTransientProviderError(error: unknown): boolean {
 
 export function safeProviderErrorMessage(error: unknown, sensitiveValues: readonly string[] = []): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return redactSecrets(raw, sensitiveValues).slice(0, 500);
+  return redactSecrets(collapseHtmlBody(raw), sensitiveValues).slice(0, 500);
+}
+
+/** A gateway in front of the provider answers 502/503 with an HTML page; keep its title, not the markup. */
+function collapseHtmlBody(message: string): string {
+  const start = message.search(/<!doctype\s+html|<html[\s>]/i);
+  if (start < 0) return message;
+  const html = message.slice(start);
+  const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.replace(/\s+/g, " ").trim();
+  const head = message.slice(0, start).trim();
+  const summary = title && !(head && title.startsWith(head)) ? `${head} ${title}`.trim() : title || head;
+  return `${summary || "HTML error page"} (HTML error page from the gateway; body omitted)`;
 }
