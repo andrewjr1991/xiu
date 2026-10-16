@@ -25,3 +25,12 @@ test("provider failure redaction removes opaque active API keys", () => {
   assert.doesNotMatch(message, new RegExp(key));
   assert.match(message, /REDACTED/);
 });
+
+test("provider failure messages keep a gateway's HTML error page down to its title", () => {
+  const html = `502 <!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n<html><head>\n<title>502 Bad Gateway</title>\n</head><body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>nginx</center>\n</body></html>`;
+  const message = safeProviderErrorMessage(Object.assign(new Error(html), { status: 502 }));
+  assert.equal(message, "502 Bad Gateway (HTML error page from the gateway; body omitted)");
+  assert.doesNotMatch(message, /<|nginx/);
+  assert.equal(safeProviderErrorMessage(new Error("<html><body>busy</body></html>")), "HTML error page (HTML error page from the gateway; body omitted)");
+  assert.equal(safeProviderErrorMessage(new Error("plain failure")), "plain failure");
+});

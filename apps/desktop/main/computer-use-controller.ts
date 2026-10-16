@@ -179,8 +179,10 @@ export class ComputerUseController {
     if (++this.inputs > limit) { this.stop(); throw new Error(`本次窗口授权已达 ${limit} 步，请重新授权。`); }
     const budget = this.taskBudget;
     if (this.automaticProvider && budget && budget.task === this.boundTask) budget.inputs = this.inputs;
+    // Blank IDs (`""`, null) and IDs on type/key are dropped rather than refused: text and keys only
+    // ever reach the focused control, so such a value is never a target and must not block the step.
+    if (typeof input.elementId !== "string" || !input.elementId.trim() || input.kind === "type" || input.kind === "key") input = { ...input, elementId: undefined };
     if (input.elementId !== undefined) {
-      if (!["click", "doubleclick", "rightclick"].includes(input.kind)) throw new Error("elementId 只用于 click/doubleclick/rightclick。文本和按键发送到当前焦点控件：先 click 目标（可带 elementId），下一步直接 type 或 key，不需要额外观察。");
       const element = this.value.elements?.find(element => element.id === input.elementId);
       if (!element) throw new Error("该控件 ID 不在最新一帧的控件列表中。请使用最新结果列出的 ID，或改用截图坐标点击。");
       if (!element.enabled) throw new Error("该控件当前已禁用，未发送输入。");

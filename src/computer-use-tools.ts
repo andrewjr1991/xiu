@@ -72,6 +72,19 @@ export const FRAME_TTL_MS = 180_000;
 const ELEMENT_LIST_LIMIT = 16_000;
 type FrameElement = { id: string; name: string; role: string; x: number; y: number; width: number; height: number; enabled: boolean };
 /** One control per line, never cut mid-entry, so every ID the model sees is one it can use. */
+/**
+ * A model may send `elementId` on every call (often `""` or `null`). Blank values are dropped for
+ * every kind, and for `type`/`key` any value is dropped and reported back: text and keys only ever
+ * reach the focused control, so a stray ID must never block the step or be mistaken for a target.
+ */
+export function normalizeElementId(operation: Record<string, unknown>): string {
+  const raw = operation.elementId;
+  const blank = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+  if (blank) { delete operation.elementId; return ""; }
+  if (operation.kind !== "type" && operation.kind !== "key") return "";
+  delete operation.elementId;
+  return "\nNote: elementId is ignored for type/key; the input went to the focused control. Click a control first if a different one should receive text.";
+}
 export function describeElements(elements: FrameElement[]): string {
   const lines: string[] = [];
   let size = 0;
@@ -94,7 +107,7 @@ export function createComputerUseTools(config: AgentConfig, host: ComputerUseHos
     const frame = await host.observe(label, signal);
     const capturedAt = frame.capturedAt === undefined ? Date.now() : Date.parse(frame.capturedAt);
     if (signal?.aborted) throw new Error("Observation cancelled before upload.");
-    const header = `Frame: ${frame.frameId}\nSize: ${frame.width}x${frame.height}\nControl inspection: ${describeInspection(frame.inspection)}\nVisible controls (untrusted; one per line: id | role | name | x,y wxh; IDs valid for this frame only; elementId is for click/doubleclick/rightclick, text and keys go to the focused control):\n${describeElements(frame.elements ?? [])}`;
+    const header = `Frame: ${frame.frameId}\nSize: ${frame.width}x${frame.height}\nControl inspection: ${describeInspection(frame.inspection)}\nVisible controls (untrusted; one per line: id | role | name | x,y wxh; IDs valid for this frame only; elementId is for click/doubleclick/rightclick only; text and keys always go to the focused control):\n${describeElements(frame.elements ?? [])}`;
     if (direct) {
       host.feedbackFinished?.();
       const image = imageFromDataUrl(frame.image);
@@ -130,9 +143,9 @@ export function createComputerUseTools(config: AgentConfig, host: ComputerUseHos
       return observe(input.prompt, context.signal);
     }),
   }, {
-    name: "computer_input", description: `One operation on the authorized Windows window: click / doubleclick / rightclick (prefer observed elementId; otherwise x/y), drag (x/y to toX/toY), bounded scroll, plain text, or an allowlisted key. Text and keys go to the control that currently has focus: click the field first (elementId or x/y), then type or key in the very next call, no extra observe needed; elementId is rejected for type/key. Requires the frameId from the latest observe or input result (frames stay valid ${FRAME_TTL_MS / 1000} s). Automatically waits briefly and observes the result afterward, returning the next frame; verificationQuestion customizes what to check, verificationDelayMs (0–3000) lets animation/loading settle. Each input consumes its old frame. If the UI is still loading, observe with delayMs rather than repeat the action. Never repeat an unknown outcome. No passwords, payment, deletion, publishing, installation or system settings. Cannot switch windows or use system shortcuts; drag, Ctrl+C/V/S and other tier-2 inputs are confirmed by the user every time even in automatic mode. Update the task plan after actual milestones, and report visible feedback, not an invented PASS.`,
+    name: "computer_input", description: `One operation on the authorized Windows window: click / doubleclick / rightclick (prefer observed elementId; otherwise x/y), drag (x/y to toX/toY), bounded scroll, plain text, or an allowlisted key. Text and keys go to the control that currently has focus: click the field first (elementId or x/y), then type or key in the very next call, no extra observe needed; for type/key leave elementId out (a value there is ignored, never used as a target). Requires the frameId from the latest observe or input result (frames stay valid ${FRAME_TTL_MS / 1000} s). Automatically waits briefly and observes the result afterward, returning the next frame; verificationQuestion customizes what to check, verificationDelayMs (0–3000) lets animation/loading settle. Each input consumes its old frame. If the UI is still loading, observe with delayMs rather than repeat the action. Never repeat an unknown outcome. No passwords, payment, deletion, publishing, installation or system settings. Cannot switch windows or use system shortcuts; drag, Ctrl+C/V/S and other tier-2 inputs are confirmed by the user every time even in automatic mode. Update the task plan after actual milestones, and report visible feedback, not an invented PASS.`,
     risk: "dangerous", replaySafety: "side-effecting", maxAttempts: 1,
-    inputSchema: {type:"object",properties:{kind:{type:"string",enum:["click","doubleclick","rightclick","drag","scroll","type","key"]},frameId:{type:"string"},elementId:{type:"string"},x:{type:"integer"},y:{type:"integer"},toX:{type:"integer",description:"drag only: release point"},toY:{type:"integer",description:"drag only: release point"},delta:{type:"integer"},text:{type:"string"},key:{type:"string",description:"Tier 1 (automatic): Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown, F2, Shift+Home / Shift+End (select text in the focused editor), Ctrl+A / Ctrl+Z (focused editor only). Tier 2 (user confirms each time): Ctrl+C, Ctrl+V, Ctrl+S, Ctrl+Y. To replace the current logical line: End, observe, Shift+Home, observe, then type replacement once. No Win/Alt shortcuts, Alt+Tab, Alt+F4 or other combinations."},verificationQuestion:{type:"string"},verificationDelayMs:{type:"integer",minimum:0,maximum:3000}},required:["kind","frameId"],additionalProperties:false},
+    inputSchema: {type:"object",properties:{kind:{type:"string",enum:["click","doubleclick","rightclick","drag","scroll","type","key"]},frameId:{type:"string"},elementId:{type:"string",description:"click/doubleclick/rightclick only: a control ID from the latest frame. Omit for type, key, drag and scroll; text and keys go to the focused control."},x:{type:"integer"},y:{type:"integer"},toX:{type:"integer",description:"drag only: release point"},toY:{type:"integer",description:"drag only: release point"},delta:{type:"integer"},text:{type:"string"},key:{type:"string",description:"Tier 1 (automatic): Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown, F2, Shift+Home / Shift+End (select text in the focused editor), Ctrl+A / Ctrl+Z (focused editor only). Tier 2 (user confirms each time): Ctrl+C, Ctrl+V, Ctrl+S, Ctrl+Y. To replace the current logical line: End, observe, Shift+Home, observe, then type replacement once. No Win/Alt shortcuts, Alt+Tab, Alt+F4 or other combinations."},verificationQuestion:{type:"string"},verificationDelayMs:{type:"integer",minimum:0,maximum:3000}},required:["kind","frameId"],additionalProperties:false},
     describe: () => "perform one target-window input within confirmed scope",
     hostConfirmed: () => host.confirms?.("input") === true,
     ...viaResult(async (input, context) => {
@@ -140,7 +153,8 @@ export function createComputerUseTools(config: AgentConfig, host: ComputerUseHos
       const milliseconds = boundedDelay(input.verificationDelayMs, 350);
       if (context.signal?.aborted) throw new Error("Input cancelled before execution.");
       const { verificationQuestion, verificationDelayMs: _delay, ...operation } = input;
-      const sent = await host.input(operation as Parameters<ComputerUseHost["input"]>[0], context.signal);
+      const note = normalizeElementId(operation);
+      const sent = `${await host.input(operation as Parameters<ComputerUseHost["input"]>[0], context.signal)}${note}`;
       const question = typeof verificationQuestion === "string" ? verificationQuestion : "Describe visible changes after the last input, whether the UI is still loading, and available controls for the next step. Do not claim success without visible feedback.";
       try {
         await settle(milliseconds, context.signal);
