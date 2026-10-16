@@ -191,6 +191,8 @@ test("the input vocabulary exposes pointer kinds, drag targets and the key tiers
   assert.deepEqual(schema.properties.kind!.enum, ["click", "doubleclick", "rightclick", "drag", "scroll", "type", "key"]);
   assert.ok(schema.properties.toX && schema.properties.toY);
   assert.match(schema.properties.key!.description ?? "", /Ctrl\+C/); assert.match(schema.properties.key!.description ?? "", /Delete/);
+  assert.match(schema.properties.text!.description ?? "", /CR\/LF line breaks/);
+  assert.match(schema.properties.key!.description ?? "", /latest frame/);
   const sent: Array<Record<string, unknown>> = [];
   const dragTools = createComputerUseTools(config, { ...host, input: async value => { sent.push(value as unknown as Record<string, unknown>); return "sent once"; }, observe: async () => frame }, { analyzeImage: async () => "Visible" });
   await dragTools.find(tool => tool.name === "computer_input")!.execute({ kind: "drag", frameId: frame.frameId, x: 10, y: 20, toX: 300, toY: 400 }, context);

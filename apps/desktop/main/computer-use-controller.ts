@@ -189,10 +189,15 @@ export class ComputerUseController {
       input = { ...input, x: Math.floor(element.x + element.width / 2), y: Math.floor(element.y + element.height / 2) };
     }
     const inside = (x: unknown, y: unknown) => Number.isInteger(x) && Number.isInteger(y) && (x as number) >= 0 && (y as number) >= 0 && (x as number) < this.value.width! && (y as number) < this.value.height!;
+    // Validate a Codex-style multiline type action as ordinary text plus CR/LF. The native
+    // bridge receives the original value and permits those line breaks only in Edit/Document.
+    const originalTypedText = input.kind === "type" && typeof input.text === "string" ? input.text : undefined;
+    if (originalTypedText !== undefined) input = { ...input, text: originalTypedText.replace(/\r\n?|\n/g, "") };
     if (POINTER_KINDS.includes(input.kind) && !inside(input.x, input.y)) throw new Error("坐标必须位于最新截图内。");
     if (input.kind === "drag" && (!inside(input.toX, input.toY) || (input.toX === input.x && input.toY === input.y))) throw new Error("拖拽终点必须位于最新截图内且不同于起点。");
     if (input.kind === "scroll" && (!Number.isInteger(input.delta) || !input.delta || Math.abs(input.delta) > 1200)) throw new Error("滚动量超限。");
     if (input.kind === "type" && (typeof input.text !== "string" || !input.text || input.text.length > 500 || /[\x00-\x1f\x7f]/.test(input.text))) throw new Error("仅允许 1–500 字普通文本，不允许控制字符。");
+    if (originalTypedText !== undefined) input = { ...input, text: originalTypedText };
     if (input.kind !== "key" || input.repeat === undefined || input.repeat === null || input.repeat === 1) input = { ...input, repeat: undefined };
     else if (!Number.isInteger(input.repeat) || input.repeat < 1 || input.repeat > MAX_KEY_REPEAT || !isRepeatableKey(input.key ?? "")) throw new Error(`repeat 只能是 1–${MAX_KEY_REPEAT}，且只用于 ${REPEATABLE_KEYS.join("、")}；Enter、Tab、Esc 和组合键每步只按一次。`);
     const repeatLabel = input.repeat ? ` ×${input.repeat}` : "";

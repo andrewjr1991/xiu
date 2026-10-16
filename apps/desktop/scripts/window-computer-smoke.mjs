@@ -14,6 +14,6 @@ const compile = spawnSync(csc,["/nologo","/target:winexe","/platform:x64",`/out:
 if(compile.status!==0)throw new Error("Fixture compilation failed");
 const output=path.join(dir,"window-computer.cjs");
 await build({stdin:{contents:'export { ComputerUseController } from "./apps/desktop/main/computer-use-controller.ts"; export { WindowsComputer } from "./apps/desktop/main/windows-computer.ts"; export { createComputerUseTools } from "./src/computer-use-tools.ts";',resolveDir:repo},outfile:output,bundle:true,platform:"node",format:"cjs",define:{"import.meta.url":JSON.stringify(pathToFileURL(path.join(repo,"apps/desktop/dist/main/index.js")).href)},external:["electron"],target:"node24"});
-const result=spawnSync(require("electron"),[fileURLToPath(new URL("window-computer-smoke.cjs",import.meta.url)),output,fixture,path.join(repo,"apps/desktop/dist/native/XiuComputerBridge.exe")],{stdio:"inherit",windowsHide:true,timeout:90000});
+const result=spawnSync(require("electron"),[fileURLToPath(new URL("window-computer-smoke.cjs",import.meta.url)),output,fixture,path.join(repo,"apps/desktop/dist/native/XiuComputerBridge.exe")],{stdio:"inherit",windowsHide:true,timeout:180000});
 if(result.error)throw result.error;
 process.exit(result.status??1);

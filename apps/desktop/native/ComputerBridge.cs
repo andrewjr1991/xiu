@@ -15,6 +15,7 @@ class ComputerBridge {
   delegate bool EnumProc(IntPtr h, IntPtr p);
   [StructLayout(LayoutKind.Sequential)] struct Rect { public int left,top,right,bottom; }
   [StructLayout(LayoutKind.Sequential)] struct Point { public int x,y; }
+  [StructLayout(LayoutKind.Sequential)] struct GuiThreadInfo { public int size; public uint flags; public IntPtr active,focus,capture,menuOwner,moveSize,caret; public Rect caretRect; }
   [StructLayout(LayoutKind.Sequential)] struct Mouse { public int dx,dy; public uint data,flags,time; public UIntPtr extra; }
   [StructLayout(LayoutKind.Sequential)] struct Key { public ushort vk,scan; public uint flags,time; public UIntPtr extra; }
   [StructLayout(LayoutKind.Explicit)] struct Union { [FieldOffset(0)] public Mouse mouse; [FieldOffset(0)] public Key key; }
@@ -39,6 +40,9 @@ class ComputerBridge {
   [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point p);
   [DllImport("user32.dll")] static extern uint SendInput(uint n,Input[] inputs,int size);
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+  [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
+  [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SendMessageTimeout(IntPtr h,uint message,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
+  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread,ref GuiThreadInfo info);
   [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
   static JavaScriptSerializer json=new JavaScriptSerializer { MaxJsonLength=12000000 };
   // Shared with apps/desktop/shared/computer-use-sensitive.ts; test/computer-use-sensitive.test.ts fails when the copies diverge.
@@ -135,14 +139,37 @@ class ComputerBridge {
   }
   // Typing and submit keys go to the focused control. When it cannot be inspected, the password and
   // consequential checks cannot run, so the input is refused unless the user confirmed this step.
-  static void CheckFocusedControl(IntPtr target,bool submit,bool inspect) {
+  static AutomationElement CheckFocusedControl(IntPtr target,bool submit,bool inspect) {
     AutomationElement focused=null;
     try { focused=AutomationElement.FocusedElement; if(focused!=null&&focused.Current.ProcessId!=N("pid"))focused=null; }
     catch(Exception e) { if(IsVerdict(e))throw; focused=null; }
-    if(focused==null) { if(!AllowUninspected())throw new Exception("control-uninspected"); return; }
-    if(!inspect)return;
+    if(focused==null) { if(!AllowUninspected())throw new Exception("control-uninspected"); return null; }
+    if(!inspect)return focused;
     CheckControl(focused);
     if(submit&&Nameless(focused)&&!AllowUninspected())throw new Exception("control-uninspected");
+    return focused;
+  }
+  static void RequireEditor(AutomationElement focused) {
+    if(focused==null||focused.Current.ProcessId!=N("pid")||(focused.Current.ControlType!=ControlType.Edit&&focused.Current.ControlType!=ControlType.Document))throw new Exception("editor-control-required");
+  }
+  // Target the verified editor HWND directly for common editing chords. This avoids a global
+  // modifier race after a consent dialog took focus, and never reads the editor's contents.
+  static bool SendEditorCommand(AutomationElement focused,string key,IntPtr target) {
+    RequireEditor(focused);
+    uint pid;uint thread=GetWindowThreadProcessId(target,out pid);
+    var gui=new GuiThreadInfo{size=Marshal.SizeOf(typeof(GuiThreadInfo))};
+    IntPtr h=GetGUIThreadInfo(thread,ref gui)?gui.focus:IntPtr.Zero;
+    if(h==IntPtr.Zero){int raw=focused.Current.NativeWindowHandle;if(raw!=0)h=new IntPtr(raw);}
+    if(h==IntPtr.Zero)return false;
+    uint focusedPid;GetWindowThreadProcessId(h,out focusedPid);if(focusedPid!=N("pid"))return false;
+    uint message=0;IntPtr l=IntPtr.Zero;
+    if(key=="Ctrl+A"){message=0x00B1;l=new IntPtr(-1);} // EM_SETSEL
+    else if(key=="Ctrl+C")message=0x0301; // WM_COPY
+    else if(key=="Ctrl+V")message=0x0302; // WM_PASTE
+    else if(key=="Ctrl+Z")message=0x0304; // WM_UNDO
+    else return false;
+    IntPtr result;if(SendMessageTimeout(h,message,IntPtr.Zero,l,2,1000,out result)==IntPtr.Zero)throw new Exception("input-blocked-or-partial-do-not-retry");
+    return true;
   }
   static void CheckControl(AutomationElement element) {
     if(element.Current.IsPassword)throw new Exception("sensitive-control-denied");
@@ -262,43 +289,58 @@ class ComputerBridge {
       int ax=(int)((long)(p.x-desktop.Left)*65535/Math.Max(1,desktop.Width-1)),ay=(int)((long)(p.y-desktop.Top)*65535/Math.Max(1,desktop.Height-1));
       var input=new List<Input>();input.Add(M(ax,ay,0,0xC001));
       if(action=="click"){input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));Send(input.ToArray());}
-      else if(action=="doubleclick"){input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));Send(input.ToArray());}
+      else if(action=="doubleclick"){
+        input.Add(M(0,0,0,2));input.Add(M(0,0,0,4));Send(input.ToArray());
+        System.Threading.Thread.Sleep(Math.Min(80,Math.Max(30,(int)GetDoubleClickTime()/4)));
+        Send(new Input[]{M(0,0,0,2),M(0,0,0,4)});
+      }
       else if(action=="rightclick"){input.Add(M(0,0,0,8));input.Add(M(0,0,0,16));Send(input.ToArray());}
       else if(action=="drag") {
         int bx=(int)((long)(q.x-desktop.Left)*65535/Math.Max(1,desktop.Width-1)),by=(int)((long)(q.y-desktop.Top)*65535/Math.Max(1,desktop.Height-1));
-        // Press, move through the midpoint, release: applications need separate messages to recognise a drag.
+        // A bounded smooth path is recognised by text editors more reliably than one midpoint jump.
         input.Add(M(0,0,0,2));Send(input.ToArray());
         try {
-          System.Threading.Thread.Sleep(40);Send(new Input[]{M((ax+bx)/2,(ay+by)/2,0,0xC001)});
-          System.Threading.Thread.Sleep(40);Send(new Input[]{M(bx,by,0,0xC001)});
-          System.Threading.Thread.Sleep(40);Send(new Input[]{M(0,0,0,4)});
+          const int steps=10;
+          for(int step=1;step<=steps;step++){
+            System.Threading.Thread.Sleep(20);
+            int mx=ax+(int)((long)(bx-ax)*step/steps),my=ay+(int)((long)(by-ay)*step/steps);
+            Send(new Input[]{M(mx,my,0,0xC001)});
+          }
+          System.Threading.Thread.Sleep(30);Send(new Input[]{M(0,0,0,4)});
         } catch {var release=new Input[]{M(0,0,0,4)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
       }
       else {int delta=N("delta");if(delta==0||Math.Abs(delta)>1200)throw new Exception("invalid-scroll");input.Add(M(0,0,unchecked((uint)delta),0x800));Send(input.ToArray());}
     } else if(action=="type") {
-      CheckFocusedControl(target,false,true);
+      var focused=CheckFocusedControl(target,false,true);
       string text=S("text");if(text.Length<1||text.Length>500)throw new Exception("text-length-limit");
-      var keys=new List<Input>();foreach(char c in text){if(char.IsControl(c))throw new Exception("control-text-denied");keys.Add(K(0,c,4));keys.Add(K(0,c,6));}Send(keys.ToArray());
+      bool multiline=text.IndexOf('\r')>=0||text.IndexOf('\n')>=0;if(multiline)RequireEditor(focused);
+      var keys=new List<Input>();
+      for(int index=0;index<text.Length;index++){
+        char c=text[index];
+        if(c=='\r'||c=='\n'){
+          if(c=='\r'&&index+1<text.Length&&text[index+1]=='\n')index++;
+          keys.Add(K(13,0,0));keys.Add(K(13,0,2));
+        } else {
+          if(char.IsControl(c))throw new Exception("control-text-denied");
+          keys.Add(K(0,c,4));keys.Add(K(0,c,6));
+        }
+      }
+      Send(keys.ToArray());
     } else {
       string key=S("key");
       if(Array.IndexOf(Tier1Keys,key)<0&&Array.IndexOf(Tier2Keys,key)<0)throw new Exception("shortcut-denied");
       int repeat=req.ContainsKey("repeat")&&req["repeat"]!=null?N("repeat"):1;
       if(repeat<1||repeat>50||(repeat>1&&Array.IndexOf(RepeatableKeys,key)<0))throw new Exception("repeat-denied");
-      CheckFocusedControl(target,key=="Enter"||key=="Space",key!="Escape");
+      var focused=CheckFocusedControl(target,key=="Enter"||key=="Space",key!="Escape");
       var keys=new Dictionary<string,ushort>{{"Enter",13},{"Tab",9},{"Escape",27},{"Backspace",8},{"Delete",46},{"Space",32},{"ArrowLeft",37},{"ArrowUp",38},{"ArrowRight",39},{"ArrowDown",40},{"Home",36},{"End",35},{"PageUp",33},{"PageDown",34},{"F2",113}};
       if(Array.IndexOf(EditorOnlyKeys,key)>=0) {
         // Selection, select-all, undo/redo and clipboard combinations only reach a focused text editor of the target process.
-        var focused=AutomationElement.FocusedElement;
-        if(focused==null||focused.Current.ProcessId!=N("pid")||(focused.Current.ControlType!=ControlType.Edit&&focused.Current.ControlType!=ControlType.Document))throw new Exception("editor-control-required");
+        RequireEditor(focused);
       }
       if(key.StartsWith("Shift+")) {
-        ushort selectedKey=key=="Shift+Home"?(ushort)36:(ushort)35;
-        try {Send(new Input[]{K(160,42,0),K(selectedKey,0,1),K(selectedKey,0,3),K(160,42,2)});}
-        catch {var release=new Input[]{K(160,42,2)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
+        System.Windows.Forms.SendKeys.SendWait(key=="Shift+Home"?"+{HOME}":"+{END}");
       } else if(key.StartsWith("Ctrl+")) {
-        ushort letter=(ushort)key[5];
-        try {Send(new Input[]{K(162,29,0),K(letter,0,0),K(letter,0,2),K(162,29,2)});}
-        catch {var release=new Input[]{K(162,29,2)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
+        if(!SendEditorCommand(focused,key,target))System.Windows.Forms.SendKeys.SendWait("^"+key.Substring(5).ToLowerInvariant());
       } else {
         ushort k=keys[key];var presses=new List<Input>();for(int i=0;i<repeat;i++){presses.Add(K(k,0,0));presses.Add(K(k,0,2));}Send(presses.ToArray());
       }

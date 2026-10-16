@@ -4,9 +4,10 @@
 
 ## 当前状态
 
+- **0.20.12 Computer Use 修复（2026-10-16，未发布）：** 针对记事本多步编辑失败，补齐已验证编辑器中的多行输入、可靠双击、平滑拖拽和目标 HWND 级 Ctrl+A/C/V/Z；每步继续返回新观察帧，Alt+Tab 等系统快捷键仍拒绝。隔离 Windows 原生冒烟已覆盖三行输入、双击替换、重复退格、右键/Esc、全选复制、拖拽选择及最终内容核对，维护者已确认真实记事本验收通过；全量 1206 通过、9 跳过、0 失败，隔离原生流程和安装生命周期通过。
 - **0.20.11 已发布 GitHub 与 npm：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
 
-更新于 2026-10-15。
+更新于 2026-10-16。
 
 - **0.20.9 已发布 GitHub（2026-10-15）。** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 与标签精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`；[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业通过，Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。发布前修正 npm 清单漏列当前设计稿并补回归；旧未公开草稿已删除，旧制品及 rejected 摘要保留本地。最终五份附件采用新 CI 原始制品，大小/SHA256 回读通过。固定 uv、安装/启动/升级/中断重启/卸载已再次本地验收。npm 0.20.9 已于 2026-10-15 发布，回读 version/latest 均为 0.20.9，integrity 与 tarball SHA256 与 Release 附件一致。Windows 未签名。仅文档补记跳过重复 CI，不改正式标签或附件。
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。
@@ -16,9 +17,9 @@
 - **Anthropic 渠道适配当前 Claude 模型（main，未发布）：** 默认模型改为 `claude-opus-5-5`，能力探测在模型拒绝强制工具调用时改用 `auto` 重试，输出上限提高到 32000 并对只允许 8192 的旧模型自动回退，带工具调用的轮次按 API 要求回传不可读的思考状态（空文本签名与加密块）。`@anthropic-ai/sdk` 已升到 0.133。尚未用真实 Anthropic Key 验证，需要维护者在渠道管理里对 Anthropic 渠道点一次「测试连接」，再跑一轮带工具调用的任务。
 - **Computer Use 加固（main，未发布，待 Windows 真机验证）：** 0.20.8 复核的中等问题 C3–C6 已在代码层处理：敏感窗口标题、禁用应用和高风险控件名三份规则改为 `apps/desktop/shared/computer-use-sensitive.ts` 单一来源，C# 桥程序内嵌同一字符串并由测试保证一致，列表补充终端、远程桌面、密码管理器、结账/验证码等；桥程序在读不到指针下或焦点控件（UIA 失败、跨进程焦点、无名称的按钮/链接/菜单项上的点击或 Enter/Space）时拒绝输入并返回 `control-uninspected`，主进程只在用户单独确认这一步后才带 `allowUninspected` 重发一次，自动模式不覆盖；截图结果带控件遍历完整度（complete/partial/unavailable）回传模型并写进逐步确认框；所有授权框说明控件名称与视觉描述会返回对话模型并写入会话历史。C# 改动只经 CI 编译，行为需要维护者在 Windows 上跑一次本地 `window-computer-smoke` 与一轮真实任务。
 - **Computer Use 可用性改造（main，未发布，待 Windows 真机验证）：** 2026-10-15 评估指出的三大根因已处理：①对话模型本身是视觉模型时截图直接作为图片进入工具结果（OpenAI 兼容协议随后附一条不可信用户消息，Anthropic 放进 tool_result），内存只保留最新一帧，会话日志只记文本，大窗口先缩到 1568 像素长边；②自动操作改为独立授权，“电脑操作”面板“启用自动电脑操作”经主进程确认即可，不再要求完全访问，可随时撤销；③输入词汇扩展为单击/双击/右键/拖拽/滚动/文本/按键并分三级（一级自动、二级每次确认、三级拒绝），按键列表 `apps/desktop/shared/computer-use-inputs.ts` 与 C# 一致由测试保证。桌面指南新增“电脑操作”章节。C# 改动只经 CI 编译。
-- **0.21 计划项已全部合并到 main（未发布）：** 首次体验六项（国产渠道模板、错误人话化、首次向导、`xiu doctor`、文档分层、偶发测试修复）、Node 20 弃用提示，以及可靠性与安全中低项 R4/A5/S4/S5/S3/S6，明细见下方“当前优先级”第 1–3 项的“已做”说明与 `CHANGELOG.md` Unreleased。等待维护者本地发布 0.21.0。
+- **0.21 计划项已全部合并到 main（未发布）：** 首次体验六项（国产渠道模板、错误人话化、首次向导、`xiu doctor`、文档分层、偶发测试修复）、Node 20 弃用提示，以及可靠性与安全中低项 R4/A5/S4/S5/S3/S6，明细见下方“当前优先级”第 1–3 项的“已做”说明与 `CHANGELOG.md` 的 0.20.12 候选说明。维护者选择先以 0.20.12 提交这些已合并增量及 Computer Use 修复。
 - **CI 与依赖：** CLI 在 Node 20.18.1 三平台验证，另有 Node 22/24 兼容作业和生产依赖审计。Dependabot 每月按目录合并为一个分组 PR（只合批 minor/patch），安全更新单独提出。2026-10-15 起 Windows 渠道配置不再做 ACL 校验（维护者决定，见 SECURITY §4），Windows 隐私预检步骤与相关测试已删除；Windows Verify 作业约 7 分钟，测试步骤约 3 分钟。未升级的大版本：chalk 6 / commander 15 / undici 8 / openai 7 要求 Node ≥22；@napi-rs/keyring 2 需先在 Windows 验证 1.3 写入的凭据能被 2.x 读回；@types/node 26 与运行的 Node 20 不匹配。
-- **当前设计：** [0.20.11 设计](./V0.20.11_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
+- **当前设计：** [0.20.12 设计](./V0.20.12_DESIGN.zh-CN.md)。根目录只保留当前设计，旧设计在 Git 历史中。
 
 ## 当前优先级
 
@@ -41,7 +42,7 @@
 
 0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm，标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2。README 已于同日重写为中英文同构概览（#58），旧版归档在 `docs/history/`。
 
-0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。下一步是维护者本地发布 0.21.0：把 `CHANGELOG.md` 的 Unreleased 落到版本号、更新 README 版本行与根目录设计稿（只保留当前版本一份），按 `PUBLISHING.zh-CN.md` 跑 typecheck/测试/构建、检查包内容后发布并回读 npm 与 Release。发布后进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 真机跑一次 `window-computer-smoke` 与一轮真实 Computer Use 任务（重点：截图直给模式、面板“启用自动电脑操作”、双击/右键/拖拽/Delete/Ctrl 组合）；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
+0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。下一步：按维护者指示提交推送 0.20.12，读取本提交 CI 结果；npm 与 GitHub Release 待后续发布指示。当前版本设计及变更已同步，不能覆盖 0.20.11。后续进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 原生窗口与真实记事本 Computer Use 验收已通过，其他应用场景继续验证；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
 
 ## 1. 项目定位
 
@@ -52,7 +53,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
 | 当前公开 npm 版本 | `0.20.11`，Registry latest 已回读 |
-| 当前开发版本 | `0.20.11` 已发布 GitHub 与 npm |
+| 当前开发版本 | `0.20.12`，本地验收通过，尚未发布 |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |
@@ -104,7 +105,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 
 ### 设计与验收
 
-当时的设计已归档到 Git 历史；当前设计见 [0.20.11 设计](./V0.20.11_DESIGN.zh-CN.md)。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
+当时的设计已归档到 Git 历史；当前设计见 [0.20.12 设计](./V0.20.12_DESIGN.zh-CN.md)。共享运行时、可信工作区、真实 Agent 任务、审批、单写者、审查/恢复、Provider/模型、历史变更快照与受控 PTY 的既有边界保持不变。G5C 已生成 Windows x64 辅助安装器，并完成含空格/中文路径的全新安装、安装物启动、覆盖升级、异常中断后重启和卸载验收；隔离测试壳驱动真实 Renderer 覆盖 1366×768、900px 窄窗、键盘、Provider/模型、审批、30 轮事件流、停止、未知副作用门禁、检查点还原与终端生命周期，测试桥不进入正式包。GitHub Actions 的 Windows、Ubuntu、macOS CLI 与 Desktop 六作业均通过；macOS/Linux 真实用户桌面与外部 Windows 设备矩阵尚未完成，因此仍不能作为跨平台稳定桌面产品发布。
 
 ## 4. 后续工程化
 

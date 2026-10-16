@@ -14,7 +14,7 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-Current version **0.20.11** (2026-10-15): [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) · [npm](https://www.npmjs.com/package/@xiu-ai/cli) · [Changelog](./CHANGELOG.md). The CLI runs on Windows, macOS and Linux; the desktop app currently ships only as an unsigned Windows x64 preview installer.
+Development version **0.20.12**, pending publication, includes the maintainer-accepted Computer Use editor fixes. Latest published version: **0.20.11** (2026-10-15): [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) · [npm](https://www.npmjs.com/package/@xiu-ai/cli) · [Changelog](./CHANGELOG.md). The CLI runs on Windows, macOS and Linux; the desktop app currently ships only as an unsigned Windows x64 preview installer.
 
 ## Install
 
