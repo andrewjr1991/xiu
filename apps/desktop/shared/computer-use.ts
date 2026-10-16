@@ -4,7 +4,7 @@ export type ControlInspection = "complete" | "partial" | "unavailable";
 export interface ComputerElement { id: string; name: string; role: string; x: number; y: number; width: number; height: number; enabled: boolean }
 import type { ComputerInputKind } from "./computer-use-inputs.js";
 /** Coordinates are in frame (image) pixels; the main process maps them back to client pixels with the frame's scale. */
-export interface ComputerInput { kind: ComputerInputKind; frameId: string; elementId?: string; x?: number; y?: number; toX?: number; toY?: number; delta?: number; text?: string; key?: string }
+export interface ComputerInput { kind: ComputerInputKind; frameId: string; elementId?: string; x?: number; y?: number; toX?: number; toY?: number; delta?: number; text?: string; key?: string; repeat?: number }
 export type ComputerUseRequest = { action: "open" | "capture" | "stop" | "state" | "windows" | "automatic" | "automatic-revoke" } | { action: "select"; handle: string } | { action: "input"; input: ComputerInput };
 export interface ComputerUseState {
   state: "idle" | "observing";

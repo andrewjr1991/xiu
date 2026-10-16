@@ -20,6 +20,10 @@ export const TIER2_KEYS = ["Ctrl+C", "Ctrl+V", "Ctrl+S", "Ctrl+Y"] as const;
 /** Combinations the helper only sends to a focused Edit/Document control of the target process. */
 export const EDITOR_ONLY_KEYS = ["Shift+Home", "Shift+End", "Ctrl+A", "Ctrl+Z", "Ctrl+C", "Ctrl+V", "Ctrl+Y"] as const;
 
+/** Keys a single step may press several times (`repeat`); Enter, Tab, Escape and combinations never repeat. */
+export const REPEATABLE_KEYS = ["Backspace", "Delete", "Space", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown"] as const;
+export const MAX_KEY_REPEAT = 50;
+
 export const POINTER_KINDS: readonly ComputerInputKind[] = ["click", "doubleclick", "rightclick", "drag", "scroll"];
 
 /** Which tier an input belongs to, or undefined when it is not part of the vocabulary. */
@@ -36,3 +40,4 @@ export function inputTier(input: { kind: string; key?: string }): InputTier | un
 }
 
 export function isEditorOnlyKey(key: string): boolean { return (EDITOR_ONLY_KEYS as readonly string[]).includes(key); }
+export function isRepeatableKey(key: string): boolean { return (REPEATABLE_KEYS as readonly string[]).includes(key); }

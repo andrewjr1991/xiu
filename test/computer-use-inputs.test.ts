@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { EDITOR_ONLY_KEYS, POINTER_KINDS, TIER1_KEYS, TIER2_KEYS, inputTier, isEditorOnlyKey } from "../apps/desktop/shared/computer-use-inputs.js";
+import { EDITOR_ONLY_KEYS, MAX_KEY_REPEAT, POINTER_KINDS, REPEATABLE_KEYS, TIER1_KEYS, TIER2_KEYS, inputTier, isEditorOnlyKey, isRepeatableKey } from "../apps/desktop/shared/computer-use-inputs.js";
 import { FRAME_MAX_EDGE, frameScale, inputNeedsConfirmation, scaleElements, scaledSize, toClientCoordinate } from "../apps/desktop/main/computer-use-policy.js";
 
 const bridge = fs.readFileSync(new URL("../apps/desktop/native/ComputerBridge.cs", import.meta.url), "utf8");
@@ -11,6 +11,12 @@ test("the native helper embeds the same key tiers as the main process", () => {
   assert.deepEqual(keyArray("Tier1Keys"), [...TIER1_KEYS]);
   assert.deepEqual(keyArray("Tier2Keys"), [...TIER2_KEYS]);
   assert.deepEqual(keyArray("EditorOnlyKeys"), [...EDITOR_ONLY_KEYS]);
+  assert.deepEqual(keyArray("RepeatableKeys"), [...REPEATABLE_KEYS]);
+  // Repeat is for editing and navigation keys only, bounded identically on both sides; Enter, Tab, Escape and combinations never repeat.
+  for (const key of REPEATABLE_KEYS) assert.ok((TIER1_KEYS as readonly string[]).includes(key) && !isEditorOnlyKey(key), key);
+  for (const key of ["Enter", "Tab", "Escape", "F2", "Ctrl+A", "Ctrl+C", "Shift+End"]) assert.equal(isRepeatableKey(key), false, key);
+  assert.equal(MAX_KEY_REPEAT, 50);
+  assert.match(bridge, /repeat<1\|\|repeat>50\|\|\(repeat>1&&Array\.IndexOf\(RepeatableKeys,key\)<0\)\)throw new Exception\("repeat-denied"\)/);
   // Clipboard, select-all, undo/redo and Shift selection are editor-only; Ctrl+S (save) works app-wide but still confirms; system shortcuts are in no list at all.
   for (const key of [...TIER1_KEYS, ...TIER2_KEYS]) { assert.doesNotMatch(key, /^(Win|Alt|Meta)/); assert.equal(isEditorOnlyKey(key), key !== "Ctrl+S" && /^(Ctrl|Shift)\+/.test(key), key); }
   for (const key of ["Alt+Tab", "Alt+F4", "Win", "Ctrl+Alt+Delete", "Ctrl+Shift+Escape", "Ctrl+W", "F1", "PrintScreen"]) assert.equal(inputTier({ kind: "key", key }), undefined, key);

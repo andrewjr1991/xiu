@@ -10,6 +10,7 @@ export const BRIDGE_ERROR_REASONS: Record<string, string> = {
   "consequential-control-denied": "检测到删除、发送、支付或其他高风险控件，请停止并由用户操作。",
   "control-uninspected": "无法识别目标控件，未发送输入。",
   "editor-control-required": "该组合键只能用于目标程序中获得焦点的文本编辑控件，未发送输入。",
+  "repeat-denied": "连按次数超出 1–50，或该按键不支持连按，未发送输入。",
   "element-changed-observe-again": "目标控件已变化，未发送输入，请重新观察。",
   "target-not-foreground": "未取得目标窗口焦点。请手动切换到目标应用后重新观察。",
   "target-occluded": "点击位置被其他窗口遮挡，未发送输入。",
