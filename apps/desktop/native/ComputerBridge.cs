@@ -27,6 +27,8 @@ class ComputerBridge {
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder text,int n);
   [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h,out Rect r);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h,int index);
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h,ref Point p);
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
@@ -47,6 +49,8 @@ class ComputerBridge {
   static readonly string[] Tier1Keys={"Enter","Tab","Escape","Backspace","Delete","Space","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown","F2","Shift+Home","Shift+End","Ctrl+A","Ctrl+Z"};
   static readonly string[] Tier2Keys={"Ctrl+C","Ctrl+V","Ctrl+S","Ctrl+Y"};
   static readonly string[] EditorOnlyKeys={"Shift+Home","Shift+End","Ctrl+A","Ctrl+Z","Ctrl+C","Ctrl+V","Ctrl+Y"};
+  // Keys that may be pressed several times in one step (`repeat`, at most 50); never Enter, Tab or a combination.
+  static readonly string[] RepeatableKeys={"Backspace","Delete","Space","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","PageUp","PageDown"};
   static Dictionary<string,object> req;
   static string inspection="unavailable";
   // Only an explicit per-step user confirmation in the main process sets this; automatic mode never does.
@@ -70,43 +74,73 @@ class ComputerBridge {
     if(Convert.ToString(i["pid"])!=S("pid")||Convert.ToString(i["started"])!=S("started"))throw new Exception("window-identity-changed");
     return h;
   }
+  // A menu, drop-down list, tooltip or dialog the target itself opened: a visible top-level WS_POPUP window of
+  // the same process that overlaps the target. It belongs to the authorized interaction, so it is drawn into
+  // the screenshot, its controls are listed and it may be clicked; a popup with a sensitive title and every
+  // window of another process still count as occlusion.
+  static bool OwnedPopup(IntPtr h,IntPtr target) {
+    if(h==IntPtr.Zero||h==target||!IsWindow(h)||!IsWindowVisible(h)||GetAncestor(h,2)!=h)return false;
+    uint pid;GetWindowThreadProcessId(h,out pid);if(pid.ToString()!=S("pid"))return false;
+    if((GetWindowLong(h,-16)&unchecked((int)0x80000000))==0)return false;
+    Rect a,b;if(!GetWindowRect(h,out a)||!GetWindowRect(target,out b))return false;
+    if(a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom)return false;
+    var t=new StringBuilder(256);GetWindowText(h,t,t.Capacity);
+    return !Regex.IsMatch(t.ToString(),SensitiveWindowTitlePattern,RegexOptions.IgnoreCase);
+  }
+  // Bottom-most first, so a later (higher) popup paints over an earlier one.
+  static List<IntPtr> OwnedPopups(IntPtr target) {
+    var list=new List<IntPtr>();
+    EnumWindows(delegate(IntPtr h,IntPtr p){if(OwnedPopup(h,target))list.Add(h);return list.Count<8;},IntPtr.Zero);
+    list.Reverse();return list;
+  }
+  static bool Belongs(IntPtr h,IntPtr target) { return h==target||OwnedPopup(h,target); }
+  static bool Blank(Bitmap bitmap) {
+    int w=bitmap.Width,h=bitmap.Height;
+    for(int yy=0;yy<h;yy+=Math.Max(1,h/24))for(int xx=0;xx<w;xx+=Math.Max(1,w/24)){var c=bitmap.GetPixel(xx,yy);if(c.R!=0||c.G!=0||c.B!=0)return false;}
+    return true;
+  }
   static void Send(Input[] a) { if(SendInput((uint)a.Length,a,Marshal.SizeOf(typeof(Input)))!=a.Length)throw new Exception("input-blocked-or-partial-do-not-retry"); }
   static Input K(ushort vk,ushort scan,uint flags) { return new Input {type=1,u=new Union {key=new Key {vk=vk,scan=scan,flags=flags}}}; }
   static Input M(int x,int y,uint data,uint flags) { return new Input {type=0,u=new Union {mouse=new Mouse {dx=x,dy=y,data=data,flags=flags}}}; }
   static string ElementId(AutomationElement element) { return string.Join(".",Array.ConvertAll(element.GetRuntimeId(),v=>v.ToString())); }
-  // Bounded control traversal. Never read edit values, password names or document text.
+  // Bounded control traversal over the target and the popups it opened. Never read edit values, password names or document text.
   // Sets `inspection` to "complete" only when every reachable control was visited within the bounds.
   static List<object> Elements(IntPtr target) {
     inspection="unavailable";
-    var items=new List<object>();var queue=new Queue<AutomationElement>();
-    Point origin=new Point();ClientToScreen(target,ref origin);
-    var root=AutomationElement.FromHandle(target);queue.Enqueue(root);int visited=0;
-    var clock=Stopwatch.StartNew();
+    var items=new List<object>();Point origin=new Point();ClientToScreen(target,ref origin);
+    var clock=Stopwatch.StartNew();int visited=0;
+    bool complete=Walk(target,origin,items,clock,ref visited);
+    foreach(var popup in OwnedPopups(target))complete&=Walk(popup,origin,items,clock,ref visited);
+    inspection=complete?"complete":"partial";
+    return items;
+  }
+  static bool Walk(IntPtr root,Point origin,List<object> items,Stopwatch clock,ref int visited) {
+    var queue=new Queue<AutomationElement>();var rootElement=AutomationElement.FromHandle(root);queue.Enqueue(rootElement);bool complete=true;
     while(queue.Count>0&&visited++<400&&items.Count<100&&clock.ElapsedMilliseconds<1500) {
       var element=queue.Dequeue();var current=element.Current;
       // Controls hosted by another process (for example UWP frames) cannot be inspected here.
-      if(current.ProcessId!=N("pid")){inspection="partial";continue;}
+      if(current.ProcessId!=N("pid")){complete=false;continue;}
       if(current.IsPassword)throw new Exception("sensitive-control-denied");
       var rect=current.BoundingRectangle;
-      if(element!=root&&!current.IsOffscreen&&!rect.IsEmpty&&rect.Width>0&&rect.Height>0) {
+      if(element!=rootElement&&!current.IsOffscreen&&!rect.IsEmpty&&rect.Width>0&&rect.Height>0) {
         string name=current.ControlType==ControlType.Edit?"Editable field":current.Name;
         if(name.Length>160)name=name.Substring(0,160);
         items.Add(new {id=ElementId(element),name=name,role=current.ControlType.ProgrammaticName,x=(int)(rect.Left-origin.x),y=(int)(rect.Top-origin.y),width=(int)rect.Width,height=(int)rect.Height,enabled=current.IsEnabled});
       }
       var child=TreeWalker.ControlViewWalker.GetFirstChild(element);int siblings=0;
       while(child!=null&&siblings++<100&&queue.Count<400){queue.Enqueue(child);child=TreeWalker.ControlViewWalker.GetNextSibling(child);}
-      if(child!=null)inspection="partial";
+      if(child!=null)complete=false;
     }
-    if(inspection!="partial")inspection=queue.Count==0?"complete":"partial";
-    return items;
+    return complete&&queue.Count==0;
   }
   // Typing and submit keys go to the focused control. When it cannot be inspected, the password and
   // consequential checks cannot run, so the input is refused unless the user confirmed this step.
-  static void CheckFocusedControl(IntPtr target,bool submit) {
+  static void CheckFocusedControl(IntPtr target,bool submit,bool inspect) {
     AutomationElement focused=null;
     try { focused=AutomationElement.FocusedElement; if(focused!=null&&focused.Current.ProcessId!=N("pid"))focused=null; }
     catch(Exception e) { if(IsVerdict(e))throw; focused=null; }
     if(focused==null) { if(!AllowUninspected())throw new Exception("control-uninspected"); return; }
+    if(!inspect)return;
     CheckControl(focused);
     if(submit&&Nameless(focused)&&!AllowUninspected())throw new Exception("control-uninspected");
   }
@@ -152,9 +186,25 @@ class ComputerBridge {
       try { info["elements"]=Elements(target); } catch(Exception e) { if(e.Message=="sensitive-control-denied")throw; info["elements"]=new object[0]; inspection="unavailable"; }
       info["inspection"]=inspection;
       using(var bitmap=new Bitmap(w,hgt)) {
-        using(var g=Graphics.FromImage(bitmap)) {var dc=g.GetHdc();try {if(!PrintWindow(target,dc,3))throw new Exception("window-capture-not-supported");}finally{g.ReleaseHdc(dc);}}
-        bool visible=false;for(int yy=0;yy<hgt;yy+=Math.Max(1,hgt/24))for(int xx=0;xx<w;xx+=Math.Max(1,w/24)){var c=bitmap.GetPixel(xx,yy);if(c.R!=0||c.G!=0||c.B!=0)visible=true;}
-        if(!visible)throw new Exception("window-capture-not-supported");
+        using(var g=Graphics.FromImage(bitmap)) {
+          var dc=g.GetHdc();try {if(!PrintWindow(target,dc,3))throw new Exception("window-capture-not-supported");}finally{g.ReleaseHdc(dc);}
+          if(Blank(bitmap))throw new Exception("window-capture-not-supported");
+          // Menus and drop-downs the target opened are separate windows; paint them where they sit over the client area.
+          Point origin=new Point();ClientToScreen(target,ref origin);
+          foreach(var popup in OwnedPopups(target)) {
+            Rect r;if(!GetWindowRect(popup,out r))continue;int pw=r.right-r.left,ph=r.bottom-r.top;if(pw<1||ph<1||pw>7680||ph>4320)continue;
+            using(var layer=new Bitmap(pw,ph)) {
+              bool drawn;using(var lg=Graphics.FromImage(layer)){var ldc=lg.GetHdc();try{drawn=PrintWindow(popup,ldc,2);}finally{lg.ReleaseHdc(ldc);}}
+              if(!drawn||Blank(layer)) {
+                // Compositor-drawn menus can print black; copy the screen only where the popup itself is on top.
+                var centre=new Point{x=r.left+pw/2,y=r.top+ph/2};
+                if(GetAncestor(WindowFromPoint(centre),2)!=popup)continue;
+                using(var lg=Graphics.FromImage(layer))lg.CopyFromScreen(r.left,r.top,0,0,new Size(pw,ph));
+              }
+              g.DrawImage(layer,r.left-origin.x,r.top-origin.y);
+            }
+          }
+        }
         info["screenshot"]=Encode(bitmap);
       }
       Target(); return info;
@@ -168,14 +218,14 @@ class ComputerBridge {
     // This does not change system policy or integrity levels. Failure still refuses input.
     uint targetPid;uint targetThread=GetWindowThreadProcessId(target,out targetPid), ownThread=GetCurrentThreadId();
     uint foregroundPid;uint foregroundThread=GetWindowThreadProcessId(GetForegroundWindow(),out foregroundPid);
-    if(GetForegroundWindow()!=target) {
+    if(!Belongs(GetForegroundWindow(),target)) {
       bool foregroundAttached=foregroundThread!=0&&foregroundThread!=ownThread&&foregroundThread!=targetThread&&AttachThreadInput(ownThread,foregroundThread,true);
       bool attached=ownThread!=targetThread&&AttachThreadInput(ownThread,targetThread,true);
       try {BringWindowToTop(target);SetForegroundWindow(target);}finally{if(attached)AttachThreadInput(ownThread,targetThread,false);if(foregroundAttached)AttachThreadInput(ownThread,foregroundThread,false);}
     }
     // Retry only focus acquisition, never an input operation.
-    for(int attempt=0;attempt<3&&GetForegroundWindow()!=target;attempt++){System.Threading.Thread.Sleep(100);BringWindowToTop(target);SetForegroundWindow(target);}
-    if(GetForegroundWindow()!=target)throw new Exception("target-not-foreground");
+    for(int attempt=0;attempt<3&&!Belongs(GetForegroundWindow(),target);attempt++){System.Threading.Thread.Sleep(100);BringWindowToTop(target);SetForegroundWindow(target);}
+    if(!Belongs(GetForegroundWindow(),target))throw new Exception("target-not-foreground");
     Target();
     if(action=="activate")return new {activated=true};
     Rect latest;if(!GetClientRect(target,out latest)||latest.right!=w||latest.bottom!=hgt)throw new Exception("window-resized-observe-again");
@@ -183,13 +233,13 @@ class ComputerBridge {
     if(pointer) {
       int x=N("x"),y=N("y"); if(x<0||y<0||x>=w||y>=hgt)throw new Exception("point-outside-target");
       var p=new Point{x=x,y=y};if(!ClientToScreen(target,ref p))throw new Exception("point-unavailable");
-      if(GetAncestor(WindowFromPoint(p),2)!=target)throw new Exception("target-occluded");
+      if(!Belongs(GetAncestor(WindowFromPoint(p),2),target))throw new Exception("target-occluded");
       // A drag ends inside the same window and on an unoccluded point too; nothing moves until both ends are checked.
       Point q=new Point();
       if(action=="drag") {
         int tx=N("toX"),ty=N("toY"); if(tx<0||ty<0||tx>=w||ty>=hgt||(tx==x&&ty==y))throw new Exception("point-outside-target");
         q=new Point{x=tx,y=ty};if(!ClientToScreen(target,ref q))throw new Exception("point-unavailable");
-        if(GetAncestor(WindowFromPoint(q),2)!=target)throw new Exception("target-occluded");
+        if(!Belongs(GetAncestor(WindowFromPoint(q),2),target))throw new Exception("target-occluded");
       }
       bool uninspected=false;
       try {
@@ -226,13 +276,15 @@ class ComputerBridge {
       }
       else {int delta=N("delta");if(delta==0||Math.Abs(delta)>1200)throw new Exception("invalid-scroll");input.Add(M(0,0,unchecked((uint)delta),0x800));Send(input.ToArray());}
     } else if(action=="type") {
-      CheckFocusedControl(target,false);
+      CheckFocusedControl(target,false,true);
       string text=S("text");if(text.Length<1||text.Length>500)throw new Exception("text-length-limit");
       var keys=new List<Input>();foreach(char c in text){if(char.IsControl(c))throw new Exception("control-text-denied");keys.Add(K(0,c,4));keys.Add(K(0,c,6));}Send(keys.ToArray());
     } else {
       string key=S("key");
       if(Array.IndexOf(Tier1Keys,key)<0&&Array.IndexOf(Tier2Keys,key)<0)throw new Exception("shortcut-denied");
-      CheckFocusedControl(target,key=="Enter"||key=="Space");
+      int repeat=req.ContainsKey("repeat")&&req["repeat"]!=null?N("repeat"):1;
+      if(repeat<1||repeat>50||(repeat>1&&Array.IndexOf(RepeatableKeys,key)<0))throw new Exception("repeat-denied");
+      CheckFocusedControl(target,key=="Enter"||key=="Space",key!="Escape");
       var keys=new Dictionary<string,ushort>{{"Enter",13},{"Tab",9},{"Escape",27},{"Backspace",8},{"Delete",46},{"Space",32},{"ArrowLeft",37},{"ArrowUp",38},{"ArrowRight",39},{"ArrowDown",40},{"Home",36},{"End",35},{"PageUp",33},{"PageDown",34},{"F2",113}};
       if(Array.IndexOf(EditorOnlyKeys,key)>=0) {
         // Selection, select-all, undo/redo and clipboard combinations only reach a focused text editor of the target process.
@@ -248,18 +300,18 @@ class ComputerBridge {
         try {Send(new Input[]{K(162,29,0),K(letter,0,0),K(letter,0,2),K(162,29,2)});}
         catch {var release=new Input[]{K(162,29,2)};SendInput(1,release,Marshal.SizeOf(typeof(Input)));throw;}
       } else {
-        ushort k=keys[key];Send(new Input[]{K(k,0,0),K(k,0,2)});
+        ushort k=keys[key];var presses=new List<Input>();for(int i=0;i<repeat;i++){presses.Add(K(k,0,0));presses.Add(K(k,0,2));}Send(presses.ToArray());
       }
     }
     // Win32 input is global, not an OS sandbox. A focus race has unknown outcome: never replay.
-    if(GetForegroundWindow()!=target)throw new Exception("focus-changed-outcome-unknown");
+    if(!Belongs(GetForegroundWindow(),target))throw new Exception("focus-changed-outcome-unknown");
     Target(); return new {sent=true};
   }
   static int Main() {
     Console.InputEncoding=Encoding.UTF8;Console.OutputEncoding=new UTF8Encoding(false);SetProcessDPIAware();
     try{string line=Console.ReadLine();if(line==null||line.Length>16000)throw new Exception("invalid-request");req=json.Deserialize<Dictionary<string,object>>(line);Console.WriteLine(json.Serialize(new{ok=true,value=Run()}));return 0;}
     catch(Exception e){
-      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-capture-too-large","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected","editor-control-required"};
+      string[] codes={"target-not-foreground","target-occluded","release-held-input","window-resized-observe-again","window-identity-changed","input-blocked-or-partial-do-not-retry","focus-changed-outcome-unknown","window-capture-not-supported","window-capture-too-large","window-unavailable","sensitive-control-denied","sensitive-window-denied","element-changed-observe-again","consequential-control-denied","control-uninspected","editor-control-required","repeat-denied"};
       string code=Array.IndexOf(codes,e.Message)>=0?e.Message:"window-action-unavailable-or-identity-changed";
       Console.WriteLine(json.Serialize(new{ok=false,error=code}));return 1;
     }

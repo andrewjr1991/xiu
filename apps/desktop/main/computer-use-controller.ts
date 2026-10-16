@@ -11,7 +11,7 @@ import { confirmComputerAction } from "./full-access-dialog.js";
 import { ComputerStatusWindow } from "./computer-status-window.js";
 import { AUTOMATIC_INPUT_LIMIT, FRAME_MAX_BYTES, MANUAL_DURATION_MS, MANUAL_INPUT_LIMIT, dataUrlBytes, frameScale, inputNeedsConfirmation, inspectionNotice, isUninspectedControl, mayReuseMergedGrant, nextTaskBudget, scaleElements, scaledSize, toClientCoordinate, type ComputerTaskBudget } from "./computer-use-policy.js";
 import { FRAME_TTL_MS } from "../../../src/computer-use-tools.js";
-import { POINTER_KINDS, inputTier } from "../shared/computer-use-inputs.js";
+import { MAX_KEY_REPEAT, POINTER_KINDS, REPEATABLE_KEYS, inputTier, isRepeatableKey } from "../shared/computer-use-inputs.js";
 import { isBlockedApp, isSensitiveWindowTitle } from "../shared/computer-use-sensitive.js";
 import type { ControlInspection } from "../shared/computer-use.js";
 
@@ -193,8 +193,11 @@ export class ComputerUseController {
     if (input.kind === "drag" && (!inside(input.toX, input.toY) || (input.toX === input.x && input.toY === input.y))) throw new Error("拖拽终点必须位于最新截图内且不同于起点。");
     if (input.kind === "scroll" && (!Number.isInteger(input.delta) || !input.delta || Math.abs(input.delta) > 1200)) throw new Error("滚动量超限。");
     if (input.kind === "type" && (typeof input.text !== "string" || !input.text || input.text.length > 500 || /[\x00-\x1f\x7f]/.test(input.text))) throw new Error("仅允许 1–500 字普通文本，不允许控制字符。");
+    if (input.kind !== "key" || input.repeat === undefined || input.repeat === null || input.repeat === 1) input = { ...input, repeat: undefined };
+    else if (!Number.isInteger(input.repeat) || input.repeat < 1 || input.repeat > MAX_KEY_REPEAT || !isRepeatableKey(input.key ?? "")) throw new Error(`repeat 只能是 1–${MAX_KEY_REPEAT}，且只用于 ${REPEATABLE_KEYS.join("、")}；Enter、Tab、Esc 和组合键每步只按一次。`);
+    const repeatLabel = input.repeat ? ` ×${input.repeat}` : "";
     const pointerLabel = { click: "左键单击", doubleclick: "左键双击", rightclick: "右键单击", drag: "拖拽", scroll: `滚动 ${input.delta}` }[input.kind as Exclude<ComputerInput["kind"], "type" | "key">];
-    const detail = input.kind === "type" ? `输入文本：${input.text}` : input.kind === "key" ? `按键：${input.key}${tier === "confirm" ? "（二级，每次确认）" : ""}` : input.kind === "drag" ? `拖拽：(${input.x}, ${input.y}) → (${input.toX}, ${input.toY})（二级，每次确认）` : `${pointerLabel}：(${input.x}, ${input.y})`;
+    const detail = input.kind === "type" ? `输入文本：${input.text}` : input.kind === "key" ? `按键：${input.key}${repeatLabel}${tier === "confirm" ? "（二级，每次确认）" : ""}` : input.kind === "drag" ? `拖拽：(${input.x}, ${input.y}) → (${input.toX}, ${input.toY})（二级，每次确认）` : `${pointerLabel}：(${input.x}, ${input.y})`;
     const confirm = inputNeedsConfirmation({ automatic: Boolean(this.automaticProvider), origin, tier });
     const notice = inspectionNotice(this.value.inspection);
     const accepted = !confirm || await confirmComputerAction(this.owner, "确认此步窗口操作", `${target.app} · ${target.title}\n${detail}\n${notice ? `${notice}\n` : ""}请确认该操作不涉及密码、支付、删除、发布或系统设置。输入和点击可能不可撤销；只执行一次。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
@@ -212,7 +215,7 @@ export class ComputerUseController {
     const client = (value: number | undefined, extent: number) => value === undefined ? undefined : toClientCoordinate(value, scale, extent);
     this.value = { ...this.value, frameId: undefined }; // Consume before side effects; unknown outcomes are never replayed.
     this.phase("正在操作");
-    const send = (allowUninspected: boolean) => this.native.request({ ...current, action: input.kind, width, height, elementId: input.elementId, x: client(input.x, width), y: client(input.y, height), toX: client(input.toX, width), toY: client(input.toY, height), delta: input.delta, text: input.text, key: input.key, allowUninspected }, signal);
+    const send = (allowUninspected: boolean) => this.native.request({ ...current, action: input.kind, width, height, elementId: input.elementId, x: client(input.x, width), y: client(input.y, height), toX: client(input.toX, width), toY: client(input.toY, height), delta: input.delta, text: input.text, key: input.key, repeat: input.repeat, allowUninspected }, signal);
     try {
       try { await send(false); }
       catch (error) {

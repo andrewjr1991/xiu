@@ -195,6 +195,9 @@ test("the input vocabulary exposes pointer kinds, drag targets and the key tiers
   const dragTools = createComputerUseTools(config, { ...host, input: async value => { sent.push(value as unknown as Record<string, unknown>); return "sent once"; }, observe: async () => frame }, { analyzeImage: async () => "Visible" });
   await dragTools.find(tool => tool.name === "computer_input")!.execute({ kind: "drag", frameId: frame.frameId, x: 10, y: 20, toX: 300, toY: 400 }, context);
   assert.equal(sent[0]!.kind, "drag"); assert.equal(sent[0]!.toX, 300); assert.equal(sent[0]!.toY, 400);
+  await dragTools.find(tool => tool.name === "computer_input")!.execute({ kind: "key", key: "Backspace", repeat: 6, frameId: frame.frameId }, context);
+  assert.equal(sent[1]!.repeat, 6);
+  assert.equal((schema.properties as Record<string, { maximum?: number }>).repeat!.maximum, 50);
 });
 
 test("a blank or misplaced elementId never blocks type/key and is dropped before reaching the host", async () => {

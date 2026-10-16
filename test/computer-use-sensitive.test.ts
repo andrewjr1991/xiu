@@ -34,3 +34,15 @@ test("every error code the native helper can report has a user-facing reason", (
   assert.match(bridge, /AllowUninspected\(\)/);
   assert.doesNotMatch(bridge, /allowUninspected"\]=|allowUninspected=true/);
 });
+
+test("popups the target opened count as the target only when they are same-process, overlapping and not sensitively titled", () => {
+  // The predicate is the single gate for compositing, control listing, occlusion and foreground checks.
+  const predicate = bridge.slice(bridge.indexOf("static bool OwnedPopup("), bridge.indexOf("static List<IntPtr> OwnedPopups("));
+  assert.match(predicate, /GetAncestor\(h,2\)!=h\)return false/);
+  assert.match(predicate, /pid\.ToString\(\)!=S\("pid"\)\)return false/);
+  assert.match(predicate, /0x80000000/);
+  assert.match(predicate, /SensitiveWindowTitlePattern/);
+  for (const site of [/Belongs\(GetAncestor\(WindowFromPoint\(p\),2\),target\)\)throw new Exception\("target-occluded"\)/, /Belongs\(GetAncestor\(WindowFromPoint\(q\),2\),target\)\)throw new Exception\("target-occluded"\)/, /Belongs\(GetForegroundWindow\(\),target\)\)throw new Exception\("target-not-foreground"\)/, /Belongs\(GetForegroundWindow\(\),target\)\)throw new Exception\("focus-changed-outcome-unknown"\)/]) assert.match(bridge, site);
+  // A popup is painted only from its own pixels: PrintWindow first, screen copy only where the popup itself is on top.
+  assert.match(bridge, /GetAncestor\(WindowFromPoint\(centre\),2\)!=popup\)continue;/);
+});
