@@ -10,6 +10,7 @@ import { WindowsComputer } from "./windows-computer.js";
 import { confirmComputerAction } from "./full-access-dialog.js";
 import { ComputerStatusWindow } from "./computer-status-window.js";
 import { AUTOMATIC_INPUT_LIMIT, FRAME_MAX_BYTES, MANUAL_DURATION_MS, MANUAL_INPUT_LIMIT, dataUrlBytes, frameScale, inputNeedsConfirmation, inspectionNotice, isUninspectedControl, mayReuseMergedGrant, nextTaskBudget, scaleElements, scaledSize, toClientCoordinate, type ComputerTaskBudget } from "./computer-use-policy.js";
+import { FRAME_TTL_MS } from "../../../src/computer-use-tools.js";
 import { POINTER_KINDS, inputTier } from "../shared/computer-use-inputs.js";
 import { isBlockedApp, isSensitiveWindowTitle } from "../shared/computer-use-sensitive.js";
 import type { ControlInspection } from "../shared/computer-use.js";
@@ -171,15 +172,18 @@ export class ComputerUseController {
     this.retainWorkspace(workspace); const target = this.activeTarget(), generation = this.generation;
     const tier = input ? inputTier(input) : undefined;
     if (!tier) throw new Error("不支持该输入或快捷键。只允许一级/二级按键，不支持 Win、Alt 组合或系统快捷键。");
-    if (input.frameId !== this.value.frameId || !this.value.capturedAt || !this.client || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图已失效，请重新观察后操作。");
+    if (input.frameId !== this.value.frameId || !this.value.capturedAt || !this.client) throw new Error("frameId 不是最新一帧：每次 computer_observe 或 computer_input 返回的新帧才有效，旧帧已被消费。请使用最新结果里的 Frame。");
+    const age = Date.now() - Date.parse(this.value.capturedAt);
+    if (age > FRAME_TTL_MS) throw new Error(`截图已超过 ${FRAME_TTL_MS / 1000} 秒（已过 ${Math.round(age / 1000)} 秒），请重新观察后操作。`);
     const limit = this.automaticProvider ? AUTOMATIC_INPUT_LIMIT : MANUAL_INPUT_LIMIT;
     if (++this.inputs > limit) { this.stop(); throw new Error(`本次窗口授权已达 ${limit} 步，请重新授权。`); }
     const budget = this.taskBudget;
     if (this.automaticProvider && budget && budget.task === this.boundTask) budget.inputs = this.inputs;
     if (input.elementId !== undefined) {
-      if (!["click", "doubleclick", "rightclick"].includes(input.kind)) throw new Error("控件定位只用于点击；输入前先点击并观察焦点。");
+      if (!["click", "doubleclick", "rightclick"].includes(input.kind)) throw new Error("elementId 只用于 click/doubleclick/rightclick。文本和按键发送到当前焦点控件：先 click 目标（可带 elementId），下一步直接 type 或 key，不需要额外观察。");
       const element = this.value.elements?.find(element => element.id === input.elementId);
-      if (!element || !element.enabled) throw new Error("控件已失效，请重新观察。");
+      if (!element) throw new Error("该控件 ID 不在最新一帧的控件列表中。请使用最新结果列出的 ID，或改用截图坐标点击。");
+      if (!element.enabled) throw new Error("该控件当前已禁用，未发送输入。");
       input = { ...input, x: Math.floor(element.x + element.width / 2), y: Math.floor(element.y + element.height / 2) };
     }
     const inside = (x: unknown, y: unknown) => Number.isInteger(x) && Number.isInteger(y) && (x as number) >= 0 && (y as number) >= 0 && (x as number) < this.value.width! && (y as number) < this.value.height!;
@@ -197,7 +201,7 @@ export class ComputerUseController {
     if (confirm) { this.owner.focus(); await new Promise(resolve => setTimeout(resolve, 150)); }
     const windows = await this.native.list();
     this.activeTarget();
-    if (input.frameId !== this.value.frameId || !this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图在确认期间已失效，请重新观察。");
+    if (input.frameId !== this.value.frameId || !this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > FRAME_TTL_MS) throw new Error("截图在确认期间已失效，请重新观察。");
     const current = windows.find(window => window.handle === target.handle && window.pid === target.pid && window.started === target.started);
     if (!current || !this.allowed(current) || generation !== this.generation || signal?.aborted) { this.stop(); throw new Error("窗口已变化，未执行输入。"); }
     this.selected = current;
@@ -217,7 +221,7 @@ export class ComputerUseController {
         const allowed = await confirmComputerAction(this.owner, "无法识别目标控件，仍要执行？", `${current.app} · ${current.title}\n${detail}\n程序读不到该位置或当前焦点控件的名称和类型，无法判断它是否是密码框、发送、支付或删除等高风险控件。只有你能看到并确认这一步安全时才继续；取消将撤销本次授权。`, AbortSignal.any([this.authority.signal, ...(signal ? [signal] : [])]));
         if (!allowed || generation !== this.generation || signal?.aborted) throw new Error("窗口操作已取消。");
         this.owner.focus(); await new Promise(resolve => setTimeout(resolve, 150));
-        if (!this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > 60_000) throw new Error("截图在确认期间已失效，请重新观察。");
+        if (!this.value.capturedAt || Date.now() - Date.parse(this.value.capturedAt) > FRAME_TTL_MS) throw new Error("截图在确认期间已失效，请重新观察。");
         const latest = (await this.native.list()).find(window => window.handle === current.handle && window.pid === current.pid && window.started === current.started);
         if (!latest || !this.allowed(latest) || generation !== this.generation || signal?.aborted) throw new Error("窗口已变化，未执行输入。");
         this.phase("正在操作");
