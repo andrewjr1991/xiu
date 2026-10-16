@@ -10,6 +10,38 @@ using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 using System.Windows.Automation;
 
+// Message delivery cannot tell whether a custom/XAML/Chromium control implemented an editing
+// command. Decide the route before sending anything; a failed/unknown send must never fall back.
+internal static class ComputerEditorCommands {
+  static bool SupportsMessages(string name) {
+    if(string.IsNullOrEmpty(name))return false;
+    // WinForms superclasses keep the native Edit/RichEdit implementation under a generated name.
+    const string prefix="WindowsForms10.";
+    if(name.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)) {
+      int suffix=name.IndexOf(".app.",prefix.Length,StringComparison.OrdinalIgnoreCase);
+      if(suffix<0)return false;
+      name=name.Substring(prefix.Length,suffix-prefix.Length);
+    }
+    return string.Equals(name,"Edit",StringComparison.OrdinalIgnoreCase)
+      ||string.Equals(name,"RichEdit",StringComparison.OrdinalIgnoreCase)
+      ||string.Equals(name,"RichEdit20A",StringComparison.OrdinalIgnoreCase)
+      ||string.Equals(name,"RichEdit20W",StringComparison.OrdinalIgnoreCase)
+      ||string.Equals(name,"RichEdit50W",StringComparison.OrdinalIgnoreCase);
+  }
+  internal static bool TrySend(string key,Func<IntPtr> verifiedEditor,Func<IntPtr,string> className,Action<IntPtr,uint,IntPtr> send) {
+    uint message;IntPtr l=IntPtr.Zero;
+    if(key=="Ctrl+A"){message=0x00B1;l=new IntPtr(-1);} // EM_SETSEL
+    else if(key=="Ctrl+C")message=0x0301; // WM_COPY
+    else if(key=="Ctrl+V")message=0x0302; // WM_PASTE
+    else if(key=="Ctrl+Z")message=0x0304; // WM_UNDO
+    else return false; // In particular, Ctrl+S is app-wide and must not require editor focus.
+    IntPtr h=verifiedEditor();
+    if(h==IntPtr.Zero||!SupportsMessages(className(h)))return false;
+    send(h,message,l); // Exceptions propagate: never retry a possibly executed operation as a key.
+    return true; // Dispatched, not proof of a visible effect. The caller still observes afterward.
+  }
+}
+
 // One bounded request per process. No shell, paths, network, clipboard, or arbitrary code.
 class ComputerBridge {
   delegate bool EnumProc(IntPtr h, IntPtr p);
@@ -27,6 +59,7 @@ class ComputerBridge {
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h,uint flags);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder text,int n);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,StringBuilder text,int n);
   [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect r);
   [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h,int index);
@@ -155,21 +188,22 @@ class ComputerBridge {
   // Target the verified editor HWND directly for common editing chords. This avoids a global
   // modifier race after a consent dialog took focus, and never reads the editor's contents.
   static bool SendEditorCommand(AutomationElement focused,string key,IntPtr target) {
-    RequireEditor(focused);
-    uint pid;uint thread=GetWindowThreadProcessId(target,out pid);
-    var gui=new GuiThreadInfo{size=Marshal.SizeOf(typeof(GuiThreadInfo))};
-    IntPtr h=GetGUIThreadInfo(thread,ref gui)?gui.focus:IntPtr.Zero;
-    if(h==IntPtr.Zero){int raw=focused.Current.NativeWindowHandle;if(raw!=0)h=new IntPtr(raw);}
-    if(h==IntPtr.Zero)return false;
-    uint focusedPid;GetWindowThreadProcessId(h,out focusedPid);if(focusedPid!=N("pid"))return false;
-    uint message=0;IntPtr l=IntPtr.Zero;
-    if(key=="Ctrl+A"){message=0x00B1;l=new IntPtr(-1);} // EM_SETSEL
-    else if(key=="Ctrl+C")message=0x0301; // WM_COPY
-    else if(key=="Ctrl+V")message=0x0302; // WM_PASTE
-    else if(key=="Ctrl+Z")message=0x0304; // WM_UNDO
-    else return false;
-    IntPtr result;if(SendMessageTimeout(h,message,IntPtr.Zero,l,2,1000,out result)==IntPtr.Zero)throw new Exception("input-blocked-or-partial-do-not-retry");
-    return true;
+    return ComputerEditorCommands.TrySend(key,delegate {
+      RequireEditor(focused);
+      uint pid;uint thread=GetWindowThreadProcessId(target,out pid);
+      var gui=new GuiThreadInfo{size=Marshal.SizeOf(typeof(GuiThreadInfo))};
+      IntPtr h=GetGUIThreadInfo(thread,ref gui)?gui.focus:IntPtr.Zero;
+      if(h==IntPtr.Zero){int raw=focused.Current.NativeWindowHandle;if(raw!=0)h=new IntPtr(raw);}
+      if(h==IntPtr.Zero)return IntPtr.Zero;
+      uint focusedPid;GetWindowThreadProcessId(h,out focusedPid);
+      if(focusedPid!=N("pid")||!Belongs(GetAncestor(h,2),target))throw new Exception("element-changed-observe-again");
+      return h;
+    },delegate(IntPtr h) {
+      var name=new StringBuilder(256);
+      return GetClassName(h,name,name.Capacity)>0?name.ToString():"";
+    },delegate(IntPtr h,uint message,IntPtr l) {
+      IntPtr result;if(SendMessageTimeout(h,message,IntPtr.Zero,l,2,1000,out result)==IntPtr.Zero)throw new Exception("input-blocked-or-partial-do-not-retry");
+    });
   }
   static void CheckControl(AutomationElement element) {
     if(element.Current.IsPassword)throw new Exception("sensitive-control-denied");

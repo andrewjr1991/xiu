@@ -2,6 +2,7 @@
 
 ## 0.20.12 (unreleased candidate)
 
+- Computer Use: editor messages are now restricted to recognized native Edit/RichEdit HWND classes (including WinForms wrappers). Custom, XAML and Chromium hosts use the existing keyboard path instead of silently ignoring native edit messages. A message timeout/error never falls back to another input. Ctrl+S once again works outside editor focus, with its per-step confirmation. Native routing tests replace assertions tied to drag step counts and particular APIs; Windows smoke covers both native editors and Chromium keyboard fallback.
 The maintainer accepted the local Computer Use editor fix on 2026-10-16. Local verification: 1206 tests passed, 9 skipped, no failures; isolated native editor workflow and Windows installer lifecycle passed. Publication remains pending.
 
 - Desktop Computer Use editor reliability: `type` accepts CR/LF only when the native bridge verifies a focused Edit/Document control; double-click uses two timed clicks; drag follows a smooth bounded path; and Ctrl+A/C/V/Z target the authorized GUI thread's verified editor HWND with a one-second hung-window timeout. The tool schema now tells the model to use the newest returned frame and to report refused system shortcuts without retry. The native Windows smoke covers a Notepad-style sequence: multi-line entry, double-click replacement with post-action correction, repeated Backspace, context-menu/Escape, select-all/copy, drag selection, selection cancellation and Alt+Tab refusal.

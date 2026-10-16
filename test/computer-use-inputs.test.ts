@@ -23,16 +23,9 @@ test("the native helper embeds the same key tiers as the main process", () => {
   // The helper refuses anything outside the two lists before touching SendInput, and gates editor keys on a focused editable control.
   assert.match(bridge, /Array\.IndexOf\(Tier1Keys,key\)<0&&Array\.IndexOf\(Tier2Keys,key\)<0\)throw new Exception\("shortcut-denied"\)/);
   assert.match(bridge, /editor-control-required/);
-  assert.match(bridge, /GetDoubleClickTime/);
-  assert.match(bridge, /const int steps=10/);
   assert.match(bridge, /bool multiline=text\.IndexOf\('\\r'\)>=0\|\|text\.IndexOf\('\\n'\)>=0;if\(multiline\)RequireEditor\(focused\)/);
-  assert.match(bridge, /if\(c=='\\r'\|\|c=='\\n'\)/);
-  assert.match(bridge, /SendEditorCommand\(focused,key,target\)/);
-  assert.match(bridge, /GetGUIThreadInfo\(thread,ref gui\)\?gui\.focus/);
-  assert.match(bridge, /key=="Ctrl\+A".*0x00B1/);
-  assert.match(bridge, /key=="Ctrl\+C".*0x0301/);
-  assert.match(bridge, /SendMessageTimeout\(h,message,IntPtr\.Zero,l,2,1000/);
-  assert.match(bridge, /SendKeys\.SendWait\(key=="Shift\+Home"\?"\+\{HOME\}":"\+\{END\}"\)/);
+  const editorPath = bridge.slice(bridge.indexOf("static bool SendEditorCommand("), bridge.indexOf("static void CheckControl("));
+  assert.ok(editorPath.indexOf("RequireEditor(focused)") >= 0 && editorPath.indexOf("RequireEditor(focused)") < editorPath.indexOf("return h;"), "message routing must obtain its HWND through the editor guard");
 });
 
 test("pointer actions, text and tier-1 keys run automatically; drag and tier-2 keys always confirm", () => {

@@ -6,6 +6,8 @@ const os=require('node:os');
 const assert=require('node:assert/strict');
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'xiu-window-fixture-'));
 app.setPath('userData',dir);app.disableHardwareAcceleration();
+// The Chromium fixture closes before the native fixture starts; only the final assertion quits.
+app.on('window-all-closed',()=>{});
 let fixture;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check){for(let i=0;i<100;i++){const result=await check();if(result)return result;await delay(50);}throw new Error('Fixture timeout');}
@@ -13,6 +15,7 @@ app.whenReady().then(async()=>{
   nativeTheme.themeSource='dark';
   const {ComputerUseController,WindowsComputer,createComputerUseTools}=require(process.argv[2]);
   const native=new WindowsComputer(process.argv[4]);
+  await require('./computer-editor-keyboard-smoke.cjs')(native);
   const stateFile=path.join(dir,'fixture-state.json');
   fixture=spawn(process.argv[3],[stateFile],{windowsHide:false,stdio:'ignore'});
   await until(()=>fs.existsSync(stateFile));
@@ -185,6 +188,12 @@ app.whenReady().then(async()=>{
   await until(()=>read().clicks===2);
   await controller.observeForModel(dir,'fixture vision (no network)');
   assert.equal(dialogs,afterSequenceDialogs,'Automatic authorized observation/input does not re-prompt');
+  const saveFrame=await controller.observeForModel(dir,'fixture vision (no network)');
+  const beforeSaveDialogs=dialogs;
+  const beforeSaves=read().saves;
+  await controller.input(dir,{kind:'key',frameId:saveFrame.frameId,key:'Ctrl+S'});
+  await until(()=>read().saves===beforeSaves+1);
+  assert.equal(dialogs,beforeSaveDialogs+1,'Ctrl+S works with button focus and still requires its own confirmation');
   await assert.rejects(controller.observeForModel(dir,'different route'),/通道|模型|授权|变更|变化/);
   assert.equal((await controller.control(dir,{action:'state'},false)).state,'idle');
   controller.taskFinished();

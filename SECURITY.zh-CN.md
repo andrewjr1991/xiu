@@ -1,8 +1,8 @@
 # Xiu 安全与隐私边界
 
-Computer Use 编辑器输入补充（2026-10-16）：多行 `type` 只允许 CR/LF，并且原生桥必须确认焦点属于已授权目标进程的 Edit/Document 控件；其他控制字符仍拒绝。Ctrl+A/C/V/Z 只发送给该目标 GUI 线程当前焦点的已验证编辑器 HWND，消息等待最多一秒，超时按未知结果停止且不重放。双击和拖拽仍受最新帧、目标窗口、遮挡、控件敏感性及逐步/自动授权边界约束；Alt/Win 和系统窗口切换快捷键继续拒绝。
-
 ## Windows Computer Use 临时授权边界（0.20.8 本地候选）
+
+- 编辑器输入（2026-10-17）：多行 `type` 只允许 CR/LF，并且原生桥必须确认焦点属于已授权目标进程的 Edit/Document 控件；其他控制字符仍拒绝。Ctrl+A/C/V/Z 先验证编辑器焦点、目标进程及窗口归属，再查询实际焦点 HWND 的类名；仅已知 Edit/RichEdit 及其 WinForms 包装类使用编辑消息，其他或未知类在任何消息发出前选择按键路径。消息等待最多一秒，超时或失败按未知结果停止，不再补发按键；返回已发送不代表界面效果验证成功。Ctrl+S 不进入编辑器消息路径，允许目标应用内非编辑控件获得焦点时执行，仍每次单独确认。双击和拖拽仍受最新帧、目标窗口、遮挡、控件敏感性及逐步/自动授权边界约束；Alt/Win 和系统窗口切换快捷键继续拒绝。
 
 - 人工电脑结果验收仅是具体已结束轮次的独立 metadata，主进程须核验准确轮次、成功电脑输入、空闲/单写者/非 Plan 上下文及独立用户确认。它不改写任务状态、校验、时间或事件，不作为确定性验证证据、恢复确认或操作授权；不能由模型文字批准、不能传给下一轮。
 - 输入词汇与分级只有 `apps/desktop/shared/computer-use-inputs.ts` 一个来源，C# 桥程序内嵌同一份按键列表并由 `test/computer-use-inputs.test.ts` 强制一致，主进程与桥程序各自独立判定。一级（自动模式下免逐步确认）：左键单击、双击、右键、滚动、普通文本，以及 Enter/Tab/Escape/Backspace/Delete/Space/方向键/Home/End/PageUp/PageDown/F2、Shift+Home/End、Ctrl+A、Ctrl+Z；二级（即使自动模式也每次单独确认）：拖拽、Ctrl+C、Ctrl+V、Ctrl+S、Ctrl+Y；三级（两端都拒绝，`shortcut-denied`）：Win、Alt、Alt+Tab、Alt+F4、Ctrl+Alt+Del、任务管理器、关闭窗口等所有列表外组合。Shift/Ctrl 组合（Ctrl+S 除外）只允许发往目标进程中获得焦点的非敏感 Edit/Document 控件，否则返回 `editor-control-required`；只发送固定组合，不读取剪贴板或编辑值；拖拽的起点与终点都必须在目标窗口内且未被遮挡，部分输入只释放可能按住的鼠标键/修饰键，不重放动作。已处于目标前台时不重复关联输入队列，避免扰动编辑状态。Backspace/Delete/Space/方向键/PageUp/PageDown 可在一步内连按（`repeat`，1–50，主进程与桥程序各自校验，超限或其他按键返回 `repeat-denied`），Enter、Tab、Esc 和所有组合键每步只按一次；确认框与记录显示“×N”。

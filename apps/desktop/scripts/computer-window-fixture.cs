@@ -6,7 +6,7 @@ using System.Web.Script.Serialization;
 // Isolated test application. No user application or real data is touched.
 class ComputerWindowFixture {
   [STAThread] static void Main(string[] args) {
-    var form = new Form { Text="Xiu isolated window fixture", ClientSize=new Size(480,320), StartPosition=FormStartPosition.CenterScreen, BackColor=Color.White };
+    var form = new Form { Text="Xiu isolated window fixture", ClientSize=new Size(480,320), StartPosition=FormStartPosition.CenterScreen, BackColor=Color.White, KeyPreview=true };
     var text=new TextBox { Location=new Point(20,20), Size=new Size(280,45), Multiline=true, AcceptsReturn=true, AccessibleName="Original editor" };
     var editor=new RichTextBox { Location=new Point(200,70), Size=new Size(260,105), Multiline=true, AcceptsTab=false, Font=new Font("Consolas",8), AccessibleName="Sequence editor" };
     var button=new Button { Text="Fixture click", Location=new Point(20,70), Size=new Size(160,40) };
@@ -14,9 +14,11 @@ class ComputerWindowFixture {
     var load=new Button { Text="Load fixture", Location=new Point(20,190), Size=new Size(160,40) };
     var status=new Label { Text="Not loaded", Location=new Point(200,195), Size=new Size(220,40) };
     var loading=new Timer { Interval=500 }; var probe=new Timer { Interval=50 }; bool ready=false;
-    int clicks=0, keys=0, wheels=0; string lastKey="";
+    int clicks=0, keys=0, wheels=0, saves=0; string lastKey="";
     int charWidth=Math.Max(1,TextRenderer.MeasureText(new string('M',20),editor.Font,new Size(1000,100),TextFormatFlags.NoPadding).Width/20),lineHeight=editor.Font.Height;
-    Action save=()=>File.WriteAllText(args[0],new JavaScriptSerializer().Serialize(new { text=text.Text, editorText=editor.Text, editorSelectionStart=editor.SelectionStart, editorSelectionLength=editor.SelectionLength, editorLeft=editor.Left, editorTop=editor.Top, charWidth=charWidth, lineHeight=lineHeight, editorWidth=editor.Width, editorHeight=editor.Height, clicks=clicks, keys=keys, wheels=wheels, ready=ready, selectionStart=text.SelectionStart, selectionLength=text.SelectionLength,lastKey=lastKey }));
+    Action save=()=>File.WriteAllText(args[0],new JavaScriptSerializer().Serialize(new { text=text.Text, editorText=editor.Text, editorSelectionStart=editor.SelectionStart, editorSelectionLength=editor.SelectionLength, editorLeft=editor.Left, editorTop=editor.Top, charWidth=charWidth, lineHeight=lineHeight, editorWidth=editor.Width, editorHeight=editor.Height, clicks=clicks, keys=keys, wheels=wheels, ready=ready, selectionStart=text.SelectionStart, selectionLength=text.SelectionLength,lastKey=lastKey,saves=saves }));
+    // Record the application's save shortcut without saving a file; focus stays on a button.
+    form.KeyDown+=(s,e)=>{if(e.Control&&e.KeyCode==Keys.S){saves++;e.SuppressKeyPress=true;save();}};
     load.Click+=(s,e)=>{ready=false;status.Text="Loading";save();loading.Start();};
     loading.Tick+=(s,e)=>{loading.Stop();ready=true;status.Text="Ready";save();};
     button.Click+=(s,e)=>{clicks++;save();}; text.TextChanged+=(s,e)=>save(); editor.TextChanged+=(s,e)=>save();
