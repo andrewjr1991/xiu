@@ -70,6 +70,11 @@ export class ComputerUseController {
   }
   feedbackFinished(): void { this.phase("等待下一步"); }
   get hasBoundTask(): boolean { return this.boundTask !== undefined; }
+  /** The controller's own dialogs stand in for the generic tool approval: selection always confirms (or reuses the user's grant), observe/input only once a target is authorized. */
+  confirms(step: "select" | "observe" | "input"): boolean {
+    if (step === "select") return true;
+    return this.selected !== undefined && Date.now() < this.expires;
+  }
   taskStarted(id: string): void { if (this.selected && !this.boundTask) this.boundTask = id; else this.stop(); this.activeTask = id; }
   taskFinished(): void { this.stop(); this.activeTask = undefined; this.taskBudget = undefined; }
   selectedStatus(): string {
