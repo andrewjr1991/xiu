@@ -1577,7 +1577,13 @@ async function main(): Promise<void> {
           },
           diagnostics: agent.status().diagnostics,
           exact: true,
-        }).catch(() => undefined);
+        }).catch((error: unknown) => {
+          // Session history is a convenience, never a gate on the task result, but a
+          // one-shot run must still say when this turn will be missing from /resume.
+          emitLine(chalk.dim(redactTerminalOutput(localize(language,
+            `未能保存本轮会话记录：${error instanceof Error ? error.message : String(error)}。任务结果不受影响，但 /resume 不会看到这一轮。`,
+            `Could not save this turn to the session history: ${error instanceof Error ? error.message : String(error)}. The task result is unaffected, but /resume will not show this turn.`))));
+        });
       }
       if (jsonStream) {
         const finished = agent.status();
