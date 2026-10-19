@@ -12,7 +12,7 @@ xiu --version
 xiu doctor
 ```
 
-In Windows PowerShell, use `npm.cmd` when `npm.ps1` is blocked by the execution policy or ConstrainedLanguage mode. `xiu doctor` prints one read-only report covering the installation, providers, web search, proxy and certificate settings, the PowerShell language mode and the workspace's own records (how many run records and session logs are readable, which are not and why, and whether an interrupted task is waiting for `xiu recover`); keys and proxy passwords are redacted, so you can paste it into an issue. `xiu --check-update` asks the official npm registry for a newer version and never installs anything.
+In Windows PowerShell, use `npm.cmd` when `npm.ps1` is blocked by the execution policy or ConstrainedLanguage mode. `xiu doctor` prints one read-only report covering the installation, providers, web search, proxy and certificate settings, the PowerShell language mode and the workspace's own records (how many run records and session logs are readable, which are not and why, and whether an interrupted task is waiting for `xiu recover`); keys and proxy passwords are redacted, so you can paste it into an issue. `xiu doctor json` prints the same report as one JSON document (`status`, and every section's items with their `level`) for scripts and CI; both forms exit 1 when the report has a failure. `xiu --check-update` asks the official npm registry for a newer version and never installs anything.
 
 ## Providers and keys
 

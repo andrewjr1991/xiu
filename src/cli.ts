@@ -24,7 +24,8 @@ import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, 
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
-import { collectDoctorReport, doctorHasHardFailure, formatDoctorReport } from "./doctor.js";
+import { collectDoctorReport, formatDoctorReport } from "./doctor.js";
+import { runDoctorCommand } from "./commands/doctor-command.js";
 import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
@@ -238,7 +239,7 @@ const program = new Command()
   .option("--language <language>", "interface and conversation language: zh-CN or en-US")
   .option("--check-update", "check the official npm registry for a newer Xiu version, then exit", false)
   .option("--update-doctor", "run read-only update and installation diagnostics, then exit", false)
-  .option("--doctor", "print the read-only diagnostics report (same as `xiu doctor`), then exit", false)
+  .option("--doctor", "print the read-only diagnostics report (same as `xiu doctor [json]`), then exit", false)
   .option("--provider-config-diagnostics", "list safe Provider configuration diagnostics and recovery backups, then exit", false)
   .option("--provider-config-preview <backup-id>", "preview Provider backup recovery (or current for dead-lock cleanup), then exit")
   .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
@@ -329,14 +330,17 @@ async function main(): Promise<void> {
     process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
     return;
   }
-  if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
+  if (options.doctor || program.args[0] === "doctor") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
-    try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
-    catch { /* The report then describes environment and legacy credentials only. */ }
-    const report = await collectDoctorReport({ version: packageJson.version, settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()) });
-    console.log(`${formatDoctorReport(report, language)}\n`);
-    process.exitCode = doctorHasHardFailure(report) ? 1 : 0;
+    process.exitCode = await runDoctorCommand(options.doctor ? (program.args as string[]) : (program.args as string[]).slice(1), {
+      language,
+      collect: async () => {
+        let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
+        try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+        catch { /* The report then describes environment and legacy credentials only. */ }
+        return collectDoctorReport({ version: packageJson.version, settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()) });
+      },
+    });
     return;
   }
   if (options.updateDoctor) {
