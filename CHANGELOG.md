@@ -3,6 +3,7 @@
 ## Unreleased (0.20.13)
 
 - CLI: `xiu --json <task>` runs a one-shot task as a machine-readable JSON Lines stream. stdout carries a `session.started` line, every redacted runtime event (the same `schemaVersion: 1` protocol the desktop uses) and one final `result` line whose `exitCode` matches the process exit code (0 completed, 2 unverified, 3 waiting for an answer, 1 failed or not started); human-readable progress moves to stderr. The flag never reads decisions from a pipe: untrusted workspaces return `not_started`, `--yes` keeps its limits and dangerous actions stay denied.
+- CLI: `/report export html <path> <summary|details>` writes the execution report as one self-contained HTML file (inline styles, no scripts, no external resources, a CSP that forbids both, light/dark aware, every value escaped). Content matches the Markdown report; phases and file changes become tables.
 - Desktop conversation: user requests and assistant replies now have a copy action. A bounded, trusted main-process clipboard write copies only the text displayed on the chosen card. The task history includes a slim clickable message map for moving between records; choosing a marker pauses automatic follow. Wide windows center the conversation and composer in a 1080 px reading column, while user messages use a narrower, roomier neutral bubble; narrow layouts retain their compact spacing.
 
 ## 0.20.12 — 2026-10-19

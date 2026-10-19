@@ -66,11 +66,11 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
         console.log(`${renderTerminalMarkdown(formatExecutionReport(report, language))}\n`);
         return true;
       }
-      const match = task.match(/^\/report\s+export\s+(markdown|json)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(summary|details)$/i);
+      const match = task.match(/^\/report\s+export\s+(markdown|json|html)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(summary|details)$/i);
       if (!match) {
         console.log(chalk.yellow(localize(language,
-          "用法：/report 或 /report export <markdown|json> <工作区内路径> <summary|details>\n",
-          "Usage: /report or /report export <markdown|json> <workspace path> <summary|details>\n")));
+          "用法：/report 或 /report export <markdown|json|html> <工作区内路径> <summary|details>\n",
+          "Usage: /report or /report export <markdown|json|html> <workspace path> <summary|details>\n")));
         return true;
       }
       const format = match[1]!.toLowerCase() as ExecutionReportFormat;

@@ -9,7 +9,7 @@ import type { TaskRunOperation, TaskRunRecord } from "./task-run.js";
 import type { UiLanguage } from "./i18n.js";
 
 export type ExecutionReportScope = "summary" | "details";
-export type ExecutionReportFormat = "markdown" | "json";
+export type ExecutionReportFormat = "markdown" | "json" | "html";
 
 export interface ExecutionReport {
   version: 1;
@@ -302,8 +302,97 @@ export function formatExecutionReport(report: ExecutionReport, language: UiLangu
   return lines.join("\n");
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>)[char] ?? char);
+}
+
+const REPORT_HTML_STYLE = `
+:root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --panel: #f6f8fa; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8d96a0; --line: #30363d; --panel: #161b22; --ok: #3fb950; --bad: #f85149; --warn: #d29922; } }
+body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif; }
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 24px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.meta { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+dt { color: var(--muted); } dd { margin: 0; }
+.ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; } .warn { color: var(--warn); font-weight: 600; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; } th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; } th { color: var(--muted); font-weight: 600; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+code, pre { font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; } code { background: var(--panel); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+pre { margin: 4px 0 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+ul { margin: 0; padding-left: 20px; } li { margin: 3px 0; } .empty { color: var(--muted); }
+footer { margin-top: 32px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+`;
+
+/**
+ * A single self-contained HTML document: inline styles only, no scripts, no
+ * external resources, and a Content-Security-Policy that forbids both, so the
+ * file can be opened or shared without loading anything. Every value is escaped.
+ */
+export function formatExecutionReportHtml(report: ExecutionReport, language: UiLanguage = "zh-CN"): string {
+  const zh = language === "zh-CN";
+  const t = (chinese: string, english: string): string => zh ? chinese : english;
+  const e = escapeHtml;
+  const flag = (value: boolean, good = true): string => `<span class="${value === good ? "ok" : "bad"}">${e(yes(value, language))}</span>`;
+  const list = (items: string[], empty: string): string => items.length ? `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>` : `<p class="empty">${e(empty)}</p>`;
+  const number = (value: number): string => `<td class="num">${value}</td>`;
+  const fileRows = report.files.map((file) => `<tr><td>${e(fileKindLabel(file.kind, language))}</td><td><code>${e(file.path)}</code>${file.preview?.length ? `<pre>${file.preview.map(e).join("\n")}</pre>` : ""}</td>${number(file.additions ?? 0)}${number(file.deletions ?? 0)}${number(file.bytesBefore)}${number(file.bytesAfter)}</tr>`).join("");
+  const phaseRows = report.phases.map((item) => `<tr><td>${e(statusLabel(item.kind, language))}</td>${number(item.total)}${number(item.succeeded)}${number(item.failed)}${number(item.pending)}</tr>`).join("");
+  const statusClass = report.run.status === "completed" ? "ok" : report.run.status === "failed" || report.run.status === "cancelled" || report.run.status === "abandoned" ? "bad" : "warn";
+  const diagnostics = report.diagnostics;
+  const body = `
+<main>
+<h1>${e(t("Xiu 完整执行报告", "Xiu execution report"))}</h1>
+<p class="meta">${e(t("生成时间", "Generated"))} ${e(report.generatedAt)} · ${e(t("范围", "Scope"))} ${e(report.scope)} · ${e(t("运行", "Run"))} <code>${e(report.run.id)}</code></p>
+<dl>
+<dt>${e(t("目标", "Goal"))}</dt><dd>${e(report.goal || t("未记录", "not recorded"))}</dd>
+<dt>${e(t("状态", "Status"))}</dt><dd><span class="${statusClass}">${e(statusLabel(report.run.status, language))}</span></dd>
+<dt>${e(t("完整", "Complete"))}</dt><dd>${flag(report.outcome.complete)}</dd>
+<dt>${e(t("已验证", "Verified"))}</dt><dd>${flag(report.outcome.verified)}</dd>
+<dt>${e(t("可继续", "Can continue"))}</dt><dd>${e(yes(report.outcome.canContinue, language))} · ${e(nextActionLabel(report, language))}</dd>
+<dt>${e(t("服务商/模型", "Provider/Model"))}</dt><dd><code>${e(report.run.provider)}/${e(report.run.model)}</code></dd>
+<dt>${e(t("开始", "Started"))}</dt><dd>${e(report.run.startedAt)}${report.run.finishedAt ? ` → ${e(report.run.finishedAt)}` : ""}</dd>
+<dt>${e(t("耗时", "Duration"))}</dt><dd>${(report.run.durationMs / 1000).toFixed(1)}${e(t(" 秒", "s"))}</dd>
+</dl>
+<h2>${e(t("关键操作与依据", "Key actions and evidence"))}</h2>
+${list(report.keyActions.map((item) => e(keyActionLabel(item, language))), t("无单独回执；请结合阶段与验证证据复核", "no separate receipts; review the phases and verification evidence"))}
+<h2>${e(t("阶段", "Phases"))}</h2>
+${report.phases.length ? `<table><thead><tr><th>${e(t("阶段", "Phase"))}</th><th class="num">${e(t("总数", "Total"))}</th><th class="num">${e(t("成功", "Succeeded"))}</th><th class="num">${e(t("失败", "Failed"))}</th><th class="num">${e(t("待确认", "Pending"))}</th></tr></thead><tbody>${phaseRows}</tbody></table>` : `<p class="empty">${e(t("无记录", "none recorded"))}</p>`}
+<h2>${e(t("文件变化", "File changes"))}</h2>
+${report.files.length ? `<table><thead><tr><th>${e(t("类型", "Kind"))}</th><th>${e(t("路径", "Path"))}</th><th class="num">+</th><th class="num">−</th><th class="num">${e(t("原字节", "Bytes before"))}</th><th class="num">${e(t("现字节", "Bytes after"))}</th></tr></thead><tbody>${fileRows}</tbody></table>${report.bounded.fileLimitReached ? `<p class="empty">${e(t(`仅列出前 ${MAX_FILES} 个文件。`, `Only the first ${MAX_FILES} files are listed.`))}</p>` : ""}` : `<p class="empty">${e(t("无记录", "none recorded"))}</p>`}
+<h2>${e(t("验证证据", "Verification evidence"))}</h2>
+${list(report.verification.map((item) => `<span class="${item.status === "succeeded" ? "ok" : item.status === "failed" ? "bad" : "warn"}">${e(statusLabel(item.status, language))}</span> · ${e(operationLabel(item.name, language))}${item.evidence ? ` · ${e(evidenceLabel(item.evidence, language))}` : ""}`), t("无验证操作记录", "no verification operation recorded"))}
+<h2>${e(t("失败与重试", "Failures and retries"))}</h2>
+${list(report.failures.map((item) => `${e(failureSourceLabel(item.source, language))} · ${e(operationLabel(item.operation, language))}: ${e(evidenceLabel(item.message, language))}`), t("无", "none"))}
+${diagnostics ? `<p>${e(t("模型重试", "Model retries"))}: ${diagnostics.retries} · ${e(t("模型调用", "model calls"))}: ${diagnostics.modelCalls} · ${e(t("工具调用", "tool calls"))}: ${diagnostics.toolCalls} · ${e(t("输入/输出 Token", "input/output tokens"))}: ${diagnostics.inputTokens}/${diagnostics.outputTokens} · ${e(t("失败", "failures"))}: ${diagnostics.failures} · ${e(t("上下文压缩", "compactions"))}: ${diagnostics.compactions}</p>` : ""}
+${report.bounded.failureLimitReached ? `<p class="empty">${e(t(`仅列出最近 ${MAX_FAILURES} 条失败。`, `Only the last ${MAX_FAILURES} failures are listed.`))}</p>` : ""}
+<h2>${e(t("安全与恢复", "Security and recovery"))}</h2>
+<ul>
+<li>${e(t("安全事件", "Security events"))}: ${report.security.events} · ${e(t("允许", "allowed"))}: ${report.security.allowed} · ${e(t("拒绝", "denied"))}: ${report.security.denied} · ${e(t("失败", "failed"))}: ${report.security.failed} · ${e(t("危险", "dangerous"))}: ${report.security.dangerous}</li>
+<li>${e(t("未知副作用", "Unknown side effects"))}: ${report.recovery.unknownSideEffects.length ? report.recovery.unknownSideEffects.map((item) => e(sideEffectLabel(item, language))).join(zh ? "、" : ", ") : e(t("无", "none"))}</li>
+${report.recovery.lastEvidence ? `<li>${e(t("最近恢复点", "Latest recovery point"))}: ${e(evidenceLabel(report.recovery.lastEvidence, language))}</li>` : ""}
+</ul>
+<footer>${e(t("报告默认脱敏且有界；详细范围仅额外包含少量脱敏文件预览。此文件不含脚本，不加载任何外部资源。", "The report is redacted and bounded by default; details only adds small redacted file previews. This file contains no scripts and loads no external resources."))}</footer>
+</main>`;
+  return `<!doctype html>
+<html lang="${zh ? "zh-CN" : "en"}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>${e(t("Xiu 执行报告", "Xiu execution report"))} · ${e(report.run.id)}</title>
+<style>${REPORT_HTML_STYLE}</style>
+</head>
+<body>${body}
+</body>
+</html>
+`;
+}
+
 export function serializeExecutionReport(report: ExecutionReport, format: ExecutionReportFormat, language: UiLanguage): string {
-  return format === "json" ? `${JSON.stringify(report, null, 2)}\n` : `${formatExecutionReport(report, language)}\n`;
+  if (format === "json") return `${JSON.stringify(report, null, 2)}\n`;
+  if (format === "html") return formatExecutionReportHtml(report, language);
+  return `${formatExecutionReport(report, language)}\n`;
 }
 
 export async function writeExecutionReport(cwd: string, requested: string, content: string): Promise<string> {

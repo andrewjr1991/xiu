@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildExecutionReport, formatExecutionReport, serializeExecutionReport, writeExecutionReport } from "../src/execution-report.js";
+import { buildExecutionReport, formatExecutionReport, formatExecutionReportHtml, serializeExecutionReport, writeExecutionReport } from "../src/execution-report.js";
 import type { SessionReplayTurn } from "../src/session.js";
 import type { TaskRunRecord } from "../src/task-run.js";
 
@@ -130,4 +130,31 @@ test("report export stays inside the workspace and writes atomically", async (t)
     await fs.symlink(outside, path.join(workspace, "link"), "dir");
     await assert.rejects(() => writeExecutionReport(workspace, "link/report.md", "unsafe"), /Unsafe report directory/);
   }
+});
+
+test("HTML export is self-contained, script-free and escapes every value", () => {
+  const secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+  const hostile = run();
+  hostile.taskPreview = "<script>alert(1)</script> & \"quotes\" <img src=x onerror=alert(2)>";
+  hostile.operations[2]!.evidence = "12 tests passed <b>bold</b>";
+  const report = buildExecutionReport({ cwd: "D:/workspace", run: hostile, turn: { ...turn(secret), task: hostile.taskPreview }, scope: "details" });
+  for (const language of ["zh-CN", "en-US"] as const) {
+    const html = serializeExecutionReport(report, "html", language);
+    assert.equal(html, formatExecutionReportHtml(report, language));
+    assert.match(html, /^<!doctype html>\n<html lang="(zh-CN|en)">/);
+    assert.match(html, /<meta charset="utf-8">/);
+    assert.match(html, /Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'/);
+    assert.doesNotMatch(html, /<(script|img|link|iframe|object|embed|a|form)\b/i, "no script, resource or link element survives escaping");
+    assert.match(html, /&lt;img src=x onerror=alert\(2\)&gt;/, "hostile markup is shown as text");
+    assert.doesNotMatch(html, /https?:\/\//i);
+    assert.doesNotMatch(html, new RegExp(secret));
+    assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; &quot;quotes&quot;/);
+    assert.match(html, /12 tests passed &lt;b&gt;bold&lt;\/b&gt;/);
+    assert.match(html, /<code>src\/app\.ts<\/code>/);
+    assert.match(html, /<pre>\+ api_key=\[REDACTED\]/, "details keep the redacted preview");
+  }
+  assert.match(formatExecutionReportHtml(report, "zh-CN"), /<h1>Xiu 完整执行报告<\/h1>[\s\S]*已验证[\s\S]*已修改/);
+  assert.match(formatExecutionReportHtml(report, "en-US"), /<h1>Xiu execution report<\/h1>[\s\S]*Verified[\s\S]*modified/);
+  const summary = formatExecutionReportHtml(buildExecutionReport({ cwd: "D:/workspace", run: run(), turn: turn(secret), scope: "summary" }), "en-US");
+  assert.doesNotMatch(summary, /<pre>/, "summary scope has no file previews");
 });
