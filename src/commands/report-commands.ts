@@ -4,17 +4,16 @@ import chalk from "chalk";
 import type { Agent } from "../agent.js";
 import type { AgentConfig } from "../config.js";
 import { formatTaskDiagnostics } from "../diagnostics.js";
-import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
+import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
+import { collectExecutionReportInputs, defaultExecutionReportSources, type ExecutionReportSources, listReportableRuns } from "../execution-report-query.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { redactSecrets } from "../secret-redaction.js";
-import { type SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
-import { loadSession } from "../session.js";
-import { TaskRunJournal, type TaskRunRecord } from "../task-run.js";
-import { listRecentRuns, RUN_LIST_LIMIT, RUN_SELECTOR, selectRun } from "./run-selection.js";
+import type { SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
+import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
+import { RUN_LIST_LIMIT, RUN_SELECTOR } from "./run-selection.js";
 import { renderTerminalMarkdown } from "../terminal-markdown.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { isWorkspaceTrusted } from "../trust.js";
-import type { SessionReplayTurn } from "../session.js";
 
 export interface ReportCommandContext {
   agent: Agent;
@@ -24,21 +23,7 @@ export interface ReportCommandContext {
   taskRunJournal: TaskRunJournal;
 }
 
-/** The journal and audit methods the report needs; narrow so tests and the one-shot command can supply their own stores. */
-export interface ExecutionReportSources {
-  cwd: string;
-  taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">;
-  securityAudit: Pick<SecurityAuditLog, "read">;
-}
-
-export interface ExecutionReportInputs {
-  cwd: string;
-  run: TaskRunRecord;
-  runs: TaskRunRecord[];
-  turn?: SessionReplayTurn;
-  turns: SessionReplayTurn[];
-  auditRecords: Awaited<ReturnType<SecurityAuditLog["read"]>>["records"];
-}
+export { collectExecutionReportInputs, type ExecutionReportInputs, type ExecutionReportSources, listReportableRuns } from "../execution-report-query.js";
 
 function noReportableRun(language: UiLanguage): string {
   return localize(language, "本工作区还没有可报告的任务运行记录。", "This workspace has no task run to report yet.");
@@ -46,11 +31,6 @@ function noReportableRun(language: UiLanguage): string {
 
 /** Up to this many recent runs are listed and selectable by index or run-id prefix. */
 export const REPORT_RUN_LIST_LIMIT = RUN_LIST_LIMIT;
-
-/** Recent runs, newest first, as shown by `/report runs` and `xiu report runs`; index 1 is the latest. */
-export async function listReportableRuns(taskRunJournal: Pick<TaskRunJournal, "recent">): Promise<TaskRunRecord[]> {
-  return listRecentRuns(taskRunJournal);
-}
 
 export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): string {
   if (!runs.length) return noReportableRun(language);
@@ -65,49 +45,6 @@ export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): stri
   return [header, ...lines, localize(language,
     `选择方式：run:<序号> 或 run:<运行 ID 前缀>（至少 4 位），例如 /report run:2、xiu report run:${runs[0]!.runId.slice(0, 8)}`,
     `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`)].join("\n");
-}
-
-
-/**
- * Gathers one task run of the workspace (the latest, or the one `selector` names), the session
- * turns of its task chain and the workspace's audit facts. Shared by the interactive `/report`
- * and the one-shot `xiu report`. Returns undefined when the workspace has no run yet.
- */
-export async function collectExecutionReportInputs(sources: ExecutionReportSources, selector?: string, language: UiLanguage = "en-US"): Promise<ExecutionReportInputs | undefined> {
-  const { cwd, taskRunJournal, securityAudit } = sources;
-  const run = await selectRun(taskRunJournal, selector, language, localize(language, "/report runs 或 xiu report runs", "/report runs or xiu report runs"));
-  if (!run) return undefined;
-  const restored = await loadSession(cwd, run.sessionId).catch(() => undefined);
-  const replay = restored?.replay.filter((item) => item.inputKind !== "system") ?? [];
-  const sessionUpdatedAt = restored?.updatedAt ?? run.updatedAt;
-  const turn = replay
-    .sort((left, right) => {
-      const leftDistance = Math.abs(Date.parse(left.diagnostics?.startedAt ?? sessionUpdatedAt) - Date.parse(run.startedAt));
-      const rightDistance = Math.abs(Date.parse(right.diagnostics?.startedAt ?? sessionUpdatedAt) - Date.parse(run.startedAt));
-      return leftDistance - rightDistance;
-    })[0];
-  const selectedIndex = turn ? restored?.replay.indexOf(turn) ?? -1 : -1;
-  const rootGoal = originalTaskGoal(turn?.task ?? run.taskPreview);
-  let rootIndex = selectedIndex;
-  if (restored && selectedIndex >= 0) {
-    for (let index = selectedIndex; index >= 0; index--) {
-      const candidate = restored.replay[index];
-      if (candidate?.inputKind !== "system" && originalTaskGoal(candidate?.task ?? "") === rootGoal) rootIndex = index;
-      if (candidate?.task === rootGoal) { rootIndex = index; break; }
-    }
-  }
-  const turns = restored && rootIndex >= 0 && selectedIndex >= rootIndex
-    ? restored.replay.slice(rootIndex, selectedIndex + 1).filter((item) => item.inputKind !== "system")
-    : (turn ? [turn] : []);
-  const chainStartedAt = turns[0]?.diagnostics?.startedAt;
-  const recentRuns = await taskRunJournal.recent(200);
-  const runs = recentRuns
-    .filter((item) => item.sessionId === run.sessionId
-      && (!chainStartedAt || Date.parse(item.startedAt) >= Date.parse(chainStartedAt) - 5_000)
-      && Date.parse(item.startedAt) <= Date.parse(run.finishedAt ?? run.updatedAt))
-    .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
-  const audit = await securityAudit.read({ limit: 500, workspaceOnly: true });
-  return { cwd, run, runs, turn, turns, auditRecords: audit.records };
 }
 
 export interface ReportCliOptions {
@@ -165,9 +102,7 @@ export async function runReportCommand(args: readonly string[], options: ReportC
     return 1;
   }
   try {
-    const sources: ExecutionReportSources = options.sources
-      ? { cwd, ...options.sources }
-      : { cwd, taskRunJournal: new TaskRunJournal(cwd), securityAudit: new SecurityAuditLog(undefined, cwd) };
+    const sources: ExecutionReportSources = options.sources ? { cwd, ...options.sources } : defaultExecutionReportSources(cwd);
     if (listRuns) {
       const runs = await listReportableRuns(sources.taskRunJournal);
       if (!runs.length) { stderr(noReportableRun(language)); return 1; }
