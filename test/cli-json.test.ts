@@ -90,10 +90,10 @@ async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: st
 }
 
 /**
- * Runs the CLI and closes the reading end of its stdout as soon as `closeStdoutWhen` matches the output seen so
+ * Runs the CLI; closes the reading end of its stdout as soon as `closeStdoutWhen` matches the output seen so
  * far (an empty pattern closes it before the first write), the way `xiu ... | head -1` does once head is gone.
  */
-async function runCli(args: string[], cwd: string, home: string, stdin = "", closeStdoutWhen?: RegExp): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+async function runCli(args: string[], cwd: string, home: string, stdin = "", closeStdoutWhen?: RegExp, terminateWhen?: RegExp): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", ...args], {
     cwd,
     env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" },
@@ -102,9 +102,12 @@ async function runCli(args: string[], cwd: string, home: string, stdin = "", clo
   });
   let stdout = "";
   let stderr = "";
+  let terminated = false;
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
     if (closeStdoutWhen && closeStdoutWhen.test(stdout)) child.stdout.destroy();
+    // `terminateWhen`: what `timeout` or a cancelled CI job does to the process once the output seen so far matches.
+    if (terminateWhen && !terminated && terminateWhen.test(stdout)) { terminated = true; child.kill("SIGTERM"); }
   });
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
   if (closeStdoutWhen?.test("")) child.stdout.destroy();
@@ -356,4 +359,23 @@ test("a stdout pipe closed during a --json task stops the task, records its end 
   assert.equal(runFiles.length, 1, runFiles.join(","));
   const status = await recordStatus(path.join(home, ".xiu", "task-runs", runFiles[0]!));
   assert.notEqual(status, "running", `the run record was left as ${status}\nstderr:\n${run.stderr}`);
+});
+
+// Windows has no SIGTERM: child.kill() there ends the process without running any handler.
+test("SIGTERM during a --json task cancels it, records the end and still prints the result line", { timeout: 90_000, skip: process.platform === "win32" ? "POSIX signal" : false }, async (t) => {
+  const server = await startFakeModelServer(t, { holdAnswers: true });
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  // `timeout` ran out while the model answer was still pending.
+  const run = await runCli(["--json", "--provider", "fake", "--yes", "Say hello"], cwd, home, "", undefined, /"type":"task\.started"/);
+  assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  const lines = parseLines(run.stdout);
+  const result = lines.at(-1);
+  assert.equal(result?.type, "result", run.stdout);
+  assert.equal(result?.payload.outcome, "cancelled");
+  assert.equal(result?.payload.exitCode, 1);
+  assert.match(run.stderr, /Received SIGTERM; stopping the current work, then exiting\./);
+  // The next start must not report an interrupted task: the record is closed as cancelled.
+  const runFiles = (await fs.readdir(path.join(home, ".xiu", "task-runs"), { recursive: true })).filter((name) => name.endsWith(".json"));
+  assert.equal(runFiles.length, 1, runFiles.join(","));
+  assert.equal(await recordStatus(path.join(home, ".xiu", "task-runs", runFiles[0]!)), "cancelled");
 });

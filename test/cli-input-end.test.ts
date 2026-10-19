@@ -33,8 +33,11 @@ async function fixture(t: TestContext, options: { mcp?: boolean } = {}): Promise
   return { cwd, home };
 }
 
-/** Starts an interactive (piped) session, writes `stdin` and closes the pipe, and waits for the process to end on its own. */
-async function runPipedSession(cwd: string, home: string, stdin: string): Promise<{ exitCode: number | null; output: string }> {
+/**
+ * Starts an interactive (piped) session, writes `stdin` and closes the pipe, and waits for the process to end on its own.
+ * With `terminateWhen`, the pipe stays open and the process gets SIGTERM once its output matches, like a stopped container.
+ */
+async function runPipedSession(cwd: string, home: string, stdin: string, terminateWhen?: RegExp): Promise<{ exitCode: number | null; output: string }> {
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--provider", "fake"], {
     cwd,
     env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" },
@@ -42,9 +45,15 @@ async function runPipedSession(cwd: string, home: string, stdin: string): Promis
     stdio: ["pipe", "pipe", "pipe"],
   });
   let output = "";
-  child.stdout.on("data", (chunk) => { output += String(chunk); });
-  child.stderr.on("data", (chunk) => { output += String(chunk); });
-  child.stdin.end(stdin);
+  let terminated = false;
+  const onOutput = (chunk: unknown): void => {
+    output += String(chunk);
+    if (terminateWhen && !terminated && terminateWhen.test(output)) { terminated = true; child.kill("SIGTERM"); }
+  };
+  child.stdout.on("data", onOutput);
+  child.stderr.on("data", onOutput);
+  if (terminateWhen) child.stdin.write(stdin);
+  else child.stdin.end(stdin);
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const timer = setTimeout(() => { child.kill(); reject(new Error(`the session did not end after its input did:\n${output}`)); }, 60_000);
     child.once("error", reject);
@@ -78,4 +87,12 @@ test("input that ends while a task runs lets the task finish, then leaves at the
   assert.equal(run.exitCode, 0, run.output);
   assert.match(run.output, /Task stopped:/);
   assert.ok(run.output.indexOf("Task stopped:") < run.output.indexOf("Input ended; leaving Xiu."), run.output);
+});
+
+test("SIGTERM at an idle piped prompt leaves like /exit, with the MCP server shut down", { timeout: 90_000, skip: process.platform === "win32" ? "POSIX signal" : false }, async (t) => {
+  const { cwd, home } = await fixture(t, { mcp: true });
+  // The input stays open (a container or CI job that is stopped), so only the signal can end the session.
+  const run = await runPipedSession(cwd, home, "/mcp\n", /fixture: connected \(2 tools\)[\s\S]*xiu> /);
+  assert.equal(run.exitCode, 0, run.output);
+  assert.match(run.output, /Received SIGTERM; leaving Xiu\./);
 });

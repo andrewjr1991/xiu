@@ -23,6 +23,8 @@ export interface InteractiveInputOptions {
   onPaste?: () => Promise<{ insertText: string; notice?: string }>;
   enableRightClickPaste?: boolean;
   signal?: AbortSignal;
+  /** Piped input only: the end of the input rejects with InputEndedError (an idle prompt) instead of waiting for `signal`. */
+  endsWithInput?: boolean;
   refreshMs?: number;
   /**
    * Drain output produced while the live editor owns the terminal. The editor
@@ -543,12 +545,11 @@ export async function readInteractiveInput(
     // blocking until the next input line arrives.
     //
     // When the input ends (the pipe reached EOF) before a line arrives, there will never
-    // be another line. Without a signal (the session is idle at its prompt) that is an
-    // InputEndedError for the caller to end the session on, instead of a prompt that
-    // waits forever while MCP servers keep the process alive. With a signal (a task is
-    // running and this prompt only drains its output) the wait goes on until the task
-    // settles, exactly as if nobody typed.
-    if (!options.signal && (process.stdin.readableEnded || process.stdin.destroyed)) throw new InputEndedError();
+    // be another line. At an idle prompt (`endsWithInput`) that is an InputEndedError for
+    // the caller to end the session on, instead of a prompt that waits forever while MCP
+    // servers keep the process alive. At the prompt that only drains a running task's
+    // output, the wait goes on until the task settles (the signal), exactly as if nobody typed.
+    if (options.endsWithInput && (process.stdin.readableEnded || process.stdin.destroyed)) throw new InputEndedError();
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const drain = (): void => {
       const live = persistentLiveOutput(options.liveOutput?.() ?? "");
@@ -562,7 +563,7 @@ export async function readInteractiveInput(
         const onAbort = (): void => finish(() => { rl.close(); resolve(""); });
         if (options.signal?.aborted) { onAbort(); return; }
         options.signal?.addEventListener("abort", onAbort, { once: true });
-        rl.once("close", () => { if (!options.signal) finish(() => reject(new InputEndedError())); });
+        rl.once("close", () => { if (options.endsWithInput) finish(() => reject(new InputEndedError())); });
         rl.question(prompt, (answer) => finish(() => { options.signal?.removeEventListener("abort", onAbort); resolve(answer); }));
       });
     } finally {

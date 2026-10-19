@@ -1549,15 +1549,34 @@ async function main(): Promise<void> {
       if (!cancelActiveWork()) console.log(chalk.dim(localize(language, "\n使用 /exit 退出 Xiu。", "\nUse /exit to leave Xiu.")));
     };
     process.on("SIGINT", onSigint);
-    let outputPipeClosed = false;
+    // Set when Xiu must leave as soon as the current work has stopped: the output pipe closed, or SIGTERM/SIGHUP arrived.
+    // runTaskSequence then stops dequeuing and skips its menus, and the prompt loop leaves instead of asking for the next line.
+    let shutdownRequested = false;
+    const idlePrompt = new AbortController();
     setBrokenPipeHandler(() => {
       // The reader of stdout or stderr is gone (`xiu --json <task> | head -1`): stop the current work as Ctrl+C would, so the
       // run records its end instead of dying mid-write, and leave once it has stopped. Idle, there is nothing to end: exit now.
-      outputPipeClosed = true;
+      shutdownRequested = true;
       const stopping = cancelActiveWork();
       if (stopping) console.error(chalk.yellow(localize(language, "输出管道已关闭，正在停止当前工作后退出。", "The output pipe was closed; stopping the current work, then exiting.")));
       return stopping;
     });
+    // SIGTERM (`timeout`, `kill`, a stopped container, a cancelled CI job) and SIGHUP (the terminal went away) end a Node
+    // process at once by default: no `result` line, and a running task left as `running` in its journal, which the next
+    // start reports as interrupted until someone runs `xiu recover abandon`. They are handled like Ctrl+C instead: the
+    // running work is cancelled and records its end, a one-shot run prints its result and exits with the cancelled code, an
+    // idle session leaves the way /exit does. A second signal while that is in progress ends the process at once.
+    const onTerminationSignal = (signal: NodeJS.Signals): void => {
+      if (shutdownRequested) process.exit(signal === "SIGHUP" ? 129 : 143);
+      shutdownRequested = true;
+      const stopping = cancelActiveWork();
+      console.error(chalk.yellow(stopping
+        ? localize(language, `收到 ${signal}，正在停止当前工作后退出。`, `Received ${signal}; stopping the current work, then exiting.`)
+        : localize(language, `\n收到 ${signal}，退出 Xiu。`, `\nReceived ${signal}; leaving Xiu.`)));
+      if (!stopping) idlePrompt.abort();
+    };
+    process.on("SIGTERM", onTerminationSignal);
+    process.on("SIGHUP", onTerminationSignal);
 
     if (startupProviderError && initialTask) {
       const cause = startupProviderError.message.replace(/[.。]$/, "");
@@ -1691,7 +1710,7 @@ async function main(): Promise<void> {
       let exitRequested = false;
       let first = true;
 
-      while (queue.size && !exitRequested && !outputPipeClosed) {
+      while (queue.size && !exitRequested && !shutdownRequested) {
         const current = queue.dequeue()!;
         const replayInput = first && firstDisplay ? firstDisplay : { task: current.text, inputKind: "task" as const };
         first = false;
@@ -1838,7 +1857,7 @@ async function main(): Promise<void> {
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
         if (!failure && agent.status().outcome === "failed") failure = new Error(incompleteTaskMessage(agent.status().failureReason, language));
         if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
-        if (failure && !exitRequested && !outputPipeClosed) {
+        if (failure && !exitRequested && !shutdownRequested) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
           const action = await selectTerminalOption(localize(language, "当前任务未完成，下一步怎么做？", "The current task did not complete. What next?"), failureRecoveryOptions(queue.size, language), language);
           if (action === "retry") {
@@ -1847,11 +1866,11 @@ async function main(): Promise<void> {
             const cleared = queue.clear();
             if (cleared) console.log(chalk.dim(localize(language, `已清空 ${cleared} 个排队任务。\n`, `Cleared ${cleared} scheduled task(s).\n`)));
           }
-        } else if (queue.size && !exitRequested && !outputPipeClosed) {
+        } else if (queue.size && !exitRequested && !shutdownRequested) {
           console.log(chalk.cyan(localize(language, `继续运行 ${queue.size} 个明确安排的任务。\n`, `Continuing with ${queue.size} explicitly scheduled task(s).\n`)));
         }
       }
-      return exitRequested || outputPipeClosed;
+      return exitRequested || shutdownRequested;
     };
 
     if (confirmedRecoveryTask && recoverySource) {
@@ -1865,7 +1884,7 @@ async function main(): Promise<void> {
       recoverySource = undefined;
     }
 
-    while (true) {
+    while (!shutdownRequested) {
       for (const message of updateCommands.flushPendingReminder()) printUpdateMessage(message);
       let task: string;
       try {
@@ -1876,6 +1895,8 @@ async function main(): Promise<void> {
           onPaste: () => clipboard.paste(),
           enableRightClickPaste: rightClickPasteEnabled,
           language,
+          signal: idlePrompt.signal,
+          endsWithInput: true,
         })).trim();
       } catch (error) {
         if (!(error instanceof InputEndedError)) throw error;
@@ -2260,6 +2281,8 @@ async function main(): Promise<void> {
       }
     }
     process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onTerminationSignal);
+    process.off("SIGHUP", onTerminationSignal);
   } finally {
     status.stop();
     if (typeof mcpStartup !== "undefined") await mcpStartup.catch(() => undefined);
