@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- **0.20.12 已发布 GitHub（2026-10-19）：** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 标签指向 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`；同提交 CI 38936632221 九项作业与 CodeQL 通过，五份 CI 原始附件已按大小/SHA256 回读。Windows 安装器未签名，npm 由维护者发布。Computer Use 编辑器修复已通过本地真实记事本与隔离 Windows/Chromium 测试。
+- **0.20.12 已发布 GitHub 与 npm（2026-10-19）：** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 标签指向 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`；同提交 CI 38936632221 九项作业与 CodeQL 通过，五份 CI 原始附件已按大小/SHA256 回读。Windows 安装器未签名；npm latest 已于 02:35 UTC 回读为 0.20.12，440 个代码文件与 CI tarball 一致。Computer Use 编辑器修复已通过本地真实记事本与隔离 Windows/Chromium 测试。
 
 - **0.20.11 已发布 GitHub 与 npm：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
 
@@ -41,11 +41,11 @@
 
 ## 下一步
 
-2026-10-19：0.20.12 GitHub Release 和附件回读已完成。维护者使用本次同源 CLI tarball 发布 npm，并核对版本、latest、integrity；之后推进 0.22 的桌面对齐与真实用户矩阵。
+2026-10-19：0.20.12 GitHub Release、附件回读与 npm 发布回读（version/latest/integrity）均已完成；之后推进 0.22 的桌面对齐与真实用户矩阵。
 
 0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm，标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2。README 已于同日重写为中英文同构概览（#58），旧版归档在 `docs/history/`。
 
-0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。0.20.12 GitHub Release 已完成，npm 发布由维护者处理。当前版本设计及变更已同步，不能覆盖 0.20.11。后续进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 原生窗口与真实记事本 Computer Use 验收已通过，其他应用场景继续验证；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
+0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。0.20.12 GitHub Release 与 npm 发布均已完成并回读。当前版本设计及变更已同步，不能覆盖 0.20.12。后续进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 原生窗口与真实记事本 Computer Use 验收已通过，其他应用场景继续验证；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
 
 ## 1. 项目定位
 
@@ -55,8 +55,8 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | --- | --- |
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
-| 当前公开 npm 版本 | `0.20.11`，Registry latest 已回读 |
-| 当前开发版本 | `0.20.12`，GitHub 已发布 |
+| 当前公开 npm 版本 | `0.20.12`，Registry latest 已回读 |
+| 当前开发版本 | `0.20.12`，GitHub 与 npm 均已发布 |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |

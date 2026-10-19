@@ -1,10 +1,12 @@
-## 0.20.12 GitHub 发布记录（2026-10-19）
+## 0.20.12 正式发布记录（2026-10-19）
 
-[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 已公开；轻量标签指向 main 的 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`。[同提交 CI 38936632221](https://github.com/andrewjr1991/xiu/actions/runs/38936632221) 九项作业通过，CodeQL 同提交通过。五份原始 CI 附件上传后按大小与 SHA256 回读核验。CLI tarball SHA256 `1784d7d0848ff683953ed4b74001a0a8f070b37e31a00837e7daa617945c2769`；Windows NSIS SHA256 `6c53d213775f6222714189b3548a294dc094693fd71a0fa1baf87c9968a95292`，`NotSigned`。npm 由维护者使用同源 CI tarball 自行发布，发布后核验 Registry 版本、latest 与 integrity。
+[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 已公开；轻量标签指向 main 的 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`。[同提交 CI 38936632221](https://github.com/andrewjr1991/xiu/actions/runs/38936632221) 九项作业通过，CodeQL 同提交通过。五份原始 CI 附件上传后按大小与 SHA256 回读核验。CLI tarball SHA256 `1784d7d0848ff683953ed4b74001a0a8f070b37e31a00837e7daa617945c2769`；Windows NSIS SHA256 `6c53d213775f6222714189b3548a294dc094693fd71a0fa1baf87c9968a95292`，`NotSigned`。
+
+npm 已于 2026-10-19 02:35 UTC 由维护者发布：Registry `version` 与 `latest` 均为 `0.20.12`，`dist.integrity` 为 `sha512-nM3Cn7fWFyBcC41VLCoW3YL45mYXJTEHymy1YYBekmTsu2cxEP2Hzi1Gni6JdMSdlu5xhqWBtux65SSktc1bSQ==`，shasum `5a50c48e2876707229ddaaba0429adcf7535b6aa`，443 个文件。npm 包与 GitHub Release 的 CI tarball 逐文件比对：440 个代码与构建文件完全一致，仅 `CHANGELOG.md`、`README.md`、`README.zh-CN.md` 三份文档为发布记录提交 `b8df7d8` 的版本（Release 包为 `c5e273b`），因此压缩摘要不同（npm SHA256 `cbb78f0b559f74b5a23d300f35b2e5e6c7688cabb25eef0b7b621e1593eea1dd`）。
 
 2026-10-17 兼容性补修：Edit/RichEdit 消息路径按实际 HWND 类名分流，其他控件回退键盘；Ctrl+S 不再误入编辑器专用校验。全量 1216 项：1207 通过、9 跳过、0 失败；原生 C# 分流行为测试、真实 Windows 编辑流程、Chromium 全选/复制/应用级保存及非编辑器拒绝通过。类型检查、改动文件 lint、CLI/桌面构建、桌面冒烟及 npm 443 文件清单通过。本地改动没有混入正式附件；GitHub 发布采用精确提交的 CI 制品。
 
-CLI 与桌面版本同步提升至 0.20.12，维护者确认 Computer Use 本地验收通过。GitHub 已公开；官方 npm 在发布准备时对 0.20.12 返回 E404，维护者发布前须再次核对，禁止覆盖已发布版本。
+CLI 与桌面版本同步提升至 0.20.12，维护者确认 Computer Use 本地验收通过。GitHub 与 npm 均已公开，0.20.12 不得重复发布或覆盖。
 
 上一轮本地验证：全量 1206 通过、9 跳过、0 失败；源码/桌面类型检查、构建、31 项 Computer Use 专项、真实隔离 Windows 编辑流程和安装生命周期通过。真实记事本任务已由维护者确认通过。安装器仍未签名，性能优化另行处理。
 
