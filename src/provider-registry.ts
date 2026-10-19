@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { localize, type UiLanguage } from "./i18n.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -177,6 +178,21 @@ export const UNCONFIGURED_PROVIDER_PROFILE: ProviderProfile = {
 
 export function startupProviderProfile(registry: ProviderRegistry, requestedId: string): ProviderProfile | undefined {
   return requestedId ? registry.get(requestedId) : registry.list()[0];
+}
+
+/**
+ * One paragraph for a `--provider <id>` that names no configured profile (plugin profiles included): the id, the
+ * configured ids, and what to do. Before, such a start ran on as "unconfigured" through MCP and indexing and failed
+ * only when the model was needed, with a message about adding a provider.
+ */
+export function formatUnknownProviderMessage(requestedId: string, configuredIds: readonly string[], language: UiLanguage): string {
+  const zh = language === "zh-CN";
+  const configured = configuredIds.length ? configuredIds.join(zh ? "、" : ", ") : localize(language, "无", "none");
+  return [
+    localize(language, `渠道 "${requestedId}" 未配置。已配置的渠道：${configured}。`, `Provider "${requestedId}" is not configured. Configured providers: ${configured}.`),
+    localize(language, "请把其中一个 ID 传给 --provider，或不带 --provider 启动 xiu 后用 /provider add 添加；这次运行没有开始。",
+      "Pass one of those ids to --provider, or start xiu without --provider and add it with /provider add; this run did not start."),
+  ].join(zh ? "" : " ");
 }
 
 const ALLOWED_KINDS = new Set<ProviderName>(["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"]);

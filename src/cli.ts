@@ -30,7 +30,7 @@ import { runDoctorCommand } from "./commands/doctor-command.js";
 import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
-import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "./provider-registry.js";
+import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile, formatUnknownProviderMessage } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
 import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
@@ -489,9 +489,24 @@ async function main(): Promise<void> {
     catch { providerRegistry.setPluginProfiles([]); }
     skillRegistry.setPluginFiles(pluginContributions.skillFiles);
     mcpManager.setPluginServers(pluginContributions.mcpServers);
-    if (!options.provider && requestedProviderId !== config.providerId) {
-      const restoredPluginProfile = providerRegistry.get(requestedProviderId);
-      if (restoredPluginProfile) Object.assign(config, profileConfig(restoredPluginProfile, providerRegistry.activeModel(requestedProviderId)));
+    if (requestedProviderId !== config.providerId) {
+      // The requested id (from --provider, XIU_PROVIDER or the saved choice) was not in providers.json before plugins loaded; a plugin may provide it.
+      const pluginProfile = providerRegistry.get(requestedProviderId);
+      if (pluginProfile) {
+        const model = options.provider ? resolveStartupModel(options.model, undefined, process.env.XIU_MODEL, pluginProfile.model) : providerRegistry.activeModel(requestedProviderId);
+        Object.assign(config, profileConfig(pluginProfile, model));
+      }
+    }
+    const configuredProviderIds = providerRegistry.list().map((profile) => profile.id);
+    if (options.provider && configuredProviderIds.length && !configuredProviderIds.includes(requestedProviderId)) {
+      // An explicit --provider that names none of the configured profiles is a mistake to report now, before MCP servers,
+      // indexing and the model. With no profile configured at all there is nothing to choose from, so the start goes on to
+      // the first-run wizard (interactive) or the existing "not configured" refusal (one-shot) as before.
+      const message = formatUnknownProviderMessage(requestedProviderId, configuredProviderIds, language);
+      if (jsonStream) { process.exitCode = jsonStream.result({ outcome: "not_started", error: message }); return; }
+      console.error(chalk.red(`${message}\n`));
+      process.exitCode = 1;
+      return;
     }
     await skillRegistry.refresh(true);
     let mcpStatuses = [] as ReturnType<McpManager["status"]>;
@@ -1528,9 +1543,10 @@ async function main(): Promise<void> {
     process.on("SIGINT", onSigint);
 
     if (startupProviderError && initialTask) {
+      const cause = startupProviderError.message.replace(/[.。]$/, "");
       const message = localize(language,
-        `当前 Provider 尚未配置：${startupProviderError.message}。请先运行 xiu，并按引导配置 Provider 后再执行一次性任务。`,
-        `The current provider is not configured: ${startupProviderError.message}. Run xiu first and complete provider setup before starting a one-shot task.`);
+        `当前 Provider 尚未配置：${cause}。请先运行 xiu，并按引导配置 Provider 后再执行一次性任务。`,
+        `The current provider is not configured: ${cause}. Run xiu first and complete provider setup before starting a one-shot task.`);
       console.error(chalk.red(message));
       process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: redactTerminalOutput(message) }) : 1;
       return;

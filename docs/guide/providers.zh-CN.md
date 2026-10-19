@@ -192,7 +192,7 @@ Xiu 不会把 Agent 的最终回答保存在本地结果缓存中，也不会重
 
 模型列表会在当前 Xiu 进程中缓存 60 秒，最多保存 100 个配置；完全相同的并发模型发现与能力探测只执行一次底层请求。失败请求不会被完成缓存压住，可以正常重试。缓存按 Provider、模型、端点、代理、鉴权配置和能力声明隔离，不跨用户配置或 Provider 复用。
 
-命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。通过 `/providers` 和 `/models` 选中的 Provider 与模型会保存在 `~/.xiu/providers.json`，下次启动继续使用。优先级为：本次显式命令行参数、上次交互选择、环境变量、内置默认值。环境变量因此适合作为首次启动默认值；若要临时覆盖已保存选择，请使用 `xiu --provider <Profile-ID> --model <模型-ID>`。
+命令行 `--provider` 和 `XIU_PROVIDER` 的值现在是 Profile ID。已配置了渠道而 `--provider` 给出的 ID 不在其中（包括拼错）时，Xiu 在信任工作区并加载插件之后立刻停下，列出已配置的渠道 ID 并退出码 1，不会连接 MCP、索引项目或进入配置模式；尚未配置任何渠道时仍进入首次向导。通过 `/providers` 和 `/models` 选中的 Provider 与模型会保存在 `~/.xiu/providers.json`，下次启动继续使用。优先级为：本次显式命令行参数、上次交互选择、环境变量、内置默认值。环境变量因此适合作为首次启动默认值；若要临时覆盖已保存选择，请使用 `xiu --provider <Profile-ID> --model <模型-ID>`。
 
 ### 3.6 环境变量何时失效
 

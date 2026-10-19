@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BUILTIN_PROVIDER_PROFILES, ProviderRegistry, providerTemplate, providerTemplateById, providerTemplates, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile, VENDOR_PROVIDER_TEMPLATES } from "../src/provider-registry.js";
+import { BUILTIN_PROVIDER_PROFILES, formatUnknownProviderMessage, ProviderRegistry, providerTemplate, providerTemplateById, providerTemplates, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile, VENDOR_PROVIDER_TEMPLATES } from "../src/provider-registry.js";
 import { WindowsSystemCredentialStore } from "../src/system-credential-store.js";
 
 class FakeCredentialEntry {
@@ -527,4 +527,11 @@ test("vendor templates are editable OpenAI-compatible presets that ship no crede
   await registry.upsert({ ...profile, id: "my-deepseek" });
   assert.equal(registry.get("my-deepseek")?.baseURL, "https://api.deepseek.com/v1");
   assert.equal(registry.get("deepseek"), undefined);
+});
+
+test("an unknown --provider id is explained with the configured ids in both languages", () => {
+  assert.equal(formatUnknownProviderMessage("nosuch", ["fake", "office-gateway"], "en-US"),
+    "Provider \"nosuch\" is not configured. Configured providers: fake, office-gateway. Pass one of those ids to --provider, or start xiu without --provider and add it with /provider add; this run did not start.");
+  assert.equal(formatUnknownProviderMessage("nosuch", [], "zh-CN"),
+    "渠道 \"nosuch\" 未配置。已配置的渠道：无。请把其中一个 ID 传给 --provider，或不带 --provider 启动 xiu 后用 /provider add 添加；这次运行没有开始。");
 });
