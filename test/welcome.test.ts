@@ -66,6 +66,32 @@ test("prompt dashboard remains within a narrow terminal with all status segments
   }
 });
 
+test("prompt dashboard gives up segments in order instead of cutting the context gauge in a narrow terminal", () => {
+  const originalColumns = process.stdout.columns;
+  const render = (columns: number, overrides: Partial<Parameters<typeof formatPromptDashboard>[0]> = {}): string => {
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
+    const line = formatPromptDashboard({ model: "fake/fake-model", contextTokens: 30_000, contextLimit: 128_000, skills: 0, cwd: "/tmp/claude-0/-home-claude-xiu/944718f9/scratchpad/probe-ws", planMode: false, mcpTools: 2, ...overrides }).replace(/\x1b\[[0-9;]*m/g, "");
+    assert.ok(terminalDisplayWidth(line) <= columns - 1, `${columns} columns: ${line}`);
+    return line;
+  };
+  try {
+    assert.match(render(120), /^Auto \| fake\/fake-model \| ctx \[###---------\] 23% \| 0 skills \| 2 mcp \| \/tmp/);
+    // 80 columns used to show `Auto | fake/fake-model | ct...---] 0% | 0 skills | 2 mcp`: the bar goes first, whole.
+    assert.match(render(80), /^Auto \| fake\/fake-model \| ctx 23% \| 0 skills \| 2 mcp \| \/tmp/);
+    assert.match(render(80, { language: "zh-CN" }), /^自动 \| fake\/fake-model \| 上下文 23% \| 0 技能 \| 2 mcp \| \/tmp/);
+    assert.match(render(70), /^Auto \| fake\/fake-model \| ctx 23% \| 2 mcp \| \/tmp/);
+    assert.match(render(55), /^Auto \| fake-model \| ctx 23% \| 2 mcp \| \/tmp/);
+    assert.match(render(45), /^Auto \| fake-model \| ctx 23% \| \/tmp/);
+    // A plan step is shown whole or not at all, and it is the first segment to go.
+    assert.match(render(140, { agents: 3, phase: "pending:Verify" }), /^Auto \| fake\/fake-model \| ctx \[###---------\] 23% \| 0 skills \| 2 mcp \| 3 agents \| pending:Verify \| \/tmp/);
+    assert.match(render(100, { agents: 3, phase: "pending:Verify" }), /^Auto \| fake\/fake-model \| ctx \[#-----\] 23% \| 0 skills \| 2 mcp \| 3 agents \| \/tmp/);
+    assert.match(render(100, { agents: 3, phase: "in_progress:Implement professional terminal UI" }), /^Auto \| fake\/fake-model \| ctx \[#-----\] 23% \| 0 skills \| 2 mcp \| 3 agents \| \/tmp/);
+    assert.match(render(80, { skills: 14, agents: 3, phase: "in_progress:Implement professional terminal UI" }), /^Auto \| fake-model \| ctx 23% \| 2 mcp \| 3 agents \| \/tmp/);
+  } finally {
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+  }
+});
+
 test("prompt dashboard can show the live provider and model together", () => {
   const line = formatPromptDashboard({
     model: "dashscope/deepseek-v4-pro", contextTokens: 0, contextLimit: 800_000, skills: 17,

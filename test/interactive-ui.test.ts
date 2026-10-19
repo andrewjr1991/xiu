@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, persistentLiveOutput, resolveCommandInput, shouldIgnoreEmptyInteractiveSubmit, terminalDisplayWidth, terminalKeyName, terminalMouseEvent, terminalOptionFrameLines, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
+import { acceptCandidate, beginRawInput, consumeTerminalMouseInput, deleteEditorBackward, deleteEditorForward, editorFrameLines, historyCandidates, insertEditorText, interactiveFrameLines, isTerminalCancel, matchingCommands, moveEditorCursor, pathCandidates, persistentLiveOutput, resolveCommandInput, shouldIgnoreEmptyInteractiveSubmit, terminalDisplayWidth, terminalKeyName, terminalMouseEvent, terminalOptionFrameLines, wrapTerminalText, type SlashCommand, type TerminalMouseInputState } from "../src/interactive-ui.js";
 import { formatRunningInputFooter, RunningTaskView } from "../src/task-queue.js";
 
 const commands: SlashCommand[] = [
@@ -240,8 +240,25 @@ test("editor frame wraps every physical line in a multiline running footer", () 
   const frame = editorFrameLines("xiu[working]> ", { value: "继续修复", cursor: 4 }, [], 0, "Working: Running a very long verification command | 2 queued\nAuto | model | D:\\long\\workspace", 36);
   assert.ok(frame.lines.length > 4);
   assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 35));
-  assert.match(frame.lines.join(""), /Running a very long verification command/);
+  assert.match(frame.lines.join(" ").replace(/\s+/g, " "), /Running a very long verification command/);
   assert.match(frame.lines.at(-1) ?? "", /Auto/);
+});
+
+test("footer lines wrap after a space so key names and words stay whole", () => {
+  const hint = "Ctrl+O show details | Enter steers current | /queue <task> schedules next | Ctrl+C cancels";
+  // At 80 columns the frame is 79 wide; this used to break inside the word, leaving `l+C cancels` on the next line.
+  assert.deepEqual(wrapTerminalText(hint, 79), ["Ctrl+O show details | Enter steers current | /queue <task> schedules next |", "Ctrl+C cancels"]);
+  assert.deepEqual(wrapTerminalText("aaa bbb ccc", 7), ["aaa bbb", "ccc"]);
+  assert.deepEqual(wrapTerminalText("aaa bbb ccc", 3), ["aaa", "bbb", "ccc"]);
+  assert.deepEqual(wrapTerminalText("ab cd", 2), ["ab", "cd"]);
+  // A word longer than the width, and Chinese text without spaces, still break at the width.
+  assert.deepEqual(wrapTerminalText("aaaaaaaaaa bb", 5), ["aaaaa", "aaaaa", "bb"]);
+  assert.deepEqual(wrapTerminalText("很长的中文".repeat(2), 7), ["很长的", "中文很", "长的中", "文"]);
+  const frame = editorFrameLines("steer> ", { value: "", cursor: 0 }, [], 0, `Working: Turn 1 | Thinking | 1s | no steering | queue empty\n${hint}\nAuto | model`, 80);
+  assert.ok(frame.lines.every((line) => terminalDisplayWidth(line) <= 79));
+  const plain = frame.lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(plain.includes("Ctrl+C cancels"), plain.join("\n"));
+  assert.ok(!plain.some((line) => line.startsWith("l+C")));
 });
 
 test("terminal key names recognize raw Windows direction sequences", () => {
