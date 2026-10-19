@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Agent } from "../agent.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import { type SkillRegistry, skillIssuesNote } from "../skills.js";
 import type { StatusLine } from "../status.js";
@@ -81,7 +82,7 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
       console.log();
     } catch (error) {
       status.stop();
-      console.error(chalk.red(`${localize(language, "技能安装失败", "Skill installation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "技能安装失败", "Skill installation failed"), error, language)}\n`));
     }
     return true;
   }

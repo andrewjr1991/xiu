@@ -1,4 +1,5 @@
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { type SecurityAuditCategory, SecurityAuditLog, type SecurityAuditRecord } from "../security-audit.js";
 import { isWorkspaceTrusted } from "../trust.js";
 
@@ -72,7 +73,7 @@ export async function runAuditCommand(args: readonly string[], options: AuditCli
     stdout(lines.join("\n"));
     return 0;
   } catch (error) {
-    stderr(`${localize(language, "读取安全审计失败", "Could not read security audit")}: ${error instanceof Error ? error.message : String(error)}`);
+    stderr(`${describeFailure(localize(language, "读取安全审计失败", "Could not read security audit"), error, language)}`);
     return 1;
   }
 }

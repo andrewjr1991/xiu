@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { localize, type UiLanguage } from "../i18n.js";
-import { formatUserFacingError } from "../user-facing-errors.js";
+import { describeFailure, formatUserFacingError } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { ManagedWebSearchAuth } from "../managed-web-search-auth.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
@@ -141,7 +141,7 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
           `✓ free-search is available · ${result.results.length} result(s) · ${Date.now() - started}ms${result.failedEngines.length ? ` · engines without results this time: ${result.failedEngines.join(", ")}` : ""}\n`)));
         return;
       } catch (error) {
-        console.log(chalk.yellow(`${localize(language, "free-search 不可用", "free-search is unavailable")}: ${error instanceof Error ? error.message : String(error)}`));
+        console.log(chalk.yellow(`${describeFailure(localize(language, "free-search 不可用", "free-search is unavailable"), error, language)}`));
         if (settings.webSearch.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error(localize(language, "没有可用的回退搜索。", "No fallback search is available."));
         console.log(chalk.dim(localize(language, "搜索会回退到 Xiu 托管搜索，继续检查回退服务。", "Searches fall back to Xiu managed search; checking the fallback service.")));
       }

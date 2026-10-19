@@ -23,7 +23,7 @@ import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./cred
 import { ConfigFileError } from "./config-file-error.js";
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
-import { explainError, formatUserFacingError } from "./user-facing-errors.js";
+import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
 import { collectDoctorReport, formatDoctorReport } from "./doctor.js";
 import { runDoctorCommand } from "./commands/doctor-command.js";
@@ -1473,7 +1473,7 @@ async function main(): Promise<void> {
           const output = parsed.kind === "runs" ? await formatRunChangeList(sources, language) : await replayRunChanges(sources, parsed.selector, parsed.file, language);
           console.log(`${redactTerminalOutput(output)}\n`);
         } catch (error) {
-          console.error(chalk.red(redactTerminalOutput(`${localize(language, "读取改动记录失败", "Could not read the change record")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+          console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "读取改动记录失败", "Could not read the change record"), error, language)}\n`)));
         }
         return;
       }
@@ -1491,7 +1491,7 @@ async function main(): Promise<void> {
           : await getWorkspaceDiff(config.cwd, requested, diffOptions);
         console.log(`${redactTerminalOutput(formatTaskChanges(report, language))}\n`);
       } catch (error) {
-        console.error(chalk.red(redactTerminalOutput(`${localize(language, "读取改动失败", "Could not inspect changes")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+        console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "读取改动失败", "Could not inspect changes"), error, language)}\n`)));
       }
     };
 
@@ -1559,7 +1559,7 @@ async function main(): Promise<void> {
         printCheckSummary(latestProjectCheck);
         projectIndex.invalidate();
       } catch (error) {
-        console.error(chalk.red(redactTerminalOutput(`${localize(language, "项目检查失败", "Project check failed")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+        console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "项目检查失败", "Project check failed"), error, language)}\n`)));
       } finally {
         status.stop();
         if (activeCheckController === controller) activeCheckController = undefined;
@@ -1905,7 +1905,7 @@ async function main(): Promise<void> {
         let interrupted: InterruptedTaskRun | undefined;
         try { interrupted = await taskRunJournal.interrupted(); }
         catch (error) {
-          console.error(chalk.red(`${localize(language, "任务恢复日志无法读取", "Could not read the task recovery journal")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          console.error(chalk.red(`${describeFailure(localize(language, "任务恢复日志无法读取", "Could not read the task recovery journal"), error, language)}\n`));
           continue;
         }
         if (!interrupted) {
@@ -1925,7 +1925,7 @@ async function main(): Promise<void> {
         let selected: RestoredSession;
         try { selected = await loadSession(config.cwd, interrupted.sessionId); }
         catch (error) {
-          console.error(chalk.red(`${localize(language, "无法加载关联会话", "Could not load the linked session")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          console.error(chalk.red(`${describeFailure(localize(language, "无法加载关联会话", "Could not load the linked session"), error, language)}\n`));
           continue;
         }
         if (selected.providerId && selected.providerId !== config.providerId) {
@@ -2057,7 +2057,7 @@ async function main(): Promise<void> {
           await draftStore.flush();
           console.log(chalk.green(`${pasted.notice ?? localize(language, "剪贴板内容已加入输入草稿。", "Clipboard content added to the input draft.")}\n`));
         } catch (error) {
-          console.error(chalk.red(`${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          console.error(chalk.red(`${describeFailure(localize(language, "剪贴板粘贴失败", "Clipboard paste failed"), error, language)}\n`));
         }
         continue;
       }
@@ -2162,7 +2162,7 @@ async function main(): Promise<void> {
             console.log(chalk.yellow(localize(language, "用法：/agents [运行ID] | /agents cancel|retry|integrate <运行ID> <任务ID>\n", "Usage: /agents [run-id] | /agents cancel|retry|integrate <run-id> <task-id>\n")));
           }
         } catch (error) {
-          console.error(chalk.red(`${localize(language, "Agent 命令失败", "Agent command failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+          console.error(chalk.red(`${describeFailure(localize(language, "Agent 命令失败", "Agent command failed"), error, language)}\n`));
         }
         continue;
       }
@@ -2257,7 +2257,7 @@ async function main(): Promise<void> {
         restoredDraft = await draftStore.load();
       } catch (error) {
         status.stop();
-        console.error(chalk.red(`${localize(language, "错误", "Error")}: ${error instanceof Error ? error.message : String(error)}\n`));
+        console.error(chalk.red(`${describeFailure(localize(language, "错误", "Error"), error, language)}\n`));
       }
     }
     process.off("SIGINT", onSigint);
@@ -2273,14 +2273,11 @@ main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   // A failure the catalog explains (a damaged configuration file, a provider configuration problem, a network or
   // HTTP error) is shown as its cause, the next step and the diagnostic command; anything else keeps its raw message.
-  const explanation = explainError(error, startupLanguage);
-  if (explanation.code === "unknown") console.error(chalk.red(`Error: ${message}`));
-  else {
-    const heading = explanation.code.startsWith("provider-config/")
-      ? localize(startupLanguage, "无法加载渠道配置", "Provider configuration could not be loaded")
+  const code = explainError(error, startupLanguage).code;
+  const heading = code === "unknown" ? "Error"
+    : code.startsWith("provider-config/") ? localize(startupLanguage, "无法加载渠道配置", "Provider configuration could not be loaded")
       : localize(startupLanguage, "Xiu 无法启动", "Xiu could not start");
-    console.error(chalk.red(formatUserFacingError(heading, error, startupLanguage, { diagnostic: "xiu doctor" })));
-  }
+  console.error(chalk.red(describeFailure(heading, error, startupLanguage, { diagnostic: "xiu doctor" })));
   // The `result` line keeps the raw message: scripts match on it, and the explanation above went to stderr.
   process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: message }) : 1;
 });
