@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveContextProfile, type ContextWindowSource } from "./context.js";
 import { defaultLanguage, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import type { TaskBudgetLimits } from "./task-budget.js";
+import { UsageError } from "./usage-error.js";
 
 export type ProviderName = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
 
@@ -94,7 +95,7 @@ export function resolveConfig(options: {
 }): AgentConfig {
   const provider = (options.provider ?? process.env.XIU_PROVIDER ?? "openai") as ProviderName;
   if (!["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"].includes(provider)) {
-    throw new Error(`Unsupported provider: ${provider}.`);
+    throw new UsageError(`Unsupported provider: ${provider}.`);
   }
 
   const defaultModel = provider === "anthropic"
@@ -105,19 +106,19 @@ export function resolveConfig(options: {
   const configuredMaxTurns = options.maxTurns ?? process.env.XIU_MAX_TURNS;
   const maxTurns = configuredMaxTurns === undefined ? undefined : Number(configuredMaxTurns);
   if (maxTurns !== undefined && (!Number.isInteger(maxTurns) || maxTurns < 1)) {
-    throw new Error("max-turns must be a positive integer when provided");
+    throw new UsageError("max-turns must be a positive integer when provided");
   }
   const agentConcurrency = Number(options.agentConcurrency ?? process.env.XIU_AGENT_CONCURRENCY ?? 3);
   if (!Number.isInteger(agentConcurrency) || agentConcurrency < 1 || agentConcurrency > 8) {
-    throw new Error("agent-concurrency must be an integer from 1 to 8");
+    throw new UsageError("agent-concurrency must be an integer from 1 to 8");
   }
 
   const proxy = options.proxy ?? (provider === "agnes" ? process.env.AGNES_PROXY : undefined);
   if (proxy) {
     let parsed: URL;
-    try { parsed = new URL(proxy); } catch { throw new Error("proxy must be a valid URL, for example http://127.0.0.1:12334"); }
+    try { parsed = new URL(proxy); } catch { throw new UsageError("proxy must be a valid URL, for example http://127.0.0.1:12334"); }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("proxy must use http:// or https://");
+      throw new UsageError("proxy must use http:// or https://");
     }
   }
 
@@ -165,16 +166,16 @@ export function resolveConfig(options: {
   const optionalPositive = (value: string | undefined, name: string): number | undefined => {
     if (value === undefined || value === "") return undefined;
     const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer when provided`);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new UsageError(`${name} must be a positive integer when provided`);
     return parsed;
   };
   const warningPercent = Number(options.budgetWarningPercent ?? process.env.XIU_BUDGET_WARNING_PERCENT ?? 80);
-  if (!Number.isFinite(warningPercent) || warningPercent < 1 || warningPercent >= 100) throw new Error("budget-warning-percent must be from 1 to 99");
+  if (!Number.isFinite(warningPercent) || warningPercent < 1 || warningPercent >= 100) throw new UsageError("budget-warning-percent must be from 1 to 99");
   const stallTimeoutSeconds = optionalPositive(options.stallTimeoutSeconds ?? process.env.XIU_STALL_TIMEOUT_SECONDS, "stall-timeout-seconds") ?? 120;
   const budgetSeconds = optionalPositive(options.budgetSeconds ?? process.env.XIU_BUDGET_SECONDS, "budget-seconds");
   const modelTimeout = (name: string, fallback: number) => {
     const seconds = optionalPositive(process.env[name], name) ?? fallback;
-    if (seconds > 86_400) throw new Error(`${name} must not exceed 86400 seconds`);
+    if (seconds > 86_400) throw new UsageError(`${name} must not exceed 86400 seconds`);
     return seconds * 1_000;
   };
   const taskBudget: TaskBudgetLimits = {

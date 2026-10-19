@@ -1,3 +1,4 @@
+import { UsageError } from "./usage-error.js";
 export type UiLanguage = "zh-CN" | "en-US";
 
 export function normalizeLanguage(value?: string): UiLanguage | undefined {
@@ -5,7 +6,7 @@ export function normalizeLanguage(value?: string): UiLanguage | undefined {
   if (!normalized) return undefined;
   if (["zh", "zh-cn", "zh-hans", "chinese", "中文"].includes(normalized)) return "zh-CN";
   if (["en", "en-us", "english", "英文"].includes(normalized)) return "en-US";
-  throw new Error(`Unsupported language: ${value}. Use zh-CN or en-US.`);
+  throw new UsageError(`Unsupported language: ${value}. Use zh-CN or en-US.`);
 }
 
 export function defaultLanguage(locale = Intl.DateTimeFormat().resolvedOptions().locale): UiLanguage {

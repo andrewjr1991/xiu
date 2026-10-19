@@ -116,6 +116,22 @@ test("a --cwd that is a file or does not exist stops every command with the caus
   assert.match(zh.stderr, /^下一步：把 --cwd 改成这个文件所在的项目目录。$/m);
 });
 
+test("an option value Xiu cannot accept is reported as the one-line usage error, not as a network timeout", { timeout: 60_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, { trusted: true });
+  const plain = await runCli(["--language", "en", "--stall-timeout-seconds", "-1", "Say hello"], cwd, home);
+  assert.equal(plain.exitCode, 1, `stdout:\n${plain.stdout}\nstderr:\n${plain.stderr}`);
+  assert.equal(plain.stderr.trim(), "Error: stall-timeout-seconds must be a positive integer when provided", "before: 'Xiu could not start: The connection or response timed out.' with network advice");
+  assert.equal(plain.stdout, "");
+
+  const json = await runCli(["--json", "--language", "en", "--stall-timeout-seconds", "0", "Say hello"], cwd, home);
+  assert.equal(json.exitCode, 1);
+  const lines = json.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  assert.equal(lines.length, 1, `stdout carries only the result line:\n${json.stdout}`);
+  assert.equal(lines[0]!.payload.outcome, "not_started");
+  assert.equal(lines[0]!.payload.error, "stall-timeout-seconds must be a positive integer when provided");
+  assert.doesNotMatch(json.stderr, /timed out|network/);
+});
+
 test("a damaged settings file is explained in the language the command line asks for", { timeout: 60_000 }, async (t) => {
   const { cwd, home } = await fixture(t, { trusted: true });
   await fs.writeFile(path.join(home, ".xiu", "settings.json"), "{ broken");

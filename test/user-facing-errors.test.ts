@@ -4,6 +4,7 @@ import test from "node:test";
 import { ConfigFileError } from "../src/config-file-error.js";
 import { ProviderConfigurationError } from "../src/provider-config-migration.js";
 import { describeFailure, errorCatalog, explainError, formatUserFacingError, summarizeUserFacingError } from "../src/user-facing-errors.js";
+import { UsageError } from "../src/usage-error.js";
 
 test("provider configuration errors become a cause, a next step and the diagnostics command", () => {
   const unsafe = new ProviderConfigurationError("unsafe", "Provider configuration storage is not a protected regular file/directory. stage: verify-owner");
@@ -102,6 +103,17 @@ test("describeFailure explains a catalogued failure and keeps one redacted line 
   assert.match(plain, /^Could not change plugin state: Plugin not found: nope \(x{400}\) key /, "the message is not truncated");
   assert.doesNotMatch(plain, new RegExp(secret));
   assert.equal(describeFailure("错误", new Error("boom"), "zh-CN"), "错误：boom");
+});
+
+test("a usage error is never classified by its words: an option named timeout is not a network timeout", () => {
+  const error = new UsageError("stall-timeout-seconds must be a positive integer when provided");
+  assert.equal(explainError(new Error("plain " + error.message), "en-US").code, "network/timeout", "the same words in an ordinary error still read as a timeout");
+  const explanation = explainError(error, "en-US");
+  assert.equal(explanation.code, "unknown");
+  assert.equal(explanation.cause, error.message);
+  assert.equal(explainError(new Error("startup failed", { cause: error }), "en-US").code, "unknown", "wrapped, too");
+  assert.equal(describeFailure("Error", error, "en-US", { diagnostic: "xiu doctor" }), `Error: ${error.message}`, "one line, no generic next step");
+  assert.equal(describeFailure("Error", new UsageError("Unsupported language: xx. Use zh-CN or en-US."), "zh-CN"), "Error：Unsupported language: xx. Use zh-CN or en-US.");
 });
 
 test("every explanation code is documented in the usage guide", async () => {
