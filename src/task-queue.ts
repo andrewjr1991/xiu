@@ -347,7 +347,9 @@ export function formatRunningInputFooter(view: RunningTaskView, queued: number, 
   const steeringState = steering ? localize(language, `${steering} 条补充要求`, `${steering} steering`) : localize(language, "无补充要求", "no steering");
   const details = view.detailsVisible() ? localize(language, "Ctrl+O 隐藏详情", "Ctrl+O hide details") : localize(language, "Ctrl+O 显示详情", "Ctrl+O show details");
   const turnLabel = turn.maximum ? `${turn.current || "-"}/${turn.maximum}` : `${turn.current || "-"}`;
-  const headline = `${localize(language, "运行中：", "Working: ")}${localize(language, "轮次", "Turn")} ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`;
+  const headline = localize(language,
+    `运行中：第 ${turnLabel} 轮 | ${view.phase()} | ${elapsed} 秒 | ${steeringState} | ${queue}`,
+    `Working: Turn ${turnLabel} | ${view.phase()} | ${elapsed}s | ${steeringState} | ${queue}`);
   const diagnostic = view.diagnosticLine();
   return [headline, ...(diagnostic ? [diagnostic] : []), ...view.progressLines(), `${details} | ${localize(language, "Enter 补充当前任务 | /queue <任务> 安排下一项 | Ctrl+C 取消", "Enter steers current | /queue <task> schedules next | Ctrl+C cancels")}`, baseFooter].join("\n");
 }
