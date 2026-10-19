@@ -110,12 +110,24 @@ async function launch(processes: FixtureProcess[], cwd: string, home: string, ex
   let cursor = 0;
   child.stdout.on("data", (chunk) => { output += String(chunk); });
   child.stderr.on("data", (chunk) => { output += String(chunk); });
+  // stdout and stderr are separate pipes, so a stderr line the CLI writes just before the prompt
+  // (for example "Task stopped: …") can reach us after the stdout prompt. Once the marker is seen,
+  // keep reading until the output has been quiet for a moment and return everything.
   const readUntil = async (marker: string, timeout = 60_000): Promise<string> => {
     const start = cursor;
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const index = output.indexOf(marker, cursor);
-      if (index >= 0) { cursor = index + marker.length; return output.slice(start, cursor); }
+      if (index >= 0) {
+        let settled = output.length;
+        do {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (output.length === settled) break;
+          settled = output.length;
+        } while (Date.now() < deadline);
+        cursor = output.length;
+        return output.slice(start);
+      }
       if (owned.spawnError) throw owned.spawnError;
       if (owned.exited) throw new Error(`CLI exited before ${marker}:\n${output}`);
       await new Promise((resolve) => setTimeout(resolve, 20));

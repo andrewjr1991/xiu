@@ -4,6 +4,7 @@ import chalk from "chalk";
 import type { Agent } from "../agent.js";
 import type { AgentConfig } from "../config.js";
 import { formatTaskDiagnostics } from "../diagnostics.js";
+import { auditRecordDetails } from "./audit-command.js";
 import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
 import { collectExecutionReportInputs, defaultExecutionReportSources, type ExecutionReportSources, listReportableRuns } from "../execution-report-query.js";
 import { localize, type UiLanguage } from "../i18n.js";
@@ -193,8 +194,7 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
       console.log(chalk.cyan(localize(language, "本机安全审计（不包含命令正文、Prompt、文件内容或凭证）", "Local security audit (excludes command text, prompts, file contents, and credentials)")));
       if (!result.records.length) console.log(chalk.dim(localize(language, "暂无匹配记录。", "No matching records.")));
       else for (const record of result.records) {
-        const details = [record.category, record.action, record.outcome, record.risk, record.source, record.scope, record.subject].filter(Boolean).join(" · ");
-        console.log(`${chalk.dim(record.timestamp)} · ${details}`);
+        console.log(`${chalk.dim(record.timestamp)} · ${auditRecordDetails(record)}`);
       }
       if (result.truncated) console.log(chalk.dim(localize(language, "仅显示最近 50 条匹配记录。", "Showing only the 50 most recent matching records.")));
       if (result.invalidLines) console.log(chalk.yellow(localize(language, `忽略了 ${result.invalidLines} 条损坏记录。`, `Ignored ${result.invalidLines} invalid record(s).`)));

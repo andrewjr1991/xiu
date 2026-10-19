@@ -27,7 +27,7 @@ API Key 有两种配置方式：
 
 v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider、MCP OAuth 和 Windows 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。
 
-从 v0.13.0 起，Xiu 在用户目录 `~/.xiu/security-audit.jsonl` 追加本机安全审计记录。输入 `/audit` 查看最近 50 条，或使用 `/audit approvals`、`/audit credentials` 按类别筛选。记录只包含时间、事件类型、结果、风险、决策来源和非秘密配置 ID；不会保存命令正文、工具参数、Prompt、模型回复、文件内容、完整工作区路径或任何凭证。日志写入失败不会改变既有审批决定，`/audit` 会显示本进程最近的写入错误。从 0.20.13 起，桌面工作台里任务工具的审批（人工决定与自动批准）也写入同一份账本，`/audit approvals` 与执行报告的“安全事件”因此同样覆盖桌面运行。
+从 v0.13.0 起，Xiu 在用户目录 `~/.xiu/security-audit.jsonl` 追加本机安全审计记录。输入 `/audit` 查看最近 50 条，或使用 `/audit approvals`、`/audit credentials` 按类别筛选。记录只包含时间、事件类型、结果、风险、决策来源和非秘密配置 ID；不会保存命令正文、工具参数、Prompt、模型回复、文件内容、完整工作区路径或任何凭证。日志写入失败不会改变既有审批决定，`/audit` 会显示本进程最近的写入错误。从 0.20.13 起，桌面工作台里任务工具的审批（人工决定与自动批准）也写入同一份账本，`/audit approvals` 与执行报告的“安全事件”因此同样覆盖桌面运行。不进入交互模式时，`xiu audit [approvals|credentials] [json] [条数]` 只读列出同一份记录（默认 50 条，`json` 输出 JSON 文档），供脚本和 CI 使用。
 
 新添加的 MCP 在第一次连接前必须确认当前权限清单，即使它没有手写 `permissions` 字段也不会自动批准。使用 `/mcp permissions` 查看待确认项，再执行 `/mcp permissions approve <名称>` 并确认；后续权限扩张仍会再次阻断。此确认只批准清单，不会跳过具体工具的风险审批、Plan 只读边界或危险操作确认。
 
