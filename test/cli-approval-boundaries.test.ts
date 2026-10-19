@@ -34,6 +34,17 @@ function toolCallFor(task: string): { name: string; arguments: Record<string, un
   return { name: "write_file", arguments: { path: "notes.txt", content: "hello\n" } };
 }
 
+/**
+ * CI-only diagnostics: when an assertion fails on a GitHub runner, publish the CLI transcript as a
+ * workflow annotation, because the job log's TAP block is not retrievable afterwards.
+ */
+function annotateOnFailure(title: string, transcript: () => string, error: unknown): void {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const text = `${error instanceof Error ? error.message : String(error)}\n--- transcript ---\n${transcript()}`.slice(0, 3_500);
+  const escaped = text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  process.stdout.write(`::error title=${title}::${escaped}\n`);
+}
+
 async function startFakeModelServer(t: TestContext): Promise<string> {
   const server = http.createServer((request, response) => {
     let body = "";
@@ -145,6 +156,12 @@ async function runOneShot(args: string[], cwd: string, home: string): Promise<{ 
 }
 
 const exists = (file: string) => fs.access(file).then(() => true, () => false);
+// PowerShell's `>` redirection writes UTF-16LE with a BOM; POSIX shells write UTF-8.
+const readShellOutput = async (file: string): Promise<string> => {
+  const bytes = await fs.readFile(file);
+  const text = bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.subarray(2).toString("utf16le") : bytes.toString("utf8");
+  return text.trim();
+};
 // Everything these English-language sessions print must be English: a Chinese character means a
 // shared module ignored the CLI language.
 const assertEnglishOnly = (output: string): void => { assert.doesNotMatch(output, /[\u4e00-\u9fff]/, `Chinese text in an English session:\n${output}`); };
@@ -153,12 +170,13 @@ test("--yes in a piped session auto-approves execute-risk commands but never dan
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);
   const app = await launch(processes, cwd, home, ["--yes"]);
+  try {
 
   const redirect = await app.command("redirect please");
   assert.match(redirect, /run_command run: echo hi > out\.txt/);
   assert.match(redirect, /Model saw: Exit code: 0/);
   assert.match(redirect, /Stopped unverified/);
-  assert.equal((await fs.readFile(path.join(cwd, "out.txt"), "utf8")).trim(), "hi");
+  assert.equal(await readShellOutput(path.join(cwd, "out.txt")), "hi");
 
   const destroy = await app.command("delete please");
   assert.match(destroy, /run_command run: rm -rf keep-me/);
@@ -169,12 +187,17 @@ test("--yes in a piped session auto-approves execute-risk commands but never dan
   assert.match(report, /Security events: [1-9]\d* · denied: [1-9]\d*/);
   assertEnglishOnly(app.output);
   await app.close();
+  } catch (error) {
+    annotateOnFailure("cli-approval-boundaries transcript", () => app.output, error);
+    throw error;
+  }
 });
 
 test("a piped session without --yes denies write approvals instead of prompting or guessing", { timeout: 120_000 }, async (t) => {
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);
   const app = await launch(processes, cwd, home, []);
+  try {
 
   const write = await app.command("write please");
   assert.match(write, /> write_file write notes\.txt/);
@@ -184,12 +207,17 @@ test("a piped session without --yes denies write approvals instead of prompting 
   assert.equal(await exists(path.join(cwd, "notes.txt")), false);
   assertEnglishOnly(app.output);
   await app.close();
+  } catch (error) {
+    annotateOnFailure("cli-approval-boundaries transcript", () => app.output, error);
+    throw error;
+  }
 });
 
 test("Plan mode stays read-only even with --yes, and writes resume once it is turned off", { timeout: 180_000 }, async (t) => {
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);
   const app = await launch(processes, cwd, home, ["--yes"]);
+  try {
 
   assert.match(await app.command("/plan on"), /Plan mode enabled \(read-only\)/);
   const planned = await app.command("write please");
@@ -202,6 +230,38 @@ test("Plan mode stays read-only even with --yes, and writes resume once it is tu
   assert.equal(await fs.readFile(path.join(cwd, "notes.txt"), "utf8"), "hello\n");
   assertEnglishOnly(app.output);
   await app.close();
+  } catch (error) {
+    annotateOnFailure("cli-approval-boundaries transcript", () => app.output, error);
+    throw error;
+  }
+});
+
+test("a piped session cannot approve a plugin manifest by menu position", { timeout: 120_000 }, async (t) => {
+  const baseURL = await startFakeModelServer(t);
+  const { cwd, home, processes } = await fixture(t, baseURL);
+  const pluginRoot = path.join(cwd, ".xiu", "plugins", "demo");
+  await fs.mkdir(path.join(pluginRoot, "skills", "review"), { recursive: true });
+  await fs.writeFile(path.join(pluginRoot, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: fixture\n---\nReview.\n");
+  await fs.writeFile(path.join(pluginRoot, "xiu.plugin.json"), `${JSON.stringify({
+    apiVersion: 1, id: "demo", name: "Demo", version: "1.0.0",
+    engines: { xiu: { min: "0.14.0", maxExclusive: "9.0.0" } },
+    permissions: ["workspace:read", "instructions:load"],
+    contributes: { skills: [{ id: "review", path: "skills/review" }] },
+  }, null, 2)}\n`);
+  const app = await launch(processes, cwd, home, ["--yes"]);
+  try {
+
+  const approve = await app.command("/plugin approve demo");
+  assert.match(approve, /Authorize plugin Demo\? There is no interactive terminal to choose from, so this counts as cancelled/);
+  assert.match(approve, /Plugin approval cancelled\./);
+  assert.doesNotMatch(approve, /approved|authorized/i);
+  assert.equal(await exists(path.join(home, ".xiu", "extension-permissions.json")), false);
+  assertEnglishOnly(app.output);
+  await app.close();
+  } catch (error) {
+    annotateOnFailure("cli-approval-boundaries transcript", () => app.output, error);
+    throw error;
+  }
 });
 
 test("--json --yes one-shot run denies a dangerous command, records the decision and exits 1", { timeout: 120_000 }, async (t) => {

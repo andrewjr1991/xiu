@@ -22,6 +22,17 @@ const tsxLoader = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
 const FINAL_ANSWER = "Done: notes written by the fake model.";
 
+/**
+ * CI-only diagnostics: when an assertion fails on a GitHub runner, publish the CLI transcript as a
+ * workflow annotation, because the job log's TAP block is not retrievable afterwards.
+ */
+function annotateOnFailure(title: string, transcript: () => string, error: unknown): void {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const text = `${error instanceof Error ? error.message : String(error)}\n--- transcript ---\n${transcript()}`.slice(0, 3_500);
+  const escaped = text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  process.stdout.write(`::error title=${title}::${escaped}\n`);
+}
+
 async function startFakeModelServer(t: TestContext): Promise<string> {
   const server = http.createServer((request, response) => {
     let body = "";
@@ -111,7 +122,8 @@ test("a finished CLI task leaves a change record that /diff run: and xiu report 
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);
   const app = await launch(processes, cwd, home);
-
+  let runPrefix = "";
+  try {
   const task = await app.command("write notes", 90_000);
   assert.match(task, /write_file write notes\.txt/);
   assert.match(task, /Done: notes written by the fake model\./);
@@ -121,7 +133,7 @@ test("a finished CLI task leaves a change record that /diff run: and xiu report 
   assert.match(runs, /#\s+run id\s+started\s+status\s+changed\s+task/);
   const row = /^1\s+([0-9a-f]{8})\s+\S+\s+(\S+)\s+1\s+write notes$/m.exec(runs);
   assert.ok(row, `run list row missing:\n${runs}`);
-  const runPrefix = row[1]!;
+  runPrefix = row[1]!;
   assert.notEqual(row[2], "running");
 
   const replay = await app.command("/diff run:1");
@@ -141,6 +153,10 @@ test("a finished CLI task leaves a change record that /diff run: and xiu report 
   const reports = await app.command("/report runs");
   assert.match(reports, new RegExp(`^1\\s+${runPrefix}\\s+\\S+\\s+\\S+\\s+write notes$`, "m"));
   await app.close();
+  } catch (error) {
+    annotateOnFailure("cli-task-history transcript", () => app.output, error);
+    throw error;
+  }
 
   // The record is the same file the desktop reads, under the run id the journal assigned.
   const history = await fs.readdir(path.join(cwd, ".xiu", "task-change-history"));

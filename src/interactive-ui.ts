@@ -761,9 +761,26 @@ export async function readInteractiveInput(
   });
 }
 
-export async function selectTerminalOption<T>(title: string, options: SelectOption<T>[], language: UiLanguage = "en-US"): Promise<T | undefined> {
+export interface SelectTerminalOptionBehaviour {
+  /**
+   * What a session without an interactive terminal (piped stdin/stdout, CI) gets instead of the menu.
+   * "cancel" (default) returns undefined and prints a one-line notice, so confirmations fail closed and
+   * destructive choices are never made by position. "first" takes the first option; use it only for
+   * harmless pickers whose choice is followed by typed prompts the caller can answer over the pipe.
+   */
+  nonInteractive?: "cancel" | "first";
+}
+
+export async function selectTerminalOption<T>(title: string, options: SelectOption<T>[], language: UiLanguage = "en-US", behaviour: SelectTerminalOptionBehaviour = {}): Promise<T | undefined> {
   if (!options.length) return undefined;
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return options[0]?.value;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (behaviour.nonInteractive === "first") return options[0]?.value;
+    const heading = title.split("\n")[0] ?? title;
+    process.stderr.write(`${chalk.dim(localize(language,
+      `${heading} 没有可交互的终端，无法选择，已按取消处理；请在命令里直接给出参数，或在终端中运行。`,
+      `${heading} There is no interactive terminal to choose from, so this counts as cancelled; pass the choice as a command argument or run in a terminal.`))}\n`);
+    return undefined;
+  }
   return await new Promise<T | undefined>((resolve) => {
     let selected = 0;
     let renderedLines = 1;
