@@ -349,7 +349,7 @@ xiu --json --yes '把 README 里的拼写错误改掉' > events.jsonl 2> progres
 {"schemaVersion":1,"type":"result","timestamp":"2026-10-19T05:06:01.681Z","payload":{"outcome":"completed","success":true,"exitCode":0,"stats":{"modelCalls":3,"toolCalls":4,"inputTokens":5120,"outputTokens":640,"estimatedTokens":6200},"durationMs":18422}}
 ```
 
-`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任，或按下文在你掌控的检出目录上显式加 `--trust-workspace`），工作区里有上次异常中断、尚未确认恢复或放弃的任务时也返回 `not_started`（请先在终端里不带任务运行一次 `xiu` 做出决定），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
+`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任，或按下文在你掌控的检出目录上显式加 `--trust-workspace`），工作区里有上次异常中断、尚未确认恢复或放弃的任务时也返回 `not_started`（在终端里不带任务运行一次 `xiu` 做出决定，或用下文的 `xiu recover abandon <ID>` 明确放弃），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
 
 任务结束后，不进入交互模式也能导出最近一次任务的执行报告：
 
@@ -360,6 +360,15 @@ xiu report json summary reports/latest.json --yes   # 已存在的文件只有�
 ```
 
 格式（`markdown`/`json`/`html`）、范围（`summary`/`details`）和工作区内路径三者顺序任意、都可以省略；不给路径时报告写到标准输出，提示文字走标准错误。默认报告最近一次运行；`xiu report runs` 列出最近 50 次运行，再加 `run:<序号>` 或 `run:<运行 ID 前缀>` 选择其中一次，例如 `xiu report html run:2 reports/previous.html`。内容与交互模式的 `/report export` 完全一致（见[会话指南](./sessions.zh-CN.md)），同样只在已信任的工作区可用，不会从管道读取任何决定；退出码 0 成功，1 用法错误、工作区未信任或还没有可报告的运行。
+
+上一次任务被终端关闭或进程崩溃打断时，交互模式会在启动时要求选择“确认恢复 / 放弃 / 退出”，而脚本和 CI 没有人能回答这个菜单，所以任何一次性任务（含 `--json`）都会以 `not_started`、退出码 1 停下。`xiu recover` 是给脚本用的出口：
+
+```powershell
+xiu recover                       # 打印中断任务摘要；有中断任务退出码 2，没有则 0
+xiu recover abandon 3f2a9c1e      # 用 ID（或至少 4 位前缀）明确放弃它，不重放任何操作
+```
+
+`abandon` 只接受与当前中断任务匹配的 ID，错误的 ID 什么也不改；“确认恢复”不能在这里做，它需要可交互终端里的人工确认。同样只在已信任的工作区可用。
 
 #### 在 CI 里运行
 
