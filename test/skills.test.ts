@@ -104,3 +104,56 @@ test("skill installation rejects unknown permission names", async () => {
   await assert.rejects(registry.install(source, false, async () => true), /unknown permissions.*system:override/i);
   await fs.rm(cwd, { recursive: true, force: true });
 });
+
+test("skills the registry finds but does not list are named with a reason, and /skills gets one line about them", async (t) => {
+  const { skillIssuesNote } = await import("../src/skills.js");
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-issues-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "fixture-home"));
+  const globalRoot = path.join(cwd, "global-skills");
+  await fs.mkdir(path.join(cwd, ".xiu", "skills", "review"), { recursive: true });
+  await fs.mkdir(path.join(cwd, ".xiu", "skills", "locked"), { recursive: true });
+  await fs.mkdir(path.join(globalRoot, "review"), { recursive: true });
+  await fs.writeFile(path.join(cwd, ".xiu", "skills", "review", "SKILL.md"), skillMarkdown("review", "Project review workflow"));
+  const locked = path.join(cwd, ".xiu", "skills", "locked", "SKILL.md");
+  await fs.writeFile(locked, skillMarkdown("locked", "Cannot be read"));
+  await fs.writeFile(path.join(globalRoot, "review", "SKILL.md"), skillMarkdown("review", "Global review workflow"));
+  const oversized = path.join(cwd, "plugin-big-SKILL.md");
+  await fs.writeFile(oversized, `${skillMarkdown("big", "Too large")}${"x".repeat(120_001)}`);
+  // A permission error is simulated for one file so the test does not depend on chmod (which Windows ignores).
+  const realReadFile = fs.readFile.bind(fs);
+  t.mock.method(fs, "readFile", ((file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+    if (file === locked) return Promise.reject(Object.assign(new Error(`EACCES: permission denied, open '${locked}'`), { code: "EACCES" }));
+    return (realReadFile as (...args: unknown[]) => unknown)(file, ...rest);
+  }) as typeof fs.readFile);
+
+  const registry = new SkillRegistry(cwd, globalRoot);
+  registry.setPluginFiles([{ file: oversized, name: "big" }, { file: path.join(cwd, "missing-SKILL.md"), name: "gone" }]);
+  await registry.refresh(true);
+  assert.deepEqual(registry.list().map((skill) => skill.name), ["review"]);
+  assert.deepEqual(registry.issues(), [
+    { name: "locked", scope: "project", reason: "unreadable", detail: "EACCES" },
+    { name: "big", scope: "plugin", reason: "oversized" },
+    { name: "gone", scope: "plugin", reason: "unreadable", detail: "ENOENT" },
+    { name: "review", scope: "global", reason: "shadowed", detail: "project" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(registry.issues()), new RegExp(cwd.replace(/[\\/]/g, "[\\\\/]")), "no path in an issue");
+
+  const en = skillIssuesNote(registry.issues(), "en-US")!;
+  assert.equal(en, "4 more skills are not listed: locked (project, unreadable: EACCES), big (plugin, over the size limit, not loaded), gone (plugin, unreadable: ENOENT), review (global, shadowed by the project skill of the same name).");
+  const zh = skillIssuesNote(registry.issues(), "zh-CN")!;
+  assert.match(zh, /^另有 4 个技能未列出：locked（project，无法读取：EACCES）、big（plugin，超过大小限制，未加载）、gone（plugin，无法读取：ENOENT）、review（global，被 project 范围的同名技能覆盖）。$/);
+  assert.equal(skillIssuesNote([], "en-US"), undefined);
+  assert.equal(skillIssuesNote([{ name: "x", scope: "global", reason: "unreadable", detail: "EIO" }], "en-US"), "1 more skill is not listed: x (global, unreadable: EIO).");
+
+  // A root over the file limit says how many files were not read instead of dropping them silently.
+  for (let index = 0; index < 301; index++) {
+    const folder = path.join(globalRoot, `many-${String(index).padStart(3, "0")}`);
+    await fs.mkdir(folder);
+    await fs.writeFile(path.join(folder, "SKILL.md"), skillMarkdown(`many-${index}`, "One of many"));
+  }
+  await registry.refresh(false);
+  assert.equal(registry.list().length, 300);
+  assert.deepEqual(registry.issues().filter((issue) => issue.reason === "truncated"), [{ name: "~/.xiu/skills", scope: "global", reason: "truncated", detail: "2" }]);
+  assert.match(skillIssuesNote(registry.issues(), "zh-CN")!, /~\/\.xiu\/skills（global，超过 300 个 SKILL\.md，后 2 个未读取）/);
+});
