@@ -39,7 +39,7 @@ import { persistentLiveOutput, readInteractiveInput, selectTerminalOption, type 
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
-import { listSessions, loadSession, type RestoredSession, type SessionReplayTurn } from "./session.js";
+import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
@@ -276,7 +276,9 @@ async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): P
 }
 
 async function chooseSession(workspace: string, language: UiLanguage) {
-  const sessions = await listSessions(workspace);
+  const { sessions, unreadable } = await listSessionsWithIssues(workspace);
+  const note = unreadableSessionsNote(unreadable, language);
+  if (note) console.log(chalk.yellow(note));
   if (!sessions.length) return undefined;
   const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
     label: session.firstTask.replace(/\s+/g, " ").slice(0, 72) || localize(language, "未命名会话", "Untitled session"),
@@ -475,9 +477,11 @@ async function main(): Promise<void> {
   };
   try {
     if (options.listSessions) {
-      const sessions = await listSessions(config.cwd);
+      const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
       if (!sessions.length) console.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
       else for (const session of sessions) console.log(`${session.id}  ${session.updatedAt}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.firstTask.slice(0, 80)}`);
+      const note = unreadableSessionsNote(unreadable, language);
+      if (note) console.log(note);
       return;
     }
     const resumeRequested = options.resume !== undefined && options.resume !== false;
@@ -2003,10 +2007,12 @@ async function main(): Promise<void> {
         continue;
       }
       if (task === "/history sessions") {
-        const sessions = await listSessions(config.cwd);
-        console.log(sessions.length
-          ? `${sessions.map((session) => `${session.id}  ${session.updatedAt}  ${session.firstTask.slice(0, 72)}`).join("\n")}\n`
-          : localize(language, "没有已保存会话。\n", "No saved sessions.\n"));
+        const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
+        const note = unreadableSessionsNote(unreadable, language);
+        console.log([
+          sessions.length ? sessions.map((session) => `${session.id}  ${session.updatedAt}  ${session.firstTask.slice(0, 72)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
+          ...(note ? [chalk.yellow(note)] : []),
+        ].join("\n") + "\n");
         continue;
       }
       if (task === "/compact" || task.startsWith("/compact ")) {

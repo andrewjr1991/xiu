@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
-import { estimateConversationTokens, formatRestoredConversation, listSessions, loadSession } from "../src/session.js";
+import { estimateConversationTokens, formatRestoredConversation, listSessions, listSessionsWithIssues, loadSession, unreadableSessionsNote } from "../src/session.js";
 import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
@@ -287,4 +287,28 @@ test("internal subagent sessions do not appear in the user resume list", async (
   assert.equal((await listSessions(cwd)).length, 0);
   const internal = await fs.readdir(path.join(cwd, ".xiu", "agent-sessions"));
   assert.equal(internal.length, 1);
+});
+
+test("one unreadable session log no longer hides the others, and loading it names the reason", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-unreadable-session-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "good.jsonl"), `${JSON.stringify({ type: "task", task: "good task", timestamp: "2026-10-19T01:00:00.000Z" })}\n`);
+  await fs.mkdir(path.join(directory, "broken.jsonl"));
+
+  assert.deepEqual((await listSessions(cwd)).map((item) => item.id), ["good"]);
+  const listing = await listSessionsWithIssues(cwd);
+  assert.deepEqual(listing.unreadable, [{ id: "broken", reason: "EISDIR" }]);
+  assert.equal(unreadableSessionsNote(listing.unreadable, "en-US"), "1 more session log(s) could not be read (EISDIR ×1) and are not listed.");
+  assert.equal(unreadableSessionsNote(listing.unreadable, "zh-CN"), "另有 1 个会话日志无法读取（EISDIR ×1），未列出。");
+  assert.equal(unreadableSessionsNote([], "en-US"), undefined);
+
+  assert.equal((await loadSession(cwd)).id, "good", "the latest readable session still loads");
+  await assert.rejects(loadSession(cwd, "broken"), (error: NodeJS.ErrnoException) => error.code === "EISDIR" && /^Session log cannot be read \(EISDIR\): broken$/.test(error.message));
+  await assert.rejects(loadSession(cwd, "missing"), /Session not found in this workspace: missing/);
+
+  await fs.rm(path.join(directory, "good.jsonl"));
+  assert.deepEqual(await listSessions(cwd), []);
+  await assert.rejects(loadSession(cwd, "broken"), /cannot be read \(EISDIR\)/, "an unreadable log is told apart from a workspace without sessions");
+  await assert.rejects(loadSession(cwd), /No Xiu sessions exist in this workspace/);
 });

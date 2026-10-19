@@ -84,14 +84,39 @@ async function readEvents(file: string): Promise<Array<Record<string, unknown>>>
   });
 }
 
+export interface SessionListing {
+  /** Newest first, as `listSessions` returns them. */
+  sessions: SessionListItem[];
+  /** Session logs skipped because they could not be read, by id, with the system error code and never a path. */
+  unreadable: Array<{ id: string; reason: string }>;
+}
+
+/**
+ * Lists the workspace's saved sessions. A log that cannot be read (a directory in its place, no
+ * permission, an I/O error) is skipped and named in `unreadable`, so one bad file does not hide
+ * every other session from `/resume`, `/history sessions`, the desktop task list or the report.
+ * Malformed lines inside a readable log are still skipped line by line.
+ */
 export async function listSessions(cwd: string): Promise<SessionListItem[]> {
+  return (await listSessionsWithIssues(cwd)).sessions;
+}
+
+export async function listSessionsWithIssues(cwd: string): Promise<SessionListing> {
   const items: SessionListItem[] = [];
+  const unreadable: SessionListing["unreadable"] = [];
   const directories = [sessionDirectory(cwd), path.join(cwd, ".forge", "sessions"), path.join(cwd, ".forge_sessions")];
   for (const directory of directories) {
     const files = await fs.readdir(directory).catch(() => [] as string[]);
     for (const name of files.filter((file) => file.endsWith(".jsonl"))) {
       const file = path.join(directory, name);
-      const [stat, events] = await Promise.all([fs.stat(file), readEvents(file)]);
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      let events: Array<Record<string, unknown>>;
+      try { [stat, events] = await Promise.all([fs.stat(file), readEvents(file)]); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        unreadable.push({ id: sessionId(file), reason: typeof code === "string" && code ? code : "unreadable" });
+        continue;
+      }
       const firstTask = events.find((event) => event.type === "task");
       const lastModel = [...events].reverse().find((event) => event.type === "model_changed" || event.type === "provider_changed" || event.type === "task");
       const lastProvider = [...events].reverse().find((event) => event.type === "provider_changed" || event.type === "task");
@@ -117,7 +142,19 @@ export async function listSessions(cwd: string): Promise<SessionListItem[]> {
       });
     }
   }
-  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  unreadable.sort((a, b) => a.id.localeCompare(b.id));
+  return { sessions: items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), unreadable };
+}
+
+/** One line naming how many session logs a list leaves out and why; undefined when none. */
+export function unreadableSessionsNote(unreadable: SessionListing["unreadable"], language: "zh-CN" | "en-US"): string | undefined {
+  if (!unreadable.length) return undefined;
+  const counts = new Map<string, number>();
+  for (const item of unreadable) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+  const reasons = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ×${count}`);
+  return language === "zh-CN"
+    ? `另有 ${unreadable.length} 个会话日志无法读取（${reasons.join("、")}），未列出。`
+    : `${unreadable.length} more session log(s) could not be read (${reasons.join(", ")}) and are not listed.`;
 }
 
 /** Delete one exact local conversation log without touching workspace content. */
@@ -140,12 +177,16 @@ export async function deleteSession(cwd: string, requested: string): Promise<boo
 }
 
 export async function loadSession(cwd: string, requested?: string): Promise<RestoredSession> {
-  const sessions = await listSessions(cwd);
-  if (!sessions.length) throw new Error("No Xiu sessions exist in this workspace.");
+  const { sessions, unreadable } = await listSessionsWithIssues(cwd);
   const selected = requested
     ? sessions.find((item) => item.id === requested || item.id.startsWith(requested))
     : sessions[0];
-  if (!selected) throw new Error(`Session not found in this workspace: ${requested}`);
+  if (!selected) {
+    const broken = requested ? unreadable.find((item) => item.id === requested || item.id.startsWith(requested)) : undefined;
+    if (broken) throw Object.assign(new Error(`Session log cannot be read (${broken.reason}): ${broken.id}`), { code: broken.reason });
+    if (!sessions.length) throw new Error("No Xiu sessions exist in this workspace.");
+    throw new Error(`Session not found in this workspace: ${requested}`);
+  }
   if (requested && sessions.filter((item) => item.id.startsWith(requested)).length > 1 && !sessions.some((item) => item.id === requested)) {
     throw new Error(`Session id prefix is ambiguous: ${requested}`);
   }
