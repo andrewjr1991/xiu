@@ -70,6 +70,16 @@ export function addedPermissions(previous: ExtensionPermissionManifest | undefin
   return next.permissions.filter((permission) => !before.has(permission));
 }
 
+/** What `PermissionGrantStore.inspect()` found; `unreadable` means every Skill and plugin counts as unapproved until the file is fixed. */
+export interface PermissionGrantStoreInspection {
+  file: string;
+  state: "read" | "absent" | "unreadable";
+  /** Number of recorded grants when the file was read. */
+  grants?: number;
+  /** The system error code or the parser's message when `state` is `unreadable`. */
+  cause?: string;
+}
+
 export class PermissionGrantStore {
   constructor(private readonly file = path.join(os.homedir(), ".xiu", "extension-permissions.json")) {}
 
@@ -80,7 +90,24 @@ export class PermissionGrantStore {
       return parsed;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, grants: {} };
-      throw error;
+      // Fail closed: nothing is approved while the record cannot be read. The message names the file so the user can fix it;
+      // the system error code is kept for callers that classify the failure.
+      const code = (error as NodeJS.ErrnoException).code;
+      throw Object.assign(new Error(`Unable to read the extension permission store at ${this.file}: ${error instanceof Error ? error.message : String(error)}`), typeof code === "string" ? { code } : {});
+    }
+  }
+
+  /** Reads the grant store without throwing, for diagnostics; the approval checks above still fail closed. */
+  async inspect(): Promise<PermissionGrantStoreInspection> {
+    const exists = await fs.lstat(this.file).then(() => true, (error: NodeJS.ErrnoException) => error.code !== "ENOENT");
+    if (!exists) return { file: this.file, state: "absent" };
+    try {
+      const parsed = await this.read();
+      return { file: this.file, state: "read", grants: Object.keys(parsed.grants).length };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const message = error instanceof Error ? error.message : String(error);
+      return { file: this.file, state: "unreadable", cause: typeof code === "string" && code ? code : message.replace(/^Unable to read the extension permission store at .*?: /, "") };
     }
   }
 

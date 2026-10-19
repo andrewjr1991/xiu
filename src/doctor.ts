@@ -8,10 +8,12 @@ import { FREE_SEARCH_VERSION } from "./free-search.js";
 import type { ProviderConfigurationDiagnostics } from "./provider-config-migration.js";
 import type { ProviderCredentialInfo, ProviderProfile } from "./provider-registry.js";
 import { redactSecrets } from "./secret-redaction.js";
+import { PermissionGrantStore } from "./extension-permissions.js";
+import { inspectMcpConfig } from "./mcp.js";
 import { listSessionsWithIssues } from "./session.js";
 import type { XiuSettings } from "./settings.js";
 import { TaskRunJournal } from "./task-run.js";
-import { isWorkspaceTrusted } from "./trust.js";
+import { inspectTrustStore, isWorkspaceTrusted } from "./trust.js";
 import { UpdateCheckCache, diagnoseUpdateInstallation, type UpdateDoctorItem, type UpdateDoctorResult } from "./update-check.js";
 import { explainError } from "./user-facing-errors.js";
 
@@ -70,9 +72,21 @@ export interface PowerShellProbe {
 }
 
 /** What the workspace's own records look like: counts, what could not be read, and whether an interrupted task is pending. */
+/** One of Xiu's own configuration files as the doctor saw it. */
+export interface ConfigFileProbe {
+  id: "settings" | "trust-store" | "extension-permissions" | "mcp-user" | "mcp-project";
+  /** `read`: parsed; `absent`: no file; `unreadable`: exists but cannot be used (`cause` says why); `skipped`: not read, `cause` says why (an untrusted workspace). */
+  state: "read" | "absent" | "unreadable" | "skipped";
+  cause?: string;
+  /** A count the summary can show when the file was read (servers, trusted workspaces, grants). */
+  count?: number;
+}
+
 export interface WorkspaceRecordsProbe {
   /** False when the workspace is not trusted; its records are then not read at all. */
   trusted: boolean;
+  /** The trust store itself could not be read; a reason without a path. Every workspace then counts as untrusted. */
+  trustFailure?: string;
   runs: number;
   unreadableRuns: Array<{ runId: string; reason: string }>;
   sessions: number;
@@ -106,6 +120,79 @@ export interface DoctorOptions {
   workspaceRecords?: () => Promise<WorkspaceRecordsProbe>;
   /** How `~/.xiu/settings.json` was read (`SettingsStore.inspect()`); omitted, the report says nothing about the file. */
   settingsFile?: { state: "read" | "absent" | "unreadable"; cause?: string };
+  /** Replaces the real look at the trust store, the extension permission store and the MCP config files. */
+  configFiles?: () => Promise<ConfigFileProbe[]>;
+}
+
+/**
+ * Reads the other configuration files the way their owners do, without throwing: the trust store,
+ * the extension permission store and the user MCP config under `~/.xiu`, plus the workspace's own
+ * MCP config, which is read only when the workspace is trusted (an untrusted workspace's project
+ * files are not read, see SECURITY §1). Read-only.
+ */
+export async function probeConfigFiles(cwd: string, options: { trusted?: () => Promise<boolean>; trustStore?: string; permissionStore?: string; mcpUserConfig?: string } = {}): Promise<ConfigFileProbe[]> {
+  const strip = (value: { state: "read" | "absent" | "unreadable"; cause?: string }, count: number | undefined): Omit<ConfigFileProbe, "id"> =>
+    ({ state: value.state, ...(value.cause ? { cause: value.cause } : {}), ...(count !== undefined ? { count } : {}) });
+  const [trust, permissions, mcpUser] = await Promise.all([
+    inspectTrustStore(options.trustStore),
+    new PermissionGrantStore(options.permissionStore).inspect(),
+    inspectMcpConfig(options.mcpUserConfig ?? path.join(os.homedir(), ".xiu", "mcp.json")),
+  ]);
+  let trusted: boolean | undefined;
+  try { trusted = await (options.trusted ?? (() => isWorkspaceTrusted(cwd, options.trustStore)))(); }
+  catch { trusted = undefined; }
+  let mcpProject: Omit<ConfigFileProbe, "id"> = { state: "skipped", cause: trusted === false ? "untrusted" : "trust-unknown" };
+  if (trusted === true) {
+    const project = await inspectMcpConfig(path.join(cwd, ".xiu", "mcp.json"));
+    mcpProject = strip(project, project.servers);
+  }
+  return [
+    { id: "trust-store", ...strip(trust, trust.workspaces) },
+    { id: "extension-permissions", ...strip(permissions, permissions.grants) },
+    { id: "mcp-user", ...strip(mcpUser, mcpUser.servers) },
+    { id: "mcp-project", ...mcpProject },
+  ];
+}
+
+const CONFIG_FILE_TEXT: Record<ConfigFileProbe["id"], { display: string; label: [string, string]; count: [string, string]; impact: [string, string] }> = {
+  settings: { display: "~/.xiu/settings.json", label: ["设置文件", "Settings file"], count: ["", ""], impact: ["", ""] },
+  "trust-store": {
+    display: "~/.xiu/trusted-workspaces.json", label: ["信任名单", "Trusted workspaces"], count: ["个已信任工作区", "trusted workspace(s)"],
+    impact: ["修好前所有工作区都按未信任处理，交互启动会以这个错误退出；修复其中的 JSON 或把文件移走后重新确认信任即可。",
+      "Until it is fixed every workspace counts as untrusted and an interactive start exits with this error; fix its JSON or move the file away, then confirm trust again."],
+  },
+  "extension-permissions": {
+    display: "~/.xiu/extension-permissions.json", label: ["扩展授权记录", "Extension permission grants"], count: ["条授权", "grant(s)"],
+    impact: ["修好前所有 Skill 与插件的授权都视为缺失：插件显示 inactive，Skill 与 MCP 的授权检查报错；修复其中的 JSON 或把文件移走后需要重新授权。",
+      "Until it is fixed every Skill and plugin counts as unapproved: plugins show inactive and Skill and MCP approval checks fail; fix its JSON or move the file away, then approve again."],
+  },
+  "mcp-user": {
+    display: "~/.xiu/mcp.json", label: ["MCP 配置（用户）", "MCP config (user)"], count: ["个服务", "server(s)"],
+    impact: ["修好前不会连接任何 MCP 服务（启动时提示“未加载 MCP 配置”）；修复其中的 JSON 或用 /mcp 重新写入。",
+      "Until it is fixed no MCP server connects (startup says the MCP configuration was not loaded); fix its JSON or rewrite it with /mcp."],
+  },
+  "mcp-project": {
+    display: ".xiu/mcp.json", label: ["MCP 配置（工作区）", "MCP config (workspace)"], count: ["个服务", "server(s)"],
+    impact: ["修好前不会连接任何 MCP 服务，包括用户配置里的；修复工作区 .xiu/mcp.json 的 JSON 或把它移走。",
+      "Until it is fixed no MCP server connects, the user configuration's included; fix the workspace's .xiu/mcp.json or move it away."],
+  },
+};
+
+function configFileItem(probe: ConfigFileProbe): DoctorItem {
+  const text = CONFIG_FILE_TEXT[probe.id];
+  const id = `config-${probe.id}`;
+  if (probe.state === "unreadable") {
+    const cause = (probe.cause ?? "unreadable").replace(/\s+/g, " ").slice(0, 160);
+    return item(id, "failure", text.label, [`${text.display} 无法读取（${cause}）`, `${text.display} could not be read (${cause})`], text.impact);
+  }
+  if (probe.state === "skipped") {
+    return probe.cause === "trust-unknown"
+      ? item(id, "info", text.label, ["信任名单无法读取，未读取工作区的 MCP 配置", "Not read: the trust store could not be read"])
+      : item(id, "info", text.label, ["工作区尚未信任，未读取", "Not read: this workspace is not trusted yet"]);
+  }
+  if (probe.state === "absent") return item(id, "pass", text.label, [`${text.display} 不存在`, `${text.display} absent`]);
+  const counted = probe.count !== undefined ? [`，${probe.count} ${text.count[0]}`, `, ${probe.count} ${text.count[1]}`] : ["", ""];
+  return item(id, "pass", text.label, [`${text.display} 已读取${counted[0]}`, `${text.display} read${counted[1]}`]);
 }
 
 function reasonWithoutPath(error: unknown): string {
@@ -122,8 +209,15 @@ function reasonWithoutPath(error: unknown): string {
  * the report can say in advance that one-shot runs will be refused and why.
  */
 export async function probeWorkspaceRecords(cwd: string, options: { trusted?: () => Promise<boolean>; taskRunRoot?: string } = {}): Promise<WorkspaceRecordsProbe> {
-  const trusted = await (options.trusted ?? (() => isWorkspaceTrusted(cwd)))().catch(() => false);
-  const probe: WorkspaceRecordsProbe = { trusted, runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] };
+  let trusted = false;
+  let trustFailure: string | undefined;
+  try { trusted = await (options.trusted ?? (() => isWorkspaceTrusted(cwd)))(); }
+  catch (error) {
+    // The trust store's own error names its file; keep the cause only.
+    const message = error instanceof Error ? error.message : String(error);
+    trustFailure = reasonWithoutPath((error as NodeJS.ErrnoException | undefined)?.code ? error : new Error(message.replace(/^Unable to read Xiu trust store at .*?: /, "")));
+  }
+  const probe: WorkspaceRecordsProbe = { trusted, ...(trustFailure ? { trustFailure } : {}), runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] };
   if (!trusted) return probe;
   const journal = new TaskRunJournal(cwd, options.taskRunRoot);
   try {
@@ -152,6 +246,11 @@ function countReasons(items: Array<{ reason: string }>, language: "zh" | "en"): 
 
 function workspaceSection(probe: WorkspaceRecordsProbe): DoctorSection {
   const section = (items: DoctorItem[]): DoctorSection => ({ id: "workspace", titleZh: "工作区记录", titleEn: "Workspace records", items });
+  if (probe.trustFailure) {
+    return section([item("workspace-trust", "failure", ["信任", "Trust"],
+      [`信任名单无法读取（${probe.trustFailure}），无法判断工作区是否受信任`, `The trust store could not be read (${probe.trustFailure}), so the workspace's trust is unknown`],
+      ["修好前所有工作区都按未信任处理；见上方“信任名单”一项。", "Until it is fixed every workspace counts as untrusted; see the trusted-workspaces item above."])]);
+  }
   if (!probe.trusted) {
     return section([item("workspace-trust", "info", ["信任", "Trust"],
       ["工作区尚未信任，未读取它的任务记录与会话日志", "This workspace is not trusted yet, so its task records and session logs were not read"],
@@ -261,7 +360,7 @@ function settingsFileItem(probe: NonNullable<DoctorOptions["settingsFile"]>): Do
     : item("settings", "pass", label, ["不存在，使用默认设置", "absent, defaults in use"]);
 }
 
-function installationSection(result: UpdateDoctorResult | undefined, failure: unknown, nodeVersion: string, settingsFile?: DoctorOptions["settingsFile"]): DoctorSection {
+function installationSection(result: UpdateDoctorResult | undefined, failure: unknown, nodeVersion: string, settingsFile: DoctorOptions["settingsFile"], configFiles: ConfigFileProbe[]): DoctorSection {
   const labels: Record<UpdateDoctorItem["id"], [string, string]> = {
     runtime: ["运行环境", "Runtime"], package: ["包完整性", "Package integrity"], command: ["命令来源", "Command resolution"], prefix: ["npm prefix", "npm prefix"],
     proxy: ["更新代理", "Update proxy"], cache: ["更新缓存", "Update cache"], registry: ["官方 Registry", "Official registry"], release: ["发布元数据", "Release metadata"],
@@ -277,6 +376,7 @@ function installationSection(result: UpdateDoctorResult | undefined, failure: un
     items.push(item("update-doctor", "warning", ["更新诊断", "Update diagnostics"], [`未能完成：${explanation.cause}`, `Did not complete: ${english.cause}`], [explanation.nextStep, english.nextStep]));
   }
   if (settingsFile) items.push(settingsFileItem(settingsFile));
+  for (const probe of configFiles) items.push(configFileItem(probe));
   if (parseMajor(nodeVersion) === 20) {
     items.push(item("node-eol", "warning", ["Node.js 版本", "Node.js version"],
       [`Node ${nodeVersion} 已于 2026-04-30 停止维护；Xiu 0.22 起要求 Node 22.12 或更高。`, `Node ${nodeVersion} reached end of life on 2026-04-30; Xiu 0.22 will require Node 22.12 or newer.`],
@@ -517,10 +617,13 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const profiles = options.registry ? safeList(options.registry) : [];
   const proxy = await proxySection(env, options.settings, profiles, updateResult?.items.find((entry) => entry.id === "registry"));
   const windows = await windowsSection(platform, env, cwd, powerShell);
-  const workspace = await (options.workspaceRecords ?? (() => probeWorkspaceRecords(cwd)))();
+  const [workspace, configFiles] = await Promise.all([
+    (options.workspaceRecords ?? (() => probeWorkspaceRecords(cwd)))(),
+    (options.configFiles ?? (() => probeConfigFiles(cwd)))(),
+  ]);
 
   const sections: DoctorSection[] = [
-    installationSection(updateResult, updateFailure, nodeVersion, options.settingsFile),
+    installationSection(updateResult, updateFailure, nodeVersion, options.settingsFile, configFiles),
     providers.section,
     webSearch.section,
     proxy,

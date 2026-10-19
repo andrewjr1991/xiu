@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { collectDoctorReport, describeProxyValue, formatDoctorReport, probeWorkspaceRecords, type DoctorProviderRegistry, type WorkspaceRecordsProbe } from "../src/doctor.js";
+import { collectDoctorReport, describeProxyValue, formatDoctorReport, type ConfigFileProbe, probeWorkspaceRecords, type DoctorProviderRegistry, type WorkspaceRecordsProbe } from "../src/doctor.js";
 import { TASK_RUN_SCHEMA_VERSION, TaskRunJournal, type TaskRunRecord } from "../src/task-run.js";
 import { ProviderConfigurationError } from "../src/provider-config-migration.js";
 import type { ProviderProfile } from "../src/provider-registry.js";
@@ -12,6 +12,7 @@ import type { UpdateDoctorResult } from "../src/update-check.js";
 const FEATURES = { text: true as const, tools: true, vision: false, image: false, video: false };
 
 /** A trusted workspace with nothing saved yet, for the tests that are about other sections. */
+const NO_CONFIG_FILES = async () => [];
 const NO_RECORDS = async (): Promise<WorkspaceRecordsProbe> => ({ trusted: true, runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] });
 
 function updateResult(overrides: Partial<UpdateDoctorResult> = {}): UpdateDoctorResult {
@@ -48,7 +49,7 @@ test("the report covers every section, redacts keys and proxy passwords, and sta
     { id: "ollama", name: "Ollama", kind: "ollama", model: "qwen3:8b", baseURL: "http://127.0.0.1:11434/v1", features: FEATURES },
   ];
   const report = await collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS,
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES,
     settings: { webSearch: { enabled: true, provider: "free-search", baseURL: "https://search.example", managedAuth: "xiu-device", authBaseURL: "https://search.example/xiu-auth", proxy: "http://corp:Secret%40Pass@proxy.corp.example:8080" } },
     registry: fakeRegistry(profiles),
     env: { HTTPS_PROXY: "http://proxy.corp.example:8080", OPENAI_API_KEY: "sk-env-canary-5678", PATH: "" },
@@ -79,7 +80,7 @@ test("the report covers every section, redacts keys and proxy passwords, and sta
 
 test("different proxy hosts, a TLS-intercepted registry and Node 20 each produce a warning with a next step", async () => {
   const report = await collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS,
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES,
     settings: {},
     registry: fakeRegistry([]),
     env: { HTTPS_PROXY: "http://a.example:3128", npm_config_https_proxy: "http://b.example:3128", NODE_EXTRA_CA_CERTS: "/nonexistent/corp-root.pem", PATH: "" },
@@ -99,7 +100,7 @@ test("different proxy hosts, a TLS-intercepted registry and Node 20 each produce
 
 test("a provider configuration that cannot be loaded is a failure explained in plain words, and NODE_TLS_REJECT_UNAUTHORIZED=0 is flagged", async () => {
   const report = await collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS,
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES,
     settings: { webSearch: { enabled: true, provider: "tavily", baseURL: "https://api.tavily.com" } },
     registry: fakeRegistry([], { loadError: new ProviderConfigurationError("unsafe", "Provider configuration storage is not a protected regular file/directory") }),
     env: { NODE_TLS_REJECT_UNAUTHORIZED: "0", PATH: "" },
@@ -119,7 +120,7 @@ test("a provider configuration that cannot be loaded is a failure explained in p
 
 test("Windows adds the PowerShell language mode and warns in a constrained mode", async () => {
   const report = await collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS,
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES,
     settings: {},
     registry: fakeRegistry([]),
     env: { WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe", PATH: "" },
@@ -147,7 +148,7 @@ test("the real ProviderRegistry works as the doctor's registry against an empty 
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const { ProviderRegistry } = await import("../src/provider-registry.js");
   const report = await collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS, settings: {}, registry: new ProviderRegistry(path.join(home, "providers.json")),
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES, settings: {}, registry: new ProviderRegistry(path.join(home, "providers.json")),
     env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1", cwd: home, homeDirectory: home,
     updateDoctor: async () => updateResult(), uvAvailable: async () => undefined,
   });
@@ -191,7 +192,7 @@ test("the workspace section counts records, names unreadable ones and warns abou
 
   const report = await collectDoctorReport({
     version: "0.21.0", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
-    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe,
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
   });
   assert.equal(report.status, "failure");
   const zh = formatDoctorReport(report, "zh-CN");
@@ -209,7 +210,7 @@ test("the workspace section counts records, names unreadable ones and warns abou
   assert.deepEqual(interrupted.interrupted, { runId: "7b00c0de-0000-4000-8000-000000000002", status: "running", startedAt: "2026-10-19T01:00:00.000Z" });
   const warned = formatDoctorReport(await collectDoctorReport({
     version: "0.21.0", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
-    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => interrupted,
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => interrupted, configFiles: NO_CONFIG_FILES,
   }), "zh-CN");
   assert.match(warned, /结论: 可用，但有需要留意的警告/);
   assert.match(warned, /! 中断任务: 有一条待处理的中断任务：7b00c0de（running，2026-10-19T01:00:00）\n {2}新的一次性运行会返回 not_started 直到处理它：.*xiu recover abandon 7b00c0de/);
@@ -222,7 +223,7 @@ test("an untrusted workspace's records are not read and the section says so", as
   assert.deepEqual(probe, { trusted: false, runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] });
   const report = await collectDoctorReport({
     version: "0.21.0", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
-    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe,
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
   });
   const section = report.sections.find((candidate) => candidate.id === "workspace");
   assert.deepEqual(section?.items.map((entry) => [entry.id, entry.level]), [["workspace-trust", "info"]], "an untrusted workspace is information, not a warning");
@@ -231,7 +232,7 @@ test("an untrusted workspace's records are not read and the section says so", as
 
 test("the installation section says how the settings file was read, and a damaged file is a failure with the fix", async () => {
   const collect = (settingsFile: { state: "read" | "absent" | "unreadable"; cause?: string }) => collectDoctorReport({
-    version: "0.21.0", workspaceRecords: NO_RECORDS, settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
+    version: "0.21.0", workspaceRecords: NO_RECORDS, configFiles: NO_CONFIG_FILES, settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
     cwd: "/work/project", homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, settingsFile,
   });
   const damaged = await collect({ state: "unreadable", cause: "Expected property name or '}' in JSON at position 2 (line 1 column 3)" });
@@ -245,4 +246,38 @@ test("the installation section says how the settings file was read, and a damage
   assert.match(formatDoctorReport(read, "zh-CN"), /✓ 设置文件: ~\/\.xiu\/settings\.json 已读取/);
   assert.match(formatDoctorReport(await collect({ state: "absent" }), "en-US"), /✓ Settings file: absent, defaults in use/);
   assert.equal((await collect({ state: "absent" })).sections[0]!.items.find((entry) => entry.id === "settings")?.level, "pass");
+});
+
+test("the installation section lists the other configuration files, and a damaged trust store is a failure everywhere it matters", async () => {
+  const collect = (configFiles: ConfigFileProbe[], workspace?: WorkspaceRecordsProbe) => collectDoctorReport({
+    version: "0.21.0", workspaceRecords: async () => workspace ?? { trusted: false, runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] }, configFiles: async () => configFiles,
+    settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
+    cwd: "/work/project", homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined,
+  });
+  const healthy = await collect([
+    { id: "trust-store", state: "read", count: 2 }, { id: "extension-permissions", state: "absent" }, { id: "mcp-user", state: "read", count: 3 }, { id: "mcp-project", state: "skipped", cause: "untrusted" },
+  ]);
+  const zh = formatDoctorReport(healthy, "zh-CN");
+  assert.match(zh, /✓ 信任名单: ~\/\.xiu\/trusted-workspaces\.json 已读取，2 个已信任工作区\n✓ 扩展授权记录: ~\/\.xiu\/extension-permissions\.json 不存在\n✓ MCP 配置（用户）: ~\/\.xiu\/mcp\.json 已读取，3 个服务\n· MCP 配置（工作区）: 工作区尚未信任，未读取/);
+  assert.match(formatDoctorReport(healthy, "en-US"), /✓ Trusted workspaces: ~\/\.xiu\/trusted-workspaces\.json read, 2 trusted workspace\(s\)\n/);
+  assert.notEqual(healthy.status, "failure");
+
+  const damaged = await collect([
+    { id: "trust-store", state: "unreadable", cause: "Unexpected token } in JSON at position 4" }, { id: "extension-permissions", state: "unreadable", cause: "EISDIR" },
+    { id: "mcp-user", state: "unreadable", cause: "Invalid MCP JSON in mcp.json: Unexpected end of JSON input" }, { id: "mcp-project", state: "skipped", cause: "trust-unknown" },
+  ], { trusted: false, trustFailure: "Unable to read Xiu trust store at", runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] });
+  assert.equal(damaged.status, "failure");
+  const text = formatDoctorReport(damaged, "zh-CN");
+  assert.match(text, /✗ 信任名单: ~\/\.xiu\/trusted-workspaces\.json 无法读取（Unexpected token } in JSON at position 4）\n {2}修好前所有工作区都按未信任处理/);
+  assert.match(text, /✗ 扩展授权记录: ~\/\.xiu\/extension-permissions\.json 无法读取（EISDIR）\n {2}修好前所有 Skill 与插件的授权都视为缺失/);
+  assert.match(text, /✗ MCP 配置（用户）: ~\/\.xiu\/mcp\.json 无法读取（Invalid MCP JSON in mcp\.json: Unexpected end of JSON input）/);
+  assert.match(text, /· MCP 配置（工作区）: 信任名单无法读取，未读取工作区的 MCP 配置/);
+  assert.match(text, /\[工作区记录\]\n✗ 信任: 信任名单无法读取（Unable to read Xiu trust store at），无法判断工作区是否受信任/);
+  assert.match(formatDoctorReport(damaged, "en-US"), /✗ Trust: The trust store could not be read \(Unable to read Xiu trust store at\), so the workspace's trust is unknown/);
+});
+
+test("probeWorkspaceRecords reports a trust store it cannot read instead of calling the workspace untrusted", async (t) => {
+  const f = await workspaceFixture(t);
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => { throw new Error("Unable to read Xiu trust store at /home/user/.xiu/trusted-workspaces.json: Unexpected token"); }, taskRunRoot: f.taskRunRoot });
+  assert.deepEqual(probe, { trusted: false, trustFailure: "Unexpected token", runs: 0, unreadableRuns: [], sessions: 0, unreadableSessions: [] }, "the cause only, never the file path");
 });
