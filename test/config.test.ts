@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveConfig } from "../src/config.js";
+import { UsageError } from "../src/usage-error.js";
 import { refreshModelContext } from "../src/context.js";
 
 test("model response deadlines are independently configurable and bounded", () => {
@@ -149,4 +150,11 @@ test("task budgets are opt-in and parse bounded values", () => {
   assert.equal(configured.stallTimeoutMs, 90_000);
   assert.throws(() => resolveConfig({ provider: "openai", budgetTokens: "0" }), /budget-tokens/);
   assert.throws(() => resolveConfig({ provider: "openai", budgetWarningPercent: "100" }), /budget-warning-percent/);
+});
+
+test("an option value Xiu cannot accept is a UsageError, whatever words its message contains", () => {
+  assert.throws(() => resolveConfig({ stallTimeoutSeconds: "-1" }), (error: unknown) => error instanceof UsageError && /^stall-timeout-seconds must be a positive integer/.test(error.message));
+  assert.throws(() => resolveConfig({ maxTurns: "0" }), UsageError);
+  assert.throws(() => resolveConfig({ budgetWarningPercent: "150" }), UsageError);
+  assert.throws(() => resolveConfig({ proxy: "ftp://proxy.invalid" }), UsageError);
 });

@@ -3,6 +3,7 @@ import type { UiLanguage } from "./i18n.js";
 import { ProviderConfigurationError } from "./provider-config-migration.js";
 import { classifyRetryError } from "./retry-policy.js";
 import { redactSecrets } from "./secret-redaction.js";
+import { UsageError } from "./usage-error.js";
 import { WorkspaceDirectoryError, type WorkspaceDirectoryProblem } from "./workspace-directory.js";
 
 /**
@@ -180,6 +181,9 @@ function entryFor(error: unknown): Entry | undefined {
     const fill = (pair: [string, string], placeholder: string): [string, string] => [pair[0].replace(placeholder, workspace.directory), pair[1]];
     return { ...entry, zh: fill(entry.zh, "<路径>"), en: fill(entry.en, "<path>") };
   }
+  // A usage error is its own explanation: its words ("stall-timeout-seconds must be …") must not be classified below
+  // as a network timeout or any other catalogued failure.
+  if (items.some((item) => item instanceof UsageError)) return undefined;
   const message = items.map((item) => item.message ?? "").join(" ");
   const codes = items.map((item) => String(item.code ?? "")).join(" ").toUpperCase();
   const status = items.map((item) => Number(item.status)).find((value) => Number.isInteger(value));

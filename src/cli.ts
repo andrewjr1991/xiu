@@ -22,6 +22,7 @@ import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 import { ConfigFileError } from "./config-file-error.js";
 import { assertWorkspaceDirectory } from "./workspace-directory.js";
+import { UsageError } from "./usage-error.js";
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
@@ -224,14 +225,14 @@ async function main(): Promise<void> {
   trustGrantedByFlag = Boolean(options.trustWorkspace);
   if (options.json) {
     const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover" || program.args[0] === "audit";
-    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, audit, update, session-list or recovery commands.");
+    if (!program.args.length || exitEarly) throw new UsageError("--json requires exactly one one-shot task and cannot be combined with doctor, report, audit, update, session-list or recovery commands.");
     // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
     const redirected = redirectHumanOutputToStderr();
     jsonStream = createJsonEventStream(redirected.writeStdout, undefined, (value) => redactSecrets(value));
   }
   const recoveryOptions = [options.providerConfigDiagnostics, options.providerConfigPreview, options.providerConfigRecover].filter(Boolean);
   if (recoveryOptions.length) {
-    if (recoveryOptions.length !== 1 || program.args.length) throw new Error("Choose one Provider configuration command without a task.");
+    if (recoveryOptions.length !== 1 || program.args.length) throw new UsageError("Choose one Provider configuration command without a task.");
     const command: ProviderRecoveryCommand = options.providerConfigRecover ? { action: "recover", backupId: options.providerConfigRecover }
       : options.providerConfigPreview ? { action: "preview", backupId: options.providerConfigPreview } : { action: "list" };
     const result = await runProviderRecoveryCommand(new ProviderRegistry(), command, {
