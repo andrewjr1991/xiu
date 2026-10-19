@@ -173,3 +173,18 @@ test("a long workspace path stays inside the brand column instead of running und
   assert.ok(pathRow, "the path is shown");
   assert.match(pathRow, /\/home\/so.*\.\.\..*-name/, "the path keeps its beginning and its end");
 });
+
+test("prompt dashboard stays one column short of the terminal width, like the frame that draws it", () => {
+  const originalColumns = process.stdout.columns;
+  try {
+    for (const columns of [80, 100, 120]) {
+      Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
+      const line = formatPromptDashboard({ model: "fake/fake-model", contextTokens: 0, contextLimit: 128_000, skills: 0, cwd: "/tmp/claude-0/-home-claude-xiu/944718f9/scratchpad/probe-ws", planMode: false, mcpTools: 2 });
+      const plain = line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+      assert.ok(terminalDisplayWidth(plain) <= columns - 1, `${columns} columns: ${terminalDisplayWidth(plain)} wide (before: exactly ${columns}, so the frame wrapped the path's last character onto its own line)\n${plain}`);
+      assert.match(plain, /probe-ws$/, "the shortened path keeps its last characters");
+    }
+  } finally {
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+  }
+});

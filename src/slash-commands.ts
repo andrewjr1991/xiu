@@ -150,6 +150,16 @@ export function helpEntriesFor(topic: string, language: UiLanguage): SlashComman
   return whole.length ? whole : matching(words[0]!);
 }
 
+/**
+ * The `/help` listing: one command per line with the descriptions in one column, which starts
+ * after the longest listed name (at least 20 columns), so `/update notifications off` no longer
+ * runs into its description while shorter names are padded.
+ */
+export function formatHelpEntries(entries: ReadonlyArray<Pick<SlashCommand, "name" | "description">>): string {
+  const width = Math.max(20, ...entries.map((command) => command.name.length));
+  return entries.map((command) => `${command.name.padEnd(width)} ${command.description}`).join("\n");
+}
+
 /** Script-side equivalents of interactive commands, named when a one-shot run is given the interactive form. */
 const ONE_SHOT_EQUIVALENTS: Readonly<Record<string, string>> = {
   "/doctor": "xiu doctor [json]",

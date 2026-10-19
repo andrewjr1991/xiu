@@ -174,7 +174,11 @@ export function formatPromptDashboard(input: {
   language?: UiLanguage;
 }): string {
   const language = input.language ?? "en-US";
-  const columns = process.stdout.columns || 100;
+  // The prompt frame draws its lines one column short of the terminal width (a line that fills
+  // the width exactly makes terminals wrap or scroll a line early), so the dashboard fits that
+  // width rather than the terminal's; it used to be one column too long, which wrapped its last
+  // character onto a line of its own.
+  const columns = (process.stdout.columns || 100) - 1;
   const ratio = Math.min(1, input.contextTokens / Math.max(1, input.contextLimit));
   const filled = Math.round(ratio * 12);
   const bar = `${"#".repeat(filled)}${"-".repeat(12 - filled)}`;
