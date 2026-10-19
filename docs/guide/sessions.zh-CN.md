@@ -223,7 +223,15 @@ xiu --resume '会话ID'
 /report export html reports/latest.html summary
 ```
 
-不进入交互模式时，`xiu report [markdown|json|html] [summary|details] [工作区内路径]` 导出同一份报告（省略路径则写到标准输出，已存在的文件需加 `--yes` 才覆盖），见[快速上手 8.6](./getting-started.zh-CN.md#86-一次性命令)。
+报告默认针对最近一次运行。`/report runs` 列出最近 50 次运行（序号 1 是最新的，附运行 ID 前 8 位、开始时间、状态和任务摘要）；在 `/report` 或 `/report export …` 末尾加 `run:<序号>` 或 `run:<运行 ID 前缀>`（至少 4 位，须唯一）即可改为报告那一次运行：
+
+```text
+/report runs
+/report run:2
+/report export html reports/run-3f2a9c1e.html details run:3f2a9c1e
+```
+
+不进入交互模式时，`xiu report [markdown|json|html] [summary|details] [run:<序号|运行 ID 前缀>] [工作区内路径]` 导出同一份报告（省略路径则写到标准输出，已存在的文件需加 `--yes` 才覆盖），`xiu report runs` 列出可选运行，见[快速上手 8.6](./getting-started.zh-CN.md#86-一次性命令)。
 
 `html` 生成一份可直接用浏览器打开、也方便发给他人的单文件报告：样式全部内联，不含任何脚本，不加载外部资源（文件自带的 Content-Security-Policy 同时禁止两者），自动适配深浅色，所有字段都经过转义。内容与 Markdown 版完全相同，只是把阶段与文件变化排成表格。
 

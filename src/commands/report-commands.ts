@@ -6,6 +6,7 @@ import type { AgentConfig } from "../config.js";
 import { formatTaskDiagnostics } from "../diagnostics.js";
 import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, originalTaskGoal, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { redactSecrets } from "../secret-redaction.js";
 import { type SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
 import { loadSession } from "../session.js";
 import { TaskRunJournal, type TaskRunRecord } from "../task-run.js";
@@ -42,14 +43,54 @@ function noReportableRun(language: UiLanguage): string {
   return localize(language, "本工作区还没有可报告的任务运行记录。", "This workspace has no task run to report yet.");
 }
 
+/** Up to this many recent runs are listed and selectable by index or run-id prefix. */
+export const REPORT_RUN_LIST_LIMIT = 50;
+
+/** Recent runs, newest first, as shown by `/report runs` and `xiu report runs`; index 1 is the latest. */
+export async function listReportableRuns(taskRunJournal: Pick<TaskRunJournal, "recent">): Promise<TaskRunRecord[]> {
+  return taskRunJournal.recent(REPORT_RUN_LIST_LIMIT);
+}
+
+export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): string {
+  if (!runs.length) return noReportableRun(language);
+  const header = localize(language, "序号  运行 ID   开始时间              状态          任务", "#     run id    started               status        task");
+  const lines = runs.map((run, index) => {
+    const number = String(index + 1).padEnd(5);
+    const id = run.runId.slice(0, 8).padEnd(9);
+    const started = run.startedAt.slice(0, 19).padEnd(21);
+    const status = run.status.padEnd(13);
+    return `${number} ${id} ${started} ${status} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`;
+  });
+  return [header, ...lines, localize(language,
+    `选择方式：run:<序号> 或 run:<运行 ID 前缀>（至少 4 位），例如 /report run:2、xiu report run:${runs[0]!.runId.slice(0, 8)}`,
+    `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`)].join("\n");
+}
+
+/** Resolves `run:<selector>`: a 1-based index into the recent list, or a unique run-id prefix. */
+async function selectRun(taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">, selector: string | undefined, language: UiLanguage): Promise<TaskRunRecord | undefined> {
+  if (selector === undefined) return taskRunJournal.latest();
+  const runs = await listReportableRuns(taskRunJournal);
+  if (/^\d+$/.test(selector)) {
+    const index = Number(selector);
+    const run = index >= 1 ? runs[index - 1] : undefined;
+    if (!run) throw new Error(localize(language, `没有第 ${selector} 个运行；最近共 ${runs.length} 个，用 /report runs 或 xiu report runs 查看。`, `There is no run #${selector}; ${runs.length} recent run(s) exist. List them with /report runs or xiu report runs.`));
+    return run;
+  }
+  if (selector.length < 4) throw new Error(localize(language, "运行 ID 前缀至少 4 位。", "A run-id prefix needs at least 4 characters."));
+  const matches = runs.filter((run) => run.runId.toLowerCase().startsWith(selector.toLowerCase()));
+  if (matches.length === 1) return matches[0];
+  if (!matches.length) throw new Error(localize(language, `最近 ${runs.length} 个运行里没有以 ${selector} 开头的运行 ID。`, `No run id among the ${runs.length} recent run(s) starts with ${selector}.`));
+  throw new Error(localize(language, `运行 ID 前缀 ${selector} 匹配 ${matches.length} 个运行，请再多写几位。`, `The run-id prefix ${selector} matches ${matches.length} runs; add more characters.`));
+}
+
 /**
- * Gathers the latest task run of the workspace, the session turns of its task chain and the
- * workspace's audit facts. Shared by the interactive `/report` and the one-shot `xiu report`.
- * Returns undefined when the workspace has no run yet.
+ * Gathers one task run of the workspace (the latest, or the one `selector` names), the session
+ * turns of its task chain and the workspace's audit facts. Shared by the interactive `/report`
+ * and the one-shot `xiu report`. Returns undefined when the workspace has no run yet.
  */
-export async function collectLatestExecutionReportInputs(sources: ExecutionReportSources): Promise<ExecutionReportInputs | undefined> {
+export async function collectExecutionReportInputs(sources: ExecutionReportSources, selector?: string, language: UiLanguage = "en-US"): Promise<ExecutionReportInputs | undefined> {
   const { cwd, taskRunJournal, securityAudit } = sources;
-  const run = await taskRunJournal.latest();
+  const run = await selectRun(taskRunJournal, selector, language);
   if (!run) return undefined;
   const restored = await loadSession(cwd, run.sessionId).catch(() => undefined);
   const replay = restored?.replay.filter((item) => item.inputKind !== "system") ?? [];
@@ -100,9 +141,11 @@ const REPORT_SCOPES: Record<string, ExecutionReportScope> = { summary: "summary"
 
 function reportUsage(language: UiLanguage): string {
   return localize(language,
-    "用法：xiu report [markdown|json|html] [summary|details] [工作区内路径] [--yes]\n省略路径时报告写到标准输出；已存在的文件只有加 --yes 才覆盖。",
-    "Usage: xiu report [markdown|json|html] [summary|details] [path inside the workspace] [--yes]\nWithout a path the report goes to stdout; an existing file is overwritten only with --yes.");
+    "用法：xiu report [markdown|json|html] [summary|details] [run:<序号|运行 ID 前缀>] [工作区内路径] [--yes]，或 xiu report runs 列出最近运行\n省略路径时报告写到标准输出；已存在的文件只有加 --yes 才覆盖。",
+    "Usage: xiu report [markdown|json|html] [summary|details] [run:<number|run-id prefix>] [path inside the workspace] [--yes], or xiu report runs to list recent runs\nWithout a path the report goes to stdout; an existing file is overwritten only with --yes.");
 }
+
+const RUN_SELECTOR = /^run:(.+)$/i;
 
 /**
  * `xiu report …`: exports the latest task's execution report without entering the interactive
@@ -117,13 +160,19 @@ export async function runReportCommand(args: readonly string[], options: ReportC
   let format: ExecutionReportFormat = "markdown";
   let scope: ExecutionReportScope = "summary";
   let requestedPath: string | undefined;
+  let selector: string | undefined;
+  let listRuns = false;
   for (const argument of args) {
     const word = argument.toLowerCase();
-    if (REPORT_FORMATS[word]) format = REPORT_FORMATS[word];
+    const selection = RUN_SELECTOR.exec(argument);
+    if (word === "runs") listRuns = true;
+    else if (selection && selector === undefined) selector = selection[1];
+    else if (REPORT_FORMATS[word]) format = REPORT_FORMATS[word];
     else if (REPORT_SCOPES[word]) scope = REPORT_SCOPES[word];
     else if (!argument.startsWith("-") && requestedPath === undefined) requestedPath = argument;
     else { stderr(reportUsage(language)); return 1; }
   }
+  if (listRuns && (selector !== undefined || requestedPath !== undefined)) { stderr(reportUsage(language)); return 1; }
   const trusted = await (options.isTrusted ?? isWorkspaceTrusted)(cwd);
   if (!trusted) {
     stderr(localize(language,
@@ -135,7 +184,13 @@ export async function runReportCommand(args: readonly string[], options: ReportC
     const sources: ExecutionReportSources = options.sources
       ? { cwd, ...options.sources }
       : { cwd, taskRunJournal: new TaskRunJournal(cwd), securityAudit: new SecurityAuditLog(undefined, cwd) };
-    const inputs = await collectLatestExecutionReportInputs(sources);
+    if (listRuns) {
+      const runs = await listReportableRuns(sources.taskRunJournal);
+      if (!runs.length) { stderr(noReportableRun(language)); return 1; }
+      stdout(formatRunList(runs, language));
+      return 0;
+    }
+    const inputs = await collectExecutionReportInputs(sources, selector, language);
     if (!inputs) { stderr(noReportableRun(language)); return 1; }
     const content = serializeExecutionReport(buildExecutionReport({ ...inputs, scope }), format, language);
     if (requestedPath === undefined) { stdout(content); return 0; }
@@ -163,23 +218,28 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
   }
   if (task === "/report" || task.startsWith("/report ")) {
     try {
-      const inputs = await collectLatestExecutionReportInputs({ cwd: config.cwd, taskRunJournal, securityAudit });
+      if (/^\/report\s+runs$/i.test(task)) {
+        console.log(`${formatRunList(await listReportableRuns(taskRunJournal), language)}\n`);
+        return true;
+      }
+      const preview = task.match(/^\/report(?:\s+run:(\S+))?$/i);
+      const match = preview ? undefined : task.match(/^\/report\s+export\s+(markdown|json|html)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(summary|details)(?:\s+run:(\S+))?$/i);
+      if (!preview && !match) {
+        console.log(chalk.yellow(localize(language,
+          "用法：/report [run:<序号|运行 ID 前缀>]、/report runs 或 /report export <markdown|json|html> <工作区内路径> <summary|details> [run:<序号|运行 ID 前缀>]\n",
+          "Usage: /report [run:<number|run-id prefix>], /report runs, or /report export <markdown|json|html> <workspace path> <summary|details> [run:<number|run-id prefix>]\n")));
+        return true;
+      }
+      const inputs = await collectExecutionReportInputs({ cwd: config.cwd, taskRunJournal, securityAudit }, preview ? preview[1] : match![6], language);
       if (!inputs) throw new Error(noReportableRun(language));
-      if (task === "/report") {
+      if (preview) {
         const report = buildExecutionReport({ ...inputs, scope: "summary" });
         console.log(`${renderTerminalMarkdown(formatExecutionReport(report, language))}\n`);
         return true;
       }
-      const match = task.match(/^\/report\s+export\s+(markdown|json|html)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+(summary|details)$/i);
-      if (!match) {
-        console.log(chalk.yellow(localize(language,
-          "用法：/report 或 /report export <markdown|json|html> <工作区内路径> <summary|details>\n",
-          "Usage: /report or /report export <markdown|json|html> <workspace path> <summary|details>\n")));
-        return true;
-      }
-      const format = match[1]!.toLowerCase() as ExecutionReportFormat;
-      const requestedPath = match[2] ?? match[3] ?? match[4]!;
-      const scope = match[5]!.toLowerCase() as ExecutionReportScope;
+      const format = match![1]!.toLowerCase() as ExecutionReportFormat;
+      const requestedPath = match![2] ?? match![3] ?? match![4]!;
+      const scope = match![5]!.toLowerCase() as ExecutionReportScope;
       const target = path.resolve(config.cwd, requestedPath);
       const exists = await fs.lstat(target).catch(() => undefined);
       if (exists) {

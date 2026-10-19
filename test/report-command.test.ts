@@ -9,25 +9,25 @@ import { TASK_RUN_SCHEMA_VERSION, TaskRunJournal, type TaskRunRecord } from "../
 
 interface Fixture { cwd: string; journal: TaskRunJournal; audit: SecurityAuditLog; out: string[]; err: string[] }
 
-async function fixture(withRun = true): Promise<Fixture> {
+async function fixture(withRun = true, runs = 1): Promise<Fixture> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-report-command-"));
   const cwd = path.join(root, "workspace");
   await fs.mkdir(cwd, { recursive: true });
   const journal = new TaskRunJournal(cwd, path.join(root, "task-runs"));
   const audit = new SecurityAuditLog(path.join(root, "security-audit.jsonl"), cwd);
-  if (withRun) {
+  for (let index = 1; withRun && index <= runs; index++) {
     const record: TaskRunRecord = {
       version: TASK_RUN_SCHEMA_VERSION,
-      runId: "run-1",
+      runId: `${["3f2a9c1e", "3f2a0000", "7b00c0de"][index - 1] ?? `run-${index}`}-0000-4000-8000-00000000000${index}`,
       workspaceId: journal.workspaceId,
       sessionId: "session-1",
-      taskPreview: "update the README api_key=sk-report-secret-1234567890",
+      taskPreview: index === 1 ? "update the README api_key=sk-report-secret-1234567890" : `older task ${index}`,
       providerId: "provider",
       model: "model",
       status: "completed",
-      startedAt: "2026-10-19T01:00:00.000Z",
-      updatedAt: "2026-10-19T01:00:10.000Z",
-      finishedAt: "2026-10-19T01:00:10.000Z",
+      startedAt: `2026-10-${String(20 - index).padStart(2, "0")}T01:00:00.000Z`,
+      updatedAt: `2026-10-${String(20 - index).padStart(2, "0")}T01:00:10.000Z`,
+      finishedAt: `2026-10-${String(20 - index).padStart(2, "0")}T01:00:10.000Z`,
       ownerPid: 1,
       ownerInstance: "instance",
       operations: [
@@ -38,7 +38,7 @@ async function fixture(withRun = true): Promise<Fixture> {
       events: [],
     };
     await fs.mkdir(path.join(root, "task-runs", journal.workspaceId), { recursive: true });
-    await fs.writeFile(path.join(root, "task-runs", journal.workspaceId, "run-1.json"), JSON.stringify(record));
+    await fs.writeFile(path.join(root, "task-runs", journal.workspaceId, `${record.runId}.json`), JSON.stringify(record));
   }
   return { cwd, journal, audit, out: [], err: [] };
 }
@@ -98,4 +98,37 @@ test("xiu report refuses bad usage, untrusted workspaces and workspaces without 
   assert.equal(await run(empty, []), 1);
   assert.match(empty.err.at(-1)!, /no task run to report yet/);
   assert.equal(empty.out.length, 0);
+});
+
+test("xiu report runs lists recent runs and run:<selector> picks one by index or id prefix", async () => {
+  const f = await fixture(true, 3);
+  assert.equal(await run(f, ["runs"]), 0);
+  const listing = f.out.at(-1)!;
+  const rows = listing.split("\n");
+  assert.match(rows[1]!, /^1\s+3f2a9c1e\s+2026-10-19T01:00:00\s+completed\s+update the README/);
+  assert.match(rows[2]!, /^2\s+3f2a0000\s+2026-10-18T01:00:00\s+completed\s+older task 2/);
+  assert.match(rows[3]!, /^3\s+7b00c0de\s+2026-10-17/);
+  assert.ok(!listing.includes("sk-report-secret"), "the listing shows the stored preview, which is already redacted at write time");
+
+  f.out.length = 0;
+  assert.equal(await run(f, ["run:2"]), 0);
+  assert.match(f.out[0]!, /older task 2/);
+  assert.doesNotMatch(f.out[0]!, /update the README/);
+
+  f.out.length = 0;
+  assert.equal(await run(f, ["RUN:7b00", "json"]), 0);
+  assert.match(f.out[0]!, /older task 3/);
+
+  assert.equal(await run(f, ["run:3f2a"]), 1);
+  assert.match(f.err.at(-1)!, /matches 2 runs/);
+  assert.equal(await run(f, ["run:9"]), 1);
+  assert.match(f.err.at(-1)!, /no run #9; 3 recent/);
+  assert.equal(await run(f, ["run:3f2"]), 1);
+  assert.match(f.err.at(-1)!, /at least 4 characters/);
+  assert.equal(await run(f, ["runs", "run:1"]), 1);
+  assert.match(f.err.at(-1)!, /Usage: xiu report/);
+
+  const empty = await fixture(false);
+  assert.equal(await run(empty, ["runs"]), 1);
+  assert.match(empty.err.at(-1)!, /no task run to report yet/);
 });

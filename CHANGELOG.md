@@ -2,6 +2,7 @@
 
 ## Unreleased (0.20.13)
 
+- CLI: `/report runs` and `xiu report runs` list the 50 most recent task runs of the workspace; `run:<number>` or `run:<run-id prefix>` on `/report`, `/report export …` and `xiu report` reports that run instead of the latest one.
 - CLI: `--trust-workspace` treats the workspace as trusted for this process only, replacing the interactive trust prompt for scripts and CI on a checkout the user controls. Nothing is written to `~/.xiu/trusted-workspaces.json`, only the command line can set it, and approvals, `--yes` scope and Plan read-only are unchanged. The getting-started guide gains a read-only GitHub Actions review example.
 - CLI: `xiu report [markdown|json|html] [summary|details] [path]` exports the latest task's execution report without entering the interactive loop: same data and formats as `/report export`, stdout when no path is given, human-readable notices on stderr, existing files overwritten only with `--yes`, trusted workspaces only, exit code 0/1. The report collection is shared with `/report`.
 - Desktop: tasks now reuse plugins approved in the CLI (`/plugin approve`): provider, MCP tool and Skill contributions of approved plugins are loaded into the trusted workspace host through the same registries the CLI uses. The desktop adds no approval entry of its own; unapproved plugins stay inactive and plugin MCP servers still require their permission manifest to be confirmed in Extensions.
