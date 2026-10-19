@@ -2,8 +2,9 @@ import process from "node:process";
 
 /**
  * The reader of stdout or stderr went away: `xiu report | head -1`, `xiu --json <task> | jq -c ... | head -1`, a
- * consumer that exited. Node answers the next write with an `error` event, and with nobody listening the process
- * dies with "Unhandled 'error' event: write EPIPE" and a stack trace, in the middle of whatever it was doing.
+ * consumer that exited, or the terminal window was closed (a write to the orphaned pty fails with EIO). Node answers
+ * the next write with an `error` event, and with nobody listening the process dies with "Unhandled 'error' event:
+ * write EPIPE" (or EIO) and a stack trace, in the middle of whatever it was doing.
  *
  * `installBrokenPipeHandling()` listens on both streams. The first broken pipe calls the handler set with
  * `setBrokenPipeHandler()`: when it returns false (nothing is running) the process exits with its current exit
@@ -33,7 +34,9 @@ export function outputPipeBroken(): boolean {
 export function installBrokenPipeHandling(streams: BrokenPipeStreams = { stdout: process.stdout, stderr: process.stderr, exit: (code) => process.exit(code) }): void {
   const onError = (error: NodeJS.ErrnoException): void => {
     // Only a lost reader is handled here; any other stream error stays as fatal as it was.
-    if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
+    // EPIPE: the reader of a pipe went away. EIO: the terminal went away (the pty's master side closed); on POSIX that
+    // arrives together with SIGHUP. ERR_STREAM_DESTROYED: a later write to a stream Node already gave up on.
+    if (error.code !== "EPIPE" && error.code !== "EIO" && error.code !== "ERR_STREAM_DESTROYED") throw error;
     if (broken) return;
     broken = true;
     if (!handler()) streams.exit(typeof process.exitCode === "number" ? process.exitCode : 0);

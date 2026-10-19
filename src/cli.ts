@@ -1556,6 +1556,9 @@ async function main(): Promise<void> {
     setBrokenPipeHandler(() => {
       // The reader of stdout or stderr is gone (`xiu --json <task> | head -1`): stop the current work as Ctrl+C would, so the
       // run records its end instead of dying mid-write, and leave once it has stopped. Idle, there is nothing to end: exit now.
+      // When a shutdown is already under way (SIGHUP from a closed terminal arrives together with EIO on its pty), the work
+      // is already stopping and will end the process itself; exiting here would leave its record open.
+      if (shutdownRequested) return true;
       shutdownRequested = true;
       const stopping = cancelActiveWork();
       if (stopping) console.error(chalk.yellow(localize(language, "输出管道已关闭，正在停止当前工作后退出。", "The output pipe was closed; stopping the current work, then exiting.")));
@@ -1597,8 +1600,17 @@ async function main(): Promise<void> {
       try {
         await runWithTaskBaseline(initialTask, () => { taskStarted = true; });
       } catch (error) {
-        if (!jsonStream) throw error;
-        process.exitCode = jsonStream.result({ outcome: taskStarted ? agent.status().outcome : "not_started", error: redactTerminalOutput(error instanceof Error ? error.message : String(error)), durationMs: Date.now() - taskStartedAt });
+        const message = redactTerminalOutput(error instanceof Error ? error.message : String(error));
+        if (!jsonStream) {
+          // Before the task started this is a startup problem and main() explains it. Once it started (and was then
+          // cancelled, interrupted or stopped by a signal), the run already has a record and an outcome: say that the task
+          // stopped and exit with the one-shot code for the outcome, the same way --json does, instead of "could not start".
+          if (!taskStarted) throw error;
+          console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${message}\n`));
+          process.exitCode = oneShotExitCode(agent.status().outcome);
+          return;
+        }
+        process.exitCode = jsonStream.result({ outcome: taskStarted ? agent.status().outcome : "not_started", error: message, durationMs: Date.now() - taskStartedAt });
         return;
       } finally {
         if (taskStarted) await agent.recordReplayTurn({
