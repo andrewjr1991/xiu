@@ -339,6 +339,18 @@ v0.8.2 新增只读工具 `verify_output`，专门验收没有项目测试套件
 xiu '检查项目架构并列出最重要的三个问题'
 ```
 
+脚本或 CI 里调用时加 `--json`：标准输出只写 JSON Lines（每行一个对象），标准错误才是给人看的文字，两者可以分别重定向。第一行是 `session.started`（版本、渠道、模型、工作区、语言），随后是任务的每个运行时事件（`task.started`、`model.started`、`tool.started`、`tool.finished`、`approval.requested`、`approval.decided`、`assistant.message`、`workspace.changed`、`task.finished` 等，字段与桌面端共用同一套 `schemaVersion: 1` 协议，已经做过脱敏），最后一行固定是 `result`：
+
+```powershell
+xiu --json --yes '把 README 里的拼写错误改掉' > events.jsonl 2> progress.log
+```
+
+```json
+{"schemaVersion":1,"type":"result","timestamp":"2026-10-19T05:06:01.681Z","payload":{"outcome":"completed","success":true,"exitCode":0,"stats":{"modelCalls":3,"toolCalls":4,"inputTokens":5120,"outputTokens":640,"estimatedTokens":6200},"durationMs":18422}}
+```
+
+`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
+
 ### 8.7 Windows 复杂命令与参数
 
 v0.9.0 起，Xiu 会优先使用参数化进程工具运行 Node、Python、Git、npm、测试器和项目脚本。程序名与参数数组分开传给操作系统，不再把整段内容拼成 PowerShell 字符串。因此路径空格、单双引号、`$`、`;`、`&`、`|`、JSON、正则表达式和中文不会被 PowerShell 再次解释。
