@@ -13,6 +13,8 @@ export function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/history sessions", "列出本项目会话", "List sessions in this project"),
     item("/compact", "压缩对话上下文", "Compress conversation context"),
     item("/plan", "查看计划或切换只读规划模式", "Show plan or toggle read-only plan mode"),
+    item("/plan on", "开启只读 Plan 模式", "Turn on read-only Plan mode"),
+    item("/plan off", "关闭 Plan 模式", "Turn off Plan mode"),
     item("/tasks", "查看当前任务计划", "Show the live task plan"),
     item("/diff", "查看最近任务开始以来的变化（来源可能未知）", "Show changes since the latest task started (attribution may be unknown)"),
     item("/diff workspace", "查看工作区全部变化，含新文件", "Show all workspace changes, including new files"),
@@ -130,55 +132,101 @@ export function knownSlashCommandWords(): Set<string> {
   return words;
 }
 
-export interface UnknownSlashCommand {
-  /** The first word of the input, for example `/skils`. */
-  word: string;
-  /** Listed commands the word most resembles, closest first, at most three. */
-  suggestions: string[];
-}
+/** What `/quit` and `/model` stand for when their usage is listed. */
+const ALIAS_TARGETS: Readonly<Record<string, string>> = { "/quit": "/exit", "/model": "/models" };
 
-export interface UnknownSlashCommandOptions {
+export type SlashInputProblem =
+  /** A lone slash word no command owns, for example `/skils`. */
+  | { kind: "unknown-command"; word: string; suggestions: string[] }
+  /** A known command word whose handler declined the rest, for example `/mcp lsit` or `/plan onn`. */
+  | { kind: "unknown-usage"; word: string; input: string; usage: string[]; suggestions: string[] }
+  /** A known command the steer> prompt does not accept while a task runs, for example `/mcp` mid-task. */
+  | { kind: "unavailable-while-running"; word: string; available: string[] };
+
+export interface SlashInputOptions {
   /** Replaces the filesystem probe in tests. */
   pathExists?: (word: string) => boolean;
+  /** Set while a task runs: the command words the steer> prompt accepts. Any other known word is unavailable until the task ends. */
+  runningCommandWords?: ReadonlySet<string>;
 }
 
 const COMMAND_WORD = /^\/[A-Za-z][A-Za-z0-9_-]*$/;
 
 /**
- * Decides whether an interactive input that starts with a slash is a mistyped command rather than task text.
- * Only a lone word such as `/skils` qualifies: `/etc/hosts`, `/a.b` and `/` are left to the model, and so is a word
+ * Explains an interactive input that starts with a slash and that no handler consumed, so the loop can answer it
+ * instead of sending it to the model as a task (or as steering while a task runs).
+ * Only a lone word qualifies as a command word: `/etc/hosts`, `/a.b` and `/` are left to the model, and so is a word
  * that names an existing path (`/tmp 下有什么`), because a path is the one ordinary reason a task starts with a slash.
- * Returns undefined when the input is not a slash word, or when it is a command the loop accepts.
+ * Returns undefined when the input is not a slash word, or when it is such a path.
  */
-export function detectUnknownSlashCommand(input: string, options: UnknownSlashCommandOptions = {}): UnknownSlashCommand | undefined {
-  const word = input.trim().split(/\s+/)[0] ?? "";
+export function explainUnhandledSlashInput(input: string, options: SlashInputOptions = {}): SlashInputProblem | undefined {
+  const trimmed = input.trim().replace(/\s+/g, " ");
+  const word = trimmed.split(" ")[0] ?? "";
   if (!COMMAND_WORD.test(word)) return undefined;
   const known = knownSlashCommandWords();
-  if (known.has(word)) return undefined;
+  if (known.has(word)) {
+    if (options.runningCommandWords && !options.runningCommandWords.has(word)) {
+      return { kind: "unavailable-while-running", word, available: [...options.runningCommandWords].filter((candidate) => !SLASH_COMMAND_ALIASES.includes(candidate)) };
+    }
+    const owner = ALIAS_TARGETS[word] ?? word;
+    const usage = slashCommands("en-US").map((command) => command.name).filter((name) => name === owner || name.startsWith(`${owner} `));
+    const rest = trimmed.toLowerCase().split(" ").slice(1);
+    // Compare the typed words with each usage's own words (`proxy sett` with `proxy set`); a usage shorter than what
+    // was typed still counts, after the ones of the same length.
+    const suggestions = rest.length
+      ? closest(usage.filter((name) => name.includes(" ")).map((name) => {
+        const tail = name.split(" ").slice(1);
+        const score = similarity(rest.slice(0, tail.length).join(" "), tail.join(" "));
+        return { name, score: score === undefined ? undefined : score + (tail.length < rest.length ? 1.5 : 0) };
+      }))
+      : [];
+    return { kind: "unknown-usage", word, input: trimmed.length > 60 ? `${trimmed.slice(0, 57)}...` : trimmed, usage, suggestions };
+  }
   const pathExists = options.pathExists ?? ((candidate: string) => { try { return fs.existsSync(candidate); } catch { return false; } });
   if (pathExists(word)) return undefined;
-  const lower = word.toLowerCase();
   const listed = [...known].filter((candidate) => !SLASH_COMMAND_ALIASES.includes(candidate)).sort();
-  const budget = lower.length - 1 >= 4 ? 2 : 1;
-  const ranked = listed
-    .map((candidate) => ({ candidate, distance: candidate.startsWith(lower) || lower.startsWith(candidate) ? 0 : editDistance(lower, candidate) }))
-    .filter(({ distance }) => distance <= budget)
-    .sort((a, b) => a.distance - b.distance || a.candidate.localeCompare(b.candidate));
-  return { word, suggestions: ranked.slice(0, 3).map(({ candidate }) => candidate) };
+  const lower = word.toLowerCase();
+  return { kind: "unknown-command", word, suggestions: closest(listed.map((name) => ({ name, score: similarity(lower, name) }))) };
 }
 
-/** One localized paragraph for the prompt: what was typed, the closest commands, and that nothing reached the model. */
-export function formatUnknownSlashCommand(unknown: UnknownSlashCommand, language: UiLanguage): string {
-  const options = unknown.suggestions.join(language === "zh-CN" ? "、" : ", ");
-  const guess = unknown.suggestions.length
-    ? localize(language, `你是想输入 ${options} 吗？`, `Did you mean ${options}?`)
-    : "";
-  return [
-    localize(language, `未知命令 ${unknown.word}。`, `Unknown command ${unknown.word}.`),
-    guess,
-    localize(language, "输入 /help 查看全部命令。", "Type /help for the full list."),
-    localize(language, "这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。", "This line was not sent to the model; if it is task text, do not start it with a slash."),
-  ].filter(Boolean).join(language === "zh-CN" ? "" : " ");
+/** 0 for a shared prefix, else the edit distance when within one edit (two from four letters on); undefined beyond that. */
+function similarity(typed: string, candidate: string): number | undefined {
+  const letters = typed.replace(/^\//, "").replace(/\s/g, "").length;
+  const budget = letters >= 4 ? 2 : 1;
+  const distance = candidate.startsWith(typed) || typed.startsWith(candidate) ? 0 : editDistance(typed, candidate);
+  return distance <= budget ? distance : undefined;
+}
+
+/** The three best-scoring names, best first, ties alphabetical. */
+function closest(scored: Array<{ name: string; score: number | undefined }>): string[] {
+  return scored
+    .filter((item): item is { name: string; score: number } => item.score !== undefined)
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+    .slice(0, 3)
+    .map(({ name }) => name);
+}
+
+/** One localized paragraph for the prompt: what was typed, the closest commands or usages, and that nothing reached the model. */
+export function formatSlashInputProblem(problem: SlashInputProblem, language: UiLanguage): string {
+  const zh = language === "zh-CN";
+  const list = (items: string[]) => items.join(zh ? "、" : ", ");
+  const guess = (suggestions: string[]) => suggestions.length ? localize(language, `你是想输入 ${list(suggestions)} 吗？`, `Did you mean ${list(suggestions)}?`) : "";
+  const notSent = localize(language, "这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。", "This line was not sent to the model; if it is task text, do not start it with a slash.");
+  const sentences = problem.kind === "unknown-command"
+    ? [localize(language, `未知命令 ${problem.word}。`, `Unknown command ${problem.word}.`), guess(problem.suggestions), localize(language, "输入 /help 查看全部命令。", "Type /help for the full list."), notSent]
+    : problem.kind === "unknown-usage"
+      ? [
+        localize(language, `${problem.word} 没有「${problem.input}」这种用法。`, `${problem.word} has no usage "${problem.input}".`),
+        guess(problem.suggestions),
+        localize(language, `可用：${list(problem.usage)}（/help 有说明）。`, `Available: ${list(problem.usage)} (see /help).`),
+        notSent,
+      ]
+      : [
+        localize(language, `${problem.word} 在任务运行时不可用，等任务结束后再用。`, `${problem.word} is not available while a task runs; use it after the task ends.`),
+        localize(language, `运行中可用：${list(problem.available)}。`, `Available now: ${list(problem.available)}.`),
+        localize(language, "这一行没有发送给模型，也没有作为补充。", "This line was not sent to the model or added as steering."),
+      ];
+  return sentences.filter(Boolean).join(zh ? "" : " ");
 }
 
 /** Optimal string alignment distance: insertions, deletions, substitutions and adjacent transpositions each cost one. */

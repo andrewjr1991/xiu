@@ -3,42 +3,80 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { detectUnknownSlashCommand, formatUnknownSlashCommand, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
+import { RUNNING_TASK_COMMAND_WORDS } from "../src/commands/running-task-commands.js";
+import { explainUnhandledSlashInput, formatSlashInputProblem, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const noPath = { pathExists: () => false };
+const running = { ...noPath, runningCommandWords: RUNNING_TASK_COMMAND_WORDS };
+const suggestionsOf = (input: string, options = noPath) => {
+  const problem = explainUnhandledSlashInput(input, options);
+  assert.ok(problem && problem.kind !== "unavailable-while-running", input);
+  return problem.suggestions;
+};
 
 test("a lone mistyped slash word is an unknown command with the closest listed commands first", () => {
-  assert.deepEqual(detectUnknownSlashCommand("/skils", noPath), { word: "/skils", suggestions: ["/skills"] });
-  assert.deepEqual(detectUnknownSlashCommand("/hepl", noPath)?.suggestions, ["/help"]);
-  assert.deepEqual(detectUnknownSlashCommand("/Help", noPath)?.suggestions, ["/help"]);
-  assert.deepEqual(detectUnknownSlashCommand("/cancle", noPath)?.suggestions, ["/cancel"]);
-  assert.deepEqual(detectUnknownSlashCommand("  /porvider add  ", noPath)?.suggestions, ["/provider", "/providers"]);
-  assert.deepEqual(detectUnknownSlashCommand("/clearqueue", noPath)?.suggestions, ["/clear", "/clear-queue"]);
-  assert.deepEqual(detectUnknownSlashCommand("/zzzz", noPath), { word: "/zzzz", suggestions: [] });
+  assert.deepEqual(explainUnhandledSlashInput("/skils", noPath), { kind: "unknown-command", word: "/skils", suggestions: ["/skills"] });
+  assert.deepEqual(suggestionsOf("/hepl"), ["/help"]);
+  assert.deepEqual(suggestionsOf("/Help"), ["/help"]);
+  assert.deepEqual(suggestionsOf("/cancle"), ["/cancel"]);
+  assert.deepEqual(suggestionsOf("  /porvider add  "), ["/provider", "/providers"]);
+  assert.deepEqual(suggestionsOf("/clearqueue"), ["/clear", "/clear-queue"]);
+  assert.deepEqual(explainUnhandledSlashInput("/zzzz", noPath), { kind: "unknown-command", word: "/zzzz", suggestions: [] });
   // Aliases are accepted but never suggested: the listed command is.
-  assert.deepEqual(detectUnknownSlashCommand("/exti", noPath)?.suggestions, ["/exit"]);
-  assert.ok(detectUnknownSlashCommand("/quti", noPath)!.suggestions.every((suggestion) => !SLASH_COMMAND_ALIASES.includes(suggestion)));
+  assert.deepEqual(suggestionsOf("/exti"), ["/exit"]);
+  assert.ok(suggestionsOf("/quti").every((suggestion) => !SLASH_COMMAND_ALIASES.includes(suggestion)));
 });
 
-test("accepted commands, task text and paths are not unknown commands", () => {
-  for (const input of ["/skills", "/mcp lsit", "/provider fallback add", "/quit", "/model gpt", "fix the failing test", "", "/", "/etc/hosts explain", "/a.b", "/1abc", "x /help"]) {
-    assert.equal(detectUnknownSlashCommand(input, noPath), undefined, JSON.stringify(input));
+test("a known command word whose handler declined the rest is an unknown usage with that command's usages", () => {
+  const typo = explainUnhandledSlashInput("/mcp  premissions ", noPath);
+  assert.equal(typo?.kind, "unknown-usage");
+  assert.equal(typo?.kind === "unknown-usage" && typo.input, "/mcp premissions");
+  assert.deepEqual(suggestionsOf("/mcp premissions"), ["/mcp permissions"]);
+  assert.ok(typo?.kind === "unknown-usage" && typo.usage.includes("/mcp") && typo.usage.includes("/mcp reload") && !typo.usage.includes("/plugins"));
+  assert.deepEqual(explainUnhandledSlashInput("/plan onn", noPath), { kind: "unknown-usage", word: "/plan", input: "/plan onn", usage: ["/plan", "/plan on", "/plan off"], suggestions: ["/plan on"] });
+  assert.deepEqual(suggestionsOf("/web proxy sett"), ["/web proxy set", "/web proxy"]);
+  assert.deepEqual(suggestionsOf("/provider fallbck add"), ["/provider fallback add", "/provider fallback"]);
+  assert.deepEqual(suggestionsOf("/history bogus"), []);
+  // An alias lists what it stands for.
+  assert.deepEqual(explainUnhandledSlashInput("/quit now", noPath), { kind: "unknown-usage", word: "/quit", input: "/quit now", usage: ["/exit"], suggestions: [] });
+  // Long task text after a command word is shortened in the message, not in what is sent anywhere (nothing is).
+  const long = explainUnhandledSlashInput(`/mcp ${"x".repeat(80)}`, noPath);
+  assert.ok(long?.kind === "unknown-usage" && long.input.length === 60 && long.input.endsWith("..."));
+});
+
+test("while a task runs, a listed command the steer> prompt does not accept is unavailable rather than steering", () => {
+  const problem = explainUnhandledSlashInput("/mcp", running);
+  assert.equal(problem?.kind, "unavailable-while-running");
+  assert.ok(problem?.kind === "unavailable-while-running" && problem.available.includes("/cancel") && problem.available.includes("/queue") && !problem.available.includes("/quit"));
+  assert.equal(explainUnhandledSlashInput("/plan on", running)?.kind, "unavailable-while-running");
+  // Words the prompt does accept keep their usage explanation; unknown words stay unknown commands.
+  assert.equal(explainUnhandledSlashInput("/credentials bogus", running)?.kind, "unknown-usage");
+  assert.equal(explainUnhandledSlashInput("/skils", running)?.kind, "unknown-command");
+  assert.equal(explainUnhandledSlashInput("fix the failing test", running), undefined);
+});
+
+test("task text and paths are not slash-command problems", () => {
+  for (const input of ["fix the failing test", "", "/", "/etc/hosts explain", "/a.b", "/1abc", "x /help"]) {
+    assert.equal(explainUnhandledSlashInput(input, noPath), undefined, JSON.stringify(input));
   }
   // A slash word that names an existing path is a task about that path, not a typo.
-  assert.equal(detectUnknownSlashCommand("/tmp what is in here", { pathExists: (word) => word === "/tmp" }), undefined);
-  assert.ok(detectUnknownSlashCommand("/tmp what is in here", noPath));
+  assert.equal(explainUnhandledSlashInput("/tmp what is in here", { pathExists: (word) => word === "/tmp" }), undefined);
+  assert.ok(explainUnhandledSlashInput("/tmp what is in here", noPath));
   // The real probe is used when none is given, and it never throws on odd input.
-  assert.ok(detectUnknownSlashCommand("/surely-not-a-path-xyz"));
+  assert.ok(explainUnhandledSlashInput("/surely-not-a-path-xyz"));
 });
 
-test("the unknown-command message names the word, the guesses and that nothing reached the model", () => {
-  const typo = detectUnknownSlashCommand("/skils", noPath)!;
-  assert.equal(formatUnknownSlashCommand(typo, "zh-CN"), "未知命令 /skils。你是想输入 /skills 吗？输入 /help 查看全部命令。这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。");
-  assert.equal(formatUnknownSlashCommand(typo, "en-US"), "Unknown command /skils. Did you mean /skills? Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
-  const none = detectUnknownSlashCommand("/zzzz", noPath)!;
-  assert.equal(formatUnknownSlashCommand(none, "en-US"), "Unknown command /zzzz. Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
-  assert.match(formatUnknownSlashCommand(detectUnknownSlashCommand("/clearqueue", noPath)!, "zh-CN"), /你是想输入 \/clear、\/clear-queue 吗？/);
+test("the messages name the word, the guesses or usages, and that nothing reached the model", () => {
+  const typo = explainUnhandledSlashInput("/skils", noPath)!;
+  assert.equal(formatSlashInputProblem(typo, "zh-CN"), "未知命令 /skils。你是想输入 /skills 吗？输入 /help 查看全部命令。这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。");
+  assert.equal(formatSlashInputProblem(typo, "en-US"), "Unknown command /skils. Did you mean /skills? Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
+  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/zzzz", noPath)!, "en-US"), "Unknown command /zzzz. Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
+  assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/clearqueue", noPath)!, "zh-CN"), /你是想输入 \/clear、\/clear-queue 吗？/);
+  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "zh-CN"), "/plan 没有「/plan onn」这种用法。你是想输入 /plan on 吗？可用：/plan、/plan on、/plan off（/help 有说明）。这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。");
+  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "en-US"), "/plan has no usage \"/plan onn\". Did you mean /plan on? Available: /plan, /plan on, /plan off (see /help). This line was not sent to the model; if it is task text, do not start it with a slash.");
+  assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/mcp", running)!, "zh-CN"), /^\/mcp 在任务运行时不可用，等任务结束后再用。运行中可用：\/cancel、\/exit、\/queue、.*\/language。这一行没有发送给模型，也没有作为补充。$/);
+  assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/mcp", running)!, "en-US"), /^\/mcp is not available while a task runs; use it after the task ends\. Available now: \/cancel, \/exit, .*\. This line was not sent to the model or added as steering\.$/);
 });
 
 test("the help list is unique, translated, and every command the loop dispatches on is listed or an alias", async () => {
@@ -61,6 +99,16 @@ test("the help list is unique, translated, and every command the loop dispatches
   assert.ok(dispatched.size >= 35, `only ${dispatched.size} dispatched words found; the scan is broken`);
   const unlisted = [...dispatched].filter((word) => !known.has(word)).sort();
   assert.deepEqual(unlisted, [], "slash commands the loop handles but /help does not list");
+});
+
+test("the steer> prompt's command words are listed commands and cover every word its handler dispatches on", async () => {
+  const known = knownSlashCommandWords();
+  assert.deepEqual([...RUNNING_TASK_COMMAND_WORDS].filter((word) => !known.has(word)), []);
+  for (const word of ["/cancel", "/exit", "/quit"]) assert.ok(RUNNING_TASK_COMMAND_WORDS.has(word), `${word} ends the running-task loop in cli.ts`);
+  const source = await fs.readFile(path.join(root, "src", "commands", "running-task-commands.ts"), "utf8");
+  const dispatched = new Set([...source.matchAll(/(?:===|startsWith\()\s*"(\/[a-z][a-z-]*)/g)].map((match) => match[1]!));
+  assert.ok(dispatched.size >= 10, `only ${dispatched.size} dispatched words found; the scan is broken`);
+  assert.deepEqual([...dispatched].filter((word) => !RUNNING_TASK_COMMAND_WORDS.has(word)), [], "words handled at steer> but missing from RUNNING_TASK_COMMAND_WORDS");
 });
 
 test("every listed command is documented in the Chinese guides", async () => {

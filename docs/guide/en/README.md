@@ -60,7 +60,7 @@ Tools are grouped by risk: reads run automatically; writes and command execution
 | `/language zh-CN\|en-US` | Interface and conversation language |
 | `/clear`, `/help`, `/exit` | New session; command list; quit |
 
-A lone slash word that is not a command (`/skils`, `/hepl`) is not sent to the model: the prompt answers with "Unknown command", the closest commands and `/help`, during a running task too. A task that starts with a path (`/etc/hosts explain`) still goes to the model.
+A lone slash word that is not a command (`/skils`, `/hepl`) is not sent to the model: the prompt answers with "Unknown command", the closest commands and `/help`. A command whose usage is not recognised (`/mcp premissions`, `/plan onn`) gets that command's usages and the closest one. While a task runs, the `steer>` prompt accepts only `/cancel`, `/exit`, `/queue`, `/clear-queue`, `/status`, `/diff`, `/check`, `/diagnostics`, `/details`, `/paste`, `/credentials`, `/web` and `/language`; any other command (`/mcp`) is answered with "not available while a task runs" instead of becoming steering text. A task that starts with a path (`/etc/hosts explain`) still goes to the model.
 
 Sessions are stored under the workspace's `.xiu/` directory; `xiu --resume` or `/resume` continues one. Checkpoints capture files before changes so `/rewind` can restore them.
 

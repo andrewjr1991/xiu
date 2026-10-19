@@ -205,7 +205,7 @@ test("a piped session without --yes denies write approvals instead of prompting 
   await app.close();
 });
 
-test("a mistyped slash command is answered at the prompt and never reaches the model", { timeout: 120_000 }, async (t) => {
+test("a mistyped slash command or usage is answered at the prompt and never reaches the model", { timeout: 120_000 }, async (t) => {
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);
   const app = await launch(processes, cwd, home, []);
@@ -213,6 +213,10 @@ test("a mistyped slash command is answered at the prompt and never reaches the m
   const typo = await app.command("/skils");
   assert.match(typo, /Unknown command \/skils\. Did you mean \/skills\? Type \/help for the full list\./);
   assert.doesNotMatch(typo, /write_file|Model saw:/);
+  const usage = await app.command("/mcp premissions");
+  assert.match(usage, /\/mcp has no usage "\/mcp premissions"\. Did you mean \/mcp permissions\? Available: \/mcp, \/mcp permissions, .*\/mcp reload \(see \/help\)\./);
+  assert.doesNotMatch(usage, /write_file|Model saw:/);
+  assert.match(await app.command("/skills install"), /Usage: \/skills install <local-path-or-https-git-url>/);
   // A slash that starts a path is task text: it goes to the model, whose write is then denied as usual.
   const pathTask = await app.command("/etc/hosts write please");
   assert.match(pathTask, /> write_file write notes\.txt/);
