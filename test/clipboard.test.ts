@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ClipboardAttachmentManager, parsePowerShellClipboardResponse, WindowsClipboardBackend, type ClipboardBackend, type ClipboardPayload } from "../src/clipboard.js";
+import { ClipboardAttachmentManager, parsePowerShellClipboardResponse, UnsupportedClipboardPlatformError, WindowsClipboardBackend, type ClipboardBackend, type ClipboardPayload } from "../src/clipboard.js";
 
 class FakeClipboard implements ClipboardBackend {
   calls = 0;
@@ -80,6 +80,28 @@ test("enterprise clipboard recovery is localized for Chinese UI", async () => {
   const backend = new WindowsClipboardBackend(new FailingClipboard("#< CLIXML"), new FailingClipboard("blocked"));
   const manager = new ClipboardAttachmentManager(cwd, backend, "zh-CN");
   await assert.rejects(manager.paste(), /系统策略禁止程序读取剪贴板/);
+});
+
+class NonWindowsClipboard implements ClipboardBackend {
+  calls = 0;
+  async read(): Promise<ClipboardPayload> { this.calls++; throw new UnsupportedClipboardPlatformError(); }
+}
+
+test("paste on macOS or Linux names the platform limit instead of a policy block", async () => {
+  // The readers shell out to PowerShell and a Windows helper; off Windows the first one gives up
+  // before trying anything, and that used to be reported as "clipboard access is restricted".
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-clipboard-platform-"));
+  const helper = new FailingClipboard("never called");
+  const english = new ClipboardAttachmentManager(cwd, new WindowsClipboardBackend(new NonWindowsClipboard(), helper));
+  await assert.rejects(english.paste(), (error: Error) => {
+    assert.match(error.message, /available on Windows only/);
+    assert.match(error.message, /Cmd\+V on macOS/);
+    assert.doesNotMatch(error.message, /restricted/);
+    assert.equal(helper.calls, 0);
+    return true;
+  });
+  const chinese = new ClipboardAttachmentManager(cwd, new WindowsClipboardBackend(new NonWindowsClipboard(), helper), "zh-CN");
+  await assert.rejects(chinese.paste(), /读取剪贴板目前只支持 Windows/);
 });
 
 test("plain clipboard text remains ordinary editor text", async () => {

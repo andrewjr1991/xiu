@@ -81,11 +81,21 @@ export interface ClipboardBackend {
 }
 
 class ClipboardPolicyError extends Error {
-  constructor(readonly kind: "access" | "image") {
+  constructor(readonly kind: "access" | "image" | "platform") {
     super(kind === "image"
       ? "The clipboard contains a bitmap, but image extraction is blocked."
-      : "Windows clipboard access is restricted.");
+      : kind === "platform"
+        ? "Reading the clipboard is available on Windows only."
+        : "Windows clipboard access is restricted.");
     this.name = "ClipboardPolicyError";
+  }
+}
+
+/** The clipboard readers shell out to Windows tools; on macOS and Linux there is nothing to try. */
+export class UnsupportedClipboardPlatformError extends Error {
+  constructor(message = "Reading the clipboard is available on Windows only") {
+    super(message);
+    this.name = "UnsupportedClipboardPlatformError";
   }
 }
 
@@ -148,7 +158,7 @@ class PowerShellClipboardBackend implements ClipboardBackend {
   }
 
   async read(imageOutputPath: string): Promise<ClipboardPayload> {
-    if (process.platform !== "win32") throw new Error("Windows Get-Clipboard is unavailable on this platform");
+    if (process.platform !== "win32") throw new UnsupportedClipboardPlatformError();
     const responsePath = `${imageOutputPath}.json`;
     try {
       await execFileAsync("powershell.exe", [
@@ -251,7 +261,7 @@ class WindowsHelperClipboardBackend implements ClipboardBackend {
   }
 
   async read(imageOutputPath: string): Promise<ClipboardPayload> {
-    if (process.platform !== "win32") throw new Error("Binary clipboard attachments are currently supported on Windows; paste a file path on this platform");
+    if (process.platform !== "win32") throw new UnsupportedClipboardPlatformError();
     const executable = await this.helper();
     try {
       const result = await execFileAsync(executable, [imageOutputPath], { windowsHide: true, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
@@ -281,8 +291,8 @@ export class WindowsClipboardBackend implements ClipboardBackend {
     try {
       payload = await this.native.read(imageOutputPath);
     } catch (error) {
-      void error;
-      throw new ClipboardPolicyError("access");
+      // Any other failure is reported as a policy block without its detail (CLIXML, policy text).
+      throw new ClipboardPolicyError(error instanceof UnsupportedClipboardPlatformError ? "platform" : "access");
     }
     if (payload.kind === "restricted") {
       throw new ClipboardPolicyError("access");
@@ -323,6 +333,11 @@ export class ClipboardAttachmentManager {
       payload = await this.backend.read(imageOutput);
     } catch (error) {
       if (error instanceof ClipboardPolicyError) {
+        if (error.kind === "platform") {
+          throw new Error(localize(this.language,
+            "读取剪贴板目前只支持 Windows。请使用终端自己的粘贴（macOS 为 Cmd+V，Linux 多为 Ctrl+Shift+V），或用 @路径 引用已保存的文件。",
+            "Reading the clipboard is available on Windows only. Use the terminal's own paste (Cmd+V on macOS, usually Ctrl+Shift+V on Linux) or reference a saved file with @path."));
+        }
         throw new Error(error.kind === "image"
           ? localize(this.language, "剪贴板中是位图，但系统禁止提取图片。请先保存成图片文件，再使用 @路径 引用。", "The clipboard contains a bitmap, but image extraction is blocked. Save it as a file and reference it with @path.")
           : localize(this.language, "系统策略禁止程序读取剪贴板。请使用终端原生右键粘贴文字或文件路径；剪贴板图片请先保存成文件，再使用 @路径 引用。", "Windows clipboard access is restricted. Use native terminal right-click for text or file paths; save clipboard images as files and reference them with @path."));
