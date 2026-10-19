@@ -3,6 +3,7 @@ import { parseAssistantInteraction, continueTaskAfterAnswer } from "../../../src
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
+import { collectExecutionReportInputs, defaultExecutionReportSources } from "../../../src/execution-report-query.js";
 import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
 import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-management.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
@@ -107,12 +108,18 @@ export class DesktopTaskController {
     await host.management?.cancelSkillPreview();
   }
 
+  /** "报告与诊断": the same report query as the CLI's `/report` and `xiu report`, so a run reads the same on both surfaces. */
   async taskDiagnostics(workspace: string) {
     const host = await this.ensure(workspace);
-    const run = await host.journal.latest();
     const clean = (value: string) => (host.sanitize?.(value) ?? redactSecrets(value)).slice(0, 60_000);
-    return { report: clean(run ? formatExecutionReport(buildExecutionReport({ cwd: workspace, run }), "zh-CN") : "尚无任务报告。"),
-      diagnostics: clean(formatTaskDiagnostics(host.agent?.status().diagnostics, "zh-CN")) };
+    let report: string;
+    try {
+      const inputs = await collectExecutionReportInputs(defaultExecutionReportSources(workspace, host.journal), undefined, "zh-CN");
+      report = inputs ? formatExecutionReport(buildExecutionReport(inputs), "zh-CN") : "尚无任务报告。";
+    } catch (error) {
+      report = `生成执行报告失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+    return { report: clean(report), diagnostics: clean(formatTaskDiagnostics(host.agent?.status().diagnostics, "zh-CN")) };
   }
 
   async changeMcp(workspace: string, action: "reload" | "disconnect" | "approve", request?: import("../shared/protocol.js").DesktopMcpApproveRequest) {
