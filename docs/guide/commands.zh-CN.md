@@ -79,6 +79,8 @@
 
 ## 启动参数速查
 
+`xiu --help` 除启动参数外，也列出下面不进入交互模式的命令（`xiu doctor`、`xiu report`、`xiu recover`、`xiu audit`）、一次性任务的退出码，以及“斜杠命令只在交互模式可用”的提示。
+
 | 参数 | 作用 |
 | --- | --- |
 | `-p, --provider <名称>` | `openai`、`anthropic` 或 `agnes` |

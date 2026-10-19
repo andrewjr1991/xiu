@@ -45,7 +45,7 @@ import { listSessionsWithIssues, loadSession, type RestoredSession, type Session
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { explainOneShotSlashInput, explainUnhandledSlashInput, formatOneShotSlashProblem, formatSlashInputProblem, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
-import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
+import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
@@ -133,6 +133,22 @@ const program = new Command()
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .option("--json", "one-shot tasks only: write runtime events and the final result to stdout as JSON Lines, human-readable text to stderr", false)
   .option("--trust-workspace", "treat the workspace as trusted for this process only, without the interactive prompt and without adding it to the trust list (for scripts and CI on a checkout you control)", false)
+  .addHelpText("after", `
+Commands that run without an interactive session (trusted workspaces only, except doctor):
+  xiu doctor [json]                                       read-only diagnostics report; json prints it as one JSON document; exit 1 when it has a failure
+  xiu report [markdown|json|html] [summary|details] [run:<number|id prefix>] [path]
+                                                          export the latest task's execution report (stdout without a path; --yes to overwrite)
+  xiu report runs                                         list recent runs and their ids
+  xiu recover [status]                                    show the interrupted task of this workspace; exit 2 when one exists, 0 otherwise
+  xiu recover abandon <run id or prefix of 4+ characters> abandon that task explicitly without replaying anything
+  xiu audit [approvals|credentials] [json] [limit]        list this workspace's local security-audit records read-only
+
+Exit codes of a one-shot task (xiu "<task>", with or without --json):
+  ${ONE_SHOT_EXIT_CODES.completed} completed · ${ONE_SHOT_EXIT_CODES.unverified} changed but unverified · ${ONE_SHOT_EXIT_CODES.waiting_user} the model asked a question · ${ONE_SHOT_EXIT_CODES.failed} failed, cancelled, paused or not started
+
+Slash commands (/help, /doctor, /report, ...) run only at the interactive prompt: start xiu without a task.
+Guides: https://github.com/andrewjr1991/xiu/blob/main/USAGE.zh-CN.md (中文) · docs/guide/en/README.md (English)
+`)
   .showHelpAfterError()
   .parse();
 
