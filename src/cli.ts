@@ -20,9 +20,10 @@ import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type Capabi
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
+import { ConfigFileError } from "./config-file-error.js";
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
-import { formatUserFacingError } from "./user-facing-errors.js";
+import { explainError, formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
 import { collectDoctorReport, formatDoctorReport } from "./doctor.js";
 import { runDoctorCommand } from "./commands/doctor-command.js";
@@ -290,6 +291,8 @@ async function chooseSession(workspace: string, language: UiLanguage) {
 }
 
 let jsonStream: JsonEventStream | undefined;
+/** The language startup failures are explained in: the settings file's, `--language` or `XIU_LANGUAGE` once they are known. */
+let startupLanguage: UiLanguage = "en-US";
 
 async function main(): Promise<void> {
   const options = program.opts();
@@ -317,6 +320,7 @@ async function main(): Promise<void> {
   // The doctor runs even when the settings file is damaged, so it can name the problem; every other
   // command fails closed on it below, as `SettingsStore.load()` does.
   const inspectedSettings = await settingsStore.inspect();
+  startupLanguage = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? inspectedSettings.settings.language) ?? "en-US";
   if (options.doctor || program.args[0] === "doctor") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? inspectedSettings.settings.language) ?? "en-US";
     process.exitCode = await runDoctorCommand(options.doctor ? (program.args as string[]) : (program.args as string[]).slice(1), {
@@ -333,7 +337,7 @@ async function main(): Promise<void> {
     });
     return;
   }
-  if (inspectedSettings.problem) throw new Error(inspectedSettings.problem);
+  if (inspectedSettings.problem) throw new ConfigFileError("settings", inspectedSettings.file, inspectedSettings.problem);
   const settings = inspectedSettings.settings;
   if (program.args[0] === "report") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
@@ -372,11 +376,7 @@ async function main(): Promise<void> {
   catch { /* OAuth remains usable through the compatibility store until explicitly migrated. */ }
   const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
   const ensureSystemCredentialStore = async () => systemCredentialStore ??= await createWindowsSystemCredentialStore("provider-api-key");
-  try { await providerRegistry.load(); }
-  catch (error) {
-    console.error(formatUserFacingError("Provider configuration could not be loaded", error, "en-US", { diagnostic: "xiu --provider-config-diagnostics" }));
-    throw error;
-  }
+  await providerRegistry.load(); // a ProviderConfigurationError is explained once, by the startup failure handler below
   const pluginRegistry = new PluginRegistry(path.resolve(options.cwd ?? process.cwd()), undefined, packageJson.version);
   await pluginRegistry.refresh(false);
   const globalPluginContributions = await pluginRegistry.loadApprovedContributions();
@@ -570,7 +570,7 @@ async function main(): Promise<void> {
       // established in the background and attached to the agent once ready.
       mcpStartup = startMcp();
     }
-    if (initialTask && mcpConfigError) console.log(chalk.yellow(localize(language, `未加载 MCP 配置：${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`, `MCP configuration was not loaded: ${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`)));
+    if (initialTask && mcpConfigError) console.log(chalk.yellow(`${formatUserFacingError(localize(language, "未加载 MCP 配置", "MCP configuration was not loaded"), mcpConfigError, language)}\n`));
     if (!projectMcpTrusted && initialTask && await fs.stat(path.join(config.cwd, ".xiu", "mcp.json")).then(() => true).catch(() => false)) {
       console.log(chalk.yellow(localize(language, "工作区尚未信任，因此已跳过项目 MCP 配置。请先以交互方式启动 Xiu 并确认信任。\n", "Project MCP configuration was skipped because this workspace has not been trusted. Start interactive Xiu once to review and trust it.\n")));
     }
@@ -1898,9 +1898,7 @@ async function main(): Promise<void> {
       inputHistory.push(task);
       if (task === "/mcp" || task.startsWith("/mcp ")) {
         await ensureMcpReady();
-        if (mcpConfigError) {
-          console.log(chalk.yellow(localize(language, `未加载 MCP 配置：${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`, `MCP configuration was not loaded: ${mcpConfigError instanceof Error ? mcpConfigError.message : String(mcpConfigError)}\n`)));
-        }
+        if (mcpConfigError) console.log(chalk.yellow(`${formatUserFacingError(localize(language, "未加载 MCP 配置", "MCP configuration was not loaded"), mcpConfigError, language)}\n`));
       }
       if (task === "/exit" || task === "/quit") break;
       if (task === "/recover") {
@@ -2273,6 +2271,16 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(chalk.red(`Error: ${message}`));
+  // A failure the catalog explains (a damaged configuration file, a provider configuration problem, a network or
+  // HTTP error) is shown as its cause, the next step and the diagnostic command; anything else keeps its raw message.
+  const explanation = explainError(error, startupLanguage);
+  if (explanation.code === "unknown") console.error(chalk.red(`Error: ${message}`));
+  else {
+    const heading = explanation.code.startsWith("provider-config/")
+      ? localize(startupLanguage, "无法加载渠道配置", "Provider configuration could not be loaded")
+      : localize(startupLanguage, "Xiu 无法启动", "Xiu could not start");
+    console.error(chalk.red(formatUserFacingError(heading, error, startupLanguage, { diagnostic: "xiu doctor" })));
+  }
+  // The `result` line keeps the raw message: scripts match on it, and the explanation above went to stderr.
   process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: message }) : 1;
 });

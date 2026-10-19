@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ConfigFileError } from "../src/config-file-error.js";
 import { probeConfigFiles } from "../src/doctor.js";
 import { PermissionGrantStore } from "../src/extension-permissions.js";
-import { inspectMcpConfig } from "../src/mcp.js";
+import { inspectMcpConfig, McpManager } from "../src/mcp.js";
 import { inspectTrustStore, isWorkspaceTrusted, trustWorkspace } from "../src/trust.js";
 
 async function fixture(t: test.TestContext) {
@@ -32,6 +33,8 @@ test("the trust store, permission store and MCP configs are inspected without th
   assert.equal(trust.state, "unreadable");
   assert.match(trust.cause!, /JSON/);
   await assert.rejects(isWorkspaceTrusted(f.cwd, f.trustStore), /Unable to read Xiu trust store at .*trusted-workspaces\.json/, "trust still fails closed");
+  await assert.rejects(isWorkspaceTrusted(f.cwd, f.trustStore), (error: unknown) => error instanceof ConfigFileError && error.kind === "trust-store" && error.file === f.trustStore && error.code === undefined,
+    "the failure names its file kind so the CLI can explain it");
   await fs.writeFile(f.trustStore, JSON.stringify({ version: 2, workspaces: [] }));
   assert.equal((await inspectTrustStore(f.trustStore)).cause, "invalid trust store structure");
 
@@ -46,6 +49,8 @@ test("the trust store, permission store and MCP configs are inspected without th
   await fs.rm(f.permissionStore);
   await fs.mkdir(f.permissionStore);
   assert.equal((await grants.inspect()).cause, "EISDIR");
+  await assert.rejects(grants.approvedManifest({ kind: "skill", name: "deploy", origin: f.cwd, permissions: ["instructions:load"], declared: true }),
+    (error: unknown) => error instanceof ConfigFileError && error.kind === "extension-permissions" && error.file === f.permissionStore && error.code === "EISDIR");
 
   assert.deepEqual(await inspectMcpConfig(f.mcpUserConfig), { file: f.mcpUserConfig, state: "absent" });
   await fs.writeFile(f.mcpUserConfig, JSON.stringify({ mcpServers: { docs: { command: "npx", args: ["docs-mcp"] }, api: { url: "https://mcp.example/sse" } } }));
@@ -57,6 +62,11 @@ test("the trust store, permission store and MCP configs are inspected without th
   assert.doesNotMatch(mcp.cause!, new RegExp(f.cwd.replace(/[\\/]/g, "[\\\\/]")));
   await fs.writeFile(f.mcpUserConfig, JSON.stringify({ mcpServers: [] }));
   assert.equal((await inspectMcpConfig(f.mcpUserConfig)).cause, "MCP config mcp.json must contain an mcpServers object");
+  await assert.rejects(new McpManager(f.cwd, f.mcpUserConfig).start(false), (error: unknown) => error instanceof ConfigFileError && error.kind === "mcp" && error.file === f.mcpUserConfig
+    && error.message === `MCP config ${f.mcpUserConfig} must contain an mcpServers object`, "the manager still refuses the file, as a ConfigFileError");
+  await fs.writeFile(f.mcpUserConfig, JSON.stringify({ mcpServers: { bad: {} } }));
+  await assert.rejects(new McpManager(f.cwd, f.mcpUserConfig).start(false), (error: unknown) => error instanceof ConfigFileError && error.kind === "mcp"
+    && error.message === "MCP server bad requires exactly one of command or url", "an invalid server entry keeps its message");
 });
 
 test("probeConfigFiles reads the workspace MCP config only for a trusted workspace and says why otherwise", async (t) => {

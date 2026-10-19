@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ConfigFileError } from "./config-file-error.js";
 
 interface TrustStore {
   version: 1;
@@ -49,8 +50,9 @@ async function loadTrustStore(file: string): Promise<TrustStore> {
     }
     return parsed as TrustStore;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, workspaces: [] };
-    throw new Error(`Unable to read Xiu trust store at ${file}: ${(error as Error).message}`);
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { version: 1, workspaces: [] };
+    throw new ConfigFileError("trust-store", file, `Unable to read Xiu trust store at ${file}: ${(error as Error).message}`, { code, cause: error });
   }
 }
 

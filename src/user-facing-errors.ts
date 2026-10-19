@@ -1,3 +1,4 @@
+import { ConfigFileError, type ConfigFileKind } from "./config-file-error.js";
 import type { UiLanguage } from "./i18n.js";
 import { ProviderConfigurationError } from "./provider-config-migration.js";
 import { classifyRetryError } from "./retry-policy.js";
@@ -62,6 +63,22 @@ const PROVIDER_CONFIG: Record<string, Entry> = {
     en: ["Reading or writing the provider configuration failed; existing backups were kept.", "Check that ~/.xiu is writable and not blocked by security software, then run the diagnostic command."] },
 };
 
+/** Xiu's own configuration files; the owners fail closed and `xiu doctor` names every file's state. */
+const CONFIG: Record<ConfigFileKind, Entry> = {
+  settings: { code: "config/settings", diagnostic: "xiu doctor",
+    zh: ["Xiu 的设置文件（~/.xiu/settings.json）无法读取或不是有效的 JSON，Xiu 不会悄悄改用默认值。", "修好它的 JSON，或把这个文件移走后重新启动；它只保存语言与联网搜索设置。"],
+    en: ["Xiu's settings file (~/.xiu/settings.json) cannot be read or is not valid JSON; Xiu does not fall back to the defaults silently.", "Fix its JSON or move the file away, then start Xiu again; it only holds the language and web-search settings."] },
+  "trust-store": { code: "config/trust-store", diagnostic: "xiu doctor",
+    zh: ["信任名单（~/.xiu/trusted-workspaces.json）无法读取，Xiu 无法判断任何工作区是否受信任，所以没有继续。", "修好它的 JSON，或把这个文件移走；移走后每个工作区会重新询问一次是否信任。"],
+    en: ["The trust list (~/.xiu/trusted-workspaces.json) cannot be read, so Xiu cannot tell whether any workspace is trusted and did not continue.", "Fix its JSON or move the file away; afterwards each workspace asks for trust once more."] },
+  "extension-permissions": { code: "config/extension-permissions", diagnostic: "xiu doctor",
+    zh: ["扩展授权记录（~/.xiu/extension-permissions.json）无法读取，插件、Skill 与 MCP 都无法确认是否已获授权。", "修好它的 JSON，或把这个文件移走；移走后已授权的插件、Skill 和 MCP 需要重新授权一次。"],
+    en: ["The extension permission record (~/.xiu/extension-permissions.json) cannot be read, so no plugin, skill or MCP server can be confirmed as approved.", "Fix its JSON or move the file away; afterwards every approved plugin, skill and MCP server needs one new approval."] },
+  mcp: { code: "config/mcp", diagnostic: "xiu doctor",
+    zh: ["MCP 配置文件无法读取，或其中某个服务条目无效，这次没有连接任何 MCP 服务；其他功能照常可用。", "按详情里的说明修正 ~/.xiu/mcp.json 或工作区的 .xiu/mcp.json，然后执行 /mcp reload 或重新启动。"],
+    en: ["An MCP configuration file cannot be read or one of its server entries is invalid, so no MCP server was connected this time; everything else works as usual.", "Fix ~/.xiu/mcp.json or the workspace's .xiu/mcp.json as the detail says, then run /mcp reload or start Xiu again."] },
+};
+
 const GENERAL: Record<string, Entry> = {
   "credential/missing": { code: "credential/missing",
     zh: ["这个渠道还没有可用的 API Key。", "在渠道设置里保存 Key（CLI 为 /provider key），或先设置渠道对应的环境变量。"],
@@ -121,7 +138,7 @@ const GENERAL: Record<string, Entry> = {
 
 /** Every explanation code with its Chinese cause, for the documentation table and its consistency test. */
 export function errorCatalog(): Array<{ code: string; cause: string; nextStep: string; diagnostic?: string }> {
-  return [...Object.values(PROVIDER_CONFIG), ...Object.values(GENERAL)].map((entry) => ({ code: entry.code, cause: entry.zh[0], nextStep: entry.zh[1], diagnostic: entry.diagnostic }));
+  return [...Object.values(PROVIDER_CONFIG), ...Object.values(CONFIG), ...Object.values(GENERAL)].map((entry) => ({ code: entry.code, cause: entry.zh[0], nextStep: entry.zh[1], diagnostic: entry.diagnostic }));
 }
 
 interface ErrorShape { message?: string; code?: unknown; status?: unknown; cause?: unknown }
@@ -138,6 +155,8 @@ function chain(error: unknown): ErrorShape[] {
 function entryFor(error: unknown): Entry | undefined {
   if (error instanceof ProviderConfigurationError) return PROVIDER_CONFIG[error.code] ?? PROVIDER_CONFIG.io;
   const items = chain(error);
+  const configFile = items.find((item): item is ConfigFileError => item instanceof ConfigFileError);
+  if (configFile) return CONFIG[configFile.kind];
   const message = items.map((item) => item.message ?? "").join(" ");
   const codes = items.map((item) => String(item.code ?? "")).join(" ").toUpperCase();
   const status = items.map((item) => Number(item.status)).find((value) => Number.isInteger(value));

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ConfigFileError } from "./config-file-error.js";
 
 export const EXTENSION_PERMISSIONS = [
   "instructions:load",
@@ -93,7 +94,7 @@ export class PermissionGrantStore {
       // Fail closed: nothing is approved while the record cannot be read. The message names the file so the user can fix it;
       // the system error code is kept for callers that classify the failure.
       const code = (error as NodeJS.ErrnoException).code;
-      throw Object.assign(new Error(`Unable to read the extension permission store at ${this.file}: ${error instanceof Error ? error.message : String(error)}`), typeof code === "string" ? { code } : {});
+      throw new ConfigFileError("extension-permissions", this.file, `Unable to read the extension permission store at ${this.file}: ${error instanceof Error ? error.message : String(error)}`, { code, cause: error });
     }
   }
 

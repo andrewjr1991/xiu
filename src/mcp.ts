@@ -15,6 +15,7 @@ import { addedPermissions, parseExtensionPermissions, permissionFingerprint, Per
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { resolveNodeRuntime } from "./node-runtime.js";
+import { ConfigFileError } from "./config-file-error.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
 // Desktop bundles this module into dist/main: inject metadata at build time,
@@ -340,20 +341,31 @@ export async function inspectMcpConfig(file: string): Promise<McpConfigInspectio
   }
 }
 
+/**
+ * Reads one MCP config file. A missing file is an empty config; anything else that stops it from loading (an I/O
+ * error, invalid JSON, an invalid server entry) is a `ConfigFileError` of kind `mcp` with the same message as before,
+ * so the CLI can explain it and point at `xiu doctor`. `/mcp add` validates its own input through `validateServer()`
+ * directly and keeps plain errors.
+ */
 async function readConfig(file: string): Promise<Record<string, McpServerConfig>> {
   let content: string;
   try { content = await fs.readFile(file, "utf8"); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {};
+    throw new ConfigFileError("mcp", file, `Unable to read MCP config ${file}: ${error instanceof Error ? error.message : String(error)}`, { code, cause: error });
   }
   let parsed: McpConfigFile;
   try { parsed = JSON.parse(content) as McpConfigFile; }
-  catch (error) { throw new Error(`Invalid MCP JSON in ${file}: ${(error as Error).message}`); }
+  catch (error) { throw new ConfigFileError("mcp", file, `Invalid MCP JSON in ${file}: ${(error as Error).message}`, { cause: error }); }
   if (!parsed || typeof parsed !== "object" || (parsed.mcpServers !== undefined && (!parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)))) {
-    throw new Error(`MCP config ${file} must contain an mcpServers object`);
+    throw new ConfigFileError("mcp", file, `MCP config ${file} must contain an mcpServers object`);
   }
-  return Object.fromEntries(Object.entries(parsed.mcpServers ?? {}).map(([name, value]) => [name, validateServer(name, value)]));
+  try {
+    return Object.fromEntries(Object.entries(parsed.mcpServers ?? {}).map(([name, value]) => [name, validateServer(name, value)]));
+  } catch (error) {
+    throw new ConfigFileError("mcp", file, error instanceof Error ? error.message : String(error), { cause: error });
+  }
 }
 
 interface McpConnectionLike {

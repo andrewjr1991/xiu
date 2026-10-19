@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { ConfigFileError } from "../src/config-file-error.js";
 import { ProviderConfigurationError } from "../src/provider-config-migration.js";
 import { errorCatalog, explainError, formatUserFacingError, summarizeUserFacingError } from "../src/user-facing-errors.js";
 
@@ -49,6 +50,30 @@ test("HTTP and network failures are classified from status codes and error codes
   assert.equal(explainError(cases[14][0], "en-US").diagnostic, "/background list");
 });
 
+test("a damaged configuration file is explained by its kind, points at xiu doctor and keeps the owner's message as the detail", () => {
+  const cases: Array<[ConfigFileError, string, RegExp, RegExp]> = [
+    [new ConfigFileError("settings", "/home/u/.xiu/settings.json", "Could not read Xiu settings file /home/u/.xiu/settings.json: Unexpected token. Fix its JSON or move the file away; it holds the language and web-search settings."), "config/settings", /设置文件（~\/\.xiu\/settings\.json）/, /^Xiu's settings file \(~\/\.xiu\/settings\.json\) cannot be read/],
+    [new ConfigFileError("trust-store", "/home/u/.xiu/trusted-workspaces.json", "Unable to read Xiu trust store at /home/u/.xiu/trusted-workspaces.json: invalid trust store structure", { code: undefined, cause: new Error("invalid trust store structure") }), "config/trust-store", /信任名单（~\/\.xiu\/trusted-workspaces\.json）无法读取/, /^The trust list .* cannot be read, so Xiu cannot tell whether any workspace is trusted/],
+    [new ConfigFileError("extension-permissions", "/home/u/.xiu/extension-permissions.json", "Unable to read the extension permission store at /home/u/.xiu/extension-permissions.json: EISDIR: illegal operation on a directory, read", { code: "EISDIR" }), "config/extension-permissions", /扩展授权记录.*无法读取，插件、Skill 与 MCP/, /no plugin, skill or MCP server can be confirmed as approved/],
+    [new ConfigFileError("mcp", "/repo/.xiu/mcp.json", "MCP server docs requires exactly one of command or url"), "config/mcp", /MCP 配置文件无法读取，或其中某个服务条目无效/, /^An MCP configuration file cannot be read or one of its server entries is invalid/],
+  ];
+  for (const [error, code, zh, en] of cases) {
+    const explanation = explainError(error, "zh-CN");
+    assert.equal(explanation.code, code);
+    assert.match(explanation.cause, zh);
+    assert.equal(explanation.diagnostic, "xiu doctor");
+    assert.equal(explanation.detail, error.message, "the owner's message, path included, is the detail");
+    assert.match(explainError(error, "en-US").cause, en);
+    assert.equal(explainError(new Error("startup failed", { cause: error }), "en-US").code, code, "a wrapped configuration error is still recognised");
+  }
+  assert.equal(cases[2][0].code, "EISDIR", "the system error code is kept for callers that classify by errno");
+  assert.equal(cases[1][0].code, undefined);
+  const text = formatUserFacingError("Xiu could not start", cases[1][0], "en-US");
+  assert.deepEqual(text.split("\n").map((line) => line.split(": ")[0]), ["Xiu could not start", "Next step", "Diagnose", "Detail"]);
+  assert.match(text, /\nDiagnose: xiu doctor\nDetail: config\/trust-store · Unable to read Xiu trust store at \/home\/u\/\.xiu\/trusted-workspaces\.json: invalid trust store structure$/);
+  assert.match(formatUserFacingError("Xiu 无法启动", cases[0][0], "zh-CN"), /^Xiu 无法启动：Xiu 的设置文件.*\n下一步：修好它的 JSON.*\n诊断：xiu doctor\n详情：config\/settings · Could not read Xiu settings file/);
+});
+
 test("unknown errors keep their redacted message as the cause and never leak secrets", () => {
   const secret = "sk-live-canary-9f8e7d6c";
   const error = new Error(`Something odd happened with key ${secret}`);
@@ -69,7 +94,7 @@ test("unknown errors keep their redacted message as the cause and never leak sec
 test("every explanation code is documented in the usage guide", async () => {
   const usage = await fs.readFile(new URL("../docs/guide/troubleshooting.zh-CN.md", import.meta.url), "utf8");
   const catalog = errorCatalog();
-  assert.ok(catalog.length >= 25);
+  assert.ok(catalog.length >= 29);
   assert.equal(new Set(catalog.map((entry) => entry.code)).size, catalog.length, "codes are unique");
   for (const entry of catalog) assert.ok(usage.includes(`\`${entry.code}\``), `docs/guide/troubleshooting.zh-CN.md must document ${entry.code}`);
 });
