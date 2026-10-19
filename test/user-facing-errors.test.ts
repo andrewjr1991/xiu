@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import test from "node:test";
 import { ConfigFileError } from "../src/config-file-error.js";
 import { ProviderConfigurationError } from "../src/provider-config-migration.js";
-import { errorCatalog, explainError, formatUserFacingError, summarizeUserFacingError } from "../src/user-facing-errors.js";
+import { describeFailure, errorCatalog, explainError, formatUserFacingError, summarizeUserFacingError } from "../src/user-facing-errors.js";
 
 test("provider configuration errors become a cause, a next step and the diagnostics command", () => {
   const unsafe = new ProviderConfigurationError("unsafe", "Provider configuration storage is not a protected regular file/directory. stage: verify-owner");
@@ -89,6 +89,19 @@ test("unknown errors keep their redacted message as the cause and never leak sec
   const authenticated = Object.assign(new Error(`401 Incorrect API key provided: ${secret}`), { status: 401 });
   assert.doesNotMatch(formatUserFacingError("x", authenticated, "zh-CN", { sensitive: [secret] }), new RegExp(secret));
   assert.match(summarizeUserFacingError(authenticated, "zh-CN"), /^服务拒绝了这个 API Key.*重新保存 Key（CLI 为 \/provider key）。$/);
+});
+
+test("describeFailure explains a catalogued failure and keeps one redacted line for anything else", () => {
+  const damaged = new ConfigFileError("extension-permissions", "/home/u/.xiu/extension-permissions.json", "Unable to read the extension permission store at /home/u/.xiu/extension-permissions.json: EISDIR: illegal operation on a directory, read", { code: "EISDIR" });
+  assert.match(describeFailure("MCP permission operation failed", damaged, "en-US"), /^MCP permission operation failed: The extension permission record \(~\/\.xiu\/extension-permissions\.json\) cannot be read.*\nNext step: Fix its JSON or move the file away.*\nDiagnose: xiu doctor\nDetail: config\/extension-permissions · Unable to read the extension permission store at /);
+  assert.match(describeFailure("MCP 登录失败", Object.assign(new Error("Forbidden"), { status: 403 }), "zh-CN"), /^MCP 登录失败：服务拒绝访问.*\n下一步：.*\n详情：http\/403 · Forbidden$/);
+  const secret = "sk-live-canary-9f8e7d6c";
+  const long = `Plugin not found: nope (${"x".repeat(400)}) key ${secret}`;
+  const plain = describeFailure("Could not change plugin state", new Error(long), "en-US", { sensitive: [secret] });
+  assert.equal(plain.split("\n").length, 1, "an unexplained failure stays one line, without a generic next step");
+  assert.match(plain, /^Could not change plugin state: Plugin not found: nope \(x{400}\) key /, "the message is not truncated");
+  assert.doesNotMatch(plain, new RegExp(secret));
+  assert.equal(describeFailure("错误", new Error("boom"), "zh-CN"), "错误：boom");
 });
 
 test("every explanation code is documented in the usage guide", async () => {

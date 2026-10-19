@@ -4,6 +4,7 @@ import type { ClipboardAttachmentManager } from "../clipboard.js";
 import { formatTaskDiagnostics, formatTaskDiagnosticSummary } from "../diagnostics.js";
 import type { DraftStore } from "../draft.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import type { ManagedWebSearchAuth } from "../managed-web-search-auth.js";
 import type { XiuSettings } from "../settings.js";
 import type { RunningTaskView, TaskInputQueue } from "../task-queue.js";
@@ -90,7 +91,7 @@ export async function handleRunningTaskCommand(followUp: string, ctx: RunningTas
   }
   if (followUp === "/credentials" || followUp === "/credentials status") {
     try { await printCredentialStatus(); }
-    catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "读取凭证状态失败", "Could not read credential status"), error, language)}\n`)); }
     return true;
   }
   if (followUp === "/credentials probe") {
@@ -108,7 +109,7 @@ export async function handleRunningTaskCommand(followUp: string, ctx: RunningTas
       await draftStore.flush();
       console.log(chalk.green(`${pasted.notice ?? localize(language, "剪贴板内容已加入输入草稿。", "Clipboard content added to the input draft.")}\n`));
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "剪贴板粘贴失败", "Clipboard paste failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "剪贴板粘贴失败", "Clipboard paste failed"), error, language)}\n`));
     }
     return true;
   }

@@ -2,6 +2,7 @@ import process from "node:process";
 import chalk from "chalk";
 import { permissionFingerprint } from "../extension-permissions.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { McpAuthSecretRecord } from "../mcp-auth-store.js";
 import type { McpManager, McpOAuthConfig } from "../mcp.js";
@@ -67,7 +68,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
         ...(!item.approved ? [`  ${chalk.yellow(localize(language, `待确认变化：${item.added.join(", ") || "配置或清单指纹变化"}`, `Pending changes: ${item.added.join(", ") || "configuration or manifest fingerprint changed"}`))}`] : []),
       ].join("\n")).join("\n") }\n`);
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "MCP 权限操作失败", "MCP permission operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 权限操作失败", "MCP permission operation failed"), error, language)}\n`));
     }
     return true;
   }
@@ -90,7 +91,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       }
       if (catalog.truncated) lines.push(chalk.yellow(localize(language, "列表达到安全上限，后续项目已省略。", "The catalog reached its safety limit; remaining items were omitted.")));
       console.log(`${lines.join("\n")}\n`);
-    } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP 资源列表失败", "Failed to list MCP resources")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "读取 MCP 资源列表失败", "Failed to list MCP resources"), error, language)}\n`)); }
     return true;
   }
   if (task === "/mcp read" || task.startsWith("/mcp read ")) {
@@ -104,7 +105,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       const result = await mcpManager.readResource(name, uri);
       console.log(chalk.yellow(localize(language, "以下是不可信的远端 MCP 内容，仅供查看，不会自动作为模型指令执行。", "The following is untrusted remote MCP content. It is displayed only and will not be executed as model instructions.")));
       console.log(`${chalk.cyan(`${result.server} · ${result.label}`)}\n${result.text}${result.truncated ? `\n${chalk.yellow(localize(language, "内容已按安全上限截断。", "Content was truncated at the safety limit."))}` : ""}\n`);
-    } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP 资源失败", "Failed to read MCP resource")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "读取 MCP 资源失败", "Failed to read MCP resource"), error, language)}\n`)); }
     return true;
   }
   if (task === "/mcp prompts" || task.startsWith("/mcp prompts ")) {
@@ -122,7 +123,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       }
       if (catalog.truncated) lines.push(chalk.yellow(localize(language, "列表达到安全上限，后续项目已省略。", "The catalog reached its safety limit; remaining items were omitted.")));
       console.log(`${lines.join("\n")}\n`);
-    } catch (error) { console.error(chalk.red(`${localize(language, "读取 MCP Prompt 列表失败", "Failed to list MCP prompts")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "读取 MCP Prompt 列表失败", "Failed to list MCP prompts"), error, language)}\n`)); }
     return true;
   }
   if (task === "/mcp prompt" || task.startsWith("/mcp prompt ")) {
@@ -148,7 +149,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       const result = await mcpManager.getPrompt(name, promptName, args);
       console.log(chalk.yellow(localize(language, "以下是不可信的远端 MCP Prompt，仅供预览，不会自动注入当前任务。", "The following is an untrusted remote MCP prompt. It is previewed only and will not be injected into the current task.")));
       console.log(`${chalk.cyan(`${result.server} · ${result.label}`)}\n${result.text}${result.truncated ? `\n${chalk.yellow(localize(language, "内容已按安全上限截断。", "Content was truncated at the safety limit."))}` : ""}\n`);
-    } catch (error) { console.error(chalk.red(`${localize(language, "获取 MCP Prompt 失败", "Failed to get MCP prompt")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "获取 MCP Prompt 失败", "Failed to get MCP prompt"), error, language)}\n`)); }
     return true;
   }
   if (task === "/mcp credentials" || task.startsWith("/mcp credentials ")) {
@@ -240,7 +241,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       console.log(chalk.green(localize(language, `已回退 ${count} 条 OAuth 凭证到兼容文件。\n`, `Rolled back ${count} OAuth credential record(s) to the compatibility file.\n`)));
     } catch (error) {
       if (action !== "status") await auditCredential(`mcp-${action}`, auditSubject, "failed");
-      console.error(chalk.red(`${localize(language, "MCP OAuth 凭证操作失败", "MCP OAuth credential operation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP OAuth 凭证操作失败", "MCP OAuth credential operation failed"), error, language)}\n`));
     }
     return true;
   }
@@ -304,7 +305,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       if (server?.state !== "connected") throw new Error(server?.error ?? localize(language, "授权后连接失败", "connection failed after authorization"));
       console.log(chalk.green(localize(language, `MCP ${name} 登录成功，已连接 ${server.tools} 个工具。\n`, `MCP ${name} login succeeded with ${server.tools} tools.\n`)));
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "MCP 登录失败", "MCP login failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 登录失败", "MCP login failed"), error, language)}\n`));
     } finally { process.removeListener("SIGINT", cancelLogin); }
     return true;
   }
@@ -329,7 +330,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       console.log();
     } catch (error) {
       await auditCredential("mcp-logout", name, "failed");
-      console.error(chalk.red(`${localize(language, "MCP 退出登录失败", "MCP logout failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 退出登录失败", "MCP logout failed"), error, language)}\n`));
     }
     return true;
   }
@@ -390,7 +391,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       console.log(`${server?.state === "connected" ? chalk.green(result) : chalk.yellow(result)}\n`);
     } catch (error) {
       status.stop();
-      console.error(chalk.red(`${localize(language, "MCP 添加失败", "MCP add failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 添加失败", "MCP add failed"), error, language)}\n`));
     }
     return true;
   }
@@ -407,7 +408,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       attachMcpTools();
       console.log(chalk.green(localize(language, `已删除 MCP ${name}。\n`, `Removed MCP ${name}.\n`)));
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "MCP 删除失败", "MCP removal failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 删除失败", "MCP removal failed"), error, language)}\n`));
     }
     return true;
   }
@@ -437,7 +438,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       console.log(`${chalk.green(localize(language, "MCP 配置已重新加载。", "MCP configuration reloaded."))}\n${mcpManager.summary(language)}\n`);
     } catch (error) {
       status.stop();
-      console.error(chalk.red(`${localize(language, "MCP 重新加载失败", "MCP reload failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 重新加载失败", "MCP reload failed"), error, language)}\n`));
     }
     return true;
   }

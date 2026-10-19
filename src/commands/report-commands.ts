@@ -8,6 +8,7 @@ import { auditRecordDetails } from "./audit-command.js";
 import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
 import { collectExecutionReportInputs, defaultExecutionReportSources, type ExecutionReportSources } from "../execution-report-query.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { redactSecrets } from "../secret-redaction.js";
 import type { SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
 import type { TaskRunJournal, TaskRunJournalScan, TaskRunRecord } from "../task-run.js";
@@ -126,7 +127,7 @@ export async function runReportCommand(args: readonly string[], options: ReportC
     stderr(localize(language, `执行报告已导出：${path.relative(cwd, written)}`, `Execution report exported: ${path.relative(cwd, written)}`));
     return 0;
   } catch (error) {
-    stderr(`${localize(language, "生成执行报告失败", "Could not generate execution report")}: ${error instanceof Error ? error.message : String(error)}`);
+    stderr(`${describeFailure(localize(language, "生成执行报告失败", "Could not generate execution report"), error, language)}`);
     return 1;
   }
 }
@@ -176,7 +177,7 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
       const written = await writeExecutionReport(config.cwd, requestedPath, serializeExecutionReport(report, format, language));
       console.log(chalk.green(localize(language, `执行报告已导出：${path.relative(config.cwd, written)}\n`, `Execution report exported: ${path.relative(config.cwd, written)}\n`)));
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "生成执行报告失败", "Could not generate execution report")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "生成执行报告失败", "Could not generate execution report"), error, language)}\n`));
     }
     return true;
   }
@@ -204,7 +205,7 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
       if (!auditStatus.healthy) console.log(chalk.yellow(localize(language, `本进程最近一次审计写入失败：${auditStatus.lastError}`, `The most recent audit write in this process failed: ${auditStatus.lastError}`)));
       console.log();
     } catch (error) {
-      console.error(chalk.red(`${localize(language, "读取安全审计失败", "Could not read security audit")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "读取安全审计失败", "Could not read security audit"), error, language)}\n`));
     }
     return true;
   }

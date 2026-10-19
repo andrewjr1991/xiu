@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { ProviderProfile, ProviderRegistry } from "../provider-registry.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
@@ -23,7 +24,7 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
   const { auditCredential, config, ensureSystemCredentialStore, formatCredentialProbe, language, printCredentialStatus, providerRegistry, switchProviderProfile } = ctx;
   if (task === "/credentials" || task === "/credentials status") {
     try { await printCredentialStatus(); }
-    catch (error) { console.error(chalk.red(`${localize(language, "读取凭证状态失败", "Could not read credential status")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    catch (error) { console.error(chalk.red(`${describeFailure(localize(language, "读取凭证状态失败", "Could not read credential status"), error, language)}\n`)); }
     return true;
   }
   if (task === "/credentials probe") {
@@ -78,7 +79,7 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
         "To prevent accidental deletion, migration never removes plaintext. After verifying the system credential across a restart, run /credentials cleanup separately.\n")));
     } catch (error) {
       await auditCredential("provider-migrate", requestedCredential, "failed");
-      console.error(chalk.red(`${localize(language, "凭证迁移失败；原引用与旧明文保持不变", "Credential migration failed; the original reference and plaintext remain unchanged")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.error(chalk.red(`${describeFailure(localize(language, "凭证迁移失败；原引用与旧明文保持不变", "Credential migration failed; the original reference and plaintext remain unchanged"), error, language)}\n`));
     }
     return true;
   }
@@ -100,7 +101,7 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
       await providerRegistry.cleanupLegacyApiKey(selected);
       await auditCredential("provider-cleanup", selected, "succeeded");
       console.log(chalk.green(localize(language, "旧明文副本已安全删除。\n", "Legacy plaintext copy safely deleted.\n")));
-    } catch (error) { await auditCredential("provider-cleanup", requestedCredential, "failed"); console.error(chalk.red(`${localize(language, "凭证清理失败", "Credential cleanup failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { await auditCredential("provider-cleanup", requestedCredential, "failed"); console.error(chalk.red(`${describeFailure(localize(language, "凭证清理失败", "Credential cleanup failed"), error, language)}\n`)); }
     return true;
   }
   if (task === "/credentials rollback" || task.startsWith("/credentials rollback ")) {
@@ -120,7 +121,7 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
       console.log((systemDeleted ? chalk.green : chalk.yellow)(localize(language,
         systemDeleted ? "已切回旧明文 Key，系统副本已删除。\n" : "已切回旧明文 Key，但系统副本未能删除；可稍后使用 /credentials forget 明确清理。\n",
         systemDeleted ? "Rolled back to the legacy key and deleted the system copy.\n" : "Rolled back to the legacy key, but the system copy could not be deleted; use /credentials forget to clean it explicitly.\n")));
-    } catch (error) { await auditCredential("provider-rollback", requestedCredential, "failed"); console.error(chalk.red(`${localize(language, "凭证回退失败", "Credential rollback failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { await auditCredential("provider-rollback", requestedCredential, "failed"); console.error(chalk.red(`${describeFailure(localize(language, "凭证回退失败", "Credential rollback failed"), error, language)}\n`)); }
     return true;
   }
   if (task === "/credentials forget" || task.startsWith("/credentials forget ")) {
@@ -144,7 +145,7 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
       await auditCredential("provider-forget", selected, "succeeded");
       if (selected === config.providerId) await switchProviderProfile(providerRegistry.get(selected)!, true, config.model);
       console.log(chalk.green(localize(language, "本地 Provider Key 已遗忘。\n", "Local Provider keys forgotten.\n")));
-    } catch (error) { await auditCredential("provider-forget", requestedCredential, "failed"); console.error(chalk.red(`${localize(language, "遗忘凭证失败", "Could not forget credential")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { await auditCredential("provider-forget", requestedCredential, "failed"); console.error(chalk.red(`${describeFailure(localize(language, "遗忘凭证失败", "Could not forget credential"), error, language)}\n`)); }
     return true;
   }
   return false;

@@ -15,6 +15,9 @@ import os from "node:os";
 import path from "node:path";
 import { SettingsStore, type XiuSettings } from "../src/settings.js";
 import { sharedFreeSearchBackend } from "../src/free-search.js";
+import { PermissionGrantStore } from "../src/extension-permissions.js";
+import { McpAuthStore } from "../src/mcp-auth-store.js";
+import { McpManager } from "../src/mcp.js";
 
 // The interactive loop tries each handler in turn, so a handler must decline input it does not own
 // without touching its context (an empty context would throw on any access).
@@ -143,4 +146,39 @@ test("incomplete task messages name the failure reason", () => {
   assert.match(incompleteTaskMessage("tool_failed", "en-US"), /tool batch/);
   assert.match(incompleteTaskMessage(undefined, "en-US"), /runtime error/);
   assert.match(incompleteTaskMessage("tool_failed", "zh-CN"), /目标尚未完成/);
+});
+
+test("a command failure the catalog explains gets the next step and xiu doctor; any other failure keeps its one line", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-command-failures-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "workspace");
+  await fs.mkdir(cwd, { recursive: true });
+  const userConfig = path.join(root, "mcp.json");
+  await fs.writeFile(userConfig, JSON.stringify({ mcpServers: { docs: { command: "node", args: ["docs-mcp.js"] } } }));
+  const permissionFile = path.join(root, "extension-permissions.json");
+  await fs.mkdir(permissionFile); // a directory where the grant store should be: every approval check fails closed
+  const mcpManager = new McpManager(cwd, userConfig, new McpAuthStore(path.join(root, "mcp-auth.json")), {}, new PermissionGrantStore(permissionFile));
+  const errors: string[] = [];
+  const logs: string[] = [];
+  const originalError = console.error;
+  const originalLog = console.log;
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  try {
+    const context = { language: "en-US", mcpManager, projectMcpTrusted: false, status: { start() {}, stop() {} } } as unknown as McpCommandContext;
+    assert.equal(await handleMcpCommand("/mcp permissions", context), true);
+    const pluginContext = { language: "zh-CN", pluginRegistry: { refresh: async () => [], setEnabled: async (id: string) => { throw new Error(`Plugin not found: ${id}`); } }, applyApprovedPlugins: async () => [] } as unknown as PluginCommandContext;
+    assert.equal(await handlePluginCommand("/plugin enable nope", pluginContext), true);
+  } finally {
+    console.error = originalError;
+    console.log = originalLog;
+  }
+  const explained = errors.join("\n");
+  assert.match(explained, /^MCP permission operation failed: The extension permission record \(~\/\.xiu\/extension-permissions\.json\) cannot be read, so no plugin, skill or MCP server can be confirmed as approved\.$/m, explained);
+  assert.match(explained, /^Next step: Fix its JSON or move the file away; afterwards every approved plugin, skill and MCP server needs one new approval\.$/m);
+  assert.match(explained, /^Diagnose: xiu doctor$/m);
+  assert.match(explained, /^Detail: config\/extension-permissions · Unable to read the extension permission store at .*extension-permissions\.json: EISDIR/m);
+  const plain = logs.join("\n");
+  assert.match(plain, /^插件状态修改失败：Plugin not found: nope$/m, plain);
+  assert.doesNotMatch(plain, /下一步/, "an unexplained failure gets no generic next step");
 });

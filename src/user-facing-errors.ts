@@ -219,6 +219,18 @@ export function formatUserFacingError(heading: string, error: unknown, language:
   return lines.join("\n");
 }
 
+/**
+ * The four-line explanation when the catalog knows the cause, otherwise `<heading>: <redacted message>` on one line.
+ * For command families whose failures are mostly input validation ("Plugin not found: x"), a generic next step would
+ * be noise; only a catalogued cause (a damaged configuration file, a network or HTTP failure) earns the next step and
+ * the diagnostic command.
+ */
+export function describeFailure(heading: string, error: unknown, language: UiLanguage, options: ExplainOptions = {}): string {
+  if (explainError(error, language, options).code !== "unknown") return formatUserFacingError(heading, error, language, options);
+  const message = redactSecrets(error instanceof Error ? error.message : String(error), options.sensitive ?? []);
+  return `${heading}${language === "zh-CN" ? "：" : ": "}${message}`;
+}
+
 /** One sentence for compact surfaces such as the desktop renderer: cause plus next step. */
 export function summarizeUserFacingError(error: unknown, language: UiLanguage, options: ExplainOptions = {}): string {
   const explanation = explainError(error, language, options);

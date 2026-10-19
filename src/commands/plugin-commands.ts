@@ -2,6 +2,7 @@ import path from "node:path";
 import chalk from "chalk";
 import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { DiscoveredPlugin, PluginRegistry } from "../plugins.js";
 import type { StatusLine } from "../status.js";
@@ -66,7 +67,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
         for (const publisher of publishers) console.log(`  ${publisher.name ?? localize(language, "未命名发布者", "Unnamed publisher")} · sha256:${publisher.fingerprint} · ${publisher.trustedAt}`);
         console.log();
       }
-    } catch (error) { console.log(chalk.red(`${localize(language, "无法读取发布者信任存储", "Could not read publisher trust store")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "无法读取发布者信任存储", "Could not read publisher trust store"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin publisher trust" || task.startsWith("/plugin publisher trust ")) {
@@ -94,7 +95,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
     try {
       const publisher = await pluginRegistry.trustPublisher(id);
       console.log(chalk.green(localize(language, `已信任发布者 ${publisher.name ?? "未命名"}（sha256:${publisher.fingerprint}）。插件权限仍需单独授权。\n`, `Trusted publisher ${publisher.name ?? "unnamed"} (sha256:${publisher.fingerprint}). Plugin permissions still require separate approval.\n`)));
-    } catch (error) { console.log(chalk.red(`${localize(language, "发布者信任失败", "Publisher trust failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "发布者信任失败", "Publisher trust failed"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin publisher revoke" || task.startsWith("/plugin publisher revoke ")) {
@@ -114,7 +115,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       if (!confirmed) return true;
       const revoked = await pluginRegistry.revokePublisher(fingerprint);
       console.log(revoked ? chalk.green(localize(language, "发布者信任已撤销。现有插件权限授权不会被静默扩大。\n", "Publisher trust was revoked. Existing plugin permission approvals are not silently expanded.\n")) : chalk.yellow(localize(language, "未找到该发布者。\n", "Publisher not found.\n")));
-    } catch (error) { console.log(chalk.red(`${localize(language, "撤销发布者信任失败", "Could not revoke publisher trust")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "撤销发布者信任失败", "Could not revoke publisher trust"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin install" || task.startsWith("/plugin install ")) {
@@ -153,7 +154,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       console.log(chalk.green(localize(language, `插件 ${result.plugin.id} ${result.plugin.version} 已安装但尚未授权。\n`, `Plugin ${result.plugin.id} ${result.plugin.version} was installed but is not yet authorized.\n`)));
     } catch (error) {
       status.stop();
-      console.log(chalk.red(`${localize(language, "插件安装失败", "Plugin installation failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.log(chalk.red(`${describeFailure(localize(language, "插件安装失败", "Plugin installation failed"), error, language)}\n`));
     }
     return true;
   }
@@ -181,7 +182,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       console.log(chalk.green(localize(language, `插件 ${id} 已更新到 ${result.plugin.version}，旧版本备份于 ${result.backup}。请重新执行 /plugin approve ${id}。\n`, `Plugin ${id} was updated to ${result.plugin.version}; the old version is backed up at ${result.backup}. Run /plugin approve ${id} again.\n`)));
     } catch (error) {
       status.stop();
-      console.log(chalk.red(`${localize(language, "插件更新失败", "Plugin update failed")}: ${error instanceof Error ? error.message : String(error)}\n`));
+      console.log(chalk.red(`${describeFailure(localize(language, "插件更新失败", "Plugin update failed"), error, language)}\n`));
     }
     return true;
   }
@@ -193,7 +194,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       await pluginRegistry.setEnabled(id.trim(), action === "enable");
       const errors = await applyApprovedPlugins(true);
       console.log(chalk.green(localize(language, `插件 ${id.trim()} 已${action === "enable" ? "启用" : "禁用"}。${errors.length ? ` 部分贡献加载失败：${errors.join("；")}` : ""}\n`, `Plugin ${id.trim()} was ${action === "enable" ? "enabled" : "disabled"}.${errors.length ? ` Some contributions failed: ${errors.join("; ")}` : ""}\n`)));
-    } catch (error) { console.log(chalk.red(`${localize(language, "插件状态修改失败", "Could not change plugin state")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "插件状态修改失败", "Could not change plugin state"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin uninstall" || task.startsWith("/plugin uninstall ")) {
@@ -213,7 +214,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       const backup = await pluginRegistry.uninstall(id);
       await applyApprovedPlugins(true);
       console.log(chalk.green(localize(language, `插件 ${id} 已卸载，备份位于 ${backup}。可使用 /plugin recover ${id} ${plugin.scope} 恢复。\n`, `Plugin ${id} was uninstalled and backed up at ${backup}. Use /plugin recover ${id} ${plugin.scope} to restore it.\n`)));
-    } catch (error) { console.log(chalk.red(`${localize(language, "插件卸载失败", "Plugin uninstall failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "插件卸载失败", "Plugin uninstall failed"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin recover" || task.startsWith("/plugin recover ")) {
@@ -230,7 +231,7 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
       const plugin = await pluginRegistry.recover(id, scope);
       const errors = await applyApprovedPlugins(true);
       console.log(chalk.green(localize(language, `插件 ${id} ${plugin.version} 已从最近备份恢复。${errors.length ? ` 部分贡献加载失败：${errors.join("；")}` : ""}\n`, `Plugin ${id} ${plugin.version} was restored from the latest backup.${errors.length ? ` Some contributions failed: ${errors.join("; ")}` : ""}\n`)));
-    } catch (error) { console.log(chalk.red(`${localize(language, "插件恢复失败", "Plugin recovery failed")}: ${error instanceof Error ? error.message : String(error)}\n`)); }
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "插件恢复失败", "Plugin recovery failed"), error, language)}\n`)); }
     return true;
   }
   if (task === "/plugin approve" || task.startsWith("/plugin approve ")) {
