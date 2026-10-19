@@ -11,6 +11,7 @@ import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "../provider-registry.js";
 import { createProvider } from "../providers.js";
 import { redactSecrets } from "../secret-redaction.js";
+import { SecurityAuditLog } from "../security-audit.js";
 import { SettingsStore } from "../settings.js";
 import { SkillRegistry, createSkillTools } from "../skills.js";
 import { createWindowsSystemCredentialStore } from "../system-credential-store.js";
@@ -83,7 +84,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
  * Electron dependency, so the execution and approval authority remains in the
  * shared Node runtime rather than the renderer.
  */
-export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; computerUse?: ComputerUseHost; pluginRegistry?: PluginRegistry } = {}): Promise<WorkspaceAgentHost> {
+export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; securityAuditFile?: string; computerUse?: ComputerUseHost; pluginRegistry?: PluginRegistry } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
   try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
@@ -131,7 +132,22 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   const runtime = new XiuRuntime({ sanitize });
   let approvalMode: WorkspaceApprovalMode = "ask";
   let approvalTail: Promise<unknown> = Promise.resolve();
-  const requestApproval = (request: ApprovalRequest): Promise<boolean> => {
+  // Every tool approval the host decides lands in the same local ledger the CLI writes, so `/audit`
+  // and the execution report count desktop runs too. Fixed-semantic fields only (outcome, risk,
+  // decision source, scope): never the description, preview or tool arguments. The log swallows its
+  // own write failures, so an unwritable ledger cannot change or delay a decision beyond the write.
+  const securityAudit = new SecurityAuditLog(options.securityAuditFile, workspace);
+  const audited = async (request: ApprovalRequest, decide: () => Promise<boolean>): Promise<boolean> => {
+    let allowed = false;
+    try { allowed = await decide(); return allowed; }
+    finally {
+      await securityAudit.record({
+        category: "approval", action: "tool-approval", outcome: allowed ? "allowed" : "denied",
+        risk: request.risk, source: request.decisionSource ?? "prompted", scope: request.sessionScope ?? "unscoped",
+      });
+    }
+  };
+  const requestApproval = (request: ApprovalRequest): Promise<boolean> => audited(request, () => {
     if (canAutomaticallyApprove(approvalMode, request)) {
       request.decisionSource = "automatic";
       return Promise.resolve(true);
@@ -139,7 +155,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     const next = approvalTail.then(() => runtime.snapshot().task?.state === "running" ? runtime.requestApproval(request) : false);
     approvalTail = next.catch(() => false);
     return next;
-  };
+  });
   // One manager per workspace host: a second desktop workspace gets its own.
   const background = new BackgroundManager({ workspace, storageRoot: options.backgroundRoot, workerProgram: await resolveNodeRuntime().catch(() => undefined), workerSource: options.backgroundWorkerSource });
   background.prepareWorkspace();
@@ -209,7 +225,9 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   }, { onTaskUpdate: (run, task) => runtime.recordSubagent({ id: `${run.id}:${task.id}`, runId: run.id, taskId: task.id, mode: task.mode, dependencies: task.dependencies, createdAt: task.createdAt, title: task.title, role: task.role, status: task.status, startedAt: task.startedAt, completedAt: task.completedAt, durationMs: task.stats?.activeMs, progress: task.progress, activity: task.activity, result: task.result, error: task.error }) }, config.agentConcurrency, config.apiKey ? [config.apiKey] : []);
   await coordinator.initialize();
   tools.push(...createMultiAgentTools(coordinator).map((tool) => tool.name !== "integrate_agent" ? tool : { ...tool, execute: async (input: Record<string, unknown>, context: import("../types.js").ToolContext) => {
-    const allowed = await runtime.requestApproval({ risk: "dangerous", description: "将子智能体 Worktree 变更整合到主工作区（始终需要确认）", preview: await tool.preview!(input, context) });
+    // Always confirmed, even in Full Access: this does not go through `requestApproval`, only through its ledger.
+    const request: ApprovalRequest = { risk: "dangerous", description: "将子智能体 Worktree 变更整合到主工作区（始终需要确认）", preview: await tool.preview!(input, context) };
+    const allowed = await audited(request, () => runtime.requestApproval(request));
     if (!allowed) throw new Error("Worktree integration was denied.");
     return tool.execute(input, context);
   } }));

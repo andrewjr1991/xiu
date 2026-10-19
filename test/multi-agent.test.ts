@@ -48,7 +48,7 @@ test("desktop model-dispatched reviewer can complete beyond ten turns", async (t
   let calls = 0;
   const host = await createWorkspaceAgentHost(cwd, {
     profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
-    journalRoot: path.join(cwd, ".xiu", "journal"), backgroundRoot: path.join(cwd, ".xiu", "background"),
+    journalRoot: path.join(cwd, ".xiu", "journal"), backgroundRoot: path.join(cwd, ".xiu", "background"), securityAuditFile: path.join(cwd, ".xiu", "security-audit.jsonl"),
     provider: { async complete(_system, messages) {
       calls++;
       const reads = messages.filter((message) => message.role === "tool").length;
@@ -423,7 +423,7 @@ test("desktop child executor passes real verification receipts without expanding
   const cwd = await gitRepository();
   const host = await createWorkspaceAgentHost(cwd, {
     profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
-    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
+    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"), securityAuditFile: path.join(cwd, ".xiu", "security-audit.jsonl"),
     provider: { async complete(_system, messages, tools) {
       const context = messages.filter((message) => message.role === "user").map((message) => message.content).join("\n");
       const completedTools = messages.filter((message) => message.role === "tool").length;
@@ -453,7 +453,7 @@ test("desktop child with an unfinished plan fails and blocks dependent specialis
   const cwd = await gitRepository();
   const host = await createWorkspaceAgentHost(cwd, {
     profile: { id: "fixture", name: "Fixture", kind: "openai-compatible", model: "fixture", features: { text: true, tools: true, vision: false, image: false, video: false, audio: false } },
-    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"),
+    backgroundRoot: path.join(cwd, ".xiu", "background"), journalRoot: path.join(cwd, ".xiu", "journal"), securityAuditFile: path.join(cwd, ".xiu", "security-audit.jsonl"),
     provider: { async complete(_system, messages) {
       if (!messages.some((message) => message.role === "tool")) return { text: "Plan", toolCalls: [{ id: "plan", name: "update_task_plan", input: { goal: "unfinished", steps: [{ id: "one", title: "Unfinished", status: "pending" }] } }], raw: {} };
       return { text: "VERDICT: PASS", toolCalls: [], raw: {} };

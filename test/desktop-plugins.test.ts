@@ -30,7 +30,7 @@ const manifest = (id: string, extra: object = {}) => ({
 const hostOptions = (workspace: string, journalRoot: string, pluginRegistry: PluginRegistry) => ({
   pluginRegistry,
   profile: { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "offline", features: { text: true as const, tools: true, vision: false, image: false, video: false, audio: false } },
-  backgroundRoot: path.join(workspace, ".xiu", "background"), journalRoot,
+  backgroundRoot: path.join(workspace, ".xiu", "background"), journalRoot, securityAuditFile: path.join(path.dirname(journalRoot), "security-audit.jsonl"),
   provider: { async complete() { return { text: "unused", toolCalls: [], raw: {} }; } },
 });
 
