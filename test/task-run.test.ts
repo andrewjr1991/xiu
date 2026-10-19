@@ -206,7 +206,9 @@ test("one unreadable journal record no longer hides the others from recent(), an
   ]);
   assert.deepEqual((await item.journal.recent(50)).map((record) => record.runId), [good.runId], "recent() skips what it cannot read");
   assert.equal((await item.journal.latest())?.runId, good.runId);
-  await assert.rejects(() => item.journal.interrupted(), /Unsupported or corrupt|in JSON/, "the interrupted-run check still fails closed on an unreadable record");
+  // Three records are unreadable; the check reads them concurrently and reports whichever rejects first, which differs
+  // between platforms (Windows reported the other-workspace one). Any of the three is the fail-closed outcome under test.
+  await assert.rejects(() => item.journal.interrupted(), /Unsupported or corrupt|in JSON|belongs to another workspace/, "the interrupted-run check still fails closed on an unreadable record");
 });
 
 test("a budget pause remains explicitly recoverable", async (t) => {
