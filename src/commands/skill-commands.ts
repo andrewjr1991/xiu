@@ -2,7 +2,7 @@ import chalk from "chalk";
 import type { Agent } from "../agent.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { selectTerminalOption } from "../interactive-ui.js";
-import type { SkillRegistry } from "../skills.js";
+import { type SkillRegistry, skillIssuesNote } from "../skills.js";
 import type { StatusLine } from "../status.js";
 import { askQuestion } from "../terminal-prompts.js";
 
@@ -19,6 +19,8 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
   if (task === "/skills") {
     const skills = await skillRegistry.refresh(true);
     agent.reloadInstructions();
+    const issuesNote = skillIssuesNote(skillRegistry.issues(), language);
+    if (issuesNote) console.log(chalk.yellow(issuesNote));
     if (!skills.length) {
       console.log(chalk.dim(localize(language, "没有已安装技能。使用 /skills install <本地路径或 HTTPS Git URL> 安装。\n", "No skills installed. Use /skills install <path-or-https-git-url>.\n")));
       return true;

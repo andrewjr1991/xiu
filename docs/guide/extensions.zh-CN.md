@@ -34,7 +34,7 @@ Skills 是写在 `SKILL.md` 中的可复用工作流程。Xiu 从以下位置发
 /skills install https://github.com/obra/superpowers.git
 ```
 
-安装后当前会话会刷新指令。v0.9.9 在每次打开 `/skills` 前重新扫描，并在任务结束后发现外部命令新安装的 Skill，因此无需重启；只有被实际扫描到并加载的 Skill 才会报告为可用。只安装可信来源；Skill 会影响模型的工作方法。Xiu 启动时只加载 Skill 名称、描述和权限摘要，需要使用时才读取完整内容，以减少上下文占用。从 0.18.2 起，`using-superpowers`、`brainstorming`、`writing-plans`、`verification-before-completion` 这类与 Xiu 内置计划和完成门禁重复的全局兼容流程不会进入模型自动目录，避免无关连锁加载；它们仍会出现在 `/skills` 中，用户明确点名时仍可通过 `read_skill` 读取。项目级和插件级同名 Skill 不受此自动过滤影响。
+安装后当前会话会刷新指令。v0.9.9 在每次打开 `/skills` 前重新扫描，并在任务结束后发现外部命令新安装的 Skill，因此无需重启；只有被实际扫描到并加载的 Skill 才会报告为可用；扫描到但没有列出的 Skill 不再静默消失，`/skills` 会在列表前用一行说明原因（文件无法读取及其系统错误码、同名 Skill 被更高优先级范围覆盖、插件 Skill 超过大小限制、某个目录超过 300 个 `SKILL.md` 时未读取的个数），只给文件夹名，不给路径。只安装可信来源；Skill 会影响模型的工作方法。Xiu 启动时只加载 Skill 名称、描述和权限摘要，需要使用时才读取完整内容，以减少上下文占用。从 0.18.2 起，`using-superpowers`、`brainstorming`、`writing-plans`、`verification-before-completion` 这类与 Xiu 内置计划和完成门禁重复的全局兼容流程不会进入模型自动目录，避免无关连锁加载；它们仍会出现在 `/skills` 中，用户明确点名时仍可通过 `read_skill` 读取。项目级和插件级同名 Skill 不受此自动过滤影响。
 
 v0.12.2 起，Skill 可以在 `SKILL.md` frontmatter 中声明权限，例如：
 

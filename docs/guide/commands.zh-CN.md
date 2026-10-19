@@ -32,7 +32,7 @@
 | `/routing set <阶段>` | 为 `planning`、`implementation` 或 `verification` 选择 Provider |
 | `/routing clear <阶段>` | 清除一个阶段的 Provider 绑定 |
 | `/language [zh-CN|en-US]` | 设置并持久保存界面与模型会话语言 |
-| `/skills` | 浏览 Skills |
+| `/skills` | 浏览 Skills；找到但未列出的 Skill（无法读取、同名被更高优先级范围覆盖、超过大小或数量限制）会在列表前用一行说明 |
 | `/skills install ...` | 安装本地或 HTTPS Git Skill |
 | `/mcp` | 查看 MCP 连接与工具数 |
 | `/mcp add [name] [url] [TOKEN_ENV]` | 添加用户级 Streamable HTTP MCP |

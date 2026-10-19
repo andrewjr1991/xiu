@@ -28,6 +28,18 @@ export interface XiuSkill {
   permissionsDeclared: boolean;
 }
 
+/** A skill file the registry found but does not list, and why; names only, never a path. */
+export interface SkillIssue {
+  /** The skill's folder (or the plugin skill's name) as the user would recognise it. */
+  name: string;
+  scope: XiuSkill["scope"];
+  /** `unreadable`: the file could not be read (`detail` is the system error code); `oversized`: a plugin skill over the size limit;
+   * `shadowed`: another skill of the same name was found first (`detail` is its scope); `truncated`: a root holds more than the
+   * limit of SKILL.md files (`detail` is the number not read). */
+  reason: "unreadable" | "oversized" | "shadowed" | "truncated";
+  detail?: string;
+}
+
 export interface InstalledSkill {
   name: string;
   destination: string;
@@ -135,8 +147,33 @@ export async function stageLocalSkillPackage(source: string, destination: string
   return items;
 }
 
+function readFailureReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof code === "string" && code) return code;
+  return (error instanceof Error ? error.message : String(error)).split(/:\s/)[0]?.slice(0, 80) || "unreadable";
+}
+
+/** One localized line for `/skills` naming the skills the registry found but does not list; undefined when there are none. */
+export function skillIssuesNote(issues: readonly SkillIssue[], language: "zh-CN" | "en-US"): string | undefined {
+  if (!issues.length) return undefined;
+  const zh = language === "zh-CN";
+  const describe = (issue: SkillIssue): string => {
+    switch (issue.reason) {
+      case "unreadable": return zh ? `无法读取：${issue.detail ?? "unreadable"}` : `unreadable: ${issue.detail ?? "unreadable"}`;
+      case "oversized": return zh ? "超过大小限制，未加载" : "over the size limit, not loaded";
+      case "shadowed": return zh ? `被 ${issue.detail ?? "another"} 范围的同名技能覆盖` : `shadowed by the ${issue.detail ?? "other"} skill of the same name`;
+      case "truncated": return zh ? `超过 ${MAX_SKILL_FILES} 个 SKILL.md，后 ${issue.detail ?? "?"} 个未读取` : `more than ${MAX_SKILL_FILES} SKILL.md files, the last ${issue.detail ?? "?"} not read`;
+    }
+  };
+  const entries = issues.map((issue) => `${issue.name}（${issue.scope}，${describe(issue)}）`);
+  return zh
+    ? `另有 ${issues.length} 个技能未列出：${entries.join("、")}。`
+    : `${issues.length} more skill${issues.length === 1 ? " is" : "s are"} not listed: ${issues.map((issue) => `${issue.name} (${issue.scope}, ${describe(issue)})`).join(", ")}.`;
+}
+
 export class SkillRegistry {
   private skills: XiuSkill[] = [];
+  private skillIssues: SkillIssue[] = [];
   private pluginFiles: Array<{ file: string; name: string }> = [];
 
   constructor(
@@ -154,18 +191,20 @@ export class SkillRegistry {
   }
 
   async refresh(includeProject = true): Promise<XiuSkill[]> {
-    const roots: Array<{ directory: string; scope: XiuSkill["scope"] }> = [
+    const roots: Array<{ directory: string; scope: XiuSkill["scope"]; label: string }> = [
       ...(includeProject ? [
-        { directory: path.join(this.cwd, ".xiu", "skills"), scope: "project" as const },
-        { directory: path.join(this.cwd, ".agents", "skills"), scope: "compatible" as const },
-        { directory: path.join(this.cwd, ".claude", "skills"), scope: "compatible" as const },
+        { directory: path.join(this.cwd, ".xiu", "skills"), scope: "project" as const, label: ".xiu/skills" },
+        { directory: path.join(this.cwd, ".agents", "skills"), scope: "compatible" as const, label: ".agents/skills" },
+        { directory: path.join(this.cwd, ".claude", "skills"), scope: "compatible" as const, label: ".claude/skills" },
       ] : []),
-      { directory: this.globalDirectory(), scope: "global" },
-      { directory: path.join(os.homedir(), ".agents", "skills"), scope: "compatible" },
+      { directory: this.globalDirectory(), scope: "global", label: "~/.xiu/skills" },
+      { directory: path.join(os.homedir(), ".agents", "skills"), scope: "compatible", label: "~/.agents/skills" },
     ];
     const discovered: XiuSkill[] = [];
+    const issues: SkillIssue[] = [];
     for (const root of roots) {
       const files = await fg("**/SKILL.md", { cwd: root.directory, absolute: true, onlyFiles: true, unique: true }).catch(() => [] as string[]);
+      if (files.length > MAX_SKILL_FILES) issues.push({ name: root.label, scope: root.scope, reason: "truncated", detail: String(files.length - MAX_SKILL_FILES) });
       for (const file of files.slice(0, MAX_SKILL_FILES)) {
         try {
           const content = await fs.readFile(file, "utf8");
@@ -181,13 +220,16 @@ export class SkillRegistry {
             permissionWarnings: permissionInfo.unknown,
             permissionsDeclared: permissionInfo.declared,
           });
-        } catch { /* ignore unreadable skills */ }
+        } catch (error) {
+          // The skill stays out of the list, but `/skills` names it so the user learns why it is missing.
+          issues.push({ name: path.basename(path.dirname(file)), scope: root.scope, reason: "unreadable", detail: readFailureReason(error) });
+        }
       }
     }
     for (const entry of this.pluginFiles.slice(0, MAX_SKILL_FILES)) {
       try {
         const content = await fs.readFile(entry.file, "utf8");
-        if (content.length > 120_000) continue;
+        if (content.length > 120_000) { issues.push({ name: entry.name, scope: "plugin", reason: "oversized" }); continue; }
         const meta = frontmatter(content);
         const permissionInfo = skillPermissions(meta);
         discovered.push({
@@ -199,15 +241,27 @@ export class SkillRegistry {
           permissionWarnings: permissionInfo.unknown,
           permissionsDeclared: permissionInfo.declared,
         });
-      } catch { /* invalid plugin contributions are reported by PluginRegistry */ }
+      } catch (error) {
+        // Invalid plugin contributions are reported by PluginRegistry; an unreadable file is still named here.
+        issues.push({ name: entry.name, scope: "plugin", reason: "unreadable", detail: readFailureReason(error) });
+      }
     }
     const unique = new Map<string, XiuSkill>();
-    for (const skill of discovered) if (!unique.has(skill.name.toLowerCase())) unique.set(skill.name.toLowerCase(), skill);
+    for (const skill of discovered) {
+      const key = skill.name.toLowerCase();
+      const winner = unique.get(key);
+      if (!winner) unique.set(key, skill);
+      else issues.push({ name: skill.name, scope: skill.scope, reason: "shadowed", detail: winner.scope });
+    }
     this.skills = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+    this.skillIssues = issues;
     return this.list();
   }
 
   list(): XiuSkill[] { return this.skills.map((skill) => ({ ...skill })); }
+
+  /** The skill files the last `refresh()` found but did not list, in discovery order. */
+  issues(): SkillIssue[] { return this.skillIssues.map((issue) => ({ ...issue })); }
 
   catalog(): string {
     if (!this.skills.length) return "No Xiu skills are installed.";
