@@ -69,6 +69,7 @@ import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
 import { diffUsage, formatRunChangeList, parseDiffCommand, replayRunChanges } from "./commands/diff-commands.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
+import { runRecoverCommand } from "./commands/recover-command.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
 import { handleWebCommand } from "./commands/web-commands.js";
@@ -290,7 +291,7 @@ async function main(): Promise<void> {
   const options = program.opts();
   trustGrantedByFlag = Boolean(options.trustWorkspace);
   if (options.json) {
-    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "doctor" || program.args[0] === "report";
+    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover";
     if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, update, session-list or recovery commands.");
     // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
     const redirected = redirectHumanOutputToStderr();
@@ -313,6 +314,11 @@ async function main(): Promise<void> {
   if (program.args[0] === "report") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes), isTrusted: workspaceTrusted });
+    return;
+  }
+  if (program.args[0] === "recover") {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    process.exitCode = await runRecoverCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
     return;
   }
   if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
@@ -804,8 +810,8 @@ async function main(): Promise<void> {
     if (recoverySource) {
       if (initialTask) {
         refuseToStart(localize(language,
-          `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先不带任务参数启动 xiu，确认恢复或放弃后再运行新任务。`,
-          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task first and explicitly resume or abandon it before running a new task.`));
+          `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先在可交互终端里不带任务参数启动 xiu 确认恢复或放弃，或运行 xiu recover abandon ${recoverySource.runId.slice(0, 8)} 明确放弃，然后再运行新任务。`,
+          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task in an interactive terminal to resume or abandon it, or run xiu recover abandon ${recoverySource.runId.slice(0, 8)} to abandon it explicitly, before running a new task.`));
         return;
       }
       const point = recoverySource.recoveryPoints.at(-1);

@@ -223,7 +223,7 @@ test("--json with an interrupted task in the workspace reports not_started inste
   assert.equal(lines[0]?.payload.success, false);
   assert.equal(lines[0]?.payload.exitCode, 1);
   assert.match(String(lines[0]?.payload.error), new RegExp(`Interrupted task ${interrupted.runId.slice(0, 8)} was detected`));
-  assert.match(String(lines[0]?.payload.error), /resume or abandon it before running a new task/);
+  assert.match(String(lines[0]?.payload.error), new RegExp(`run xiu recover abandon ${interrupted.runId.slice(0, 8)} to abandon it explicitly`));
   // The explanation is human output and therefore on stderr; the model was never contacted; the record is untouched.
   assert.match(run.stderr, /Interrupted task .* was detected/);
   assert.equal(server.requests.length, 0, "the task must not reach the model");
@@ -236,7 +236,7 @@ test("a one-shot task with an interrupted run exits 1 and leaves the record for 
   const interrupted = await leaveInterruptedRun(cwd, home);
   const run = await runCli(["--provider", "fake", "--yes", "write a summary"], cwd, home);
   assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
-  assert.match(run.stdout, /Interrupted task .* was detected\. Start xiu without a task first/);
+  assert.match(run.stdout, /Interrupted task .* was detected\. Start xiu without a task in an interactive terminal/);
   assert.equal(server.requests.length, 0);
   assert.equal(await recordStatus(interrupted.file), "running");
 });
