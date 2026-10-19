@@ -236,7 +236,7 @@ test("real desktop host forwards idle Plan mode to its shared manager and resets
   let calls = 0;
   const options = {
     profile: { id: "fixture", name: "Fixture", kind: "openai-compatible" as const, model: "offline", features: { text: true as const, tools: true, vision: false, image: false, video: false, audio: false } },
-    backgroundRoot: path.join(workspace, ".xiu", "background"), journalRoot,
+    backgroundRoot: path.join(workspace, ".xiu", "background"), journalRoot, securityAuditFile: path.join(workspace, ".xiu", "security-audit.jsonl"),
     provider: { async complete() {
       calls++;
       await finish.promise;
