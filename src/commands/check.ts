@@ -16,6 +16,9 @@ export interface ProjectCheck {
   beforeScript?: string;
   afterScript?: string;
   reason?: string;
+  /** Which situation `reason` describes, so the terminal can say it in the user's language; `reasonDetail` is the script-name prefix for the `not-string` case. */
+  reasonCode?: "no-package" | "cancelled" | "no-script" | "empty-script" | "not-string";
+  reasonDetail?: string;
 }
 
 export interface ProjectCheckDiscovery {
@@ -54,8 +57,8 @@ function safeText(value: string, sensitiveValues: readonly string[] = []): strin
   return redactSecrets(value, [...environmentSecrets, ...sensitiveValues]);
 }
 
-function absentChecks(reason: string): ProjectCheck[] {
-  return PROJECT_CHECK_NAMES.map((name) => ({ name, command: `npm run ${name}`, available: false, reason }));
+function absentChecks(reason: string, reasonCode?: ProjectCheck["reasonCode"]): ProjectCheck[] {
+  return PROJECT_CHECK_NAMES.map((name) => ({ name, command: `npm run ${name}`, available: false, reason, ...(reasonCode ? { reasonCode } : {}) }));
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -64,7 +67,7 @@ function record(value: unknown): value is Record<string, unknown> {
 
 /** Read project metadata only. The caller must establish workspace trust first. */
 export async function discoverProjectChecks(context: ToolContext, options: Pick<ProjectCheckOptions, "sensitiveValues"> = {}): Promise<ProjectCheckDiscovery> {
-  if (context.signal?.aborted) return { packagePresent: false, checks: absentChecks("Discovery cancelled."), error: "Discovery cancelled." };
+  if (context.signal?.aborted) return { packagePresent: false, checks: absentChecks("Discovery cancelled.", "cancelled"), error: "Discovery cancelled." };
   try {
     // project_info reads package.json; prevent a link to an external package first.
     resolveWorkspacePath(context.cwd, "package.json");
@@ -74,7 +77,7 @@ export async function discoverProjectChecks(context: ToolContext, options: Pick<
     const info: unknown = JSON.parse(execution.output);
     if (!record(info) || !Array.isArray(info.markers)) throw new Error("Project discovery returned invalid metadata.");
     const packagePresent = info.markers.includes("package.json");
-    if (!packagePresent) return { packagePresent: false, checks: absentChecks("No package.json in the workspace root.") };
+    if (!packagePresent) return { packagePresent: false, checks: absentChecks("No package.json in the workspace root.", "no-package") };
     if (typeof info.package_error === "string") throw new Error(`Cannot read package.json: ${info.package_error}`);
     if (!record(info.scripts)) throw new Error("package.json scripts must be an object.");
     const scripts = info.scripts;
@@ -84,6 +87,7 @@ export async function discoverProjectChecks(context: ToolContext, options: Pick<
       const result: ProjectCheck = { name, command: `npm run ${name}`, available };
       if (!available) {
         result.reason = script === undefined ? `No ${name} script in package.json.` : `The ${name} script must be a non-empty string.`;
+        result.reasonCode = script === undefined ? "no-script" : "empty-script";
         return result;
       }
       result.script = safeText(script, options.sensitiveValues);
@@ -93,6 +97,8 @@ export async function discoverProjectChecks(context: ToolContext, options: Pick<
         else if (lifecycle !== undefined && typeof lifecycle !== "string") {
           result.available = false;
           result.reason = `The ${prefix}${name} script must be a string.`;
+          result.reasonCode = "not-string";
+          result.reasonDetail = prefix;
         }
       }
       return result;
