@@ -114,6 +114,15 @@ test("a saved change record that cannot be read is told apart from a missing one
   await assert.rejects(replayRunChanges(f, "3", undefined, "en-US"), /cannot be read \(Unsafe or oversized task change history file\.\)/);
 });
 
+test("/diff runs lists the readable runs and says how many journal records it could not read", async () => {
+  const f = await fixture();
+  await fs.writeFile(path.join(path.dirname(f.cwd), "task-runs", f.taskRunJournal.workspaceId, "not-json.json"), "{not json");
+  const text = await formatRunChangeList(f, "en-US");
+  assert.match(text, /^1\s+3f2a9c1e\s+/m);
+  assert.match(text, /\n1 more run record\(s\) could not be read \(corrupt ×1\) and are not listed/);
+  assert.match(await formatRunChangeList(f, "zh-CN"), /\n另有 1 条运行记录无法读取（corrupt ×1），未列出/);
+});
+
 test("/diff runs on a workspace without runs says so", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-diff-commands-empty-"));
   const journal = new TaskRunJournal(root, path.join(root, "task-runs"));

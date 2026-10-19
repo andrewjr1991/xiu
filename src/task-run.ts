@@ -172,6 +172,26 @@ function replayPolicy(sideEffect: TaskSideEffect): TaskReplayPolicy {
   return "forbidden";
 }
 
+/** Why a journal record could not be read; a fixed word or the system error code, never a path or message. */
+export type TaskRunUnreadableReason = "corrupt" | "unsafe" | "other-workspace" | "unreadable" | string;
+
+export interface TaskRunJournalScan {
+  /** Newest first, as `recent` returns them. */
+  records: TaskRunRecord[];
+  /** Records skipped because they could not be read, by file name (the run id), sorted by id. */
+  unreadable: Array<{ runId: string; reason: TaskRunUnreadableReason }>;
+}
+
+function unreadableRecordReason(error: unknown): TaskRunUnreadableReason {
+  if (error instanceof SyntaxError) return "corrupt";
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("Unsupported or corrupt")) return "corrupt";
+  if (message.startsWith("Unsafe")) return "unsafe";
+  if (message.includes("another workspace")) return "other-workspace";
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && code ? code : "unreadable";
+}
+
 function isRecord(value: unknown): value is TaskRunRecord {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<TaskRunRecord>;
@@ -421,19 +441,38 @@ export class TaskRunJournal {
     return (await this.recent(1))[0];
   }
 
-  /** Returns newest runs for this workspace, including terminal runs. */
+  /**
+   * Returns newest runs for this workspace, including terminal runs. A record that cannot be read
+   * (corrupt, written by another schema version, another workspace's, or an unsafe entry) is
+   * skipped so one bad file does not hide every other run; `scan` names the skipped ones. The
+   * interrupted-run check does not use this path: it still fails closed on an unreadable record.
+   */
   async recent(limit = 100): Promise<TaskRunRecord[]> {
+    return (await this.scan(limit)).records;
+  }
+
+  /** `recent` plus the records it could not read, each with a reason and never a path. */
+  async scan(limit = 100): Promise<TaskRunJournalScan> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Task-run history limit must be between 1 and 500.");
     const names = await fs.readdir(this.directory()).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [] as string[];
       throw error;
     });
+    const unreadable: TaskRunJournalScan["unreadable"] = [];
     const records = (await Promise.all(names
       .filter((name) => name.endsWith(".json"))
-      .map((name) => this.read(path.basename(name, ".json")))))
+      .map(async (name) => {
+        const runId = path.basename(name, ".json");
+        try { return await this.read(runId); }
+        catch (error) {
+          unreadable.push({ runId: runId.slice(0, 160), reason: unreadableRecordReason(error) });
+          return undefined;
+        }
+      })))
       .filter((record): record is TaskRunRecord => Boolean(record))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return records.slice(0, limit).map((record) => structuredClone(record));
+    unreadable.sort((a, b) => a.runId.localeCompare(b.runId));
+    return { records: records.slice(0, limit).map((record) => structuredClone(record)), unreadable };
   }
 
   currentRun(): TaskRunRecord | undefined { return this.current ? structuredClone(this.current) : undefined; }

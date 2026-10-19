@@ -132,3 +132,28 @@ test("xiu report runs lists recent runs and run:<selector> picks one by index or
   assert.equal(await run(empty, ["runs"]), 1);
   assert.match(empty.err.at(-1)!, /no task run to report yet/);
 });
+
+test("xiu report runs lists the readable runs and says how many records it could not read", async () => {
+  const f = await fixture();
+  const directory = path.join(path.dirname(f.cwd), "task-runs", f.journal.workspaceId);
+  await fs.writeFile(path.join(directory, "bad-version.json"), JSON.stringify({ version: 99, runId: "bad-version" }));
+  await fs.writeFile(path.join(directory, "not-json.json"), "{not json");
+
+  assert.equal(await run(f, ["runs"]), 0);
+  const listing = f.out.at(-1)!;
+  assert.match(listing, /^1\s+3f2a9c1e\s+/m, "the readable run is still listed");
+  assert.match(listing, /\n2 more run record\(s\) could not be read \(corrupt ×2\) and are not listed; the runs shown are unaffected, and the interrupted-task check is unchanged\.$/);
+  assert.doesNotMatch(listing, /bad-version|not-json|task-runs/, "no file name or path is echoed");
+  assert.equal(await run(f, ["runs"], { language: "zh-CN" }), 0);
+  assert.match(f.out.at(-1)!, /另有 2 条运行记录无法读取（corrupt ×2），未列出/);
+  assert.equal(await run(f, []), 0, "the latest readable run still reports");
+  assert.match(f.out.at(-1)!, /update the README/);
+
+  const empty = await fixture(false);
+  const emptyDirectory = path.join(path.dirname(empty.cwd), "task-runs", empty.journal.workspaceId);
+  await fs.mkdir(emptyDirectory, { recursive: true });
+  await fs.writeFile(path.join(emptyDirectory, "not-json.json"), "{not json");
+  assert.equal(await run(empty, ["runs"]), 1);
+  assert.match(empty.err.at(-1)!, /no task run to report yet\.\n1 more run record\(s\) could not be read \(corrupt ×1\)/);
+  assert.equal(empty.out.length, 0);
+});

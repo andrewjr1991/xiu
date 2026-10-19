@@ -1,4 +1,4 @@
-import { listRecentRuns, selectRun } from "./commands/run-selection.js";
+import { listRecentRuns, type RunListJournal, selectRun } from "./commands/run-selection.js";
 import { type ExecutionReportSessionLog, originalTaskGoal } from "./execution-report.js";
 import { localize, type UiLanguage } from "./i18n.js";
 import { SecurityAuditLog } from "./security-audit.js";
@@ -15,7 +15,7 @@ import { TaskRunJournal, type TaskRunRecord } from "./task-run.js";
 /** The journal and audit methods the report needs; narrow so tests and the one-shot command can supply their own stores. */
 export interface ExecutionReportSources {
   cwd: string;
-  taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">;
+  taskRunJournal: Pick<TaskRunJournal, "latest"> & RunListJournal;
   securityAudit: Pick<SecurityAuditLog, "read">;
 }
 
@@ -49,7 +49,7 @@ export function defaultExecutionReportSources(cwd: string, taskRunJournal: Execu
 }
 
 /** Recent runs, newest first, as shown by `/report runs` and `xiu report runs`; index 1 is the latest. */
-export async function listReportableRuns(taskRunJournal: Pick<TaskRunJournal, "recent">): Promise<TaskRunRecord[]> {
+export async function listReportableRuns(taskRunJournal: RunListJournal): Promise<TaskRunRecord[]> {
   return listRecentRuns(taskRunJournal);
 }
 
