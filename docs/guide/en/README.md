@@ -34,7 +34,7 @@ Keys come from an environment variable, the local file `~/.xiu/providers.json`, 
 
 ## Working in a session
 
-The first time Xiu enters a directory it asks whether to trust the workspace. Until you trust it, no project instructions (`AGENTS.md` / `XIU.md`), Skills or MCP servers are loaded and nothing is written or executed. The trust list lives in `~/.xiu/trusted-workspaces.json`.
+The first time Xiu enters a directory it asks whether to trust the workspace. Until you trust it, no project instructions (`AGENTS.md` / `XIU.md`), Skills or MCP servers are loaded and nothing is written or executed. The trust list lives in `~/.xiu/trusted-workspaces.json`. The question is asked only on an interactive terminal: over a pipe (CI, redirected input, `echo 1 | xiu`) Xiu does not read the answer from the pipe, counts the workspace as not trusted, says so on stderr and exits 1; `--trust-workspace` is the scripted form of that decision.
 
 Type a task in plain language, or pass it on the command line (`xiu "fix the failing tests"`). While a task runs you can type follow-up instructions; `/cancel` stops it. Attach images with `@path`, or paste them from the clipboard on Windows.
 

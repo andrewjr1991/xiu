@@ -75,7 +75,7 @@ async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: st
   return { cwd, home };
 }
 
-async function runCli(args: string[], cwd: string, home: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+async function runCli(args: string[], cwd: string, home: string, stdin = ""): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", ...args], {
     cwd,
     env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" },
@@ -86,7 +86,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<{ exit
   let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += String(chunk); });
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-  child.stdin.end();
+  child.stdin.end(stdin);
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI --json run timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`)); }, 60_000);
     child.once("error", reject);
@@ -154,6 +154,24 @@ test("--json refuses to prompt for workspace trust and reports a not_started res
   assert.match(String(lines[0]?.payload.error), /not trusted/);
   assert.doesNotMatch(run.stdout + run.stderr, /Do you trust the files in this workspace\?/);
   assert.doesNotMatch(run.stdout + run.stderr, /UNTRUSTED-JSON-CANARY/);
+});
+
+test("a start without a terminal in an untrusted workspace does not ask for trust, does not start and exits 1", { timeout: 90_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, { trusted: false });
+  const trustFile = path.join(home, ".xiu", "trusted-workspaces.json");
+  const expectNotStarted = (run: { exitCode: number | null; stdout: string; stderr: string }, label: string) => {
+    assert.equal(run.exitCode, 1, `${label}: exit code\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`);
+    assert.match(run.stderr, /There is no interactive terminal to confirm trust in this workspace, so it counts as not trusted: Xiu did not inspect or modify it\. Run xiu in a terminal in this directory once and confirm trust, or pass --trust-workspace explicitly on a checkout you control\./, label);
+    assert.doesNotMatch(run.stdout + run.stderr, /Trust this workspace|Select \[1\]|Workspace trusted/, `${label}: the menu is not shown over a pipe`);
+  };
+  // A plain one-shot task (no --json) with the input closed: before, the trust question stayed pending and the process exited 0 with no result.
+  expectNotStarted(await runCli(["--provider", "fake", "Say hello"], cwd, home), "one-shot, input closed");
+  // A line on the pipe is not an answer to the trust question: an empty line or "1" would have counted as "Trust this workspace".
+  expectNotStarted(await runCli(["--provider", "fake", "Say hello"], cwd, home, "1\n"), "one-shot, '1' piped");
+  expectNotStarted(await runCli(["--provider", "fake", "Say hello"], cwd, home, "\n"), "one-shot, empty line piped");
+  // An interactive start over a pipe has nobody to answer either.
+  expectNotStarted(await runCli(["--provider", "fake"], cwd, home, "\n"), "interactive start piped");
+  await assert.rejects(fs.access(trustFile), "nothing was written to the trust list");
 });
 
 test("--json without a task is a usage error that writes nothing to stdout", { timeout: 60_000 }, async (t) => {
