@@ -203,6 +203,13 @@ async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): P
   return "trusted";
 }
 
+/** The `result` error of a `--json` run in a workspace that is not trusted: trust is never read from a pipe. */
+function untrustedWorkspaceJsonMessage(language: UiLanguage): string {
+  return localize(language,
+    "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace，再使用 --json。",
+    "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust, or pass --trust-workspace explicitly on a checkout you control, before using --json.");
+}
+
 async function chooseSession(workspace: string, language: UiLanguage) {
   const { sessions, unreadable } = await listSessionsWithIssues(workspace);
   const note = unreadableSessionsNote(unreadable, language);
@@ -426,6 +433,15 @@ async function main(): Promise<void> {
     ].join("\n");
   };
   try {
+    if (options.listSessions || (options.resume !== undefined && options.resume !== false && typeof options.resume === "string")) {
+      // A session log under the workspace's .xiu/sessions is workspace content, read only once the workspace is trusted,
+      // like its task records (xiu report, recover, audit). `--resume` without an id chooses one after the trust question below.
+      if (!(await workspaceTrusted(config.cwd))) {
+        if (jsonStream) { process.exitCode = jsonStream.result({ outcome: "not_started", error: untrustedWorkspaceJsonMessage(language) }); return; }
+        const trust = await confirmWorkspaceTrust(config.cwd, language);
+        if (trust !== "trusted") { if (trust === "unavailable") process.exitCode = 1; return; }
+      }
+    }
     if (options.listSessions) {
       const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
       if (!sessions.length) console.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
@@ -479,9 +495,7 @@ async function main(): Promise<void> {
 
     if (jsonStream && !(await workspaceTrusted(config.cwd))) {
       // A non-interactive run must not read a trust decision from a pipe; trust is granted interactively once, or explicitly per run with --trust-workspace.
-      process.exitCode = jsonStream.result({ outcome: "not_started", error: localize(language,
-        "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace，再使用 --json。",
-        "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust, or pass --trust-workspace explicitly on a checkout you control, before using --json.") });
+      process.exitCode = jsonStream.result({ outcome: "not_started", error: untrustedWorkspaceJsonMessage(language) });
       return;
     }
     const trust = await confirmWorkspaceTrust(config.cwd, language);
