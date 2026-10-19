@@ -65,6 +65,7 @@ import { redactSecrets } from "./secret-redaction.js";
 import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
 import { XiuRuntime } from "./runtime/xiu-runtime.js";
 import { askQuestion, askSecret, askYesNo, InputEndedError } from "./terminal-prompts.js";
+import { installBrokenPipeHandling, setBrokenPipeHandler } from "./broken-pipe.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
@@ -93,6 +94,9 @@ function printUpdateMessage(message: UpdateMessage): void {
         : message.text;
   (message.kind === "error" ? console.error : console.log)(`${formatted}\n`);
 }
+
+// A consumer that closes the pipe early (`xiu report | head -1`) must not turn into a Node stack trace: see broken-pipe.ts.
+installBrokenPipeHandling();
 
 const program = new Command()
   .name("xiu")
@@ -1526,7 +1530,8 @@ async function main(): Promise<void> {
       }
     };
 
-    const onSigint = () => {
+    /** Stops whatever is running the way Ctrl+C does; false when nothing was running. */
+    const cancelActiveWork = (): boolean => {
       status.stop();
       if (activeCheckController) {
         activeCheckController.abort();
@@ -1537,10 +1542,22 @@ async function main(): Promise<void> {
       } else if (xiuRuntime.stopTask()) {
         runningTaskView?.setPhase(localize(language, "正在取消", "Cancelling"));
         console.log(chalk.yellow(localize(language, "\n正在取消当前任务……", "\nCancelling current task...")));
-      }
-      else console.log(chalk.dim(localize(language, "\n使用 /exit 退出 Xiu。", "\nUse /exit to leave Xiu.")));
+      } else return false;
+      return true;
+    };
+    const onSigint = () => {
+      if (!cancelActiveWork()) console.log(chalk.dim(localize(language, "\n使用 /exit 退出 Xiu。", "\nUse /exit to leave Xiu.")));
     };
     process.on("SIGINT", onSigint);
+    let outputPipeClosed = false;
+    setBrokenPipeHandler(() => {
+      // The reader of stdout or stderr is gone (`xiu --json <task> | head -1`): stop the current work as Ctrl+C would, so the
+      // run records its end instead of dying mid-write, and leave once it has stopped. Idle, there is nothing to end: exit now.
+      outputPipeClosed = true;
+      const stopping = cancelActiveWork();
+      if (stopping) console.error(chalk.yellow(localize(language, "输出管道已关闭，正在停止当前工作后退出。", "The output pipe was closed; stopping the current work, then exiting.")));
+      return stopping;
+    });
 
     if (startupProviderError && initialTask) {
       const cause = startupProviderError.message.replace(/[.。]$/, "");
@@ -1674,7 +1691,7 @@ async function main(): Promise<void> {
       let exitRequested = false;
       let first = true;
 
-      while (queue.size && !exitRequested) {
+      while (queue.size && !exitRequested && !outputPipeClosed) {
         const current = queue.dequeue()!;
         const replayInput = first && firstDisplay ? firstDisplay : { task: current.text, inputKind: "task" as const };
         first = false;
@@ -1821,7 +1838,7 @@ async function main(): Promise<void> {
         if (!failure && agent.status().outcome === "unverified") failure = new Error(localize(language, "任务修改了文件，但没有通过验证。", "The task changed files but no verification passed."));
         if (!failure && agent.status().outcome === "failed") failure = new Error(incompleteTaskMessage(agent.status().failureReason, language));
         if (!failure && agent.status().outcome === "paused") failure = new Error(localize(language, "任务已在安全恢复点暂停。处理预算或审批要求后，使用 /recover 继续。", "The task paused at a safe recovery point. Address its budget or approval requirement, then use /recover to continue."));
-        if (failure && !exitRequested) {
+        if (failure && !exitRequested && !outputPipeClosed) {
           console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${failure instanceof Error ? failure.message : String(failure)}\n`));
           const action = await selectTerminalOption(localize(language, "当前任务未完成，下一步怎么做？", "The current task did not complete. What next?"), failureRecoveryOptions(queue.size, language), language);
           if (action === "retry") {
@@ -1830,11 +1847,11 @@ async function main(): Promise<void> {
             const cleared = queue.clear();
             if (cleared) console.log(chalk.dim(localize(language, `已清空 ${cleared} 个排队任务。\n`, `Cleared ${cleared} scheduled task(s).\n`)));
           }
-        } else if (queue.size && !exitRequested) {
+        } else if (queue.size && !exitRequested && !outputPipeClosed) {
           console.log(chalk.cyan(localize(language, `继续运行 ${queue.size} 个明确安排的任务。\n`, `Continuing with ${queue.size} explicitly scheduled task(s).\n`)));
         }
       }
-      return exitRequested;
+      return exitRequested || outputPipeClosed;
     };
 
     if (confirmedRecoveryTask && recoverySource) {
