@@ -100,8 +100,8 @@
 | `--video-model <模型>` | 视频生成模型 |
 | `--audio-model <模型>` | 音频或语音生成模型 |
 | `--unified-model <模型>` | 一个模型承担可支持的全部能力 |
-| `-r, --resume [会话]` | 选择或指定恢复会话 |
-| `--list-sessions` | 列出工作区会话 |
+| `-r, --resume [会话]` | 选择或指定恢复会话。会话日志是工作区里的内容，只在工作区受信任后读取：未信任时终端里先询问是否信任，管道/CI 下按未信任处理并退出码 1（与 `xiu report`、`xiu recover`、`xiu audit` 一致） |
+| `--list-sessions` | 列出工作区会话，同样只在工作区受信任后读取 |
 | `--context-window <Token>` | Provider 元数据不可用时覆盖模型真实窗口 |
 | `--context-limit <Token>` | 覆盖自动压缩阈值，最大为窗口的 90% |
 | `--max-turns <次数>` | 可选的单任务轮数上限；默认不限制 |

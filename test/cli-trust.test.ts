@@ -6,6 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { trustWorkspace } from "../src/trust.js";
+import { Agent } from "../src/agent.js";
+import type { AgentConfig } from "../src/config.js";
+import { listSessions } from "../src/session.js";
+import type { ModelProvider } from "../src/types.js";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxLoader = import.meta.resolve("tsx");
@@ -75,4 +79,51 @@ test("fresh interactive startup stays open with no channels even when environmen
   assert.doesNotMatch(output, /Error: OPENAI_API_KEY is not set/);
   await fs.rm(workspace, { recursive: true, force: true });
   await fs.rm(home, { recursive: true, force: true });
+});
+
+test("--list-sessions and --resume <id> read the workspace's session logs only once it is trusted", { timeout: 120_000 }, async (t) => {
+  const workspace = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "xiu-untrusted-sessions-")));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-untrusted-sessions-home-"));
+  t.after(() => Promise.all([fs.rm(workspace, { recursive: true, force: true }), fs.rm(home, { recursive: true, force: true })]));
+  // One finished session in the (not yet trusted) workspace, written the way a real run writes it.
+  const config: AgentConfig = { provider: "openai", providerId: "openai", model: "test-model", cwd: workspace, maxTurns: 5, autoApprove: true, contextLimit: 60_000 };
+  const provider: ModelProvider = { async complete() { return { text: "SESSION-ANSWER-CANARY", toolCalls: [], raw: { role: "assistant", content: "SESSION-ANSWER-CANARY" }, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } }; } };
+  await new Agent({ config, provider, tools: [], approve: async () => true }).run("SESSION-TASK-CANARY");
+  const [session] = await listSessions(workspace);
+  assert.ok(session, "the session log exists");
+
+  const run = async (args: string[]) => {
+    const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--provider", "agnes", ...args], {
+      cwd: workspace,
+      env: { ...process.env, HOME: home, USERPROFILE: home, AGNES_API_KEY: "", XIU_LANGUAGE: "", XIU_PROVIDER: "" },
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.stdin.end("1\n");
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI run timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`)); }, 60_000);
+      child.once("error", reject);
+      child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
+    });
+    return { exitCode, stdout, stderr, output: stdout + stderr };
+  };
+
+  const listing = await run(["--list-sessions"]);
+  assert.equal(listing.exitCode, 1, listing.output);
+  assert.match(listing.output, /There is no interactive terminal to confirm trust in this workspace, so it counts as not trusted/);
+  assert.doesNotMatch(listing.output, new RegExp(`${session.id}|SESSION-TASK-CANARY`), "before: the untrusted workspace's sessions were listed with exit 0");
+
+  const resume = await run(["--resume", session.id]);
+  assert.equal(resume.exitCode, 1, resume.output);
+  assert.match(resume.output, /so it counts as not trusted/);
+  assert.doesNotMatch(resume.output, /Resumed session|SESSION-TASK-CANARY|SESSION-ANSWER-CANARY/, "nothing from the log was read or shown");
+  assert.equal(await fs.stat(path.join(home, ".xiu", "trusted-workspaces.json")).then(() => true, () => false), false, "nothing was written to the trust list");
+
+  const trusted = await run(["--trust-workspace", "--list-sessions"]);
+  assert.equal(trusted.exitCode, 0, trusted.output);
+  assert.match(trusted.stdout, new RegExp(`^${session.id}  .*SESSION-TASK-CANARY`, "m"), "with trust granted for this process the listing is unchanged");
 });

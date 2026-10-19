@@ -55,6 +55,8 @@ xiu --resume
 xiu --list-sessions
 ```
 
+会话日志保存在工作区的 `.xiu/sessions/` 下，属于检出目录里的内容，所以 `xiu --resume` 与 `xiu --list-sessions` 只在工作区受信任后读取它们：未信任时终端里先问是否信任此工作区，没有可交互终端（管道、CI）时按未信任处理、不读取也不列出、退出码 1；在你掌控的检出目录上可以显式加 `--trust-workspace`。这与 `xiu report`、`xiu recover`、`xiu audit` 对任务记录的处理一致。
+
 恢复指定会话：
 
 ```powershell
