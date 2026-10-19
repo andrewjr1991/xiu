@@ -56,6 +56,7 @@ import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools, createBackgroundTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
+import { contextLimitModeLabel, contextWindowSourceLabel, formatCredentialBackendStatus, projectCheckReason, runOutcomeLabel } from "./status-labels.js";
 import { formatTaskDiagnosticSummary } from "./diagnostics.js";
 import type { AgentTool, ApprovalRequest, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
@@ -391,15 +392,7 @@ async function main(): Promise<void> {
   const mcpManager = createMcpManager(config.cwd, mcpSystemCredentialStore);
   const ensureMcpSystemCredentialStore = async () => mcpSystemCredentialStore ??= await createWindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record");
   let mcpStartup: Promise<ReturnType<McpManager["status"]>> | undefined;
-  const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => {
-    const storage = backend.backend === "environment"
-      ? localize(language, "进程环境变量", "process environment")
-      : backend.secure
-      ? localize(language, "系统安全存储", "system secure storage")
-      : localize(language, "本机明文兼容存储", "local plaintext compatibility storage");
-    const state = backend.available ? localize(language, "可用", "available") : localize(language, "不可用", "unavailable");
-    return `${label}: ${backend.backend} · ${state} · ${backend.entries} ${localize(language, "项", "item(s)")} · ${storage}${backend.reason ? ` · ${backend.reason}` : ""}`;
-  };
+  const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => formatCredentialBackendStatus(label, backend, language);
   const printCredentialStatus = async (): Promise<void> => {
     const environmentCredentials = new EnvironmentCredentialStore({
       kind: "provider-api-key",
@@ -1508,7 +1501,7 @@ async function main(): Promise<void> {
           for (const check of discovery.checks) {
             console.log(check.available
               ? `${chalk.cyan(check.name)}\n${redactTerminalOutput(projectCheckPreview(check))}\n`
-              : chalk.dim(`${check.name}: ${redactTerminalOutput(check.reason ?? localize(language, "不可用", "unavailable"))}`));
+              : chalk.dim(`${check.name}: ${redactTerminalOutput(projectCheckReason(check, language))}`));
           }
           if (latestProjectCheck) {
             console.log(chalk.dim(localize(language, "上次检查记录（未重新运行）：", "Previous check record (not rerun):")));
@@ -2249,20 +2242,20 @@ async function main(): Promise<void> {
         const indexStatusEn = `Index: ${index?.files ?? 0} files${index?.truncated ? " (truncated)" : ""} · ${index?.analyzedModules ?? 0} analyzed modules · ${index?.symbols ?? 0} symbols · ${index?.dependencies ?? 0} dependencies · ${indexModeEn} · ${index?.durationMs ?? 0}ms${index?.dirty ? " · refresh pending" : ""}`;
         console.log(zh ? [
           `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `能力探测：${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `语言：简体中文`,
-          `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${current.outcome}`,
+          `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${runOutcomeLabel(current.outcome, language)}`,
           `轮次：${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : "（无限制）"}`, `待处理补充：${current.pendingSteering}`, `消息：${current.messages}`,
-          `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${current.contextLimitMode}）`,
-          `模型窗口：${current.contextWindow.toLocaleString()} tokens（${current.contextWindowSource}）`, `API Token：输入 ${current.stats.inputTokens.toLocaleString()} / 输出 ${current.stats.outputTokens.toLocaleString()}`,
+          `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${contextLimitModeLabel(current.contextLimitMode, language)}）`,
+          `模型窗口：${current.contextWindow.toLocaleString()} tokens（${contextWindowSourceLabel(current.contextWindowSource, language)}）`, `API Token：输入 ${current.stats.inputTokens.toLocaleString()} / 输出 ${current.stats.outputTokens.toLocaleString()}`,
           `调用：模型 ${current.stats.modelCalls} / 工具 ${current.stats.toolCalls}`, `压缩次数：${current.stats.compactions}`, `活跃时间：${(current.stats.activeMs / 1000).toFixed(1)} 秒`,
           `最近任务诊断：${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "暂无"}`,
           indexStatusZh, `MCP：${mcpManager.status().filter((server) => server.state === "connected").length} 个服务 / ${mcpManager.tools().length} 个工具`,
           `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${background.list().filter((item) => item.running).length} 个运行中`,
           `活动：${activities.list().length} 条记录（/details）`,
         ].join("\n") + "\n" : [
-          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${current.outcome}`,
+          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${runOutcomeLabel(current.outcome, language)}`,
           `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`, `Pending steering: ${current.pendingSteering}`, `Messages: ${current.messages}`,
-          `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${current.contextLimitMode})`,
-          `Model window: ${current.contextWindow.toLocaleString()} tokens (${current.contextWindowSource})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
+          `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${contextLimitModeLabel(current.contextLimitMode, language)})`,
+          `Model window: ${current.contextWindow.toLocaleString()} tokens (${contextWindowSourceLabel(current.contextWindowSource, language)})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
           `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`, `Compactions: ${current.stats.compactions}`, `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,
           `Latest task diagnostics: ${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "none"}`,
           indexStatusEn, `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
