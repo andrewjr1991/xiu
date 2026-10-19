@@ -1867,14 +1867,23 @@ async function main(): Promise<void> {
 
     while (true) {
       for (const message of updateCommands.flushPendingReminder()) printUpdateMessage(message);
-      const task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
-        paths: projectIndex.paths("", 1_000),
-        initialValue: restoredDraft,
-        onChange: (value) => { void draftStore.save(value); },
-        onPaste: () => clipboard.paste(),
-        enableRightClickPaste: rightClickPasteEnabled,
-        language,
-      })).trim();
+      let task: string;
+      try {
+        task = (await readInteractiveInput(awaitingReply ? localize(language, "请回答> ", "answer> ") : "xiu> ", slashCommands(language), inputHistory, promptFooter, {
+          paths: projectIndex.paths("", 1_000),
+          initialValue: restoredDraft,
+          onChange: (value) => { void draftStore.save(value); },
+          onPaste: () => clipboard.paste(),
+          enableRightClickPaste: rightClickPasteEnabled,
+          language,
+        })).trim();
+      } catch (error) {
+        if (!(error instanceof InputEndedError)) throw error;
+        // The piped input is over (`printf '/mcp\n' | xiu`, a script that closed its end): leave the way /exit does, so the
+        // MCP servers are shut down and the process ends, instead of a prompt that waits for a line that cannot come.
+        console.log(chalk.dim(localize(language, "\n输入已结束，退出 Xiu。", "\nInput ended; leaving Xiu.")));
+        break;
+      }
       await draftStore.flush();
       restoredDraft = await draftStore.load();
       if (!task) continue;

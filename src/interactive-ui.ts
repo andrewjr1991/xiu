@@ -1,6 +1,7 @@
 import readline from "node:readline";
 import chalk from "chalk";
 import { localize, type UiLanguage } from "./i18n.js";
+import { InputEndedError } from "./terminal-prompts.js";
 
 export interface SlashCommand {
   name: string;
@@ -540,6 +541,14 @@ export async function readInteractiveInput(
     // drained while the prompt waits, and an aborted wait (the running task settled)
     // resolves empty so the caller can print the result and prompt again instead of
     // blocking until the next input line arrives.
+    //
+    // When the input ends (the pipe reached EOF) before a line arrives, there will never
+    // be another line. Without a signal (the session is idle at its prompt) that is an
+    // InputEndedError for the caller to end the session on, instead of a prompt that
+    // waits forever while MCP servers keep the process alive. With a signal (a task is
+    // running and this prompt only drains its output) the wait goes on until the task
+    // settles, exactly as if nobody typed.
+    if (!options.signal && (process.stdin.readableEnded || process.stdin.destroyed)) throw new InputEndedError();
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const drain = (): void => {
       const live = persistentLiveOutput(options.liveOutput?.() ?? "");
@@ -547,11 +556,14 @@ export async function readInteractiveInput(
     };
     const refreshTimer = options.liveOutput && options.refreshMs && options.refreshMs > 0 ? setInterval(drain, Math.max(100, options.refreshMs)) : undefined;
     try {
-      return await new Promise<string>((resolve) => {
-        const onAbort = (): void => { rl.close(); resolve(""); };
+      return await new Promise<string>((resolve, reject) => {
+        let settled = false;
+        const finish = (outcome: () => void): void => { if (settled) return; settled = true; outcome(); };
+        const onAbort = (): void => finish(() => { rl.close(); resolve(""); });
         if (options.signal?.aborted) { onAbort(); return; }
         options.signal?.addEventListener("abort", onAbort, { once: true });
-        rl.question(prompt, (answer) => { options.signal?.removeEventListener("abort", onAbort); resolve(answer); });
+        rl.once("close", () => { if (!options.signal) finish(() => reject(new InputEndedError())); });
+        rl.question(prompt, (answer) => finish(() => { options.signal?.removeEventListener("abort", onAbort); resolve(answer); }));
       });
     } finally {
       if (refreshTimer) clearInterval(refreshTimer);
