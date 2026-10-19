@@ -66,7 +66,7 @@ import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
-import { handleReportCommand } from "./commands/report-commands.js";
+import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
 import { handleWebCommand } from "./commands/web-commands.js";
@@ -273,8 +273,8 @@ let jsonStream: JsonEventStream | undefined;
 async function main(): Promise<void> {
   const options = program.opts();
   if (options.json) {
-    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor";
-    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, update, session-list or recovery commands.");
+    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "doctor" || program.args[0] === "report";
+    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, update, session-list or recovery commands.");
     // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
     const redirected = redirectHumanOutputToStderr();
     jsonStream = createJsonEventStream(redirected.writeStdout, undefined, (value) => redactSecrets(value));
@@ -293,6 +293,11 @@ async function main(): Promise<void> {
   }
   const settingsStore = new SettingsStore();
   const settings = await settingsStore.load();
+  if (program.args[0] === "report") {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes) });
+    return;
+  }
   if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;

@@ -223,6 +223,8 @@ xiu --resume '会话ID'
 /report export html reports/latest.html summary
 ```
 
+不进入交互模式时，`xiu report [markdown|json|html] [summary|details] [工作区内路径]` 导出同一份报告（省略路径则写到标准输出，已存在的文件需加 `--yes` 才覆盖），见[快速上手 8.6](./getting-started.zh-CN.md#86-一次性命令)。
+
 `html` 生成一份可直接用浏览器打开、也方便发给他人的单文件报告：样式全部内联，不含任何脚本，不加载外部资源（文件自带的 Content-Security-Policy 同时禁止两者），自动适配深浅色，所有字段都经过转义。内容与 Markdown 版完全相同，只是把阶段与文件变化排成表格。
 
 - `summary` 包含目标、阶段、相对文件路径与增删统计、验证、失败、预算、安全事件计数和恢复状态，不包含源码预览。
