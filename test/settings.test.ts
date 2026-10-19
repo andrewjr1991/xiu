@@ -192,3 +192,28 @@ test("custom search services are never moved to local-first search", async () =>
   assert.deepEqual((await new SettingsStore(filename, {}).load()).webSearch, custom);
   await fs.rm(directory, { recursive: true, force: true });
 });
+
+test("a damaged settings file fails closed with its path, while inspect() still yields the defaults for diagnostics", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-settings-damaged-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, "settings.json");
+  const store = new SettingsStore(filename, {});
+  assert.deepEqual(await store.inspect(), { file: filename, state: "absent", settings: { webSearch: managedBetaSearch } }, "no file: defaults, no problem");
+  await store.save({ language: "zh-CN" });
+  assert.deepEqual(await store.inspect(), { file: filename, state: "read", settings: { language: "zh-CN", webSearch: managedBetaSearch } });
+
+  await fs.writeFile(filename, "{ broken");
+  const damaged = await store.inspect();
+  assert.equal(damaged.state, "unreadable");
+  assert.deepEqual(damaged.settings, { webSearch: managedBetaSearch }, "the defaults, so the doctor can still describe web search");
+  assert.match(damaged.cause!, /JSON/);
+  assert.doesNotMatch(damaged.cause!, /settings\.json/, "the cause is the parser's message alone");
+  assert.match(damaged.problem!, new RegExp(`^Could not read Xiu settings file ${filename.replace(/[\\/.]/g, "\\$&")}: .*JSON.*Fix its JSON or move the file away`));
+  await assert.rejects(store.load(), { message: damaged.problem }, "load() keeps failing closed instead of resetting the user's settings");
+
+  const asDirectory = new SettingsStore(path.join(directory, "folder.json"), {});
+  await fs.mkdir(asDirectory.file);
+  const unreadable = await asDirectory.inspect();
+  assert.equal(unreadable.state, "unreadable");
+  assert.equal(unreadable.cause, "EISDIR", "a system error is reported by its code");
+});

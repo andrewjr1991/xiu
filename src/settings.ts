@@ -12,6 +12,18 @@ export interface XiuSettings {
   };
 }
 
+/** What `SettingsStore.inspect()` found: the settings to use and, when the file is damaged, why. */
+export interface SettingsInspection {
+  file: string;
+  /** `read`: the file was parsed; `absent`: no file, defaults apply; `unreadable`: the file exists but cannot be used, defaults apply. */
+  state: "read" | "absent" | "unreadable";
+  settings: XiuSettings;
+  /** The underlying error (a JSON syntax message or a system error code) when `state` is `unreadable`. */
+  cause?: string;
+  /** The full, actionable error `load()` throws when `state` is `unreadable`. */
+  problem?: string;
+}
+
 export const XIU_BETA_SEARXNG_ENDPOINT = "https://search.jingran.vip";
 export const XIU_BETA_SEARCH_AUTH_ENDPOINT = `${XIU_BETA_SEARXNG_ENDPOINT}/xiu-auth`;
 export const XIU_BETA_SEARXNG_TOKEN_ENV = "XIU_BETA_SEARXNG_TOKEN";
@@ -82,7 +94,25 @@ export class SettingsStore {
     private readonly environment: NodeJS.ProcessEnv = process.env,
   ) {}
 
+  get file(): string { return this.filename; }
+
+  /**
+   * Loads the settings and fails closed on a damaged file: silently falling back to defaults could
+   * switch web search or the language without the user noticing. `xiu doctor` uses `inspect()`
+   * instead so it can still run and name the problem.
+   */
   async load(): Promise<XiuSettings> {
+    const inspection = await this.inspect();
+    if (inspection.problem) throw new Error(inspection.problem);
+    return inspection.settings;
+  }
+
+  /** Reads the settings file without throwing; a damaged file yields the defaults plus the cause. */
+  async inspect(): Promise<SettingsInspection> {
+    const defaults = (): XiuSettings => {
+      const webSearch = betaWebSearchConfig(this.environment);
+      return webSearch ? { webSearch } : {};
+    };
     try {
       const parsed = JSON.parse(await fs.readFile(this.filename, "utf8")) as { language?: unknown; webSearch?: unknown; webSearchSchema?: unknown; update?: unknown };
       const webSearch = webSearchConfig(parsed.webSearch);
@@ -99,19 +129,22 @@ export class SettingsStore {
       const effectiveWebSearch = Object.prototype.hasOwnProperty.call(parsed, "webSearch")
         ? legacyBetaWithoutToken ? betaWebSearchConfig(this.environment) : upgradedPreset
         : betaWebSearchConfig(this.environment);
-      return {
+      const settings: XiuSettings = {
         ...(typeof parsed.language === "string" ? { language: normalizeLanguage(parsed.language) } : {}),
         ...(effectiveWebSearch ? { webSearch: effectiveWebSearch } : {}),
         ...(parsed.update && typeof parsed.update === "object" && (parsed.update as { notifications?: unknown }).notifications === true
           ? { update: { notifications: true } }
           : {}),
       };
+      return { file: this.filename, state: "read", settings };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        const webSearch = betaWebSearchConfig(this.environment);
-        return webSearch ? { webSearch } : {};
-      }
-      throw new Error(`Could not read Xiu settings: ${error instanceof Error ? error.message : String(error)}`);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { file: this.filename, state: "absent", settings: defaults() };
+      const code = (error as NodeJS.ErrnoException).code;
+      const cause = typeof code === "string" && code ? code : error instanceof Error ? error.message : String(error);
+      return {
+        file: this.filename, state: "unreadable", settings: defaults(), cause,
+        problem: `Could not read Xiu settings file ${this.filename}: ${cause}. Fix its JSON or move the file away; it holds the language and web-search settings. xiu doctor still runs and names the problem.`,
+      };
     }
   }
 

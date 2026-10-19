@@ -314,7 +314,27 @@ async function main(): Promise<void> {
     return;
   }
   const settingsStore = new SettingsStore();
-  const settings = await settingsStore.load();
+  // The doctor runs even when the settings file is damaged, so it can name the problem; every other
+  // command fails closed on it below, as `SettingsStore.load()` does.
+  const inspectedSettings = await settingsStore.inspect();
+  if (options.doctor || program.args[0] === "doctor") {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? inspectedSettings.settings.language) ?? "en-US";
+    process.exitCode = await runDoctorCommand(options.doctor ? (program.args as string[]) : (program.args as string[]).slice(1), {
+      language,
+      collect: async () => {
+        let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
+        try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+        catch { /* The report then describes environment and legacy credentials only. */ }
+        return collectDoctorReport({
+          version: packageJson.version, settings: inspectedSettings.settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()),
+          settingsFile: { state: inspectedSettings.state, ...(inspectedSettings.cause ? { cause: inspectedSettings.cause } : {}) },
+        });
+      },
+    });
+    return;
+  }
+  if (inspectedSettings.problem) throw new Error(inspectedSettings.problem);
+  const settings = inspectedSettings.settings;
   if (program.args[0] === "report") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes), isTrusted: workspaceTrusted });
@@ -328,19 +348,6 @@ async function main(): Promise<void> {
   if (program.args[0] === "audit") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
-    return;
-  }
-  if (options.doctor || program.args[0] === "doctor") {
-    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    process.exitCode = await runDoctorCommand(options.doctor ? (program.args as string[]) : (program.args as string[]).slice(1), {
-      language,
-      collect: async () => {
-        let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
-        try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
-        catch { /* The report then describes environment and legacy credentials only. */ }
-        return collectDoctorReport({ version: packageJson.version, settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()) });
-      },
-    });
     return;
   }
   if (options.updateDoctor) {

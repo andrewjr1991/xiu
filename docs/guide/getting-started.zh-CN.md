@@ -80,7 +80,7 @@ xiu --update-doctor
 
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
-从 0.21 起，`xiu doctor`（等价于 `xiu --doctor`，交互模式中为 `/doctor`）把上述更新诊断、`--provider-config-diagnostics`、联网搜索配置、代理与证书检查合并成一份只读报告，分为“安装与运行环境 / 模型渠道 / 联网搜索 / 代理与证书 / Windows / 工作区记录 / 系统”七段：每个渠道只显示类型、模型、地址主机名和 Key 来源（环境变量名、系统凭据、本机配置文件或缺失），不显示 Key；代理地址里的账号密码替换为 `***`，多个代理变量指向不同地址时给出警告并说明更新检查、联网搜索、模型请求各自读哪个设置；检测 `NODE_TLS_REJECT_UNAUTHORIZED=0`（标为错误）、`NODE_EXTRA_CA_CERTS` 文件是否存在、访问 npm Registry 时的证书替换（企业网关）或 HTTP 403；Windows 上读取 PowerShell 语言模式与执行策略，受限语言模式提示用 `npm.cmd`；Node 20 会提示已停止维护；“工作区记录”一段用与 `/report runs`、`/resume` 相同的方式读取当前工作区的运行记录与会话日志，报告可读条数、无法读取的条数与原因（如 `corrupt ×1`、`EISDIR ×1`，不含路径），并提前做一次与一次性运行相同的中断任务检查——有待处理的中断任务时给出警告并指向 `xiu recover status` / `xiu recover abandon <运行 ID>`，检查本身因损坏记录无法完成时标为错误（此时新的一次性运行会返回 `not_started`）；未信任的工作区不读取任何记录，只提示先交互运行一次。报告不发起搜索、不发送凭证、不修改任何文件，只有更新诊断原有的 npm Registry 只读查询会联网；在线测试仍用 `/provider test` 与 `/web doctor`。存在错误时退出码为 1。`xiu doctor json` 把同一份（已脱敏的）报告输出为一个 JSON 文档：`version`、`generatedAt`、`status`（pass/warning/failure）与 `sections[]`，每段含 `id`、中英文标题和 `items[]`（`id`、`level`、中英文 `label`/`summary`/`detail`），供脚本和 CI 判读，退出码与文本形式相同；`xiu doctor` 后面跟其他词会报用法错误并返回 1，不再被当成任务发给模型。
+从 0.21 起，`xiu doctor`（等价于 `xiu --doctor`，交互模式中为 `/doctor`）把上述更新诊断、`--provider-config-diagnostics`、联网搜索配置、代理与证书检查合并成一份只读报告，分为“安装与运行环境 / 模型渠道 / 联网搜索 / 代理与证书 / Windows / 工作区记录 / 系统”七段：每个渠道只显示类型、模型、地址主机名和 Key 来源（环境变量名、系统凭据、本机配置文件或缺失），不显示 Key；代理地址里的账号密码替换为 `***`，多个代理变量指向不同地址时给出警告并说明更新检查、联网搜索、模型请求各自读哪个设置；检测 `NODE_TLS_REJECT_UNAUTHORIZED=0`（标为错误）、`NODE_EXTRA_CA_CERTS` 文件是否存在、访问 npm Registry 时的证书替换（企业网关）或 HTTP 403；Windows 上读取 PowerShell 语言模式与执行策略，受限语言模式提示用 `npm.cmd`；Node 20 会提示已停止维护；“工作区记录”一段用与 `/report runs`、`/resume` 相同的方式读取当前工作区的运行记录与会话日志，报告可读条数、无法读取的条数与原因（如 `corrupt ×1`、`EISDIR ×1`，不含路径），并提前做一次与一次性运行相同的中断任务检查——有待处理的中断任务时给出警告并指向 `xiu recover status` / `xiu recover abandon <运行 ID>`，检查本身因损坏记录无法完成时标为错误（此时新的一次性运行会返回 `not_started`）；未信任的工作区不读取任何记录，只提示先交互运行一次。“安装与运行环境”一段还会说明 `~/.xiu/settings.json` 是已读取、不存在（使用默认）还是无法读取：设置文件损坏时其他命令都会以同一个错误退出（不会悄悄改用默认设置），只有 `xiu doctor` 仍能运行并把原因与修法列出来。报告不发起搜索、不发送凭证、不修改任何文件，只有更新诊断原有的 npm Registry 只读查询会联网；在线测试仍用 `/provider test` 与 `/web doctor`。存在错误时退出码为 1。`xiu doctor json` 把同一份（已脱敏的）报告输出为一个 JSON 文档：`version`、`generatedAt`、`status`（pass/warning/failure）与 `sections[]`，每段含 `id`、中英文标题和 `items[]`（`id`、`level`、中英文 `label`/`summary`/`detail`），供脚本和 CI 判读，退出码与文本形式相同；`xiu doctor` 后面跟其他词会报用法错误并返回 1，不再被当成任务发给模型。
 
 ## 从正确目录启动
 
@@ -171,7 +171,7 @@ xiu --language zh-CN
 $env:XIU_LANGUAGE = 'zh-CN'
 ```
 
-优先级为：命令行 `--language`、环境变量 `XIU_LANGUAGE`、`~/.xiu/settings.json`、系统区域语言。中文模式会统一使用简体中文显示启动页、菜单、审批、状态、计划、进展、关键操作和完成摘要，并要求模型使用中文给出用户可见的分析摘要、阶段说明与最终回答。代码、命令、路径、工具名、模型名和外部原始输出保持原文。
+优先级为：命令行 `--language`、环境变量 `XIU_LANGUAGE`、`~/.xiu/settings.json`、系统区域语言。若 `~/.xiu/settings.json` 损坏（JSON 语法错误或无法读取），Xiu 会以 “Could not read Xiu settings file <路径>: <原因>” 退出而不是悄悄改用默认设置；修复其中的 JSON 或把文件移走即可，`xiu doctor` 在此期间仍可运行。中文模式会统一使用简体中文显示启动页、菜单、审批、状态、计划、进展、关键操作和完成摘要，并要求模型使用中文给出用户可见的分析摘要、阶段说明与最终回答。代码、命令、路径、工具名、模型名和外部原始输出保持原文。
 
 从 v0.8.6 开始，内置工具活动说明、重试、恢复点和多 Agent 状态也会确定性本地化；中文任务计划拒绝纯英文自然语言标题。v0.9.9 进一步在模型回复显示前确定性转换自然语言中的繁体字，任务计划也会转为简体；围栏代码块和行内代码保持原文。代码路径、命令、模型名与第三方命令原始输出仍保持原文。明确询问“你是谁”或“谁开发了 Xiu”时由程序级身份守卫回答，底层模型不能再把 Xiu 说成 Agnes 或归属于 Sapiens AI；Xiu 由静然开发。
 
