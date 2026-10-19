@@ -38,6 +38,8 @@ The first time Xiu enters a directory it asks whether to trust the workspace. Un
 
 Type a task in plain language, or pass it on the command line (`xiu "fix the failing tests"`). While a task runs you can type follow-up instructions; `/cancel` stops it. Attach images with `@path`, or paste them from the clipboard on Windows.
 
+For scripts and CI, `xiu --json --yes "task"` writes only JSON Lines to stdout (a `session.started` line, every redacted runtime event, and a final `result` line) and moves human-readable progress to stderr. The `result` exit code matches the process: 0 completed, 2 changed but unverified, 3 the model asked a question, 1 failed or not started. `--json` never reads decisions from a pipe: an untrusted workspace returns `not_started` until you trust it interactively once, and dangerous actions stay denied.
+
 Tools are grouped by risk: reads run automatically; writes and command execution ask for approval; dangerous actions (deletes, hard resets, bulk changes) always ask, and `--yes` cannot skip them. Answer `y` to allow, Enter to refuse. Narrow "always allow for this session" grants exist for ordinary writes and specific programs and expire when Xiu exits.
 
 `/plan on` switches to read-only Plan mode, enforced at the tool boundary: Xiu can read, search and design but cannot write or execute. `/plan` and `/tasks` show the current plan; `/plan off` returns to execution.

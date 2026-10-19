@@ -41,6 +41,7 @@ import { PluginRegistry } from "./plugins.js";
 import { listSessions, loadSession, type RestoredSession, type SessionReplayTurn } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
+import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
@@ -236,6 +237,7 @@ const program = new Command()
   .option("--provider-config-preview <backup-id>", "preview Provider backup recovery (or current for dead-lock cleanup), then exit")
   .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
+  .option("--json", "one-shot tasks only: write runtime events and the final result to stdout as JSON Lines, human-readable text to stderr", false)
   .showHelpAfterError()
   .parse();
 
@@ -266,8 +268,17 @@ async function chooseSession(workspace: string, language: UiLanguage) {
   return selected ? await loadSession(workspace, selected) : undefined;
 }
 
+let jsonStream: JsonEventStream | undefined;
+
 async function main(): Promise<void> {
   const options = program.opts();
+  if (options.json) {
+    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor";
+    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, update, session-list or recovery commands.");
+    // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
+    const redirected = redirectHumanOutputToStderr();
+    jsonStream = createJsonEventStream(redirected.writeStdout, undefined, (value) => redactSecrets(value));
+  }
   const recoveryOptions = [options.providerConfigDiagnostics, options.providerConfigPreview, options.providerConfigRecover].filter(Boolean);
   if (recoveryOptions.length) {
     if (recoveryOptions.length !== 1 || program.args.length) throw new Error("Choose one Provider configuration command without a task.");
@@ -469,6 +480,13 @@ async function main(): Promise<void> {
       console.log(chalk.yellow(localize(language, "警告：Xiu 正在 Windows System32 中运行。请退出并进入项目目录后重新启动，以免误改系统文件。\n", "Warning: Xiu is running in Windows System32. Exit, enter your project directory, and start Xiu there before making changes.\n")));
     }
 
+    if (jsonStream && !(await isWorkspaceTrusted(config.cwd))) {
+      // A non-interactive run must not read a trust decision from a pipe; trust is granted once, interactively.
+      process.exitCode = jsonStream.result({ outcome: "not_started", error: localize(language,
+        "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，再使用 --json。",
+        "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust before using --json.") });
+      return;
+    }
     if (!(await confirmWorkspaceTrust(config.cwd, language))) return;
     config.projectConfigurationTrusted = true;
     await pluginRegistry.refresh(true);
@@ -933,6 +951,10 @@ async function main(): Promise<void> {
       sanitize: redactTerminalOutput,
       approvalHandler: approveRequest,
     });
+    if (jsonStream) {
+      const stream = jsonStream;
+      xiuRuntime.subscribe((event) => stream.event(event));
+    }
     const agent = new Agent({
       config,
       provider,
@@ -1463,10 +1485,11 @@ async function main(): Promise<void> {
     process.on("SIGINT", onSigint);
 
     if (startupProviderError && initialTask) {
-      console.error(chalk.red(localize(language,
+      const message = localize(language,
         `当前 Provider 尚未配置：${startupProviderError.message}。请先运行 xiu，并按引导配置 Provider 后再执行一次性任务。`,
-        `The current provider is not configured: ${startupProviderError.message}. Run xiu first and complete provider setup before starting a one-shot task.`)));
-      process.exitCode = 1;
+        `The current provider is not configured: ${startupProviderError.message}. Run xiu first and complete provider setup before starting a one-shot task.`);
+      console.error(chalk.red(message));
+      process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: redactTerminalOutput(message) }) : 1;
       return;
     }
 
@@ -1474,8 +1497,14 @@ async function main(): Promise<void> {
 
     if (initialTask) {
       let taskStarted = false;
+      const taskStartedAt = Date.now();
+      jsonStream?.started({ version: packageJson.version, provider: config.providerId, model: config.model, workspace: config.cwd, language });
       try {
         await runWithTaskBaseline(initialTask, () => { taskStarted = true; });
+      } catch (error) {
+        if (!jsonStream) throw error;
+        process.exitCode = jsonStream.result({ outcome: taskStarted ? agent.status().outcome : "not_started", error: redactTerminalOutput(error instanceof Error ? error.message : String(error)), durationMs: Date.now() - taskStartedAt });
+        return;
       } finally {
         if (taskStarted) await agent.recordReplayTurn({
           task: initialTask,
@@ -1490,6 +1519,20 @@ async function main(): Promise<void> {
           diagnostics: agent.status().diagnostics,
           exact: true,
         }).catch(() => undefined);
+      }
+      if (jsonStream) {
+        const finished = agent.status();
+        const snapshot = xiuRuntime.snapshot();
+        const { modelCalls, toolCalls, inputTokens, outputTokens, estimatedTokens } = finished.stats;
+        process.exitCode = jsonStream.result({
+          outcome: finished.outcome,
+          failureReason: finished.failureReason,
+          completionIssues: finished.completionIssues?.length ? finished.completionIssues : undefined,
+          pendingQuestion: snapshot.task?.pendingQuestion?.question,
+          stats: { modelCalls, toolCalls, inputTokens, outputTokens, estimatedTokens },
+          durationMs: Date.now() - taskStartedAt,
+        });
+        return;
       }
       if (agent.status().outcome === "unverified") process.exitCode = 2;
       return;
@@ -2122,6 +2165,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
-  process.exitCode = 1;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(chalk.red(`Error: ${message}`));
+  process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: message }) : 1;
 });
