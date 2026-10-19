@@ -1,11 +1,43 @@
 import readline from "node:readline/promises";
 import process from "node:process";
 
-/** Reads one line from the terminal. */
-export async function askQuestion(prompt: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try { return await rl.question(prompt); }
-  finally { rl.close(); }
+/** The input ended (EOF, Ctrl-D, a closed pipe) before the question was answered. */
+export class InputEndedError extends Error {
+  readonly code = "input/ended";
+  constructor() {
+    super("Input ended before the question was answered.");
+    this.name = "InputEndedError";
+  }
+}
+
+export interface PromptStreams {
+  input: NodeJS.ReadableStream;
+  output: NodeJS.WritableStream;
+}
+
+/**
+ * Reads one line from the terminal. When the input ends before a line arrives, the promise rejects with
+ * `InputEndedError` instead of staying pending: a pending question would let the process drain its event
+ * loop and exit 0 as if the prompt had never been shown.
+ */
+export async function askQuestion(prompt: string, streams: PromptStreams = { input: process.stdin, output: process.stdout }): Promise<string> {
+  const rl = readline.createInterface({ input: streams.input, output: streams.output });
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      let settled = false;
+      rl.once("close", () => { if (!settled) { settled = true; reject(new InputEndedError()); } });
+      rl.question(prompt).then((answer) => { settled = true; resolve(answer); }, (error: unknown) => { settled = true; reject(error); });
+    });
+  } finally { rl.close(); }
+}
+
+/** Asks a `[y/N]` question; only `y`/`yes` is a yes, and an input that ends without an answer is a no. */
+export async function askYesNo(prompt: string, streams?: PromptStreams): Promise<boolean> {
+  try { return /^(y|yes)$/i.test((await askQuestion(prompt, streams)).trim()); }
+  catch (error) {
+    if (error instanceof InputEndedError) return false;
+    throw error;
+  }
 }
 
 /** Reads a secret with masked echo; falls back to a plain prompt when stdin is not a raw-capable TTY. */

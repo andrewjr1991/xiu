@@ -64,7 +64,7 @@ import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
 import { XiuRuntime } from "./runtime/xiu-runtime.js";
-import { askQuestion, askSecret } from "./terminal-prompts.js";
+import { askQuestion, askSecret, askYesNo, InputEndedError } from "./terminal-prompts.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
@@ -163,20 +163,38 @@ async function workspaceTrusted(workspace: string): Promise<boolean> {
   return trustGrantedByFlag || isWorkspaceTrusted(workspace);
 }
 
-async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): Promise<boolean> {
-  if (await workspaceTrusted(workspace)) return true;
+/**
+ * `trusted`: the workspace was already trusted or the user trusted it now. `declined`: the user chose Exit, or
+ * ended the input (Ctrl-D) at the prompt. `unavailable`: there is no interactive terminal to ask on, so trust is
+ * not asked for; a trust question is never answered by a pipe, where an empty line would count as the default
+ * "1. Trust". The caller decides the exit code.
+ */
+async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): Promise<"trusted" | "declined" | "unavailable"> {
+  if (await workspaceTrusted(workspace)) return "trusted";
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(chalk.yellow(localize(language,
+      "没有可交互的终端，无法确认是否信任此工作区，按未信任处理：Xiu 没有检查或修改其中内容。请先在终端里进入该目录运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace。",
+      "There is no interactive terminal to confirm trust in this workspace, so it counts as not trusted: Xiu did not inspect or modify it. Run xiu in a terminal in this directory once and confirm trust, or pass --trust-workspace explicitly on a checkout you control.")));
+    return "unavailable";
+  }
   console.log(chalk.bold(localize(language, "是否信任此工作区中的文件？", "Do you trust the files in this workspace?")));
   console.log(chalk.dim(localize(language, "Xiu 可以在这里读取文件和项目指令、加载 MCP、修改代码并运行命令。", "Xiu may read files, load project instructions and MCP servers, modify code, and run commands here.")));
   console.log(`\n  ${chalk.green("1.")} ${localize(language, "信任此工作区", "Trust this workspace")}`);
   console.log(`  ${chalk.red("2.")} ${localize(language, "退出", "Exit")}\n`);
-  const choice = (await askQuestion(chalk.cyan(localize(language, "选择 [1]：", "Select [1]: ")))).trim();
+  let choice: string;
+  try { choice = (await askQuestion(chalk.cyan(localize(language, "选择 [1]：", "Select [1]: ")))).trim(); }
+  catch (error) {
+    if (!(error instanceof InputEndedError)) throw error;
+    choice = "2";
+    console.log();
+  }
   if (choice !== "" && choice !== "1") {
     console.log(chalk.dim(localize(language, "未信任工作区，Xiu 没有检查或修改其中内容。", "Workspace was not trusted. Xiu did not inspect or modify it.")));
-    return false;
+    return "declined";
   }
   await trustWorkspace(workspace);
   console.log(chalk.green(localize(language, "已信任工作区。\n", "Workspace trusted.\n")));
-  return true;
+  return "trusted";
 }
 
 async function chooseSession(workspace: string, language: UiLanguage) {
@@ -447,7 +465,13 @@ async function main(): Promise<void> {
         "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust, or pass --trust-workspace explicitly on a checkout you control, before using --json.") });
       return;
     }
-    if (!(await confirmWorkspaceTrust(config.cwd, language))) return;
+    const trust = await confirmWorkspaceTrust(config.cwd, language);
+    if (trust !== "trusted") {
+      // A one-shot task that never started is a failure to its script (exit 1, as with --json); so is a start with no
+      // terminal to answer on. Choosing Exit at the interactive prompt is a normal exit.
+      if (initialTask || trust === "unavailable") process.exitCode = 1;
+      return;
+    }
     config.projectConfigurationTrusted = true;
     await pluginRegistry.refresh(true);
     const pluginContributions = await pluginRegistry.loadApprovedContributions();
@@ -1999,8 +2023,7 @@ async function main(): Promise<void> {
           console.log(chalk.dim(localize(language, "已取消恢复。\n", "Restore cancelled.\n")));
           continue;
         }
-        const answer = await askQuestion(chalk.bgRed.white.bold(" RESTORE ") + ` Restore files from checkpoint ${selected}? [y/N] `);
-        if (!/^(y|yes)$/i.test(answer.trim())) {
+        if (!(await askYesNo(chalk.bgRed.white.bold(" RESTORE ") + ` Restore files from checkpoint ${selected}? [y/N] `))) {
           console.log(chalk.dim(localize(language, "已取消恢复。\n", "Restore cancelled.\n")));
           continue;
         }
@@ -2066,8 +2089,7 @@ async function main(): Promise<void> {
               console.log(chalk.red(localize(language, "合并已被冲突或证据门禁阻止；主工作区和 Agent Worktree 均未修改。\n", "Integration is blocked by conflicts or evidence gates; the main workspace and Agent Worktree were not modified.\n")));
               continue;
             }
-            const answer = await askQuestion(chalk.yellow("[write]") + localize(language, ` 将此 Agent 补丁合并到 ${config.cwd}？[y/N] `, ` Integrate this Agent patch into ${config.cwd}? [y/N] `));
-            if (!/^(y|yes)$/i.test(answer.trim())) console.log(chalk.dim(localize(language, "已取消 Agent 集成。\n", "Agent integration cancelled.\n")));
+            if (!(await askYesNo(chalk.yellow("[write]") + localize(language, ` 将此 Agent 补丁合并到 ${config.cwd}？[y/N] `, ` Integrate this Agent patch into ${config.cwd}? [y/N] `)))) console.log(chalk.dim(localize(language, "已取消 Agent 集成。\n", "Agent integration cancelled.\n")));
             else {
               console.log(chalk.green(`${await coordinator.integrate(parts[2], parts[3])}\n`));
               projectIndex.invalidate();
