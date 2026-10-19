@@ -1,5 +1,14 @@
 import path from "node:path";
-import ts from "typescript";
+import type ts from "typescript";
+
+// The TypeScript parser is by far the largest dependency Xiu ships (about 0.4 s to load), so it
+// is loaded the first time a source file is actually analyzed rather than when Xiu starts.
+// Every helper below runs inside analyzeSource, after loadTypeScript() has assigned `api`.
+let api: typeof ts;
+async function loadTypeScript(): Promise<typeof ts> {
+  if (!api) api = (await import("typescript")).default;
+  return api;
+}
 
 export const MAX_SYMBOLS_PER_FILE = 500;
 export const MAX_IMPORTS_PER_FILE = 300;
@@ -95,15 +104,15 @@ function bounded(value: string, maximum: number): string {
 }
 
 function exported(node: ts.Node): boolean {
-  const modifiers = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
-  if (modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword)) return true;
-  if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent) && ts.isVariableStatement(node.parent.parent)) return exported(node.parent.parent);
+  const modifiers = api.canHaveModifiers(node) ? api.getModifiers(node) : undefined;
+  if (modifiers?.some((modifier) => modifier.kind === api.SyntaxKind.ExportKeyword || modifier.kind === api.SyntaxKind.DefaultKeyword)) return true;
+  if (api.isVariableDeclaration(node) && api.isVariableDeclarationList(node.parent) && api.isVariableStatement(node.parent.parent)) return exported(node.parent.parent);
   return false;
 }
 
 function defaultExported(node: ts.Node): boolean {
-  const modifiers = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
-  return Boolean(modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword));
+  const modifiers = api.canHaveModifiers(node) ? api.getModifiers(node) : undefined;
+  return Boolean(modifiers?.some((modifier) => modifier.kind === api.SyntaxKind.DefaultKeyword));
 }
 
 function declarationSignature(source: ts.SourceFile, node: ts.Node): string {
@@ -115,50 +124,51 @@ function declarationSignature(source: ts.SourceFile, node: ts.Node): string {
 
 function declarationName(node: ts.Node): ts.Identifier | undefined {
   const candidate = (node as ts.NamedDeclaration).name;
-  return candidate && ts.isIdentifier(candidate) ? candidate : undefined;
+  return candidate && api.isIdentifier(candidate) ? candidate : undefined;
 }
 
 function bindingNames(name: ts.BindingName): ts.Identifier[] {
-  if (ts.isIdentifier(name)) return [name];
-  return name.elements.flatMap((element) => ts.isOmittedExpression(element) ? [] : bindingNames(element.name));
+  if (api.isIdentifier(name)) return [name];
+  return name.elements.flatMap((element) => api.isOmittedExpression(element) ? [] : bindingNames(element.name));
 }
 
 function isDeclarationIdentifier(node: ts.Identifier): boolean {
   const parent = node.parent;
-  if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent)
-    || ts.isClassDeclaration(parent) || ts.isClassExpression(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeAliasDeclaration(parent)
-    || ts.isEnumDeclaration(parent) || ts.isModuleDeclaration(parent) || ts.isMethodDeclaration(parent) || ts.isMethodSignature(parent)
-    || ts.isPropertyDeclaration(parent) || ts.isPropertySignature(parent) || ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent)
-    || ts.isTypeParameterDeclaration(parent) || ts.isEnumMember(parent) || ts.isBindingElement(parent)) && parent.name === node) return true;
-  if (ts.isImportClause(parent) && parent.name === node) return true;
-  if (ts.isImportSpecifier(parent) && (parent.name === node || parent.propertyName === node)) return true;
-  if (ts.isNamespaceImport(parent) && parent.name === node) return true;
-  if (ts.isImportEqualsDeclaration(parent) && parent.name === node) return true;
-  if (ts.isPropertyAssignment(parent) && parent.name === node) return true;
+  if ((api.isVariableDeclaration(parent) || api.isParameter(parent) || api.isFunctionDeclaration(parent) || api.isFunctionExpression(parent)
+    || api.isClassDeclaration(parent) || api.isClassExpression(parent) || api.isInterfaceDeclaration(parent) || api.isTypeAliasDeclaration(parent)
+    || api.isEnumDeclaration(parent) || api.isModuleDeclaration(parent) || api.isMethodDeclaration(parent) || api.isMethodSignature(parent)
+    || api.isPropertyDeclaration(parent) || api.isPropertySignature(parent) || api.isGetAccessorDeclaration(parent) || api.isSetAccessorDeclaration(parent)
+    || api.isTypeParameterDeclaration(parent) || api.isEnumMember(parent) || api.isBindingElement(parent)) && parent.name === node) return true;
+  if (api.isImportClause(parent) && parent.name === node) return true;
+  if (api.isImportSpecifier(parent) && (parent.name === node || parent.propertyName === node)) return true;
+  if (api.isNamespaceImport(parent) && parent.name === node) return true;
+  if (api.isImportEqualsDeclaration(parent) && parent.name === node) return true;
+  if (api.isPropertyAssignment(parent) && parent.name === node) return true;
   return false;
 }
 
 function childContainer(node: ts.Node, container?: string): string | undefined {
   const name = declarationName(node)?.text;
   if (!name) return container;
-  if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) return container ? `${container}.${name}` : name;
-  if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return container ? `${container}.${name}` : name;
+  if (api.isFunctionDeclaration(node) || api.isClassDeclaration(node)) return container ? `${container}.${name}` : name;
+  if (api.isMethodDeclaration(node) || api.isGetAccessorDeclaration(node) || api.isSetAccessorDeclaration(node)) return container ? `${container}.${name}` : name;
   return container;
 }
 
 function scriptKind(filename: string): ts.ScriptKind {
   switch (path.extname(filename).toLowerCase()) {
-    case ".tsx": return ts.ScriptKind.TSX;
-    case ".jsx": return ts.ScriptKind.JSX;
-    case ".js": case ".mjs": case ".cjs": return ts.ScriptKind.JS;
-    default: return ts.ScriptKind.TS;
+    case ".tsx": return api.ScriptKind.TSX;
+    case ".jsx": return api.ScriptKind.JSX;
+    case ".js": case ".mjs": case ".cjs": return api.ScriptKind.JS;
+    default: return api.ScriptKind.TS;
   }
 }
 
-export function analyzeSource(filename: string, content: string): SourceIntelligence {
+export async function analyzeSource(filename: string, content: string): Promise<SourceIntelligence> {
   const language = sourceLanguage(filename);
   if (!supportsAst(filename)) return { language, analyzed: false, symbols: [], imports: [], references: [] };
-  const source = ts.createSourceFile(filename, content, ts.ScriptTarget.Latest, true, scriptKind(filename));
+  const ts = await loadTypeScript();
+  const source = ts.createSourceFile(filename, content, api.ScriptTarget.Latest, true, scriptKind(filename));
   const symbols: IndexedSymbol[] = [];
   const imports: IndexedImport[] = [];
 
@@ -170,79 +180,79 @@ export function analyzeSource(filename: string, content: string): SourceIntellig
   const collect = (node: ts.Node, container?: string): void => {
     const name = declarationName(node);
     if (name) {
-      if (ts.isFunctionDeclaration(node)) addSymbol(name, "function", node, container);
-      else if (ts.isClassDeclaration(node)) addSymbol(name, "class", node, container);
-      else if (ts.isInterfaceDeclaration(node)) addSymbol(name, "interface", node, container);
-      else if (ts.isTypeAliasDeclaration(node)) addSymbol(name, "type", node, container);
-      else if (ts.isEnumDeclaration(node)) addSymbol(name, "enum", node, container);
-      else if (ts.isModuleDeclaration(node)) addSymbol(name, "namespace", node, container);
-      else if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) addSymbol(name, "method", node, container, exported(node.parent));
-      else if (ts.isPropertyDeclaration(node)) addSymbol(name, "property", node, container, exported(node.parent));
+      if (api.isFunctionDeclaration(node)) addSymbol(name, "function", node, container);
+      else if (api.isClassDeclaration(node)) addSymbol(name, "class", node, container);
+      else if (api.isInterfaceDeclaration(node)) addSymbol(name, "interface", node, container);
+      else if (api.isTypeAliasDeclaration(node)) addSymbol(name, "type", node, container);
+      else if (api.isEnumDeclaration(node)) addSymbol(name, "enum", node, container);
+      else if (api.isModuleDeclaration(node)) addSymbol(name, "namespace", node, container);
+      else if (api.isMethodDeclaration(node) || api.isGetAccessorDeclaration(node) || api.isSetAccessorDeclaration(node)) addSymbol(name, "method", node, container, exported(node.parent));
+      else if (api.isPropertyDeclaration(node)) addSymbol(name, "property", node, container, exported(node.parent));
     }
-    if (ts.isVariableDeclaration(node)) {
+    if (api.isVariableDeclaration(node)) {
       for (const identifier of bindingNames(node.name)) addSymbol(identifier, "variable", node, container);
     }
-    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier) && imports.length < MAX_IMPORTS_PER_FILE) {
+    if (api.isImportDeclaration(node) && api.isStringLiteralLike(node.moduleSpecifier) && imports.length < MAX_IMPORTS_PER_FILE) {
       const bindings: IndexedImportBinding[] = [];
       const clause = node.importClause;
       if (clause?.name) bindings.push({ imported: "default", local: clause.name.text, kind: "default", ...position(source, clause.name) });
       const namedBindings = clause?.namedBindings;
       if (namedBindings) {
-        if (ts.isNamespaceImport(namedBindings)) bindings.push({ imported: "*", local: namedBindings.name.text, kind: "namespace", ...position(source, namedBindings.name) });
+        if (api.isNamespaceImport(namedBindings)) bindings.push({ imported: "*", local: namedBindings.name.text, kind: "namespace", ...position(source, namedBindings.name) });
         else for (const element of namedBindings.elements) bindings.push({ imported: element.propertyName?.text ?? element.name.text, local: element.name.text, kind: "named", ...position(source, element.name) });
       }
       imports.push({ specifier: node.moduleSpecifier.text, line: position(source, node).line, bindings });
     }
-    if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)
-      && ts.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "require"
-      && node.initializer.arguments.length === 1 && ts.isStringLiteralLike(node.initializer.arguments[0]) && imports.length < MAX_IMPORTS_PER_FILE) {
+    if (api.isVariableDeclaration(node) && node.initializer && api.isCallExpression(node.initializer)
+      && api.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "require"
+      && node.initializer.arguments.length === 1 && api.isStringLiteralLike(node.initializer.arguments[0]) && imports.length < MAX_IMPORTS_PER_FILE) {
       const bindings: IndexedImportBinding[] = [];
-      if (ts.isIdentifier(node.name)) bindings.push({ imported: "*", local: node.name.text, kind: "namespace", ...position(source, node.name) });
+      if (api.isIdentifier(node.name)) bindings.push({ imported: "*", local: node.name.text, kind: "namespace", ...position(source, node.name) });
       else for (const element of node.name.elements) {
-        if (ts.isOmittedExpression(element) || !ts.isIdentifier(element.name)) continue;
-        const imported = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
+        if (api.isOmittedExpression(element) || !api.isIdentifier(element.name)) continue;
+        const imported = element.propertyName && api.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
         bindings.push({ imported, local: element.name.text, kind: "named", ...position(source, element.name) });
       }
       imports.push({ specifier: node.initializer.arguments[0].text, line: position(source, node).line, bindings });
     }
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length === 1
-      && ts.isStringLiteralLike(node.arguments[0]) && imports.length < MAX_IMPORTS_PER_FILE) {
+    if (api.isCallExpression(node) && node.expression.kind === api.SyntaxKind.ImportKeyword && node.arguments.length === 1
+      && api.isStringLiteralLike(node.arguments[0]) && imports.length < MAX_IMPORTS_PER_FILE) {
       imports.push({ specifier: node.arguments[0].text, line: position(source, node).line, bindings: [] });
     }
-    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier) && imports.length < MAX_IMPORTS_PER_FILE) {
-      const bindings = node.exportClause && ts.isNamedExports(node.exportClause)
+    if (api.isExportDeclaration(node) && node.moduleSpecifier && api.isStringLiteralLike(node.moduleSpecifier) && imports.length < MAX_IMPORTS_PER_FILE) {
+      const bindings = node.exportClause && api.isNamedExports(node.exportClause)
         ? node.exportClause.elements.map((element): IndexedImportBinding => ({ imported: element.propertyName?.text ?? element.name.text, local: element.name.text, kind: "named", ...position(source, element.name) }))
         : [];
       imports.push({ specifier: node.moduleSpecifier.text, line: position(source, node).line, bindings });
     }
     const nextContainer = childContainer(node, container);
-    ts.forEachChild(node, (child) => collect(child, nextContainer));
+    api.forEachChild(node, (child) => collect(child, nextContainer));
   };
   collect(source);
 
   const callPositions = new Map<number, { kind: IndexedReferenceKind; qualifier?: string }>();
   const markCall = (expression: ts.Expression, kind: IndexedReferenceKind): void => {
-    if (ts.isIdentifier(expression)) callPositions.set(expression.getStart(source), { kind });
-    else if (ts.isPropertyAccessExpression(expression)) callPositions.set(expression.name.getStart(source), { kind, qualifier: bounded(expression.expression.getText(source), 80) });
+    if (api.isIdentifier(expression)) callPositions.set(expression.getStart(source), { kind });
+    else if (api.isPropertyAccessExpression(expression)) callPositions.set(expression.name.getStart(source), { kind, qualifier: bounded(expression.expression.getText(source), 80) });
   };
   const markCalls = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) markCall(node.expression, "call");
-    else if (ts.isNewExpression(node)) markCall(node.expression, "construct");
-    else if (ts.isTaggedTemplateExpression(node)) markCall(node.tag, "tag");
-    ts.forEachChild(node, markCalls);
+    if (api.isCallExpression(node)) markCall(node.expression, "call");
+    else if (api.isNewExpression(node)) markCall(node.expression, "construct");
+    else if (api.isTaggedTemplateExpression(node)) markCall(node.tag, "tag");
+    api.forEachChild(node, markCalls);
   };
   markCalls(source);
 
   const references: IndexedReference[] = [];
   const collectReferences = (node: ts.Node, container?: string): void => {
     if (references.length >= MAX_REFERENCES_PER_FILE) return;
-    if (ts.isIdentifier(node) && !isDeclarationIdentifier(node)) {
+    if (api.isIdentifier(node) && !isDeclarationIdentifier(node)) {
       const call = callPositions.get(node.getStart(source));
-      const propertyQualifier = ts.isPropertyAccessExpression(node.parent) && node.parent.name === node ? bounded(node.parent.expression.getText(source), 80) : undefined;
+      const propertyQualifier = api.isPropertyAccessExpression(node.parent) && node.parent.name === node ? bounded(node.parent.expression.getText(source), 80) : undefined;
       references.push({ name: node.text, ...position(source, node), kind: call?.kind ?? "reference", ...(call?.qualifier || propertyQualifier ? { qualifier: call?.qualifier ?? propertyQualifier } : {}), ...(container ? { container } : {}) });
     }
     const nextContainer = childContainer(node, container);
-    ts.forEachChild(node, (child) => collectReferences(child, nextContainer));
+    api.forEachChild(node, (child) => collectReferences(child, nextContainer));
   };
   collectReferences(source);
   return { language, analyzed: true, symbols, imports, references };

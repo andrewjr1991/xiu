@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { Client, InsufficientScopeError, StreamableHTTPClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
+import type { AuthProvider, Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -730,11 +730,13 @@ class HttpMcpConnection implements McpConnectionLike {
       token: async () => (await this.authProvider!.tokens())?.access_token,
       onUnauthorized: async () => await this.authProvider!.ensureFresh(undefined, true),
     } : undefined;
-    const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), {
+    // The MCP client library is loaded when the first server is started, not when Xiu starts.
+    const sdk = await import("@modelcontextprotocol/client");
+    const transport = new sdk.StreamableHTTPClientTransport(new URL(this.config.url!), {
       requestInit: { headers },
       ...(transportAuth ? { authProvider: transportAuth, fetch: createSafeOAuthFetch(), onInsufficientScope: "throw" as const } : {}),
     });
-    const client = new Client({ name: "xiu", version: clientVersion }, {
+    const client = new sdk.Client({ name: "xiu", version: clientVersion }, {
       versionNegotiation: { mode: "auto", probe: { timeoutMs: 5_000, maxRetries: 0 } },
     });
     this.client = client;
@@ -975,6 +977,7 @@ export class McpManager {
       execute: async (input, context) => {
         try { return await connection.callTool(definition.name, input, context.signal); }
         catch (error) {
+          const { InsufficientScopeError } = await import("@modelcontextprotocol/client");
           if (!(error instanceof InsufficientScopeError) || !config.auth || !config.url) {
             throw sanitizeOAuthError(error, await this.redactionValues(config.url));
           }

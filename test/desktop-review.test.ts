@@ -100,8 +100,8 @@ test("desktop review provides bounded local audio and video previews", async (t)
   assert.match(video.dataUrl ?? "", /^data:video\/mp4;base64,/);
 });
 
-test("HTML sanitizer strips remote and executable surfaces from direct input", () => {
-  const safe = sanitizeHtmlPreview('<iframe src="file:///secret"></iframe><object data="https://evil"></object><table style="background:url(https://evil)"><tr><td onmouseover="x()">ok</td></tr></table>');
+test("HTML sanitizer strips remote and executable surfaces from direct input", async () => {
+  const safe = await sanitizeHtmlPreview('<iframe src="file:///secret"></iframe><object data="https://evil"></object><table style="background:url(https://evil)"><tr><td onmouseover="x()">ok</td></tr></table>');
   assert.doesNotMatch(safe, /<iframe|<object|file:\/\/|https:\/\/evil|onmouseover|background:url/i);
   assert.match(safe, /<table><tbody><tr><td>ok<\/td><\/tr><\/tbody><\/table>/);
 });

@@ -1,7 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { dataUrlFromImage } from "./tool-images.js";
 import { createHash } from "node:crypto";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
 import type { AssistantTurn, AvailableModel, ConversationMessage, ModelProvider, ModelStreamProgress, ThinkingReplayBlock, ToolCall, ToolDefinition } from "./types.js";
@@ -148,26 +148,32 @@ function canRetryForcedToolProbeWithAuto(error: unknown): boolean {
 }
 
 class OpenAIProvider implements ModelProvider {
-  private client: OpenAI;
+  private readonly clientOptions: ConstructorParameters<typeof OpenAI>[0];
+  private clientPromise?: Promise<OpenAI>;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv)
       ?? config.apiKey
       ?? readEnvironmentCredential(config.provider === "agnes" ? "AGNES_API_KEY" : "OPENAI_API_KEY");
     const dispatcher = createTrustedDispatcher(config.proxy);
-    this.client = new OpenAI({
+    this.clientOptions = {
       apiKey: apiKey || "xiu-local",
       maxRetries: 0,
       timeout: Math.max(config.modelFirstResponseTimeoutMs ?? 600_000, config.modelCompleteTimeoutMs ?? 900_000),
       baseURL: config.baseURL,
       fetchOptions: dispatcher ? { dispatcher } : undefined,
-    });
+    };
+  }
+
+  /** The SDK is loaded and the client built on the first request, not when the provider is configured at startup. */
+  private client(): Promise<OpenAI> {
+    return this.clientPromise ??= import("openai").then(({ default: OpenAI }) => new OpenAI(this.clientOptions));
   }
 
   async complete(system: string, messages: ConversationMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<AssistantTurn> {
     const formatted = this.formatMessages(system, messages);
     const formattedTools = this.formatTools(tools);
 
-    const response = await this.client.chat.completions.create({
+    const response = await (await this.client()).chat.completions.create({
       model: this.config.model,
       messages: formatted,
       ...openAIPromptCache(this.config, system),
@@ -191,7 +197,7 @@ class OpenAIProvider implements ModelProvider {
 
   async listModels(): Promise<AvailableModel[]> {
     const models = await modelDiscoveryCache.run(`models:${requestFingerprint(this.config)}`, async () => {
-      const page = await this.client.models.list();
+      const page = await (await this.client()).models.list();
       const models: AvailableModel[] = [];
       for await (const model of page) {
         models.push({ id: model.id, description: model.owned_by ? `Owned by ${model.owned_by}` : undefined, source: "api", capabilities: discoveredCapabilities(model), contextWindow: discoveredContextWindow(model) });
@@ -209,7 +215,7 @@ class OpenAIProvider implements ModelProvider {
         parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
       } };
     const request = async (toolChoice: "auto" | { type: "function"; function: { name: string } }): Promise<boolean> => {
-      const response = await this.client.chat.completions.create({
+      const response = await (await this.client()).chat.completions.create({
         model: this.config.model,
         messages: [{
           role: "user",
@@ -235,7 +241,7 @@ class OpenAIProvider implements ModelProvider {
 
   async stream(system: string, messages: ConversationMessage[], tools: ToolDefinition[], onTextDelta: (delta: string) => void, signal?: AbortSignal, onProgress?: (progress?: ModelStreamProgress) => void): Promise<AssistantTurn> {
     const formattedTools = this.formatTools(tools);
-    const response = await this.client.chat.completions.create({
+    const response = await (await this.client()).chat.completions.create({
       model: this.config.model,
       messages: this.formatMessages(system, messages),
       ...openAIPromptCache(this.config, system),
@@ -340,19 +346,31 @@ function anthropicThinkingReplay(content: Anthropic.ContentBlock[]): ThinkingRep
 }
 
 class AnthropicProvider implements ModelProvider {
-  private client: Anthropic;
+  private readonly clientOptions: ConstructorParameters<typeof Anthropic>[0];
+  private clientPromise?: Promise<Anthropic>;
   private maxTokens = ANTHROPIC_MAX_TOKENS;
   private replayThinking = true;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
     const dispatcher = createTrustedDispatcher(config.proxy);
-    this.client = new Anthropic({
+    this.clientOptions = {
       apiKey,
       maxRetries: 0,
       timeout: Math.max(config.modelFirstResponseTimeoutMs ?? 600_000, config.modelCompleteTimeoutMs ?? 900_000),
       baseURL: config.baseURL,
       fetchOptions: dispatcher ? { dispatcher } : undefined,
-    });
+    };
+  }
+
+  /** The SDK is loaded and the client built on the first request, not when the provider is configured at startup. */
+  private client(): Promise<Anthropic> {
+    return this.clientPromise ??= import("@anthropic-ai/sdk").then(({ default: Anthropic }) => new Anthropic(this.clientOptions));
+  }
+
+  /** The API's 400 rejections, which carry the reason Xiu adapts to; anything else is returned as undefined. */
+  private async badRequest(error: unknown): Promise<InstanceType<typeof Anthropic.BadRequestError> | undefined> {
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
+    return error instanceof Anthropic.BadRequestError ? error : undefined;
   }
 
   /**
@@ -366,16 +384,17 @@ class AnthropicProvider implements ModelProvider {
       try {
         return await attempt({ max_tokens: this.maxTokens, replayThinking: this.replayThinking });
       } catch (error) {
-        if (!(error instanceof Anthropic.BadRequestError)) throw error;
-        if (this.maxTokens > ANTHROPIC_LEGACY_MAX_TOKENS && /max_tokens/i.test(error.message)) { this.maxTokens = ANTHROPIC_LEGACY_MAX_TOKENS; continue; }
-        if (this.replayThinking && /thinking|signature/i.test(error.message)) { this.replayThinking = false; continue; }
+        const rejected = await this.badRequest(error);
+        if (!rejected) throw error;
+        if (this.maxTokens > ANTHROPIC_LEGACY_MAX_TOKENS && /max_tokens/i.test(rejected.message)) { this.maxTokens = ANTHROPIC_LEGACY_MAX_TOKENS; continue; }
+        if (this.replayThinking && /thinking|signature/i.test(rejected.message)) { this.replayThinking = false; continue; }
         throw error;
       }
     }
   }
 
   async complete(system: string, messages: ConversationMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<AssistantTurn> {
-    const response = await this.withAdaptations(({ max_tokens, replayThinking }) => this.client.messages.create({
+    const response = await this.withAdaptations(async ({ max_tokens, replayThinking }) => (await this.client()).messages.create({
       model: this.config.model,
       max_tokens,
       system: this.cacheableSystem(system),
@@ -387,7 +406,7 @@ class AnthropicProvider implements ModelProvider {
 
   async listModels(): Promise<AvailableModel[]> {
     const models = await modelDiscoveryCache.run(`models:${requestFingerprint(this.config)}`, async () => {
-      const page = await this.client.models.list({ limit: 100 });
+      const page = await (await this.client()).models.list({ limit: 100 });
       const models: AvailableModel[] = [];
       for await (const model of page) {
         models.push({ id: model.id, name: model.display_name, description: model.created_at ? `Released ${model.created_at.slice(0, 10)}` : undefined, source: "api", capabilities: discoveredCapabilities(model), contextWindow: discoveredContextWindow(model) });
@@ -401,7 +420,7 @@ class AnthropicProvider implements ModelProvider {
   async probeToolSupport(signal?: AbortSignal): Promise<boolean> {
     const name = "xiu_capability_probe";
     const request = async (tool_choice: Anthropic.ToolChoice): Promise<boolean> => {
-      const response = await this.client.messages.create({
+      const response = await (await this.client()).messages.create({
         model: this.config.model,
         max_tokens: 1024,
         messages: [{ role: "user", content: "Call the xiu_capability_probe tool with value OK. Do not answer in plain text; this request only verifies structured tool calling." }],
@@ -417,7 +436,8 @@ class AnthropicProvider implements ModelProvider {
       if (await request({ type: "tool", name })) return true;
     } catch (error) {
       // Current Claude models reject a forced tool choice outright; they still call the tool when asked.
-      if (!(error instanceof Anthropic.BadRequestError) || !/tool_choice/i.test(error.message)) throw error;
+      const rejected = await this.badRequest(error);
+      if (!rejected || !/tool_choice/i.test(rejected.message)) throw error;
     }
     return request({ type: "auto" });
   }
@@ -433,7 +453,7 @@ class AnthropicProvider implements ModelProvider {
   }
 
   private async streamOnce(params: Anthropic.MessageStreamParams, onTextDelta: (delta: string) => void, signal: AbortSignal | undefined, onProgress: ((progress?: ModelStreamProgress) => void) | undefined): Promise<AssistantTurn> {
-    const stream = this.client.messages.stream(params, { signal });
+    const stream = (await this.client()).messages.stream(params, { signal });
     stream.on("text", (text) => onTextDelta(text));
     let chunks = 0, textCharacters = 0, argumentCharacters = 0;
     const argumentBlocks = new Map<number, { name: string; json: string }>();

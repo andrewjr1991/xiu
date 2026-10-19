@@ -350,7 +350,7 @@ export class ProjectIndex {
         const content = await fs.readFile(path.join(this.cwd, metadata.path), "utf8");
         const contentTerms = tokenize(content);
         terms = [...new Set([...terms, ...contentTerms])].slice(0, MAX_TERMS_PER_FILE);
-        intelligence = analyzeSource(metadata.path, content);
+        intelligence = await analyzeSource(metadata.path, content);
       } catch { /* retain path-only terms when a file changes during refresh */ }
     }
     return { ...metadata, terms, ...intelligence };

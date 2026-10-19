@@ -2,8 +2,6 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { existsSync } from "node:fs";
 import { ensureManagedUv, uvExecutableName, type ManagedUvOptions } from "./uv-install.js";
 import type { SearchResult } from "./web-search.js";
@@ -194,6 +192,8 @@ export function freeSearchLaunch(home: string, proxy: string | undefined, enviro
 async function connectStdio(launch: FreeSearchLaunch): Promise<FreeSearchClient> {
   // The SDK adds only its minimal default environment (PATH, HOME and similar) to `env`,
   // so provider keys and other secrets in Xiu's environment never reach the server.
+  // The MCP client is loaded on the first search, not when Xiu starts.
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([import("@modelcontextprotocol/client"), import("@modelcontextprotocol/client/stdio")]);
   const transport = new StdioClientTransport({ command: launch.command, args: launch.args, cwd: launch.cwd, env: launch.env, stderr: "ignore" });
   const client = new Client({ name: "xiu", version: FREE_SEARCH_VERSION });
   await client.connect(transport);
