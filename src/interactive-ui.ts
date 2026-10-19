@@ -200,6 +200,11 @@ function truncateDisplay(value: string, width: number, keepEnd = false): string 
     : `${takeDisplayWidth(value, width - 3)}...`;
 }
 
+/**
+ * Wrap plain text to a display width. A line breaks after its last space when it has one, so a
+ * footer such as `… | Ctrl+C cancels` keeps `Ctrl+C` whole instead of leaving `l+C cancels` on the
+ * next line; text without spaces (Chinese prose, a long path) still breaks at the width.
+ */
 export function wrapTerminalText(value: string, width: number): string[] {
   const safeWidth = Math.max(1, width);
   const lines: string[] = [];
@@ -208,9 +213,18 @@ export function wrapTerminalText(value: string, width: number): string[] {
   for (const character of stripAnsi(value)) {
     const characterWidth = terminalCharacterWidth(character);
     if (used > 0 && used + characterWidth > safeWidth) {
-      lines.push(current);
-      current = "";
-      used = 0;
+      const breakAt = character === " " ? -1 : current.lastIndexOf(" ");
+      if (breakAt > 0) {
+        lines.push(current.slice(0, breakAt).trimEnd());
+        current = current.slice(breakAt + 1);
+        used = terminalDisplayWidth(current);
+      } else {
+        lines.push(current);
+        current = "";
+        used = 0;
+        // The space that overflowed becomes the line break itself rather than a leading blank.
+        if (character === " ") continue;
+      }
     }
     current += character;
     used += characterWidth;

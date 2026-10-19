@@ -179,16 +179,44 @@ export function formatPromptDashboard(input: {
   // width rather than the terminal's; it used to be one column too long, which wrapped its last
   // character onto a line of its own.
   const columns = (process.stdout.columns || 100) - 1;
+  const budget = Math.max(20, Math.floor(columns * 0.72));
   const ratio = Math.min(1, input.contextTokens / Math.max(1, input.contextLimit));
-  const filled = Math.round(ratio * 12);
-  const bar = `${"#".repeat(filled)}${"-".repeat(12 - filled)}`;
   const percent = `${Math.round(ratio * 100)}%`;
-  const mcp = input.mcpTools ? ` | ${input.mcpTools} mcp` : "";
-  const agents = input.agents ? ` | ${input.agents} agents` : "";
-  const background = input.backgroundTasks ? ` | ${input.backgroundTasks} bg` : "";
-  const phase = input.phase ? ` | ${input.phase}` : "";
-  const left = `${input.planMode ? localize(language, "规划", "Plan") : localize(language, "自动", "Auto")} | ${input.model} | ${localize(language, "上下文", "ctx")} [${bar}] ${percent} | ${input.skills} ${localize(language, "技能", "skills")}${mcp}${agents}${background}${phase}`;
-  const fittedLeft = fit(left, Math.max(20, Math.floor(columns * 0.72)));
+  const context = (cells: number): string => {
+    const label = localize(language, "上下文", "ctx");
+    if (cells === 0) return `${label} ${percent}`;
+    const filled = Math.round(ratio * cells);
+    return `${label} [${"#".repeat(filled)}${"-".repeat(cells - filled)}] ${percent}`;
+  };
+  const mode = input.planMode ? localize(language, "规划", "Plan") : localize(language, "自动", "Auto");
+  const skills = `${input.skills} ${localize(language, "技能", "skills")}`;
+  const counts = [
+    input.mcpTools ? `${input.mcpTools} mcp` : undefined,
+    input.agents ? `${input.agents} agents` : undefined,
+    input.backgroundTasks ? `${input.backgroundTasks} bg` : undefined,
+  ];
+  const shortModel = input.model.slice(input.model.lastIndexOf("/") + 1);
+  const compose = (segments: Array<string | undefined>): string => segments.filter((segment): segment is string => Boolean(segment)).join(" | ");
+  // In a narrow terminal, give up detail segment by segment (the plan step, then a shorter
+  // context bar, the bar, an empty skill count, the model's provider prefix, the skill count and
+  // the other counts) instead of cutting the text somewhere in the middle, which used to leave
+  // `ct...---] 0%` at 80 columns.
+  const layouts: Array<Array<string | undefined>> = [
+    [mode, input.model, context(12), skills, ...counts],
+    [mode, input.model, context(6), skills, ...counts],
+    [mode, input.model, context(0), skills, ...counts],
+    [mode, input.model, context(0), input.skills ? skills : undefined, ...counts],
+    [mode, shortModel, context(0), input.skills ? skills : undefined, ...counts],
+    [mode, shortModel, context(0), ...counts],
+    [mode, shortModel, context(0)],
+  ];
+  let left = compose([...layouts[0], input.phase]);
+  for (const layout of layouts) {
+    const withPhase = compose([...layout, input.phase]);
+    left = textWidth(withPhase) <= budget ? withPhase : compose(layout);
+    if (textWidth(left) <= budget) break;
+  }
+  const fittedLeft = fit(left, budget);
   const available = Math.max(8, columns - textWidth(fittedLeft) - 3);
   return chalk.dim(`${fittedLeft} | ${fit(input.cwd, available)}`);
 }
