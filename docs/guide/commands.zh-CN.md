@@ -91,7 +91,7 @@
 | --- | --- |
 | `-p, --provider <ID>` | 本次使用的渠道 Profile ID（`/providers` 可查看，插件提供的渠道在工作区信任后也可用）；已配置了渠道而 ID 不在其中时，启动即在标准错误列出已配置的渠道并退出码 1（`--json` 下 `result` 行为 `not_started`），不会连接 MCP 或进入配置模式；尚未配置任何渠道时仍进入首次向导 |
 | `-m, --model <模型>` | 指定文本模型 |
-| `-C, --cwd <目录>` | 指定工作区 |
+| `-C, --cwd <目录>` | 指定工作区；必须是已存在的目录。指向文件或不存在的路径时，除 `xiu doctor` 外的所有命令都在信任询问、插件和记录之前停下，按“原因 / 下一步 / 诊断 / 详情”四行提示（错误码 `workspace/missing`、`workspace/not-directory`、`workspace/unreadable`）并以退出码 1 结束，`--json` 的 `result` 行为 `not_started`、`error` 仍是原始信息（如 `Workspace does not exist: <路径>`） |
 | `--base-url <URL>` | OpenAI 兼容 API 地址 |
 | `--media-base-url <URL>` | 多媒体生成 API 地址 |
 | `--proxy <URL>` | HTTP(S) 代理 |

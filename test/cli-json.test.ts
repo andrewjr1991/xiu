@@ -348,7 +348,8 @@ test("--json with an unreadable task-run journal reports not_started rather than
 test("a closed stdout pipe ends a command quietly instead of a Node EPIPE stack trace", { timeout: 60_000 }, async (t) => {
   const { cwd, home } = await fixture(t, { trusted: true });
   // `xiu doctor | head -0`: the reader is gone before the first line is written. The doctor's verdict depends on the
-  // machine (a stale launcher, an old Node), so the expected exit code is whatever the same command returns with a reader.
+  // machine, so the expected exit code is whatever the same command returns with a reader: on CI the tests run before
+  // `npm run build`, so the package-integrity item reports `dist/cli.js` missing and the doctor exits 1 there.
   const reference = await runCli(["--provider", "fake", "doctor"], cwd, home);
   assert.ok(reference.stdout.length > 0, "the doctor prints its report");
   const run = await runCli(["--provider", "fake", "doctor"], cwd, home, "", { closeStdoutWhen: /^/ });
