@@ -48,6 +48,7 @@ Tools are grouped by risk: reads run automatically; writes and command execution
 | --- | --- |
 | `/status` | Model, tokens, calls, elapsed time |
 | `/diff [task\|workspace\|staged]` | Changes made during this task, in the workspace, or staged |
+| `/diff runs`, `/diff run:<number\|id prefix> [file]` | List recent runs; replay the change record saved when a run finished, or one file's complete diff |
 | `/check [typecheck\|lint\|test\|build\|all]` | Discover the project's npm scripts; run them with approval |
 | `/checkpoints`, `/rewind` | List file checkpoints; restore one |
 | `/report` | Preview or export a redacted execution report |

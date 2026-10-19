@@ -15,6 +15,7 @@ import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runPro
 import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommand } from "./commands/provider-recovery.js";
 import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
+import { saveTaskChangeHistory } from "./task-change-history.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
@@ -66,6 +67,7 @@ import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
+import { diffUsage, formatRunChangeList, parseDiffCommand, replayRunChanges } from "./commands/diff-commands.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
@@ -100,6 +102,8 @@ function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/diff", "查看最近任务开始以来的变化（来源可能未知）", "Show changes since the latest task started (attribution may be unknown)"),
     item("/diff workspace", "查看工作区全部变化，含新文件", "Show all workspace changes, including new files"),
     item("/diff staged", "查看 Git 暂存区变化", "Show staged Git changes"),
+    item("/diff runs", "列出最近运行及其保存的改动记录", "List recent runs and their saved change records"),
+    item("/diff run:", "回放某次运行保存的改动：/diff run:<序号|ID 前缀> [文件]", "Replay the changes saved for a run: /diff run:<number|id prefix> [file]"),
     item("/check", "发现项目检查脚本并显示最近结果", "Discover project check scripts and show recent results"),
     item("/check all", "依次运行可用的标准项目检查", "Run available standard project checks in order"),
     ...PROJECT_CHECK_NAMES.map((name) => item(`/check ${name}`, `运行项目 ${name} 检查`, `Run the project ${name} check`)),
@@ -1368,6 +1372,27 @@ async function main(): Promise<void> {
       }
     };
 
+    /**
+     * Saves the bounded, redacted change report of the run that just finished to
+     * `.xiu/task-change-history/<runId>.json`, the same record the desktop writes, so that
+     * `/diff run:<selector>` can replay it later. Never throws; a failure is only reported.
+     */
+    const persistTaskChangeHistory = async (baseline: TaskChangeSnapshot | undefined): Promise<void> => {
+      if (!baseline) return;
+      try {
+        const sessionId = agent.status().sessionId;
+        const run = (await taskRunJournal.recent(20)).find((candidate) => candidate.status !== "running"
+          && (!sessionId || candidate.sessionId === sessionId) && candidate.startedAt >= baseline.capturedAt);
+        if (!run) return;
+        const report = await inspectTaskChanges(config.cwd, baseline, { sensitiveValues: config.apiKey ? [config.apiKey] : [] });
+        await saveTaskChangeHistory(config.cwd, run.runId, report);
+      } catch (error) {
+        emitLine(chalk.dim(redactTerminalOutput(localize(language,
+          `未能保存本次运行的改动记录：${error instanceof Error ? error.message : String(error)}。/diff task 仍可查看本次改动。`,
+          `Could not save this run's change record: ${error instanceof Error ? error.message : String(error)}. /diff task still shows this task's changes.`))));
+      }
+    };
+
     const runWithTaskBaseline = async (task: string, onStarted?: () => void): Promise<string> => {
       if (!providerRegistry.get(config.providerId)) throw new Error(localize(language, "尚未配置渠道，请先使用 /provider add 或 /providers。", "No Provider configured. Use /provider add or /providers first."));
       const preparation = new AbortController();
@@ -1389,26 +1414,42 @@ async function main(): Promise<void> {
         throw new Error(localize(language, "任务已在准备阶段取消。", "Task cancelled during preparation."));
       }
       onStarted?.();
-      return xiuRuntime.createTask(task);
+      const baseline = latestTaskBaseline;
+      try {
+        return await xiuRuntime.createTask(task);
+      } finally {
+        await persistTaskChangeHistory(baseline);
+      }
     };
 
     const printDiff = async (command: string): Promise<void> => {
-      const requested = command.slice("/diff".length).trim() || "task";
-      if (!["task", "workspace", "staged"].includes(requested)) {
-        console.log(chalk.yellow(localize(language, "用法：/diff [task|workspace|staged]\n", "Usage: /diff [task|workspace|staged]\n")));
+      const parsed = parseDiffCommand(command);
+      if (parsed.kind === "usage") {
+        console.log(chalk.yellow(`${diffUsage(language)}\n`));
         return;
       }
+      if (parsed.kind === "runs" || parsed.kind === "run") {
+        try {
+          const sources = { cwd: config.cwd, taskRunJournal };
+          const output = parsed.kind === "runs" ? await formatRunChangeList(sources, language) : await replayRunChanges(sources, parsed.selector, parsed.file, language);
+          console.log(`${redactTerminalOutput(output)}\n`);
+        } catch (error) {
+          console.error(chalk.red(redactTerminalOutput(`${localize(language, "读取改动记录失败", "Could not read the change record")}: ${error instanceof Error ? error.message : String(error)}\n`)));
+        }
+        return;
+      }
+      const requested = parsed.view;
       if (requested === "task" && !latestTaskBaseline) {
         console.log(chalk.dim(localize(language,
-          "本次会话还没有任务起点快照。恢复的历史会话不会重建旧快照；使用 /diff workspace 或 /diff staged 查看当前状态。\n",
-          "No task baseline is available in this session. Historical baselines are not reconstructed on resume; use /diff workspace or /diff staged for the current state.\n")));
+          "本次会话还没有任务起点快照。恢复的历史会话不会重建旧快照；使用 /diff runs 回放以前运行保存的改动，或用 /diff workspace、/diff staged 查看当前状态。\n",
+          "No task baseline is available in this session. Historical baselines are not reconstructed on resume; use /diff runs to replay the changes saved for earlier runs, or /diff workspace and /diff staged for the current state.\n")));
         return;
       }
       try {
         const diffOptions = { sensitiveValues: config.apiKey ? [config.apiKey] : [] };
         const report = requested === "task"
           ? await inspectTaskChanges(config.cwd, latestTaskBaseline!, diffOptions)
-          : await getWorkspaceDiff(config.cwd, requested as "workspace" | "staged", diffOptions);
+          : await getWorkspaceDiff(config.cwd, requested, diffOptions);
         console.log(`${redactTerminalOutput(formatTaskChanges(report, language))}\n`);
       } catch (error) {
         console.error(chalk.red(redactTerminalOutput(`${localize(language, "读取改动失败", "Could not inspect changes")}: ${error instanceof Error ? error.message : String(error)}\n`)));
