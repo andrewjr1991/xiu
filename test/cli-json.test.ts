@@ -16,8 +16,12 @@ const tsxLoader = import.meta.resolve("tsx");
 const FINAL_ANSWER = "Hello from the fake model.";
 
 /** Minimal OpenAI-compatible server: answers the capability probe with a tool call and every other request with one final message. */
-async function startFakeModelServer(t: TestContext): Promise<{ baseURL: string; requests: Array<Record<string, unknown>> }> {
+async function startFakeModelServer(t: TestContext, options: { holdAnswers?: boolean } = {}): Promise<{ baseURL: string; requests: Array<Record<string, unknown>>; releaseAnswers: () => void }> {
   const requests: Array<Record<string, unknown>> = [];
+  // With `holdAnswers`, every answer to the task itself (not the capability probe) waits until `releaseAnswers()`
+  // or the end of the test, so the task is still running while the test does something to the process.
+  const held: Array<() => void> = [];
+  const releaseAnswers = (): void => { for (const release of held.splice(0)) release(); };
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += String(chunk); });
@@ -30,6 +34,15 @@ async function startFakeModelServer(t: TestContext): Promise<{ baseURL: string; 
       requests.push(parsed);
       const tools = Array.isArray(parsed.tools) ? parsed.tools as Array<{ function?: { name?: string } }> : [];
       const probe = tools.find((tool) => tool.function?.name === "xiu_capability_probe");
+      if (options.holdAnswers && !probe) {
+        const release = (): void => answer();
+        held.push(release);
+        request.on("close", () => { const index = held.indexOf(release); if (index >= 0) held.splice(index, 1); });
+        return;
+      }
+      answer();
+      function answer(): void {
+      if (response.destroyed || response.writableEnded) return;
       const message = probe
         ? { role: "assistant", content: null, tool_calls: [{ id: "probe-1", type: "function", function: { name: "xiu_capability_probe", arguments: JSON.stringify({ value: "OK" }) } }] }
         : { role: "assistant", content: FINAL_ANSWER };
@@ -49,13 +62,14 @@ async function startFakeModelServer(t: TestContext): Promise<{ baseURL: string; 
         return;
       }
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(completion));
+      }
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  t.after(() => { releaseAnswers(); return new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }); });
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  return { baseURL: `http://127.0.0.1:${address.port}/v1`, requests };
+  return { baseURL: `http://127.0.0.1:${address.port}/v1`, requests, releaseAnswers };
 }
 
 async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: string }) {
@@ -75,7 +89,11 @@ async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: st
   return { cwd, home };
 }
 
-async function runCli(args: string[], cwd: string, home: string, stdin = ""): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+/**
+ * Runs the CLI and closes the reading end of its stdout as soon as `closeStdoutWhen` matches the output seen so
+ * far (an empty pattern closes it before the first write), the way `xiu ... | head -1` does once head is gone.
+ */
+async function runCli(args: string[], cwd: string, home: string, stdin = "", closeStdoutWhen?: RegExp): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", ...args], {
     cwd,
     env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" },
@@ -84,8 +102,12 @@ async function runCli(args: string[], cwd: string, home: string, stdin = ""): Pr
   });
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+  child.stdout.on("data", (chunk) => {
+    stdout += String(chunk);
+    if (closeStdoutWhen && closeStdoutWhen.test(stdout)) child.stdout.destroy();
+  });
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+  if (closeStdoutWhen?.test("")) child.stdout.destroy();
   child.stdin.end(stdin);
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     const timer = setTimeout(() => { child.kill(); reject(new Error(`CLI --json run timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`)); }, 60_000);
@@ -308,4 +330,30 @@ test("--json with an unreadable task-run journal reports not_started rather than
   assert.equal(lines[0]?.payload.outcome, "not_started");
   assert.match(String(lines[0]?.payload.error), /task recovery journal could not be read/);
   assert.equal(server.requests.length, 0);
+});
+
+test("a closed stdout pipe ends a command quietly instead of a Node EPIPE stack trace", { timeout: 60_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, { trusted: true });
+  // `xiu doctor | head -0`: the reader is gone before the first line is written. The doctor's verdict depends on the
+  // machine (a stale launcher, an old Node), so the expected exit code is whatever the same command returns with a reader.
+  const reference = await runCli(["--provider", "fake", "doctor"], cwd, home);
+  assert.ok(reference.stdout.length > 0, "the doctor prints its report");
+  const run = await runCli(["--provider", "fake", "doctor"], cwd, home, "", /^/);
+  assert.equal(run.exitCode, reference.exitCode, `stderr:\n${run.stderr}`);
+  assert.doesNotMatch(run.stderr, /EPIPE|Unhandled 'error' event|at .*node:/);
+});
+
+test("a stdout pipe closed during a --json task stops the task, records its end and exits without a stack trace", { timeout: 90_000 }, async (t) => {
+  const server = await startFakeModelServer(t, { holdAnswers: true });
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  // The consumer leaves once the task has started; the model answer is still pending at that moment.
+  const run = await runCli(["--json", "--provider", "fake", "--yes", "Say hello"], cwd, home, "", /"type":"task\.started"/);
+  assert.notEqual(run.exitCode, null, "the process must exit on its own");
+  assert.doesNotMatch(run.stderr, /EPIPE|Unhandled 'error' event|at .*node:/);
+  assert.match(run.stderr, /The output pipe was closed; stopping the current work, then exiting\./);
+  // The run that was cancelled is closed in the journal, so the next start does not report an interrupted task.
+  const runFiles = (await fs.readdir(path.join(home, ".xiu", "task-runs"), { recursive: true })).filter((name) => name.endsWith(".json"));
+  assert.equal(runFiles.length, 1, runFiles.join(","));
+  const status = await recordStatus(path.join(home, ".xiu", "task-runs", runFiles[0]!));
+  assert.notEqual(status, "running", `the run record was left as ${status}\nstderr:\n${run.stderr}`);
 });

@@ -81,6 +81,8 @@
 
 `xiu --help` 除启动参数外，也列出下面不进入交互模式的命令（`xiu doctor`、`xiu report`、`xiu recover`、`xiu audit`）、一次性任务的退出码，以及“斜杠命令只在交互模式可用”的提示。
 
+标准输出或标准错误接的管道被对端关闭时（`xiu report | head -1`、`xiu --json '任务' | jq -c . | head -1`、读取输出的程序先退出了），Xiu 不再因 `write EPIPE` 带着 Node 调用栈崩溃：没有任务在跑（`xiu doctor`、`xiu report`、`xiu audit`、`--help` 等）就按当时的退出码安静结束；一次性任务或交互会话中的任务正在运行时，像按下 Ctrl+C 一样取消它、等运行记录写完再退出，不会在任务运行日志里留下“运行中”的中断记录，队列里后面的任务也不再开始。
+
 | 参数 | 作用 |
 | --- | --- |
 | `-p, --provider <ID>` | 本次使用的渠道 Profile ID（`/providers` 可查看，插件提供的渠道在工作区信任后也可用）；已配置了渠道而 ID 不在其中时，启动即在标准错误列出已配置的渠道并退出码 1（`--json` 下 `result` 行为 `not_started`），不会连接 MCP 或进入配置模式；尚未配置任何渠道时仍进入首次向导 |
