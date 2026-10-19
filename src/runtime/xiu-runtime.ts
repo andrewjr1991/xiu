@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { parseAssistantInteraction, continueTaskAfterAnswer } from "../assistant-interaction.js";
 import type { AgentEvents, AgentRunOutcome, AgentFailureReason } from "../agent.js";
+import { localize, type UiLanguage } from "../i18n.js";
 import { redactSecrets, sanitizeSecrets } from "../secret-redaction.js";
 import type { ApprovalRequest, ToolResult } from "../types.js";
 import {
@@ -34,6 +35,8 @@ export interface XiuRuntimeOptions {
   now?: () => Date;
   sanitize?: (value: string) => string;
   approvalHandler?: (request: ApprovalRequest) => Promise<boolean>;
+  /** Language of the runtime's own user-facing text (approval effects, failure reasons). Defaults to Chinese, which the desktop expects. */
+  language?: UiLanguage;
 }
 
 type RuntimeListener = (event: RuntimeEvent) => void;
@@ -54,16 +57,16 @@ function terminalState(outcome: AgentRunOutcome): Exclude<RuntimeTaskState, "idl
   return "failed";
 }
 
-function approvalEffects(risk: ApprovalRequest["risk"]): string[] {
-  if (risk === "write") return ["可能修改可信工作区中的文件"];
-  if (risk === "execute") return ["将在本机启动进程", "命令可能修改工作区或产生外部副作用"];
-  return ["操作可能不可逆", "可能影响工作区外的数据或外部系统"];
+function approvalEffects(risk: ApprovalRequest["risk"], language: UiLanguage): string[] {
+  if (risk === "write") return [localize(language, "可能修改可信工作区中的文件", "May modify files in the trusted workspace")];
+  if (risk === "execute") return [localize(language, "将在本机启动进程", "Starts a process on this machine"), localize(language, "命令可能修改工作区或产生外部副作用", "The command may change the workspace or have external side effects")];
+  return [localize(language, "操作可能不可逆", "The operation may be irreversible"), localize(language, "可能影响工作区外的数据或外部系统", "May affect data outside the workspace or external systems")];
 }
 
-function approvalRecovery(risk: ApprovalRequest["risk"]): string {
+function approvalRecovery(risk: ApprovalRequest["risk"], language: UiLanguage): string {
   return risk === "write"
-    ? "文件工具通常会先创建恢复点；仍请在执行后审查变更。"
-    : "进程、网络和外部系统副作用可能无法由 Xiu 自动恢复。";
+    ? localize(language, "文件工具通常会先创建恢复点；仍请在执行后审查变更。", "File tools usually create a recovery point first; still review the change afterwards.")
+    : localize(language, "进程、网络和外部系统副作用可能无法由 Xiu 自动恢复。", "Process, network and external-system side effects may not be recoverable by Xiu.");
 }
 
 function boundedToolResult(result: ToolResult, clean: (value: string, maximum: number) => string): ToolResult {
@@ -93,10 +96,12 @@ export class XiuRuntime {
   private questionTask?: string;
   private readonly now: () => Date;
   private readonly sanitizeText: (value: string) => string;
+  private readonly language: UiLanguage;
 
   constructor(private readonly options: XiuRuntimeOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.sanitizeText = options.sanitize ?? ((value) => redactSecrets(value));
+    this.language = options.language ?? "zh-CN";
   }
 
   attachDriver(driver: RuntimeTaskDriver): void {
@@ -196,14 +201,16 @@ export class XiuRuntime {
       const result = await driver.run(executionTask);
       const status = driver.status();
       const state = terminalState(status.outcome);
-      const interaction = status.outcome === "waiting_user" ? parseAssistantInteraction(result, "zh-CN") : undefined;
+      const interaction = status.outcome === "waiting_user" ? parseAssistantInteraction(result, this.language) : undefined;
       const safeResult = this.clean(interaction?.text ?? result, MAX_MESSAGE_TEXT);
       const pendingQuestion = interaction?.question ? { id: randomUUID(), question: this.clean(interaction.question, 4_000) } : undefined;
       if (pendingQuestion) this.questionTask = originalTask;
       const reasons: Partial<Record<AgentFailureReason, string>> = {
-        verification_failed: "尚有必需校验失败或在文件变更后失效；模型的完成声明不等于全部验证已通过。请继续补齐完成检查中列出的校验。",
-        plan_incomplete: "任务计划仍有未完成步骤；模型的完成声明未通过程序检查。",
-        tool_failed: "最后一次工具操作未成功；请检查运行提醒后继续。",
+        verification_failed: localize(this.language,
+          "尚有必需校验失败或在文件变更后失效；模型的完成声明不等于全部验证已通过。请继续补齐完成检查中列出的校验。",
+          "A required check failed or became stale after a file change; the model's completion claim does not mean every verification passed. Finish the checks listed in the completion review."),
+        plan_incomplete: localize(this.language, "任务计划仍有未完成步骤；模型的完成声明未通过程序检查。", "The task plan still has unfinished steps; the model's completion claim did not pass the program check."),
+        tool_failed: localize(this.language, "最后一次工具操作未成功；请检查运行提醒后继续。", "The last tool operation did not succeed; review the runtime notices before continuing."),
       };
       const reason = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
       const error = reason ? this.clean([reason, ...(status.completionIssues ?? []).slice(0, 12)].join("\n"), MAX_TOOL_TEXT) : undefined;
@@ -250,8 +257,8 @@ export class XiuRuntime {
       ...(request.preview ? { preview: this.clean(request.preview, MAX_TOOL_TEXT) } : {}),
       ...(request.sessionScope ? { sessionScope: this.clean(request.sessionScope, 200) } : {}),
       scope: "once",
-      effects: approvalEffects(request.risk),
-      recovery: approvalRecovery(request.risk),
+      effects: approvalEffects(request.risk, this.language),
+      recovery: approvalRecovery(request.risk, this.language),
       requestedAt: this.timestamp(),
     };
     const promise = new Promise<boolean>((resolve, reject) => {

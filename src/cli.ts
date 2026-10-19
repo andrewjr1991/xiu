@@ -705,16 +705,18 @@ async function main(): Promise<void> {
           approvalDecision = true;
           return approvalDecision;
         }
-        activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
-        status.stop();
-        activeQueuedInputController?.abort();
-        runningTaskView?.discard();
         request.decisionSource = "prompted";
         if (!process.stdin.isTTY) {
+          // Nothing can answer a prompt here, so deny without tearing down the live task view: the
+          // denial and the tool's start line stay visible in the piped output.
           if (config.backgroundMode) throw new BackgroundApprovalRequiredError(request.description);
           approvalDecision = false;
           return approvalDecision;
         }
+        activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
+        status.stop();
+        activeQueuedInputController?.abort();
+        runningTaskView?.discard();
         if (request.preview) console.log(`${chalk.dim(localize(language, "拟议修改：", "Proposed change:"))}\n${request.preview}\n`);
         const options = [
           { label: localize(language, "否，拒绝", "No, deny"), description: localize(language, "不执行此操作", "Do not run this operation"), value: "deny" as const },
@@ -972,6 +974,7 @@ async function main(): Promise<void> {
     const xiuRuntime = new XiuRuntime({
       sanitize: redactTerminalOutput,
       approvalHandler: approveRequest,
+      language,
     });
     if (jsonStream) {
       const stream = jsonStream;
