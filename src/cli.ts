@@ -43,7 +43,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
-import { detectUnknownSlashCommand, formatUnknownSlashCommand, slashCommands } from "./slash-commands.js";
+import { explainUnhandledSlashInput, formatSlashInputProblem, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
@@ -75,7 +75,7 @@ import { handleReportCommand, runReportCommand } from "./commands/report-command
 import { runAuditCommand } from "./commands/audit-command.js";
 import { runRecoverCommand } from "./commands/recover-command.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
-import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
+import { handleRunningTaskCommand, incompleteTaskMessage, RUNNING_TASK_COMMAND_WORDS } from "./commands/running-task-commands.js";
 import { handleWebCommand } from "./commands/web-commands.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -1682,9 +1682,9 @@ async function main(): Promise<void> {
             break;
           }
           if (await handleRunningTaskCommand(followUp, { agent, applyRuntimeLanguage, chooseRuntimeLanguage, clipboard, draftStore, language, managedWebSearchAuth: () => managedWebSearchAuth, printCredentialStatus, printDiff, queue, settings, view })) continue;
-          const unknownFollowUpCommand = detectUnknownSlashCommand(followUp);
-          if (unknownFollowUpCommand) {
-            console.log(chalk.yellow(`${formatUnknownSlashCommand(unknownFollowUpCommand, language)}\n`));
+          const unhandledFollowUp = explainUnhandledSlashInput(followUp, { runningCommandWords: RUNNING_TASK_COMMAND_WORDS });
+          if (unhandledFollowUp) {
+            console.log(chalk.yellow(`${formatSlashInputProblem(unhandledFollowUp, language)}\n`));
             continue;
           }
 
@@ -2083,8 +2083,9 @@ async function main(): Promise<void> {
       if (await handleBackgroundCommand(task, { config, language, background })) continue;
       if (await handleReportCommand(task, { agent, config, language, securityAudit, taskRunJournal })) continue;
       if (await handleCredentialCommand(task, { auditCredential, config, ensureSystemCredentialStore, formatCredentialProbe, language, printCredentialStatus, providerRegistry, switchProviderProfile })) continue;
-      if (task === "/queue" || task === "/clear-queue" || task === "/cancel") {
-        console.log(chalk.dim(localize(language, `${task} 仅在任务运行时可用。\n`, `${task} is available while a task is running.\n`)));
+      if (task === "/queue" || task.startsWith("/queue ") || task === "/clear-queue" || task === "/cancel") {
+        const word = task.split(/\s+/)[0]!;
+        console.log(chalk.dim(localize(language, `${word} 仅在任务运行时可用。\n`, `${word} is available while a task is running.\n`)));
         continue;
       }
       if (task === "/status") {
@@ -2140,9 +2141,9 @@ async function main(): Promise<void> {
         console.log(`${slashCommands(language).map((command) => `${command.name.padEnd(20)} ${command.description}`).join("\n")}\n`);
         continue;
       }
-      const unknownCommand = detectUnknownSlashCommand(task);
-      if (unknownCommand) {
-        console.log(chalk.yellow(`${formatUnknownSlashCommand(unknownCommand, language)}\n`));
+      const unhandledInput = explainUnhandledSlashInput(task);
+      if (unhandledInput) {
+        console.log(chalk.yellow(`${formatSlashInputProblem(unhandledInput, language)}\n`));
         continue;
       }
       try {

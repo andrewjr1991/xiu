@@ -26,6 +26,15 @@ export interface RunningTaskCommandContext {
 }
 
 /**
+ * The command words the steer> prompt accepts while a task runs, in the order the prompt lists them. `/cancel`,
+ * `/exit` and `/quit` end the running-task loop in cli.ts; every other listed word is handled below. Any other
+ * known command is unavailable until the task ends (`explainUnhandledSlashInput` says so instead of steering).
+ */
+export const RUNNING_TASK_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  "/cancel", "/exit", "/quit", "/queue", "/clear-queue", "/status", "/diff", "/check", "/diagnostics", "/details", "/paste", "/credentials", "/web", "/language",
+]);
+
+/**
  * Handles the slash commands accepted at the steer> prompt while a task runs; returns false when the
  * input is not one of them, so cli.ts can send it as steering or queue it. /cancel and /exit stay in
  * cli.ts because they end the running-task loop.

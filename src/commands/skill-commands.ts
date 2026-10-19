@@ -40,7 +40,7 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
     }
     return true;
   }
-  if (task.startsWith("/skills install ")) {
+  if (task === "/skills install" || task.startsWith("/skills install ")) {
     const source = task.slice("/skills install ".length).trim();
     if (!source) {
       console.log(chalk.yellow(localize(language, "用法：/skills install <本地路径或 HTTPS Git URL>\n", "Usage: /skills install <local-path-or-https-git-url>\n")));
