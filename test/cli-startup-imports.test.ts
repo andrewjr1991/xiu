@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxLoader = import.meta.resolve("tsx");
-const traceRegister = fileURLToPath(new URL("./fixtures/import-trace-register.mjs", import.meta.url));
+// `--import` takes a module specifier: on Windows an absolute path (`D:\...`) is not one, a file: URL is.
+const traceRegister = new URL("./fixtures/import-trace-register.mjs", import.meta.url).href;
 
 /**
  * The packages that dominate Xiu's startup time (about a second together) and are needed only
