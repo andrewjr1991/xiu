@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { constants, type Stats } from "node:fs";
 import path from "node:path";
-import { load } from "cheerio";
 import { redactSecrets } from "../secret-redaction.js";
 import { resolveWorkspacePath } from "../workspace-path.js";
 
@@ -95,7 +94,9 @@ function markdownToSafeHtml(source: string): string {
 const ALLOWED_HTML = new Set(["p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "pre", "code", "blockquote", "strong", "b", "em", "i", "table", "thead", "tbody", "tr", "th", "td"]);
 const REMOVE_WITH_CONTENT = "script,style,template,noscript,iframe,frame,object,embed,svg,math,form,input,button,textarea,select,option,link,meta,base,audio,video,source,canvas";
 
-export function sanitizeHtmlPreview(source: string): string {
+export async function sanitizeHtmlPreview(source: string): Promise<string> {
+  // The HTML parser is loaded on the first preview that needs it, not when the process starts.
+  const { load } = await import("cheerio");
   const $ = load(source, { xmlMode: false }, false);
   $(REMOVE_WITH_CONTENT).remove();
   $("*").each((_index, element) => {
@@ -163,8 +164,8 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
     const truncated = stat.size > bytesRead;
     return {
       path: relative, kind, bytes: stat.size, truncated, source,
-      ...(kind === "markdown" ? { safeHtml: sanitizeHtmlPreview(markdownToSafeHtml(source)) } : {}),
-      ...(kind === "html" ? { safeHtml: sanitizeHtmlPreview(source) } : {}),
+      ...(kind === "markdown" ? { safeHtml: await sanitizeHtmlPreview(markdownToSafeHtml(source)) } : {}),
+      ...(kind === "html" ? { safeHtml: await sanitizeHtmlPreview(source) } : {}),
     };
   } finally { await handle.close(); }
 }

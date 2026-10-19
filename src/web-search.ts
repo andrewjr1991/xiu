@@ -2,7 +2,6 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import * as tls from "node:tls";
 import { createHash } from "node:crypto";
-import * as cheerio from "cheerio";
 import { Agent, fetch as undiciFetch, ProxyAgent } from "undici";
 import { sharedFreeSearchBackend, type FreeSearchBackend } from "./free-search.js";
 import type { AgentTool } from "./types.js";
@@ -279,8 +278,10 @@ function formatResults(query: string, results: SearchResult[], duplicatesRemoved
   ].filter(Boolean).join("\n")).join("\n\n")}\n\nEvidence coverage: ${quality.uniqueSources} unique source(s) across ${quality.uniqueDomains} domain(s); ${quality.datedSources}/${quality.uniqueSources} include a provider-supplied date; ${quality.duplicatesRemoved} duplicate(s) removed.${quality.warnings.length ? `\nWarnings: ${quality.warnings.join("; ")}.` : ""}\nCitation guidance: Search snippets are discovery-only. Open each Citation URL with web_open before citing time-sensitive claims.`;
 }
 
-function htmlToReadableText(html: string, url: string, maxCharacters: number): string {
-  const $ = cheerio.load(html);
+async function htmlToReadableText(html: string, url: string, maxCharacters: number): Promise<string> {
+  // The HTML parser is loaded on the first page opened, not when Xiu starts.
+  const { load } = await import("cheerio");
+  const $ = load(html);
   $("script,style,noscript,template,svg,canvas,form,button,input,select,textarea").remove();
   const title = $("title").first().text().replace(/\s+/g, " ").trim();
   const root = $("main,article").first().length ? $("main,article").first() : $("body");
@@ -427,7 +428,7 @@ export function createWebSearchTools(config: WebSearchConfig | undefined, proxy?
         const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
         if (!/^(?:text\/html|text\/plain|application\/json)(?:;|$)/.test(contentType)) throw new Error(`Unsupported web content type: ${contentType || "unknown"}`);
         const body = await responseText(response);
-        if (contentType.startsWith("text/html")) return htmlToReadableText(body, url.toString(), maxCharacters);
+        if (contentType.startsWith("text/html")) return await htmlToReadableText(body, url.toString(), maxCharacters);
         const bounded = body.length > maxCharacters ? `${body.slice(0, maxCharacters)}\n\n[content truncated at ${maxCharacters} characters]` : body;
         return `${UNTRUSTED_NOTICE}\n\nSource ID: ${webSourceId(url.toString())}\nCitation URL: ${url}\nSource host: ${url.hostname}\nURL: ${url}\nContent:\n${bounded}`;
       } finally { lifecycle.dispose(); }

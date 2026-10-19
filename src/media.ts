@@ -1,6 +1,6 @@
 import { fetch, ProxyAgent, type Dispatcher } from "undici";
-import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
+import type Anthropic from "@anthropic-ai/sdk";
+import type OpenAI from "openai";
 import type { AgentConfig } from "./config.js";
 import { readEnvironmentCredential } from "./credential-store.js";
 import { createTrustedDispatcher } from "./trusted-dispatcher.js";
@@ -237,7 +237,8 @@ export class AgnesMediaBackend implements MediaBackend {
 }
 
 export class OpenAIVisionBackend implements MediaBackend {
-  private readonly client: OpenAI;
+  private readonly clientOptions: ConstructorParameters<typeof OpenAI>[0];
+  private clientPromise?: Promise<OpenAI>;
   private readonly apiKey: string;
   private readonly baseURL: string;
   private readonly dispatcher?: Dispatcher;
@@ -246,16 +247,21 @@ export class OpenAIVisionBackend implements MediaBackend {
     this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
     this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
     this.dispatcher = createTrustedDispatcher(config.proxy);
-    this.client = new OpenAI({
+    this.clientOptions = {
       apiKey: this.apiKey,
       baseURL: this.baseURL,
       ...options,
       fetchOptions: this.dispatcher ? { dispatcher: this.dispatcher } : undefined,
-    });
+    };
+  }
+
+  /** The SDK is loaded and the client built on the first media request, not when the backend is configured. */
+  private client(): Promise<OpenAI> {
+    return this.clientPromise ??= import("openai").then(({ default: OpenAI }) => new OpenAI(this.clientOptions));
   }
 
   async analyzeImage(prompt: string, image: string, signal?: AbortSignal): Promise<string> {
-    const response = await this.client.chat.completions.create({
+    const response = await (await this.client()).chat.completions.create({
       model: this.config.capabilities?.vision ?? this.config.model,
       messages: [{
         role: "user",
@@ -274,7 +280,7 @@ export class OpenAIVisionBackend implements MediaBackend {
     if (request.images?.length) throw new Error("This OpenAI-compatible adapter does not support reference-image editing; remove reference_images or use a provider-specific adapter that supports it");
     const landscape = ["3:2", "4:3", "16:9", "21:9"].includes(request.ratio ?? "");
     const portrait = ["2:3", "3:4", "9:16"].includes(request.ratio ?? "");
-    const response = await this.client.images.generate({
+    const response = await (await this.client()).images.generate({
       model: this.config.capabilities?.image ?? "gpt-image-1",
       prompt: request.prompt,
       size: landscape ? "1536x1024" : portrait ? "1024x1536" : "1024x1024",
@@ -286,7 +292,7 @@ export class OpenAIVisionBackend implements MediaBackend {
   }
 
   async generateAudio(request: AudioGenerationRequest, signal?: AbortSignal): Promise<Buffer> {
-    const response = await this.client.audio.speech.create({
+    const response = await (await this.client()).audio.speech.create({
       model: this.config.capabilities?.audio ?? "gpt-4o-mini-tts",
       input: request.text,
       voice: request.voice ?? "alloy",
@@ -341,16 +347,22 @@ export class OpenAIVisionBackend implements MediaBackend {
 }
 
 export class AnthropicVisionBackend implements MediaBackend {
-  private readonly client: Anthropic;
+  private readonly clientOptions: ConstructorParameters<typeof Anthropic>[0];
+  private clientPromise?: Promise<Anthropic>;
 
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     const dispatcher = createTrustedDispatcher(config.proxy);
-    this.client = new Anthropic({
+    this.clientOptions = {
       ...options,
       apiKey: readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"),
       baseURL: config.mediaBaseURL ?? config.baseURL,
       fetchOptions: dispatcher ? { dispatcher } : undefined,
-    });
+    };
+  }
+
+  /** The SDK is loaded and the client built on the first media request, not when the backend is configured. */
+  private client(): Promise<Anthropic> {
+    return this.clientPromise ??= import("@anthropic-ai/sdk").then(({ default: Anthropic }) => new Anthropic(this.clientOptions));
   }
 
   async analyzeImage(prompt: string, image: string, signal?: AbortSignal): Promise<string> {
@@ -361,7 +373,7 @@ export class AnthropicVisionBackend implements MediaBackend {
           return { type: "base64" as const, media_type: match[1] as "image/png" | "image/jpeg" | "image/webp" | "image/gif", data: match[2] };
         })()
       : { type: "url" as const, url: image };
-    const response = await this.client.messages.create({
+    const response = await (await this.client()).messages.create({
       model: this.config.capabilities?.vision ?? this.config.model,
       max_tokens: 4096,
       messages: [{ role: "user", content: [{ type: "image", source }, { type: "text", text: prompt }] }],

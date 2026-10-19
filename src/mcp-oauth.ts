@@ -2,16 +2,13 @@ import { randomBytes } from "node:crypto";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import {
-  auth,
-  discoverAuthorizationServerMetadata,
-  resourceUrlFromServerUrl,
-  type OAuthClientInformationContext,
-  type OAuthClientMetadata,
-  type OAuthClientProvider,
-  type OAuthDiscoveryState,
-  type StoredOAuthClientInformation,
-  type StoredOAuthTokens,
+import type {
+  OAuthClientInformationContext,
+  OAuthClientMetadata,
+  OAuthClientProvider,
+  OAuthDiscoveryState,
+  StoredOAuthClientInformation,
+  StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
 import { McpAuthStore, type McpAuthRecord } from "./mcp-auth-store.js";
 import type { McpOAuthConfig } from "./mcp.js";
@@ -48,8 +45,13 @@ export interface McpOAuthInteraction {
   interactive?: boolean;
 }
 
-function canonicalResource(serverUrl: string): string {
-  return resourceUrlFromServerUrl(serverUrl).toString();
+/** The MCP client library is loaded on first use (login, refresh or logout), not when Xiu starts. */
+function mcpClient(): Promise<typeof import("@modelcontextprotocol/client")> {
+  return import("@modelcontextprotocol/client");
+}
+
+async function canonicalResource(serverUrl: string): Promise<string> {
+  return (await mcpClient()).resourceUrlFromServerUrl(serverUrl).toString();
 }
 
 function scopeList(value?: string): string[] {
@@ -175,7 +177,7 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     const issuer = ctx?.issuer ?? this.recentIssuer;
     if (this.config.clientId) return { client_id: this.config.clientId, ...(issuer ? { issuer } : {}) } as StoredOAuthClientInformation;
     if (issuer && this.recentClient) return this.recentClient;
-    const matches = await this.store.find(canonicalResource(this.serverUrl), issuer);
+    const matches = await this.store.find(await canonicalResource(this.serverUrl), issuer);
     const withClient = matches.filter((record) => record.clientInformation);
     if (withClient.length === 1) {
       this.recentIssuer = withClient[0]!.issuer;
@@ -190,14 +192,14 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     if (!issuer) throw new Error("OAuth client registration was not bound to an issuer");
     this.recentIssuer = issuer;
     this.recentClient = clientInformation;
-    const identity = { resource: canonicalResource(this.serverUrl), issuer, clientId: clientInformation.client_id };
+    const identity = { resource: await canonicalResource(this.serverUrl), issuer, clientId: clientInformation.client_id };
     await this.store.save(mergeRecord(await this.store.get(identity), { ...identity, clientInformation }));
   }
 
   async tokens(ctx?: OAuthClientInformationContext): Promise<StoredOAuthTokens | undefined> {
     const issuer = ctx?.issuer ?? this.recentIssuer;
     const client = await this.clientInformation(ctx);
-    const matches = await this.store.find(canonicalResource(this.serverUrl), issuer, client?.client_id);
+    const matches = await this.store.find(await canonicalResource(this.serverUrl), issuer, client?.client_id);
     return matches.length === 1 ? matches[0]!.tokens : undefined;
   }
 
@@ -206,7 +208,7 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     const client = await this.clientInformation(issuer ? { issuer } : undefined);
     if (!issuer || !client?.client_id) throw new Error("OAuth tokens were not bound to an issuer and client");
     this.recentIssuer = issuer;
-    const identity = { resource: canonicalResource(this.serverUrl), issuer, clientId: client.client_id };
+    const identity = { resource: await canonicalResource(this.serverUrl), issuer, clientId: client.client_id };
     const expiresAt = tokens.expires_in === undefined ? undefined : Date.now() + tokens.expires_in * 1_000;
     await this.store.save(mergeRecord(await this.store.get(identity), { ...identity, tokens, clientInformation: client, ...(expiresAt ? { expiresAt } : {}) }));
   }
@@ -243,14 +245,14 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     if (scope === "verifier" || scope === "all") this.verifier = undefined;
     if (scope === "discovery" || scope === "all") this.discovery = undefined;
     if (scope === "tokens" || scope === "client" || scope === "all") {
-      const matches = await this.store.find(canonicalResource(this.serverUrl), this.recentIssuer, this.recentClient?.client_id);
+      const matches = await this.store.find(await canonicalResource(this.serverUrl), this.recentIssuer, this.recentClient?.client_id);
       await Promise.all(matches.map(async (record) => await this.store.clearCredentials(record, scope === "all" ? "all" : scope)));
       if (scope === "client" || scope === "all") this.recentClient = undefined;
     }
   }
 
   async status(): Promise<McpOAuthStatus> {
-    const records = await this.store.find(canonicalResource(this.serverUrl));
+    const records = await this.store.find(await canonicalResource(this.serverUrl));
     const record = records.find((item) => item.tokens) ?? records[0];
     return {
       authenticated: Boolean(record?.tokens?.access_token),
@@ -263,7 +265,7 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
   }
 
   async ensureFresh(signal?: AbortSignal, force = false): Promise<void> {
-    const records = await this.store.find(canonicalResource(this.serverUrl));
+    const records = await this.store.find(await canonicalResource(this.serverUrl));
     const record = records.find((item) => item.tokens);
     if (!record?.tokens) return;
     if (!force && (!record.expiresAt || record.expiresAt - Date.now() > REFRESH_SKEW_MS)) return;
@@ -277,7 +279,7 @@ export class XiuMcpOAuthProvider implements OAuthClientProvider {
     const flight = (async () => {
       if (signal?.aborted) throw new Error("OAuth refresh was cancelled");
       try {
-        const result = await auth(this, {
+        const result = await (await mcpClient()).auth(this, {
           serverUrl: this.serverUrl,
           scope: record.tokens?.scope,
           fetchFn: boundedOAuthFetch(signal),
@@ -353,7 +355,7 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
   // Observe early listener failures immediately while retaining the original promise for the flow below.
   void callback.catch(() => undefined);
   try {
-    const result = await auth(provider, {
+    const result = await (await mcpClient()).auth(provider, {
       serverUrl: provider.serverUrl,
       scope: (scopes ?? provider.config.scopes)?.join(" "),
       fetchFn: safeFetch,
@@ -361,7 +363,7 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
     if (result === "AUTHORIZED") return;
     const callbackUrl = await callback;
     const { code, iss } = provider.validateCallback(callbackUrl);
-    const exchanged = await auth(provider, {
+    const exchanged = await (await mcpClient()).auth(provider, {
       serverUrl: provider.serverUrl,
       authorizationCode: code,
       iss,
@@ -376,14 +378,14 @@ export async function loginMcpOAuth(provider: XiuMcpOAuthProvider, interaction: 
 }
 
 export async function logoutMcpOAuth(provider: XiuMcpOAuthProvider, forgetClient = false): Promise<McpOAuthLogoutResult> {
-  const records = await provider.store.find(canonicalResource(provider.serverUrl));
+  const records = await provider.store.find(await canonicalResource(provider.serverUrl));
   let revoked = false;
   let warning: string | undefined;
   for (const record of records) {
     if (!record.tokens) continue;
     try {
       const safeFetch = boundedOAuthFetch(undefined, 15_000);
-      const metadata = await discoverAuthorizationServerMetadata(record.issuer, { fetchFn: safeFetch });
+      const metadata = await (await mcpClient()).discoverAuthorizationServerMetadata(record.issuer, { fetchFn: safeFetch });
       const endpoint = (metadata as unknown as { revocation_endpoint?: string } | undefined)?.revocation_endpoint;
       if (!endpoint) continue;
       const checked = await validateOAuthUrl(endpoint);
@@ -400,7 +402,7 @@ export async function logoutMcpOAuth(provider: XiuMcpOAuthProvider, forgetClient
       }
     } catch (error) { warning = sanitizedError(error, recordSecrets(record)).message; }
   }
-  const cleared = await provider.store.clearResource(canonicalResource(provider.serverUrl), forgetClient);
+  const cleared = await provider.store.clearResource(await canonicalResource(provider.serverUrl), forgetClient);
   return { cleared, revoked, ...(warning ? { warning } : {}) };
 }
 
