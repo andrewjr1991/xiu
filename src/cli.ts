@@ -787,19 +787,25 @@ async function main(): Promise<void> {
       return { skipped, reason: localize(language, "备用链中没有满足上下文与能力要求的 Provider", "No provider in the failover chain satisfies the context and capability requirements") };
     };
 
+    // Refusing to start is a failure of the run, not a clean exit: a one-shot or `--json` caller gets exit code 1
+    // and the `result` line it waits for, so a script never mistakes "nothing happened" for success.
+    const refuseToStart = (message: string): void => {
+      console.log(chalk.red(message));
+      process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: redactTerminalOutput(message) }) : 1;
+    };
     try {
       recoverySource = await taskRunJournal.interrupted();
     } catch (error) {
-      console.log(chalk.red(localize(language,
+      refuseToStart(localize(language,
         `任务恢复日志无法读取：${error instanceof Error ? error.message : String(error)}。为避免错误重放，Xiu 不会开始新任务。`,
-        `The task recovery journal could not be read: ${error instanceof Error ? error.message : String(error)}. Xiu will not start a new task because replay safety cannot be established.`)));
+        `The task recovery journal could not be read: ${error instanceof Error ? error.message : String(error)}. Xiu will not start a new task because replay safety cannot be established.`));
       return;
     }
     if (recoverySource) {
       if (initialTask) {
-        console.log(chalk.red(localize(language,
+        refuseToStart(localize(language,
           `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先不带任务参数启动 xiu，确认恢复或放弃后再运行新任务。`,
-          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task first and explicitly resume or abandon it before running a new task.`)));
+          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task first and explicitly resume or abandon it before running a new task.`));
         return;
       }
       const point = recoverySource.recoveryPoints.at(-1);
@@ -830,6 +836,9 @@ async function main(): Promise<void> {
         console.log(chalk.green(localize(language, "旧任务已标记为放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
         recoverySource = undefined;
       } else {
+        // "Exit" is the user's own choice (exit code 0); a menu cancelled because there is no terminal means a
+        // scripted session ran none of its input, which is a failure.
+        if (action === undefined) process.exitCode = 1;
         return;
       }
     }

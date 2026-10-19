@@ -349,7 +349,7 @@ xiu --json --yes '把 README 里的拼写错误改掉' > events.jsonl 2> progres
 {"schemaVersion":1,"type":"result","timestamp":"2026-10-19T05:06:01.681Z","payload":{"outcome":"completed","success":true,"exitCode":0,"stats":{"modelCalls":3,"toolCalls":4,"inputTokens":5120,"outputTokens":640,"estimatedTokens":6200},"durationMs":18422}}
 ```
 
-`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任，或按下文在你掌控的检出目录上显式加 `--trust-workspace`），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
+`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任，或按下文在你掌控的检出目录上显式加 `--trust-workspace`），工作区里有上次异常中断、尚未确认恢复或放弃的任务时也返回 `not_started`（请先在终端里不带任务运行一次 `xiu` 做出决定），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
 
 任务结束后，不进入交互模式也能导出最近一次任务的执行报告：
 
