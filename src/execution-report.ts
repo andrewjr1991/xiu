@@ -11,6 +11,18 @@ import type { UiLanguage } from "./i18n.js";
 export type ExecutionReportScope = "summary" | "details";
 export type ExecutionReportFormat = "markdown" | "json" | "html";
 
+/**
+ * Whether the run's session log backed the report. File changes, receipts and the task chain
+ * come from the session log; when it is missing, unreadable or holds no turn for the run, the
+ * report says so instead of showing an empty "file changes" that reads as "nothing changed".
+ */
+export interface ExecutionReportSessionLog {
+  status: "read" | "turn-missing" | "missing" | "unreadable";
+  sessionId: string;
+  /** The system error code for `unreadable` (such as EACCES); never a path or message. */
+  detail?: string;
+}
+
 export interface ExecutionReport {
   version: 1;
   generatedAt: string;
@@ -44,6 +56,7 @@ export interface ExecutionReport {
   failures: Array<{ source: "operation" | "diagnostic"; operation: string; message: string }>;
   security: { events: number; allowed: number; denied: number; failed: number; dangerous: number };
   recovery: { lastEvidence?: string; unknownSideEffects: string[] };
+  sessionLog: ExecutionReportSessionLog;
   bounded: { fileLimitReached: boolean; failureLimitReached: boolean; sourceContentIncluded: boolean };
 }
 
@@ -91,6 +104,7 @@ export function buildExecutionReport(options: {
   turn?: SessionReplayTurn;
   turns?: SessionReplayTurn[];
   auditRecords?: SecurityAuditRecord[];
+  sessionLog?: ExecutionReportSessionLog;
   scope?: ExecutionReportScope;
 }): ExecutionReport {
   const { cwd, run, turn } = options;
@@ -189,6 +203,9 @@ export function buildExecutionReport(options: {
       dangerous: auditRecords.filter((item) => item.risk === "dangerous").length,
     },
     recovery: { ...(runs.flatMap((item) => item.recoveryPoints).at(-1)?.evidence ? { lastEvidence: safe(runs.flatMap((item) => item.recoveryPoints).at(-1)?.evidence) } : {}), unknownSideEffects },
+    sessionLog: options.sessionLog
+      ? { status: options.sessionLog.status, sessionId: safe(options.sessionLog.sessionId, 160), ...(options.sessionLog.detail ? { detail: safe(options.sessionLog.detail, 40) } : {}) }
+      : { status: turns.length ? "read" : "turn-missing", sessionId: safe(run.sessionId, 160) },
     bounded: { fileLimitReached: allFiles.length > MAX_FILES, failureLimitReached: allFailures.length > MAX_FAILURES, sourceContentIncluded: scope === "details" },
   };
 }
@@ -260,6 +277,32 @@ function keyActionLabel(value: string, language: UiLanguage): string {
   return `${operationLabel(value.slice(0, separator), language)}：${evidenceLabel(value.slice(separator + 2), language)}`;
 }
 
+/**
+ * One sentence on why the session-backed parts of the report (file changes, receipts, task
+ * chain) are absent; undefined when the session log was read. The plain-text one-liner is the same
+ * in the Markdown and HTML reports.
+ */
+export function sessionLogNote(report: ExecutionReport, language: UiLanguage): string | undefined {
+  const { status, sessionId, detail } = report.sessionLog;
+  if (status === "read") return undefined;
+  const zh = language === "zh-CN";
+  const session = `${zh ? "会话" : "session"} ${sessionId.slice(0, 8) || "?"}`;
+  const consequence = zh
+    ? "文件变化、操作回执与任务链无法列出，其余内容仅来自运行记录与审计账本"
+    : "file changes, receipts and the task chain cannot be listed; the rest comes from the run record and the audit ledger alone";
+  const cause = status === "missing"
+    ? (zh ? `会话日志缺失（${session}）` : `session log missing (${session})`)
+    : status === "unreadable"
+      ? (zh ? `会话日志无法读取（${session}${detail ? `，${detail}` : ""}）` : `session log unreadable (${session}${detail ? `, ${detail}` : ""})`)
+      : (zh ? `会话日志里没有这次运行的轮次（${session}）` : `the session log has no turn for this run (${session})`);
+  return `${cause}${zh ? "：" : ": "}${consequence}`;
+}
+
+function unavailableLabel(report: ExecutionReport, language: UiLanguage, recorded: string): string {
+  if (report.sessionLog.status === "read") return recorded;
+  return language === "zh-CN" ? "无法列出（见“来源”）" : "unavailable (see Sources)";
+}
+
 export function formatExecutionReport(report: ExecutionReport, language: UiLanguage = "zh-CN"): string {
   const zh = language === "zh-CN";
   const lines = [
@@ -272,9 +315,10 @@ export function formatExecutionReport(report: ExecutionReport, language: UiLangu
     `- ${zh ? "可继续" : "Can continue"}: ${yes(report.outcome.canContinue, language)} · ${nextActionLabel(report, language)}`,
     `- ${zh ? "服务商/模型" : "Provider/Model"}: ${report.run.provider}/${report.run.model}`,
     `- ${zh ? "耗时" : "Duration"}: ${(report.run.durationMs / 1000).toFixed(1)}${zh ? " 秒" : "s"}`,
+    ...(sessionLogNote(report, language) ? [`- ${zh ? "来源" : "Sources"}: ${sessionLogNote(report, language)}`] : []),
     "",
     `## ${zh ? "关键操作与依据" : "Key actions and evidence"}`,
-    ...(report.keyActions.length ? report.keyActions.map((item) => `- ${keyActionLabel(item, language)}`) : [`- ${zh ? "无单独回执；请结合阶段与验证证据复核" : "no separate receipts; review the phases and verification evidence"}`]),
+    ...(report.keyActions.length ? report.keyActions.map((item) => `- ${keyActionLabel(item, language)}`) : [`- ${unavailableLabel(report, language, zh ? "无单独回执；请结合阶段与验证证据复核" : "no separate receipts; review the phases and verification evidence")}`]),
     "",
     `## ${zh ? "阶段" : "Phases"}`,
     ...report.phases.map((item) => `- ${statusLabel(item.kind, language)}: ${item.succeeded}/${item.total} ${zh ? "成功" : "succeeded"} · ${item.failed} ${zh ? "失败" : "failed"} · ${item.pending} ${zh ? "待确认" : "pending"}`),
@@ -283,7 +327,7 @@ export function formatExecutionReport(report: ExecutionReport, language: UiLangu
     ...(report.files.length ? report.files.flatMap((file) => [
       `- ${fileKindLabel(file.kind, language)} \`${file.path}\`${file.additions === undefined ? "" : ` +${file.additions}`}${file.deletions === undefined ? "" : ` -${file.deletions}`}`,
       ...(file.preview ?? []).map((line) => `  - \`${line.replace(/`/g, "'")}\``),
-    ]) : [`- ${zh ? "无记录" : "none recorded"}`]),
+    ]) : [`- ${unavailableLabel(report, language, zh ? "无记录" : "none recorded")}`]),
     "",
     `## ${zh ? "验证证据" : "Verification evidence"}`,
     ...(report.verification.length ? report.verification.map((item) => `- ${statusLabel(item.status, language)} · ${operationLabel(item.name, language)}${item.evidence ? ` · ${evidenceLabel(item.evidence, language)}` : ""}`) : [`- ${zh ? "无验证操作记录" : "no verification operation recorded"}`]),
@@ -353,13 +397,14 @@ export function formatExecutionReportHtml(report: ExecutionReport, language: UiL
 <dt>${e(t("服务商/模型", "Provider/Model"))}</dt><dd><code>${e(report.run.provider)}/${e(report.run.model)}</code></dd>
 <dt>${e(t("开始", "Started"))}</dt><dd>${e(report.run.startedAt)}${report.run.finishedAt ? ` → ${e(report.run.finishedAt)}` : ""}</dd>
 <dt>${e(t("耗时", "Duration"))}</dt><dd>${(report.run.durationMs / 1000).toFixed(1)}${e(t(" 秒", "s"))}</dd>
+${sessionLogNote(report, language) ? `<dt>${e(t("来源", "Sources"))}</dt><dd><span class="warn">${e(sessionLogNote(report, language)!)}</span></dd>` : ""}
 </dl>
 <h2>${e(t("关键操作与依据", "Key actions and evidence"))}</h2>
-${list(report.keyActions.map((item) => e(keyActionLabel(item, language))), t("无单独回执；请结合阶段与验证证据复核", "no separate receipts; review the phases and verification evidence"))}
+${list(report.keyActions.map((item) => e(keyActionLabel(item, language))), unavailableLabel(report, language, t("无单独回执；请结合阶段与验证证据复核", "no separate receipts; review the phases and verification evidence")))}
 <h2>${e(t("阶段", "Phases"))}</h2>
 ${report.phases.length ? `<table><thead><tr><th>${e(t("阶段", "Phase"))}</th><th class="num">${e(t("总数", "Total"))}</th><th class="num">${e(t("成功", "Succeeded"))}</th><th class="num">${e(t("失败", "Failed"))}</th><th class="num">${e(t("待确认", "Pending"))}</th></tr></thead><tbody>${phaseRows}</tbody></table>` : `<p class="empty">${e(t("无记录", "none recorded"))}</p>`}
 <h2>${e(t("文件变化", "File changes"))}</h2>
-${report.files.length ? `<table><thead><tr><th>${e(t("类型", "Kind"))}</th><th>${e(t("路径", "Path"))}</th><th class="num">+</th><th class="num">−</th><th class="num">${e(t("原字节", "Bytes before"))}</th><th class="num">${e(t("现字节", "Bytes after"))}</th></tr></thead><tbody>${fileRows}</tbody></table>${report.bounded.fileLimitReached ? `<p class="empty">${e(t(`仅列出前 ${MAX_FILES} 个文件。`, `Only the first ${MAX_FILES} files are listed.`))}</p>` : ""}` : `<p class="empty">${e(t("无记录", "none recorded"))}</p>`}
+${report.files.length ? `<table><thead><tr><th>${e(t("类型", "Kind"))}</th><th>${e(t("路径", "Path"))}</th><th class="num">+</th><th class="num">−</th><th class="num">${e(t("原字节", "Bytes before"))}</th><th class="num">${e(t("现字节", "Bytes after"))}</th></tr></thead><tbody>${fileRows}</tbody></table>${report.bounded.fileLimitReached ? `<p class="empty">${e(t(`仅列出前 ${MAX_FILES} 个文件。`, `Only the first ${MAX_FILES} files are listed.`))}</p>` : ""}` : `<p class="empty">${e(unavailableLabel(report, language, t("无记录", "none recorded")))}</p>`}
 <h2>${e(t("验证证据", "Verification evidence"))}</h2>
 ${list(report.verification.map((item) => `<span class="${item.status === "succeeded" ? "ok" : item.status === "failed" ? "bad" : "warn"}">${e(statusLabel(item.status, language))}</span> · ${e(operationLabel(item.name, language))}${item.evidence ? ` · ${e(evidenceLabel(item.evidence, language))}` : ""}`), t("无验证操作记录", "no verification operation recorded"))}
 <h2>${e(t("失败与重试", "Failures and retries"))}</h2>
