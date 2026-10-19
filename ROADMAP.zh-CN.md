@@ -4,11 +4,11 @@
 
 ## 当前状态
 
-- **0.20.12 发布前兼容性修正（2026-10-17）：** Computer Use 仅对已知 Edit/RichEdit 控件使用编辑消息，其他控件在发送前选择按键路径；超时或失败不补发。Ctrl+S 恢复应用级行为且仍逐次确认；移除钉死步数/API 的断言，增加 C# 分流行为测试与原生/Chromium 窗口回归。版本保持 0.20.12，尚未发布。
-- **0.20.12 Computer Use 修复（2026-10-16，未发布）：** 针对记事本多步编辑失败，补齐已验证编辑器中的多行输入、可靠双击、平滑拖拽和目标 HWND 级 Ctrl+A/C/V/Z；每步继续返回新观察帧，Alt+Tab 等系统快捷键仍拒绝。隔离 Windows 原生冒烟已覆盖三行输入、双击替换、重复退格、右键/Esc、全选复制、拖拽选择及最终内容核对，维护者已确认真实记事本验收通过；全量 1206 通过、9 跳过、0 失败，隔离原生流程和安装生命周期通过。
+- **0.20.12 已发布 GitHub（2026-10-19）：** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 标签指向 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`；同提交 CI 38936632221 九项作业与 CodeQL 通过，五份 CI 原始附件已按大小/SHA256 回读。Windows 安装器未签名，npm 由维护者发布。Computer Use 编辑器修复已通过本地真实记事本与隔离 Windows/Chromium 测试。
+
 - **0.20.11 已发布 GitHub 与 npm：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
 
-更新于 2026-10-16。
+更新于 2026-10-19。
 
 - **0.20.9 已发布 GitHub（2026-10-15）。** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 与标签精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`；[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业通过，Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。发布前修正 npm 清单漏列当前设计稿并补回归；旧未公开草稿已删除，旧制品及 rejected 摘要保留本地。最终五份附件采用新 CI 原始制品，大小/SHA256 回读通过。固定 uv、安装/启动/升级/中断重启/卸载已再次本地验收。npm 0.20.9 已于 2026-10-15 发布，回读 version/latest 均为 0.20.9，integrity 与 tarball SHA256 与 Release 附件一致。Windows 未签名。仅文档补记跳过重复 CI，不改正式标签或附件。
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。
@@ -41,11 +41,11 @@
 
 ## 下一步
 
-2026-10-17：0.20.12 的 HWND 类名分流和 Ctrl+S 回归修复已完成，本地全量 1207 通过、9 跳过，原生/Chromium 窗口回归通过。提交推送后检查对应 CI；npm 和 GitHub Release 等维护者发布指示。
+2026-10-19：0.20.12 GitHub Release 和附件回读已完成。维护者使用本次同源 CLI tarball 发布 npm，并核对版本、latest、integrity；之后推进 0.22 的桌面对齐与真实用户矩阵。
 
 0.20.11 已于 2026-10-15 发布至 [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.11) 与 npm，标签精确绑定 c0ba7fda8624bde8dcf4940ab1288d7f911db3d2。README 已于同日重写为中英文同构概览（#58），旧版归档在 `docs/history/`。
 
-0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。下一步：按维护者指示提交推送 0.20.12，读取本提交 CI 结果；npm 与 GitHub Release 待后续发布指示。当前版本设计及变更已同步，不能覆盖 0.20.11。后续进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 原生窗口与真实记事本 Computer Use 验收已通过，其他应用场景继续验证；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
+0.21 计划项已于 2026-10-15 全部合并到 main（未发布）：当前优先级第 1 项的六项首次体验改进（#59–#65）、Node 20 弃用提示（#64）与第 3 项的 R4/A5/S4/S5/S3/S6（#66–#72）。0.20.12 GitHub Release 已完成，npm 发布由维护者处理。当前版本设计及变更已同步，不能覆盖 0.20.11。后续进入第 4 项 0.22：`engines` 改为 `>=22.12` 并一次性升级受 Node 20 限制的依赖，再做桌面对齐与电脑操作闭环。维护者侧待办：Windows 原生窗口与真实记事本 Computer Use 验收已通过，其他应用场景继续验证；`@napi-rs/keyring` 1.x 写、2.x 读的往返测试；企业机器上确认托管搜索选择持久化；在 Security 页把 CodeQL 告警 #19（测试 worker 的 `eval`，仅测试代码）标为 used in tests。
 
 ## 1. 项目定位
 
@@ -56,7 +56,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 | npm 包 | `@xiu-ai/cli` |
 | 全局命令 | `xiu` |
 | 当前公开 npm 版本 | `0.20.11`，Registry latest 已回读 |
-| 当前开发版本 | `0.20.12`，本地验收通过，尚未发布 |
+| 当前开发版本 | `0.20.12`，GitHub 已发布 |
 | 主要运行时 | Node.js 20.18.1+ / TypeScript |
 | 主要验收平台 | Windows PowerShell / Windows x64 桌面 |
 | 跨平台状态 | 0.20.8 main CI 九作业通过（三平台 CLI 与桌面、Node 22/24 兼容、生产依赖审计），含 Windows 未签名 NSIS 安装生命周期；真实用户/企业设备、模型长任务和浏览器实玩仍需独立验收 |

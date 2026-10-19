@@ -1,8 +1,10 @@
-## 0.20.12 发布准备（2026-10-16，未发布）
+## 0.20.12 GitHub 发布记录（2026-10-19）
 
-2026-10-17 兼容性补修：Edit/RichEdit 消息路径按实际 HWND 类名分流，其他控件回退键盘；Ctrl+S 不再误入编辑器专用校验。全量 1216 项：1207 通过、9 跳过、0 失败；原生 C# 分流行为测试、真实 Windows 编辑流程、Chromium 全选/复制/应用级保存及非编辑器拒绝通过。类型检查、改动文件 lint、CLI/桌面构建、桌面冒烟及 npm 443 文件清单通过。未重新生成安装器或发布制品，发布仍待精确提交 CI 与后续指示。
+[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 已公开；轻量标签指向 main 的 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`。[同提交 CI 38936632221](https://github.com/andrewjr1991/xiu/actions/runs/38936632221) 九项作业通过，CodeQL 同提交通过。五份原始 CI 附件上传后按大小与 SHA256 回读核验。CLI tarball SHA256 `1784d7d0848ff683953ed4b74001a0a8f070b37e31a00837e7daa617945c2769`；Windows NSIS SHA256 `6c53d213775f6222714189b3548a294dc094693fd71a0fa1baf87c9968a95292`，`NotSigned`。npm 由维护者使用同源 CI tarball 自行发布，发布后核验 Registry 版本、latest 与 integrity。
 
-CLI 与桌面版本同步提升至 0.20.12，维护者确认 Computer Use 本地验收通过。本次仅提交推送源码；npm 与 GitHub Release 均待后续发布。官方 npm 在准备时对 0.20.12 返回 E404，发布前须再次核对，禁止覆盖已发布版本。
+2026-10-17 兼容性补修：Edit/RichEdit 消息路径按实际 HWND 类名分流，其他控件回退键盘；Ctrl+S 不再误入编辑器专用校验。全量 1216 项：1207 通过、9 跳过、0 失败；原生 C# 分流行为测试、真实 Windows 编辑流程、Chromium 全选/复制/应用级保存及非编辑器拒绝通过。类型检查、改动文件 lint、CLI/桌面构建、桌面冒烟及 npm 443 文件清单通过。本地改动没有混入正式附件；GitHub 发布采用精确提交的 CI 制品。
+
+CLI 与桌面版本同步提升至 0.20.12，维护者确认 Computer Use 本地验收通过。GitHub 已公开；官方 npm 在发布准备时对 0.20.12 返回 E404，维护者发布前须再次核对，禁止覆盖已发布版本。
 
 上一轮本地验证：全量 1206 通过、9 跳过、0 失败；源码/桌面类型检查、构建、31 项 Computer Use 专项、真实隔离 Windows 编辑流程和安装生命周期通过。真实记事本任务已由维护者确认通过。安装器仍未签名，性能优化另行处理。
 

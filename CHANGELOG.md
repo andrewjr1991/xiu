@@ -1,9 +1,11 @@
 # Changelog
 
-## 0.20.12 (unreleased candidate)
+## 0.20.12 — 2026-10-19
+
+Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) from `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`; all nine jobs of [exact-source CI 38936632221](https://github.com/andrewjr1991/xiu/actions/runs/38936632221) passed. The five original CI assets have verified sizes and SHA-256 digests. Windows installer is unsigned.
 
 - Computer Use: editor messages are now restricted to recognized native Edit/RichEdit HWND classes (including WinForms wrappers). Custom, XAML and Chromium hosts use the existing keyboard path instead of silently ignoring native edit messages. A message timeout/error never falls back to another input. Ctrl+S once again works outside editor focus, with its per-step confirmation. Native routing tests replace assertions tied to drag step counts and particular APIs; Windows smoke covers both native editors and Chromium keyboard fallback.
-The maintainer accepted the local Computer Use editor fix on 2026-10-16. Local verification: 1206 tests passed, 9 skipped, no failures; isolated native editor workflow and Windows installer lifecycle passed. Publication remains pending.
+The maintainer accepted the local Computer Use editor fix on 2026-10-16. Local verification: 1206 tests passed, 9 skipped, no failures; isolated native editor workflow and Windows installer lifecycle passed.
 
 - Desktop Computer Use editor reliability: `type` accepts CR/LF only when the native bridge verifies a focused Edit/Document control; double-click uses two timed clicks; drag follows a smooth bounded path; and Ctrl+A/C/V/Z target the authorized GUI thread's verified editor HWND with a one-second hung-window timeout. The tool schema now tells the model to use the newest returned frame and to report refused system shortcuts without retry. The native Windows smoke covers a Notepad-style sequence: multi-line entry, double-click replacement with post-action correction, repeated Backspace, context-menu/Escape, select-all/copy, drag selection, selection cancellation and Alt+Tab refusal.
 - CI: the package and platform smoke scripts give `npm install` of the packed tarball six minutes instead of three and two fetch retries; a slow registry on the Windows runner hit the old limit on two consecutive PRs (#72, #74) with no code cause.
