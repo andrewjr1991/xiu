@@ -52,6 +52,9 @@ function fit(value: string, width: number): string {
 
 type WelcomeBoxRow = string | { divider: string };
 
+/** Display column (within a panel row) where the startup-config values start. */
+const SESSION_VALUE_COLUMN = 10;
+
 function box(title: string, rows: WelcomeBoxRow[], width: number, rightColumn?: number): string[] {
   const innerWidth = width - 2;
   const fixedRule = (left: string, right: string): string => rightColumn
@@ -106,19 +109,34 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
     localize(language, "3. 使用 /plan on 进行只读调查", "3. Use /plan on to investigate safely"),
     localize(language, "4. 使用 /skills 浏览已安装工作流", "4. Use /skills to browse installed workflows"),
   ];
+  // Labels are padded by display width so the values line up in one column in both languages
+  // (a fixed number of spaces lined up the two-character Chinese labels but not "Approval").
+  const labelled = (label: string, value: string): string => `${label}${" ".repeat(Math.max(1, SESSION_VALUE_COLUMN - textWidth(label)))}${value}`;
   const session = [
-    `${localize(language, "模型", "Model")}      ${config.providerId}/${config.model}`,
-    `${localize(language, "上下文", "Context")}    ${Math.round((config.contextWindow ?? 128_000) / 1000)}K · ${localize(language, "压缩点", "compact at")} ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`,
-    `${localize(language, "认证", "Auth")}      ${authState(config) === "configured" ? localize(language, "已配置", "configured") : localize(language, "缺少 API Key", "missing API key")}`,
-    `${localize(language, "审批", "Approval")}      ${config.autoApprove ? localize(language, "自动，危险操作除外", "automatic except dangerous") : localize(language, "按风险询问", "risk-based prompts")}`,
-    `${localize(language, "技能", "Skills")}      ${skillCount} ${localize(language, "个已安装", "installed")}`,
+    labelled(localize(language, "模型", "Model"), `${config.providerId}/${config.model}`),
+    labelled(localize(language, "上下文", "Context"), `${Math.round((config.contextWindow ?? 128_000) / 1000)}K · ${localize(language, "压缩点", "compact at")} ${Math.round((config.contextLimit ?? 102_400) / 1000)}K`),
+    labelled(localize(language, "认证", "Auth"), authState(config) === "configured" ? localize(language, "已配置", "configured") : localize(language, "缺少 API Key", "missing API key")),
+    labelled(localize(language, "审批", "Approval"), config.autoApprove ? localize(language, "自动，危险操作除外", "automatic except dangerous") : localize(language, "按风险询问", "risk-based prompts")),
+    labelled(localize(language, "技能", "Skills"), `${skillCount} ${localize(language, "个已安装", "installed")}`),
   ];
+  // Side-by-side layout from 86 columns: the brand column's width decides how much of the
+  // workspace path fits; the path used to be cut at 38 columns whatever the column's width,
+  // so in a 100-column terminal the panel's border overwrote its tail.
+  const sideBySide = width >= 86;
+  const gap = 3;
+  // At least 34 columns: the version line ("Xiu 0.20.13 - Build. Fix. Verify.", 33 columns) must
+  // fit, since a pipe or log gets no cursor positioning and an overflowing brand line pushes the
+  // panel's row out of line.
+  const leftWidth = Math.max(34, Math.min(38, Math.floor(width * 0.32)));
+  const brandWidth = sideBySide ? leftWidth : width;
+  const title = `Xiu ${version}`;
+  const tagline = localize(language, "- 构建 · 修复 · 验证", "- Build. Fix. Verify.");
 
   const brand = [
     ...LOGO.map((line) => chalk.cyan.bold(line)),
-    `${chalk.bold(`Xiu ${version}`)} ${chalk.dim(localize(language, "- 构建 · 修复 · 验证", "- Build. Fix. Verify."))}`,
-    chalk.dim(localize(language, "修代码，也修工程。", "Build code. Fix systems.")),
-    chalk.dim(fit(config.cwd, 38)),
+    textWidth(`${title} ${tagline}`) <= brandWidth ? `${chalk.bold(title)} ${chalk.dim(tagline)}` : chalk.bold(fit(title, brandWidth)),
+    chalk.dim(fit(localize(language, "修代码，也修工程。", "Build code. Fix systems."), brandWidth)),
+    chalk.dim(fit(config.cwd, brandWidth)),
   ];
   // The welcome panel is terminal scrollback, not a live TUI region. Label it
   // explicitly so a later provider/model switch cannot make the old row look
@@ -126,9 +144,7 @@ export function renderWelcome(config: AgentConfig, version: string, skillCount =
   const panelRows: WelcomeBoxRow[] = [...tips, { divider: localize(language, "启动时配置 · 实时状态见底栏", "Startup config · live status below") }, ...session];
   const alignBorderWithCursor = Boolean(process.stdout.isTTY);
 
-  if (width >= 86) {
-    const gap = 3;
-    const leftWidth = Math.max(30, Math.min(38, Math.floor(width * 0.32)));
+  if (sideBySide) {
     const panelWidth = width - leftWidth - gap;
     const panelStartColumn = alignBorderWithCursor ? leftWidth + gap + 1 : undefined;
     const rightColumn = alignBorderWithCursor ? leftWidth + gap + panelWidth : undefined;

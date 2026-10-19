@@ -129,3 +129,47 @@ test("interactive welcome panel positions every mixed-language right border at o
   assert.equal(contentRows.length, 2);
   assert.ok(contentRows.every((line) => line.includes("\x1b[117G│")), "each content row should place its right border at terminal column 117");
 });
+
+test("startup-config values line up in one column in English as well as in Chinese", () => {
+  for (const language of ["en-US", "zh-CN"] as const) {
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (...values: unknown[]) => lines.push(values.join(" "));
+    try {
+      renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "D:\\project", apiKey: "test-key", autoApprove: true, language }, "0.20.13", 3);
+    } finally {
+      console.log = originalLog;
+    }
+    const plain = lines.map((line) => line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, ""));
+    const values = ["agnes/agnes-2.5-flash", "128K", language === "zh-CN" ? "已配置" : "configured", language === "zh-CN" ? "自动，危险操作除外" : "automatic except dangerous", language === "zh-CN" ? "3 个已安装" : "3 installed"];
+    const columns = values.map((value) => {
+      const line = plain.find((candidate) => candidate.includes(value));
+      assert.ok(line, `${language}: a startup-config row shows ${value}`);
+      return terminalDisplayWidth(line.slice(0, line.indexOf(value)));
+    });
+    assert.deepEqual(columns, columns.map(() => columns[0]), `${language}: the values start at the same column (before: "Approval" pushed its value four columns right)\n${plain.join("\n")}`);
+  }
+});
+
+test("a long workspace path stays inside the brand column instead of running under the panel", () => {
+  // 100 columns is also what a pipe gets (no `columns`), so this is the layout in logs and in most terminals.
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalColumns = process.stdout.columns;
+  console.log = (...values: unknown[]) => lines.push(values.join(" "));
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value: 100 });
+  try {
+    renderWelcome({ provider: "agnes", providerId: "agnes", model: "agnes-2.5-flash", cwd: "/home/someone/work/a-rather-long-project-directory-name", autoApprove: true }, "0.20.13", 0);
+  } finally {
+    console.log = originalLog;
+    Object.defineProperty(process.stdout, "columns", { configurable: true, value: originalColumns });
+  }
+  const plain = lines.map((line) => line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, ""));
+  const panelRows = plain.filter((line) => /[┌├│└]/.test(line));
+  assert.equal(panelRows.length, 12, "the panel has twelve rows");
+  const borderColumns = [...new Set(panelRows.map((line) => terminalDisplayWidth(line.slice(0, line.search(/[┌├│└]/)))))];
+  assert.deepEqual(borderColumns, [borderColumns[0]], `every panel row starts at the same column (before: the path row and the version line pushed their rows' border right)\n${plain.join("\n")}`);
+  const pathRow = plain.find((line) => line.includes("/home/so"));
+  assert.ok(pathRow, "the path is shown");
+  assert.match(pathRow, /\/home\/so.*\.\.\..*-name/, "the path keeps its beginning and its end");
+});
