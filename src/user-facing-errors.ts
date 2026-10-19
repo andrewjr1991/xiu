@@ -3,6 +3,7 @@ import type { UiLanguage } from "./i18n.js";
 import { ProviderConfigurationError } from "./provider-config-migration.js";
 import { classifyRetryError } from "./retry-policy.js";
 import { redactSecrets } from "./secret-redaction.js";
+import { WorkspaceDirectoryError, type WorkspaceDirectoryProblem } from "./workspace-directory.js";
 
 /**
  * One explanation of a failure for the person at the keyboard: what went
@@ -79,6 +80,22 @@ const CONFIG: Record<ConfigFileKind, Entry> = {
     en: ["An MCP configuration file cannot be read or one of its server entries is invalid, so no MCP server was connected this time; everything else works as usual.", "Fix ~/.xiu/mcp.json or the workspace's .xiu/mcp.json as the detail says, then run /mcp reload or start Xiu again."] },
 };
 
+/**
+ * The workspace path cannot be used. `<路径>` / `<path>` is replaced with the actual directory when a
+ * `WorkspaceDirectoryError` is explained; the catalog (and the documentation table) shows the placeholder.
+ */
+const WORKSPACE: Record<WorkspaceDirectoryProblem, Entry> = {
+  missing: { code: "workspace/missing",
+    zh: ["工作区目录不存在：<路径>。", "把 --cwd 指向一个已存在的项目目录，或先进入项目目录再运行 xiu。"],
+    en: ["The workspace directory does not exist: <path>.", "Point --cwd at an existing project directory, or run xiu from inside the project."] },
+  "not-directory": { code: "workspace/not-directory",
+    zh: ["工作区路径是文件而不是目录：<路径>。工作区必须是目录。", "把 --cwd 改成这个文件所在的项目目录。"],
+    en: ["The workspace path is a file, not a directory: <path>. A workspace must be a directory.", "Point --cwd at the project directory that contains the file instead."] },
+  unreadable: { code: "workspace/unreadable",
+    zh: ["工作区目录存在但无法读取（权限不足或所在磁盘不可用）：<路径>。", "检查这个目录的读取权限，或换一个你有权限读取的目录。"],
+    en: ["The workspace directory exists but could not be read (no permission, or its volume is unavailable): <path>.", "Check read access to the directory, or choose one you can read."] },
+};
+
 const GENERAL: Record<string, Entry> = {
   "credential/missing": { code: "credential/missing",
     zh: ["这个渠道还没有可用的 API Key。", "在渠道设置里保存 Key（CLI 为 /provider key），或先设置渠道对应的环境变量。"],
@@ -138,7 +155,7 @@ const GENERAL: Record<string, Entry> = {
 
 /** Every explanation code with its Chinese cause, for the documentation table and its consistency test. */
 export function errorCatalog(): Array<{ code: string; cause: string; nextStep: string; diagnostic?: string }> {
-  return [...Object.values(PROVIDER_CONFIG), ...Object.values(CONFIG), ...Object.values(GENERAL)].map((entry) => ({ code: entry.code, cause: entry.zh[0], nextStep: entry.zh[1], diagnostic: entry.diagnostic }));
+  return [...Object.values(PROVIDER_CONFIG), ...Object.values(CONFIG), ...Object.values(WORKSPACE), ...Object.values(GENERAL)].map((entry) => ({ code: entry.code, cause: entry.zh[0], nextStep: entry.zh[1], diagnostic: entry.diagnostic }));
 }
 
 interface ErrorShape { message?: string; code?: unknown; status?: unknown; cause?: unknown }
@@ -157,6 +174,12 @@ function entryFor(error: unknown): Entry | undefined {
   const items = chain(error);
   const configFile = items.find((item): item is ConfigFileError => item instanceof ConfigFileError);
   if (configFile) return CONFIG[configFile.kind];
+  const workspace = items.find((item): item is WorkspaceDirectoryError => item instanceof WorkspaceDirectoryError);
+  if (workspace) {
+    const entry = WORKSPACE[workspace.problem];
+    const fill = (pair: [string, string], placeholder: string): [string, string] => [pair[0].replace(placeholder, workspace.directory), pair[1]];
+    return { ...entry, zh: fill(entry.zh, "<路径>"), en: fill(entry.en, "<path>") };
+  }
   const message = items.map((item) => item.message ?? "").join(" ");
   const codes = items.map((item) => String(item.code ?? "")).join(" ").toUpperCase();
   const status = items.map((item) => Number(item.status)).find((value) => Number.isInteger(value));

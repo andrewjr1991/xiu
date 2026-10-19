@@ -83,6 +83,39 @@ test("a damaged trust list stops startup with the cause, the next step and xiu d
   assert.match(json.stderr, /^Xiu could not start: The trust list .* did not continue\.\nNext step: .*\nDiagnose: xiu doctor\nDetail: config\/trust-store · /m, "the explanation goes to stderr, for the person reading the log");
 });
 
+test("a --cwd that is a file or does not exist stops every command with the cause and the next step", { timeout: 120_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, { trusted: true });
+  const file = path.join(cwd, "notes.txt");
+  await fs.writeFile(file, "not a workspace");
+  const missing = path.join(cwd, "gone");
+
+  const task = await runCli(["--language", "en", "--cwd", file, "Say hello"], cwd, home);
+  assert.equal(task.exitCode, 1, `stdout:\n${task.stdout}\nstderr:\n${task.stderr}`);
+  assert.match(task.stderr, /^Xiu could not start: The workspace path is a file, not a directory: .*notes\.txt\. A workspace must be a directory\.$/m);
+  assert.match(task.stderr, /^Next step: Point --cwd at the project directory that contains the file instead\.$/m);
+  assert.match(task.stderr, /^Detail: workspace\/not-directory · Workspace is not a directory: /m);
+  assert.doesNotMatch(task.stderr, /^Error: /m, "the raw line is replaced, not duplicated");
+
+  const json = await runCli(["--json", "--language", "en", "--cwd", missing, "Say hello"], cwd, home);
+  assert.equal(json.exitCode, 1);
+  const lines = json.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  assert.equal(lines.length, 1, `stdout carries only the result line:\n${json.stdout}`);
+  assert.equal(lines[0]!.payload.outcome, "not_started");
+  assert.equal(lines[0]!.payload.error, `Workspace does not exist: ${missing}`, "the result keeps the raw message scripts match on");
+  assert.match(json.stderr, /^Xiu could not start: The workspace directory does not exist: .*gone\.\nNext step: Point --cwd at an existing project directory, or run xiu from inside the project\./m);
+
+  // The read-only script commands used to report on the non-existent workspace ("no task run to report yet").
+  const report = await runCli(["--language", "en", "--trust-workspace", "--cwd", missing, "report", "runs"], cwd, home);
+  assert.equal(report.exitCode, 1, `stdout:\n${report.stdout}\nstderr:\n${report.stderr}`);
+  assert.match(report.stderr, /^Xiu could not start: The workspace directory does not exist: /m);
+  assert.doesNotMatch(report.stdout + report.stderr, /no task run to report|not trusted/);
+
+  const zh = await runCli(["--language", "zh", "--cwd", file, "recover", "status"], cwd, home);
+  assert.equal(zh.exitCode, 1);
+  assert.match(zh.stderr, /^Xiu 无法启动：工作区路径是文件而不是目录：.*notes\.txt。工作区必须是目录。$/m);
+  assert.match(zh.stderr, /^下一步：把 --cwd 改成这个文件所在的项目目录。$/m);
+});
+
 test("a damaged settings file is explained in the language the command line asks for", { timeout: 60_000 }, async (t) => {
   const { cwd, home } = await fixture(t, { trusted: true });
   await fs.writeFile(path.join(home, ".xiu", "settings.json"), "{ broken");

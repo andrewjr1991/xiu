@@ -21,6 +21,7 @@ import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
 import { ConfigFileError } from "./config-file-error.js";
+import { assertWorkspaceDirectory } from "./workspace-directory.js";
 import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
@@ -263,19 +264,24 @@ async function main(): Promise<void> {
   }
   if (inspectedSettings.problem) throw new ConfigFileError("settings", inspectedSettings.file, inspectedSettings.problem);
   const settings = inspectedSettings.settings;
+  // Every command but the doctor works on the workspace, so a path that is not an existing directory stops here,
+  // before trust, plugins or records are looked at: `xiu --cwd <file> report runs` used to answer "no task run to
+  // report yet", and a task said the same `Error: Workspace does not exist` for a file as for a missing directory.
+  const workspaceDirectory = path.resolve(options.cwd ?? process.cwd());
+  await assertWorkspaceDirectory(workspaceDirectory);
   if (program.args[0] === "report") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes), isTrusted: workspaceTrusted });
+    process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: workspaceDirectory, language, yes: Boolean(options.yes), isTrusted: workspaceTrusted });
     return;
   }
   if (program.args[0] === "recover") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    process.exitCode = await runRecoverCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
+    process.exitCode = await runRecoverCommand((program.args as string[]).slice(1), { cwd: workspaceDirectory, language, isTrusted: workspaceTrusted });
     return;
   }
   if (program.args[0] === "audit") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
+    process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: workspaceDirectory, language, isTrusted: workspaceTrusted });
     return;
   }
   const scriptTypo = program.args.length ? explainScriptCommandTypo((program.args as string[]).join(" ")) : undefined;
@@ -311,7 +317,7 @@ async function main(): Promise<void> {
   const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
   const ensureSystemCredentialStore = async () => systemCredentialStore ??= await createWindowsSystemCredentialStore("provider-api-key");
   await providerRegistry.load(); // a ProviderConfigurationError is explained once, by the startup failure handler below
-  const pluginRegistry = new PluginRegistry(path.resolve(options.cwd ?? process.cwd()), undefined, packageJson.version);
+  const pluginRegistry = new PluginRegistry(workspaceDirectory, undefined, packageJson.version);
   await pluginRegistry.refresh(false);
   const globalPluginContributions = await pluginRegistry.loadApprovedContributions();
   try { providerRegistry.setPluginProfiles(globalPluginContributions.providers); }
@@ -371,8 +377,6 @@ async function main(): Promise<void> {
     await securityAudit.record({ category: "credential", action, outcome, ...(subject ? { subject } : {}), source: "command" });
   };
   let language = config.language ?? "en-US";
-  const stat = await fs.stat(config.cwd).catch(() => undefined);
-  if (!stat?.isDirectory()) throw new Error(`Workspace does not exist: ${config.cwd}`);
 
   const status = new StatusLine();
   const activities = new ActivityLog();
