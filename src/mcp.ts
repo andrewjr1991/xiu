@@ -317,6 +317,29 @@ function mcpManifest(name: string, origin: string, config: McpServerConfig): Ext
   };
 }
 
+/** What `inspectMcpConfig()` found; `unreadable` means none of that file's servers connect until it is fixed. */
+export interface McpConfigInspection {
+  file: string;
+  state: "read" | "absent" | "unreadable";
+  /** Number of configured servers when the file was read. */
+  servers?: number;
+  /** The system error code or the validation message when `state` is `unreadable`. */
+  cause?: string;
+}
+
+/** Reads one MCP config file without throwing, for diagnostics; the manager itself still refuses a damaged file. */
+export async function inspectMcpConfig(file: string): Promise<McpConfigInspection> {
+  const exists = await fs.stat(file).then(() => true, () => false);
+  if (!exists) return { file, state: "absent" };
+  try {
+    return { file, state: "read", servers: Object.keys(await readConfig(file)).length };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const message = error instanceof Error ? error.message : String(error);
+    return { file, state: "unreadable", cause: typeof code === "string" && code ? code : message.split(file).join(path.basename(file)) };
+  }
+}
+
 async function readConfig(file: string): Promise<Record<string, McpServerConfig>> {
   let content: string;
   try { content = await fs.readFile(file, "utf8"); }
