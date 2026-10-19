@@ -43,7 +43,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
-import { explainOneShotSlashInput, explainUnhandledSlashInput, formatOneShotSlashProblem, formatSlashInputProblem, helpEntriesFor, slashCommands } from "./slash-commands.js";
+import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
@@ -272,6 +272,16 @@ async function main(): Promise<void> {
   if (program.args[0] === "audit") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
+    return;
+  }
+  const scriptTypo = program.args.length ? explainScriptCommandTypo((program.args as string[]).join(" ")) : undefined;
+  if (scriptTypo) {
+    // `xiu doctr` is a mistyped script command, not a task: say so before the trust prompt, providers or the model.
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    const message = formatScriptCommandTypo(scriptTypo, language);
+    if (jsonStream) { process.exitCode = jsonStream.result({ outcome: "not_started", error: message }); return; }
+    console.error(chalk.yellow(`${message}\n`));
+    process.exitCode = 1;
     return;
   }
   if (options.updateDoctor) {
