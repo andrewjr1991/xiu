@@ -80,7 +80,7 @@ xiu --update-doctor
 
 如果 `xiu` 无法识别，请关闭并重新打开 PowerShell，再试一次。
 
-从 0.21 起，`xiu doctor`（等价于 `xiu --doctor`，交互模式中为 `/doctor`）把上述更新诊断、`--provider-config-diagnostics`、联网搜索配置、代理与证书检查合并成一份只读报告，分为“安装与运行环境 / 模型渠道 / 联网搜索 / 代理与证书 / Windows / 系统”六段：每个渠道只显示类型、模型、地址主机名和 Key 来源（环境变量名、系统凭据、本机配置文件或缺失），不显示 Key；代理地址里的账号密码替换为 `***`，多个代理变量指向不同地址时给出警告并说明更新检查、联网搜索、模型请求各自读哪个设置；检测 `NODE_TLS_REJECT_UNAUTHORIZED=0`（标为错误）、`NODE_EXTRA_CA_CERTS` 文件是否存在、访问 npm Registry 时的证书替换（企业网关）或 HTTP 403；Windows 上读取 PowerShell 语言模式与执行策略，受限语言模式提示用 `npm.cmd`；Node 20 会提示已停止维护。报告不发起搜索、不发送凭证、不修改任何文件，只有更新诊断原有的 npm Registry 只读查询会联网；在线测试仍用 `/provider test` 与 `/web doctor`。存在错误时退出码为 1。
+从 0.21 起，`xiu doctor`（等价于 `xiu --doctor`，交互模式中为 `/doctor`）把上述更新诊断、`--provider-config-diagnostics`、联网搜索配置、代理与证书检查合并成一份只读报告，分为“安装与运行环境 / 模型渠道 / 联网搜索 / 代理与证书 / Windows / 工作区记录 / 系统”七段：每个渠道只显示类型、模型、地址主机名和 Key 来源（环境变量名、系统凭据、本机配置文件或缺失），不显示 Key；代理地址里的账号密码替换为 `***`，多个代理变量指向不同地址时给出警告并说明更新检查、联网搜索、模型请求各自读哪个设置；检测 `NODE_TLS_REJECT_UNAUTHORIZED=0`（标为错误）、`NODE_EXTRA_CA_CERTS` 文件是否存在、访问 npm Registry 时的证书替换（企业网关）或 HTTP 403；Windows 上读取 PowerShell 语言模式与执行策略，受限语言模式提示用 `npm.cmd`；Node 20 会提示已停止维护；“工作区记录”一段用与 `/report runs`、`/resume` 相同的方式读取当前工作区的运行记录与会话日志，报告可读条数、无法读取的条数与原因（如 `corrupt ×1`、`EISDIR ×1`，不含路径），并提前做一次与一次性运行相同的中断任务检查——有待处理的中断任务时给出警告并指向 `xiu recover status` / `xiu recover abandon <运行 ID>`，检查本身因损坏记录无法完成时标为错误（此时新的一次性运行会返回 `not_started`）；未信任的工作区不读取任何记录，只提示先交互运行一次。报告不发起搜索、不发送凭证、不修改任何文件，只有更新诊断原有的 npm Registry 只读查询会联网；在线测试仍用 `/provider test` 与 `/web doctor`。存在错误时退出码为 1。
 
 ## 从正确目录启动
 
