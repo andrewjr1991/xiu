@@ -29,6 +29,19 @@ test("a broken stdout pipe with nothing running exits quietly with the current e
   assert.equal(outputPipeBroken(), true);
 });
 
+test("a closed terminal (EIO on the tty) counts as a gone reader too", () => {
+  const { stdout, exits } = install();
+  const previous = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    assert.doesNotThrow(() => stdout.emit("error", Object.assign(new Error("write EIO"), { code: "EIO", errno: -5, syscall: "write" })));
+  } finally {
+    process.exitCode = previous;
+  }
+  assert.deepEqual(exits, [0]);
+  assert.equal(outputPipeBroken(), true);
+});
+
 test("a broken stderr pipe is handled the same way and defaults to exit code 0", () => {
   const { stderr, exits } = install();
   const previous = process.exitCode;
@@ -71,7 +84,7 @@ test("a handler that finds nothing to stop still exits", () => {
 
 test("other stream errors are not swallowed", () => {
   const { stdout, exits } = install();
-  const other = Object.assign(new Error("boom"), { code: "EIO" });
+  const other = Object.assign(new Error("boom"), { code: "EACCES" });
   assert.throws(() => stdout.emit("error", other), /boom/);
   assert.deepEqual(exits, []);
   assert.equal(outputPipeBroken(), false);
