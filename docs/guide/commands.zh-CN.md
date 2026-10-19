@@ -75,7 +75,7 @@
 | `/help [命令]` | 显示全部命令，或只显示一个命令的用法 |
 | `/exit` | 退出 Xiu |
 
-在交互提示符里，以斜杠开头的单个词如果不是上表中的命令（例如 `/skils`、`/hepl`），Xiu 不会把它当作任务发给模型，而是提示“未知命令”、最接近的命令和 `/help`；命令对了但后面的用法没有被识别（`/mcp premissions`、`/plan onn`）时，列出该命令的全部用法和最接近的一项。任务运行中的“补充>”提示符同样处理，并且只接受 `/cancel`、`/exit`、`/queue`、`/clear-queue`、`/status`、`/diff`、`/check`、`/diagnostics`、`/details`、`/paste`、`/credentials`、`/web`、`/language`：输入其他命令（如 `/mcp`）会提示等任务结束后再用，而不会被当作对任务的补充发给模型。以路径开头的任务（`/etc/hosts 有什么问题`、`/tmp 下有什么`）不受影响；如果一行任务内容恰好以斜杠开头的单词开始，请换个写法，不要以斜杠开头。`/help <命令>`（如 `/help mcp`、`/help plan on`）只列出该命令的用法。斜杠命令只在交互模式可用：`xiu /help`、`xiu /doctor` 这样的一次性运行不会开始，也不会把它发给模型，而是提示进入交互模式或对应的脚本命令（`xiu doctor`、`xiu report`、`xiu recover`、`xiu audit`、`--check-update`、`--list-sessions` 等），退出码 1；`--json` 下 `result` 行的 `outcome` 为 `not_started`。
+在交互提示符里，以斜杠开头的单个词如果不是上表中的命令（例如 `/skils`、`/hepl`），Xiu 不会把它当作任务发给模型，而是提示“未知命令”、最接近的命令和 `/help`；命令对了但后面的用法没有被识别（`/mcp premissions`、`/plan onn`）时，列出该命令的全部用法和最接近的一项。任务运行中的“补充>”提示符同样处理，并且只接受 `/cancel`、`/exit`、`/queue`、`/clear-queue`、`/status`、`/diff`、`/check`、`/diagnostics`、`/details`、`/paste`、`/credentials`、`/web`、`/language`：输入其他命令（如 `/mcp`）会提示等任务结束后再用，而不会被当作对任务的补充发给模型。以路径开头的任务（`/etc/hosts 有什么问题`、`/tmp 下有什么`）不受影响；如果一行任务内容恰好以斜杠开头的单词开始，请换个写法，不要以斜杠开头。`/help <命令>`（如 `/help mcp`、`/help plan on`）只列出该命令的用法。斜杠命令只在交互模式可用：`xiu /help`、`xiu /doctor` 这样的一次性运行不会开始，也不会把它发给模型，而是提示进入交互模式或对应的脚本命令（`xiu doctor`、`xiu report`、`xiu recover`、`xiu audit`、`--check-update`、`--list-sessions` 等），退出码 1；`--json` 下 `result` 行的 `outcome` 为 `not_started`。脚本命令拼错时同样如此：`xiu doctr`、`xiu reprot json`、`xiu Doctor` 这类最多三个词、首词与 `doctor`/`report`/`recover`/`audit` 只差一个字母或大小写、其余词是该命令参数的一次性任务，不会进入信任询问或发给模型，而是提示“未知命令 … 你是想运行 xiu doctor 吗？”并退出码 1；更长的任务或带其他词的任务（`edit README`、`doctr 修一下测试`）仍按任务处理。
 
 ## 启动参数速查
 

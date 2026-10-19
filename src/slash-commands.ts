@@ -209,6 +209,55 @@ export function formatOneShotSlashProblem(problem: OneShotSlashProblem, language
   return sentences.filter(Boolean).join(zh ? "" : " ");
 }
 
+/** The commands that run without an interactive session, in the order `xiu --help` lists them. */
+export const SCRIPT_COMMANDS: readonly string[] = ["doctor", "report", "recover", "audit"];
+
+/** The bare argument words each script command accepts; `run:<…>`, paths, ids and limits are not words a typo guard needs. */
+const SCRIPT_COMMAND_ARGUMENT_WORDS: Readonly<Record<string, readonly string[]>> = {
+  doctor: ["json"],
+  report: ["markdown", "json", "html", "summary", "details", "runs"],
+  recover: ["status", "abandon"],
+  audit: ["approvals", "credentials", "json"],
+};
+
+export interface ScriptCommandTypo {
+  /** The first word as typed, for example `doctr`. */
+  word: string;
+  /** The script command it is one edit (or a letter case) away from, for example `doctor`. */
+  command: string;
+}
+
+/**
+ * `xiu doctr`, `xiu reprot json`, `xiu Doctor`: a one-shot task of at most three words whose first word is one edit or a
+ * letter case away from a script command and whose other words are that command's argument words. Before, such a run
+ * went through the trust prompt to the model as a task. A longer task, or one whose other words are not arguments
+ * (`edit README`, `recovr abandon 1234`, `doctr fix the tests`), is task text and is left alone; so is the exact word,
+ * which the command handles.
+ */
+export function explainScriptCommandTypo(task: string): ScriptCommandTypo | undefined {
+  const words = task.trim().split(/\s+/).filter(Boolean);
+  const word = words[0];
+  if (!word || words.length > 3 || !/^[A-Za-z]+$/.test(word)) return undefined;
+  const typed = word.toLowerCase();
+  if (SCRIPT_COMMANDS.includes(word)) return undefined;
+  const command = SCRIPT_COMMANDS.find((candidate) => typed === candidate || editDistance(typed, candidate) <= 1);
+  if (!command) return undefined;
+  const accepted = SCRIPT_COMMAND_ARGUMENT_WORDS[command] ?? [];
+  if (!words.slice(1).every((argument) => accepted.includes(argument.toLowerCase()))) return undefined;
+  return { word, command };
+}
+
+/** One localized paragraph for stderr (or the `--json` result line): the typo, the command meant and that nothing ran. */
+export function formatScriptCommandTypo(problem: ScriptCommandTypo, language: UiLanguage): string {
+  const zh = language === "zh-CN";
+  const commands = SCRIPT_COMMANDS.map((command) => `xiu ${command}`);
+  return [
+    localize(language, `未知命令 ${problem.word}。你是想运行 xiu ${problem.command} 吗？`, `Unknown command ${problem.word}. Did you mean xiu ${problem.command}?`),
+    localize(language, `${commands.join("、")} 不进入交互模式；这次运行没有开始，也没有把它当作任务发给模型。如果它就是任务内容，请写成完整的一句话。`,
+      `${commands.slice(0, -1).join(", ")} and ${commands.at(-1)} run without an interactive session; this run did not start and nothing was sent to the model as a task. If it is task text, write it as a full sentence.`),
+  ].join(zh ? "" : " ");
+}
+
 export type SlashInputProblem =
   /** A lone slash word no command owns, for example `/skils`. */
   | { kind: "unknown-command"; word: string; suggestions: string[] }

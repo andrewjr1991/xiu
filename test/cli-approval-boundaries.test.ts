@@ -248,7 +248,18 @@ test("a one-shot run given a slash command does not start and says what to run i
   const result = lines.at(-1)!;
   assert.equal(result.payload?.outcome, "not_started", json.stdout);
   assert.match(String(result.payload?.error), /^Unknown command \/skils\. Did you mean \/skills\?/);
-  assertEnglishOnly(help.stderr + doctor.stderr + json.stderr);
+
+  // A mistyped script command stops the same way, before the trust prompt: before, `xiu doctr` became the task "doctr".
+  const typo = await runOneShot(["doctr"], cwd, home);
+  assert.equal(typo.exitCode, 1, typo.stderr);
+  assert.match(typo.stderr, /^Unknown command doctr\. Did you mean xiu doctor\? xiu doctor, xiu report, xiu recover and xiu audit run without an interactive session; this run did not start/m);
+  assert.doesNotMatch(typo.stdout + typo.stderr, /Do you trust|Model saw:/);
+  const typoJson = await runOneShot(["--json", "reprot", "json"], cwd, home);
+  assert.equal(typoJson.exitCode, 1, typoJson.stderr);
+  const typoResult = typoJson.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { payload?: { outcome?: string; error?: string } }).at(-1)!;
+  assert.equal(typoResult.payload?.outcome, "not_started", typoJson.stdout);
+  assert.match(String(typoResult.payload?.error), /^Unknown command reprot\. Did you mean xiu report\?/);
+  assertEnglishOnly(help.stderr + doctor.stderr + json.stderr + typo.stderr + typoJson.stderr);
 });
 
 test("Plan mode stays read-only even with --yes, and writes resume once it is turned off", { timeout: 180_000 }, async (t) => {
