@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { RUNNING_TASK_COMMAND_WORDS } from "../src/commands/running-task-commands.js";
-import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatScriptCommandTypo, formatOneShotSlashProblem, formatSlashInputProblem, helpEntriesFor, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
+import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatScriptCommandTypo, formatOneShotSlashProblem, formatHelpEntries, formatSlashInputProblem, helpEntriesFor, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const noPath = { pathExists: () => false };
@@ -158,4 +158,21 @@ test("a one-shot task that is a mistyped script command is recognised, task text
     "Unknown command doctr. Did you mean xiu doctor? xiu doctor, xiu report, xiu recover and xiu audit run without an interactive session; this run did not start and nothing was sent to the model as a task. If it is task text, write it as a full sentence.");
   assert.equal(formatScriptCommandTypo({ word: "reprot", command: "report" }, "zh-CN"),
     "未知命令 reprot。你是想运行 xiu report 吗？xiu doctor、xiu report、xiu recover、xiu audit 不进入交互模式；这次运行没有开始，也没有把它当作任务发给模型。如果它就是任务内容，请写成完整的一句话。");
+});
+
+test("/help lists every description in one column, after the longest listed command", () => {
+  const entries = helpEntriesFor("", "en-US");
+  const longest = Math.max(...entries.map((command) => command.name.length));
+  assert.ok(longest > 20, "some command names are longer than the old fixed 20-column pad");
+  const lines = formatHelpEntries(entries).split("\n");
+  assert.equal(lines.length, entries.length);
+  for (const [index, command] of entries.entries()) {
+    assert.equal(lines[index], `${command.name.padEnd(longest)} ${command.description}`, `before: ${command.name} ran into its description when the name was longer than 20 columns`);
+  }
+  // A topic listing is as narrow as its own longest name allows, but never narrower than the usual 20 columns.
+  const mcp = helpEntriesFor("mcp", "en-US");
+  const mcpWidth = Math.max(20, ...mcp.map((command) => command.name.length));
+  assert.ok(mcpWidth < longest);
+  assert.deepEqual(formatHelpEntries(mcp).split("\n"), mcp.map((command) => `${command.name.padEnd(mcpWidth)} ${command.description}`));
+  assert.equal(formatHelpEntries([{ name: "/exit", description: "Exit Xiu" }]), `${"/exit".padEnd(20)} Exit Xiu`);
 });

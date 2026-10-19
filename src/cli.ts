@@ -45,7 +45,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
-import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, helpEntriesFor, slashCommands } from "./slash-commands.js";
+import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, formatHelpEntries, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
@@ -2291,7 +2291,7 @@ async function main(): Promise<void> {
       if (task === "/help" || task.startsWith("/help ")) {
         const topic = task.slice("/help".length).trim();
         const entries = helpEntriesFor(topic, language);
-        if (entries.length) console.log(`${entries.map((command) => `${command.name.padEnd(20)} ${command.description}`).join("\n")}\n`);
+        if (entries.length) console.log(`${formatHelpEntries(entries)}\n`);
         else console.log(chalk.yellow(`${formatSlashInputProblem(explainUnhandledSlashInput(topic.startsWith("/") ? topic : `/${topic}`, { pathExists: () => false }) ?? { kind: "unknown-command", word: topic, suggestions: [] }, language)}\n`));
         continue;
       }
