@@ -7,6 +7,7 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { trustWorkspace } from "../src/trust.js";
+import { loadTaskChangeHistory } from "../src/task-change-history.js";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxLoader = import.meta.resolve("tsx");
@@ -127,6 +128,14 @@ test("--json streams every runtime event of a one-shot task as JSON Lines and en
   assert.match(run.stderr, /Xiu - fake\/fake-model/);
   assert.doesNotMatch(run.stdout, /fake-key-not-a-secret/);
   assert.ok(server.requests.length >= 1, "the fake model received the task");
+  // The finished run's bounded change record is saved next to the sessions so /diff run:<selector> can replay it.
+  const runFiles = (await fs.readdir(path.join(home, ".xiu", "task-runs"), { recursive: true })).filter((name) => name.endsWith(".json")).map((name) => path.basename(name));
+  assert.equal(runFiles.length, 1, runFiles.join(","));
+  const historyFiles = await fs.readdir(path.join(cwd, ".xiu", "task-change-history"));
+  assert.deepEqual(historyFiles, runFiles);
+  const history = await loadTaskChangeHistory(cwd, path.basename(runFiles[0]!, ".json"));
+  assert.equal(history?.view, "task");
+  assert.deepEqual(history?.changes, []);
 });
 
 test("--json refuses to prompt for workspace trust and reports a not_started result", { timeout: 60_000 }, async (t) => {

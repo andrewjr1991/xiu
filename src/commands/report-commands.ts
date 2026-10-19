@@ -10,6 +10,7 @@ import { redactSecrets } from "../secret-redaction.js";
 import { type SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
 import { loadSession } from "../session.js";
 import { TaskRunJournal, type TaskRunRecord } from "../task-run.js";
+import { listRecentRuns, RUN_LIST_LIMIT, RUN_SELECTOR, selectRun } from "./run-selection.js";
 import { renderTerminalMarkdown } from "../terminal-markdown.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { isWorkspaceTrusted } from "../trust.js";
@@ -44,11 +45,11 @@ function noReportableRun(language: UiLanguage): string {
 }
 
 /** Up to this many recent runs are listed and selectable by index or run-id prefix. */
-export const REPORT_RUN_LIST_LIMIT = 50;
+export const REPORT_RUN_LIST_LIMIT = RUN_LIST_LIMIT;
 
 /** Recent runs, newest first, as shown by `/report runs` and `xiu report runs`; index 1 is the latest. */
 export async function listReportableRuns(taskRunJournal: Pick<TaskRunJournal, "recent">): Promise<TaskRunRecord[]> {
-  return taskRunJournal.recent(REPORT_RUN_LIST_LIMIT);
+  return listRecentRuns(taskRunJournal);
 }
 
 export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): string {
@@ -66,22 +67,6 @@ export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): stri
     `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`)].join("\n");
 }
 
-/** Resolves `run:<selector>`: a 1-based index into the recent list, or a unique run-id prefix. */
-async function selectRun(taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">, selector: string | undefined, language: UiLanguage): Promise<TaskRunRecord | undefined> {
-  if (selector === undefined) return taskRunJournal.latest();
-  const runs = await listReportableRuns(taskRunJournal);
-  if (/^\d+$/.test(selector)) {
-    const index = Number(selector);
-    const run = index >= 1 ? runs[index - 1] : undefined;
-    if (!run) throw new Error(localize(language, `没有第 ${selector} 个运行；最近共 ${runs.length} 个，用 /report runs 或 xiu report runs 查看。`, `There is no run #${selector}; ${runs.length} recent run(s) exist. List them with /report runs or xiu report runs.`));
-    return run;
-  }
-  if (selector.length < 4) throw new Error(localize(language, "运行 ID 前缀至少 4 位。", "A run-id prefix needs at least 4 characters."));
-  const matches = runs.filter((run) => run.runId.toLowerCase().startsWith(selector.toLowerCase()));
-  if (matches.length === 1) return matches[0];
-  if (!matches.length) throw new Error(localize(language, `最近 ${runs.length} 个运行里没有以 ${selector} 开头的运行 ID。`, `No run id among the ${runs.length} recent run(s) starts with ${selector}.`));
-  throw new Error(localize(language, `运行 ID 前缀 ${selector} 匹配 ${matches.length} 个运行，请再多写几位。`, `The run-id prefix ${selector} matches ${matches.length} runs; add more characters.`));
-}
 
 /**
  * Gathers one task run of the workspace (the latest, or the one `selector` names), the session
@@ -90,7 +75,7 @@ async function selectRun(taskRunJournal: Pick<TaskRunJournal, "latest" | "recent
  */
 export async function collectExecutionReportInputs(sources: ExecutionReportSources, selector?: string, language: UiLanguage = "en-US"): Promise<ExecutionReportInputs | undefined> {
   const { cwd, taskRunJournal, securityAudit } = sources;
-  const run = await selectRun(taskRunJournal, selector, language);
+  const run = await selectRun(taskRunJournal, selector, language, localize(language, "/report runs 或 xiu report runs", "/report runs or xiu report runs"));
   if (!run) return undefined;
   const restored = await loadSession(cwd, run.sessionId).catch(() => undefined);
   const replay = restored?.replay.filter((item) => item.inputKind !== "system") ?? [];
@@ -145,7 +130,6 @@ function reportUsage(language: UiLanguage): string {
     "Usage: xiu report [markdown|json|html] [summary|details] [run:<number|run-id prefix>] [path inside the workspace] [--yes], or xiu report runs to list recent runs\nWithout a path the report goes to stdout; an existing file is overwritten only with --yes.");
 }
 
-const RUN_SELECTOR = /^run:(.+)$/i;
 
 /**
  * `xiu report …`: exports the latest task's execution report without entering the interactive
