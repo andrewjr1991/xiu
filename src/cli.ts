@@ -238,11 +238,23 @@ const program = new Command()
   .option("--provider-config-recover <backup-id>", "preview and explicitly confirm Provider recovery in an interactive terminal, then exit")
   .option("-y, --yes", "approve writes and execution automatically (dangerous actions still prompt)", false)
   .option("--json", "one-shot tasks only: write runtime events and the final result to stdout as JSON Lines, human-readable text to stderr", false)
+  .option("--trust-workspace", "treat the workspace as trusted for this process only, without the interactive prompt and without adding it to the trust list (for scripts and CI on a checkout you control)", false)
   .showHelpAfterError()
   .parse();
 
+/**
+ * `--trust-workspace` is the user's explicit, per-invocation trust decision for scripts and CI.
+ * It lives only in this process: nothing is written to the trust list, and nothing but the
+ * command line (never an environment variable, a setting, a project file or model text) sets it.
+ */
+let trustGrantedByFlag = false;
+
+async function workspaceTrusted(workspace: string): Promise<boolean> {
+  return trustGrantedByFlag || isWorkspaceTrusted(workspace);
+}
+
 async function confirmWorkspaceTrust(workspace: string, language: UiLanguage): Promise<boolean> {
-  if (await isWorkspaceTrusted(workspace)) return true;
+  if (await workspaceTrusted(workspace)) return true;
   console.log(chalk.bold(localize(language, "是否信任此工作区中的文件？", "Do you trust the files in this workspace?")));
   console.log(chalk.dim(localize(language, "Xiu 可以在这里读取文件和项目指令、加载 MCP、修改代码并运行命令。", "Xiu may read files, load project instructions and MCP servers, modify code, and run commands here.")));
   console.log(`\n  ${chalk.green("1.")} ${localize(language, "信任此工作区", "Trust this workspace")}`);
@@ -272,6 +284,7 @@ let jsonStream: JsonEventStream | undefined;
 
 async function main(): Promise<void> {
   const options = program.opts();
+  trustGrantedByFlag = Boolean(options.trustWorkspace);
   if (options.json) {
     const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "doctor" || program.args[0] === "report";
     if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, update, session-list or recovery commands.");
@@ -295,7 +308,7 @@ async function main(): Promise<void> {
   const settings = await settingsStore.load();
   if (program.args[0] === "report") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
-    process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes) });
+    process.exitCode = await runReportCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, yes: Boolean(options.yes), isTrusted: workspaceTrusted });
     return;
   }
   if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
@@ -469,7 +482,7 @@ async function main(): Promise<void> {
     }
     const initialTask = (program.args as string[]).join(" ").trim();
     const skillRegistry = new SkillRegistry(config.cwd);
-    const trustedBeforePrompt = await isWorkspaceTrusted(config.cwd);
+    const trustedBeforePrompt = await workspaceTrusted(config.cwd);
     await skillRegistry.refresh(trustedBeforePrompt);
     if (initialTask) {
       console.log(chalk.bold(`\nXiu - ${config.providerId}/${config.model}`));
@@ -485,11 +498,11 @@ async function main(): Promise<void> {
       console.log(chalk.yellow(localize(language, "警告：Xiu 正在 Windows System32 中运行。请退出并进入项目目录后重新启动，以免误改系统文件。\n", "Warning: Xiu is running in Windows System32. Exit, enter your project directory, and start Xiu there before making changes.\n")));
     }
 
-    if (jsonStream && !(await isWorkspaceTrusted(config.cwd))) {
-      // A non-interactive run must not read a trust decision from a pipe; trust is granted once, interactively.
+    if (jsonStream && !(await workspaceTrusted(config.cwd))) {
+      // A non-interactive run must not read a trust decision from a pipe; trust is granted interactively once, or explicitly per run with --trust-workspace.
       process.exitCode = jsonStream.result({ outcome: "not_started", error: localize(language,
-        "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，再使用 --json。",
-        "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust before using --json.") });
+        "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace，再使用 --json。",
+        "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust, or pass --trust-workspace explicitly on a checkout you control, before using --json.") });
       return;
     }
     if (!(await confirmWorkspaceTrust(config.cwd, language))) return;

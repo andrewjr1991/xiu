@@ -151,3 +151,20 @@ test("--json without a task is a usage error that writes nothing to stdout", { t
   assert.equal(run.stdout, "");
   assert.match(run.stderr, /--json requires exactly one one-shot task/);
 });
+
+test("--trust-workspace grants trust for this process only and never writes the trust list", { timeout: 90_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: false, baseURL: server.baseURL });
+  const run = await runCli(["--trust-workspace", "--json", "--provider", "fake", "Say hello"], cwd, home);
+  const lines = parseLines(run.stdout);
+  assert.equal(run.exitCode, 0, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  assert.equal(lines[0]?.type, "session.started");
+  assert.equal(lines.at(-1)?.payload.outcome, "completed");
+  const trustFile = path.join(home, ".xiu", "trusted-workspaces.json");
+  const stored = await fs.readFile(trustFile, "utf8").catch(() => "");
+  assert.ok(!stored.includes(path.basename(cwd)), `the workspace must not be added to the trust list: ${stored}`);
+  // The grant does not survive the process: the next run without the flag is still untrusted.
+  const again = await runCli(["--json", "--provider", "fake", "Say hello"], cwd, home);
+  assert.equal(again.exitCode, 1);
+  assert.equal(parseLines(again.stdout)[0]?.payload.outcome, "not_started");
+});

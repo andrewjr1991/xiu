@@ -103,6 +103,7 @@
 | `--agent-concurrency <数量>` | 并发子 Agent 上限，1 到 8，默认 3 |
 | `--language <语言>` | 本次启动使用 `zh-CN` 或 `en-US` |
 | `-y, --yes` | 自动批准非危险写入和执行 |
+| `--trust-workspace` | 只在本次运行里把工作区视为已信任，跳过信任询问；不写入信任列表，只能由命令行给出，供脚本与 CI 在自己掌控的检出目录上使用 |
 | `--json` | 仅限一次性任务：标准输出改为 JSON Lines 运行时事件流并以 `result` 行结束，人读文字全部转到标准错误；退出码 0 完成 / 2 未验证 / 3 等待回答 / 1 失败 |
 | `xiu report [markdown\|json\|html] [summary\|details] [路径]` | 不进入交互模式，导出最近一次任务的执行报告（同 `/report export`）；省略路径写到标准输出；已存在的文件需加 `--yes` 才覆盖；只在已信任的工作区可用 |
 | `--version` | 显示版本 |

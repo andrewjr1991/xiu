@@ -349,7 +349,7 @@ xiu --json --yes '把 README 里的拼写错误改掉' > events.jsonl 2> progres
 {"schemaVersion":1,"type":"result","timestamp":"2026-10-19T05:06:01.681Z","payload":{"outcome":"completed","success":true,"exitCode":0,"stats":{"modelCalls":3,"toolCalls":4,"inputTokens":5120,"outputTokens":640,"estimatedTokens":6200},"durationMs":18422}}
 ```
 
-`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
+`result.payload.exitCode` 与进程退出码一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答，1 失败、取消、未配置渠道或用法错误。`--json` 不会从管道读取任何决定：未信任的工作区直接返回 `not_started`（请先交互运行一次 `xiu` 并确认信任，或按下文在你掌控的检出目录上显式加 `--trust-workspace`），审批在非终端环境里仍按原规则处理（`--yes` 自动批准普通写入与执行，危险操作一律拒绝并在 `approval.decided` 里可见），模型提问则以 `waiting_user` 结束。`--json` 只能和一个一次性任务同用，不能和 `doctor`、`report`、`--check-update`、`--list-sessions` 或渠道恢复命令组合。
 
 任务结束后，不进入交互模式也能导出最近一次任务的执行报告：
 
@@ -360,6 +360,42 @@ xiu report json summary reports/latest.json --yes   # 已存在的文件只有�
 ```
 
 格式（`markdown`/`json`/`html`）、范围（`summary`/`details`）和工作区内路径三者顺序任意、都可以省略；不给路径时报告写到标准输出，提示文字走标准错误。内容与交互模式的 `/report export` 完全一致（见[会话指南](./sessions.zh-CN.md)），同样只在已信任的工作区可用，不会从管道读取任何决定；退出码 0 成功，1 用法错误、工作区未信任或还没有可报告的运行。
+
+#### 在 CI 里运行
+
+CI 的检出目录是全新的，没有人在上面交互确认过信任。`--trust-workspace` 把这一步换成命令行上的显式决定：只对当前进程生效，不写入 `~/.xiu/trusted-workspaces.json`，也不能用环境变量或配置文件代替；它只替代信任询问，审批规则、`--yes` 的范围和 Plan 只读都不变。只在你掌控内容的检出目录上使用它。渠道配置在 CI 里没有交互入口，所以先写一份只含地址与环境变量名（不含 Key）的 `~/.xiu/providers.json`，Key 仍然只从 Secrets 注入的环境变量读取。下面是一个只读审查任务的 GitHub Actions 示例：不加 `--yes`，所以任何写文件或执行命令的请求都会被拒绝并出现在 `approval.decided` 事件里；审查结论随后用 `xiu report` 写进作业摘要。
+
+```yaml
+name: Xiu review
+on: [pull_request]
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @xiu-ai/cli
+      - name: Configure a provider (address and key variable name only)
+        run: |
+          mkdir -p ~/.xiu
+          cat > ~/.xiu/providers.json <<'JSON'
+          {"version":5,"active":"ci","profiles":[{"id":"ci","name":"CI","kind":"openai","model":"gpt-5.5","baseURL":"https://api.openai.com/v1","apiKeyEnv":"OPENAI_API_KEY","features":{"text":true,"tools":true,"vision":false,"image":false,"video":false}}]}
+          JSON
+      - name: Read-only review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          xiu --trust-workspace --json '审查这次改动的正确性、安全性与测试覆盖，只读，不修改任何文件' > events.jsonl 2> progress.log || true
+          xiu --trust-workspace report >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xiu-review
+          path: |
+            events.jsonl
+            progress.log
+```
 
 ### 8.7 Windows 复杂命令与参数
 

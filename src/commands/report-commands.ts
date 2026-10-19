@@ -127,8 +127,8 @@ export async function runReportCommand(args: readonly string[], options: ReportC
   const trusted = await (options.isTrusted ?? isWorkspaceTrusted)(cwd);
   if (!trusted) {
     stderr(localize(language,
-      "工作区尚未信任，不能读取它的任务记录。请先交互运行一次 xiu 并确认信任。",
-      "This workspace is not trusted yet, so its task records are not read. Run xiu interactively once and confirm trust first."));
+      "工作区尚未信任，不能读取它的任务记录。请先交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace。",
+      "This workspace is not trusted yet, so its task records are not read. Run xiu interactively once and confirm trust, or pass --trust-workspace explicitly on a checkout you control."));
     return 1;
   }
   try {
