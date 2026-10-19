@@ -8,6 +8,7 @@ import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { trustWorkspace } from "../src/trust.js";
 import { loadTaskChangeHistory } from "../src/task-change-history.js";
+import { TaskRunJournal } from "../src/task-run.js";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxLoader = import.meta.resolve("tsx");
@@ -59,9 +60,11 @@ async function startFakeModelServer(t: TestContext): Promise<{ baseURL: string; 
 
 async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: string }) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-json-cli-"));
-  const cwd = path.join(base, "project");
   const home = path.join(base, "home");
-  await fs.mkdir(cwd);
+  await fs.mkdir(path.join(base, "project"));
+  // The CLI keys per-workspace state (the task-run journal) by the path it is started in, so start it in the
+  // real path: os.tmpdir() is a symlink on macOS (/var → /private/var) and may be a short 8.3 name on Windows.
+  const cwd = await fs.realpath(path.join(base, "project"));
   await fs.mkdir(path.join(home, ".xiu"), { recursive: true });
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   if (options.trusted) await trustWorkspace(cwd, path.join(home, ".xiu", "trusted-workspaces.json"));
@@ -176,4 +179,95 @@ test("--trust-workspace grants trust for this process only and never writes the 
   const again = await runCli(["--json", "--provider", "fake", "Say hello"], cwd, home);
   assert.equal(again.exitCode, 1);
   assert.equal(parseLines(again.stdout)[0]?.payload.outcome, "not_started");
+});
+
+/** A PID that certainly belongs to no live process: a child that has already exited. */
+async function exitedPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "0"], { stdio: "ignore", windowsHide: true });
+  await new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("exit", () => resolve()); });
+  assert.ok(child.pid);
+  return child.pid;
+}
+
+/**
+ * Leaves the journal in the state a crashed Xiu leaves behind: a `running` record whose owner process is gone.
+ * The record is written through the real journal so its shape is whatever the CLI expects.
+ */
+async function leaveInterruptedRun(cwd: string, home: string): Promise<{ runId: string; file: string }> {
+  const root = path.join(home, ".xiu", "task-runs");
+  const journal = new TaskRunJournal(cwd, root);
+  const record = await journal.begin({ sessionId: "crashed-session", task: "refactor the parser", providerId: "fake", model: "fake-model" });
+  const directory = path.join(root, journal.workspaceId);
+  const owner = { ownerPid: await exitedPid(), ownerStartedAt: "2000-01-01T00:00:00.000Z" };
+  const file = path.join(directory, `${record.runId}.json`);
+  await fs.writeFile(file, `${JSON.stringify({ ...record, ...owner })}\n`);
+  const lockFile = path.join(directory, ".active.lock");
+  await fs.writeFile(lockFile, `${JSON.stringify({ ...JSON.parse(await fs.readFile(lockFile, "utf8")), ...owner })}\n`);
+  return { runId: record.runId, file };
+}
+
+async function recordStatus(file: string): Promise<string> {
+  return (JSON.parse(await fs.readFile(file, "utf8")) as { status: string }).status;
+}
+
+test("--json with an interrupted task in the workspace reports not_started instead of exiting 0 without a result", { timeout: 60_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  const interrupted = await leaveInterruptedRun(cwd, home);
+  const run = await runCli(["--json", "--provider", "fake", "--yes", "write a summary"], cwd, home);
+  assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  const lines = parseLines(run.stdout);
+  assert.equal(lines.length, 1, run.stdout);
+  assert.equal(lines[0]?.type, "result");
+  assert.equal(lines[0]?.payload.outcome, "not_started");
+  assert.equal(lines[0]?.payload.success, false);
+  assert.equal(lines[0]?.payload.exitCode, 1);
+  assert.match(String(lines[0]?.payload.error), new RegExp(`Interrupted task ${interrupted.runId.slice(0, 8)} was detected`));
+  assert.match(String(lines[0]?.payload.error), /resume or abandon it before running a new task/);
+  // The explanation is human output and therefore on stderr; the model was never contacted; the record is untouched.
+  assert.match(run.stderr, /Interrupted task .* was detected/);
+  assert.equal(server.requests.length, 0, "the task must not reach the model");
+  assert.equal(await recordStatus(interrupted.file), "running");
+});
+
+test("a one-shot task with an interrupted run exits 1 and leaves the record for an interactive decision", { timeout: 60_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  const interrupted = await leaveInterruptedRun(cwd, home);
+  const run = await runCli(["--provider", "fake", "--yes", "write a summary"], cwd, home);
+  assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  assert.match(run.stdout, /Interrupted task .* was detected\. Start xiu without a task first/);
+  assert.equal(server.requests.length, 0);
+  assert.equal(await recordStatus(interrupted.file), "running");
+});
+
+test("a piped interactive start never resumes or abandons an interrupted run on its own", { timeout: 60_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  const interrupted = await leaveInterruptedRun(cwd, home);
+  // No task argument: the CLI would show the resume/abandon/exit menu, but stdin is a pipe that ends at once.
+  const run = await runCli(["--provider", "fake", "--yes"], cwd, home);
+  assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  assert.match(run.stdout, /Interrupted task detected: refactor the parser/);
+  assert.match(run.stderr, /How should the interrupted task be handled\? There is no interactive terminal to choose from, so this counts as cancelled/);
+  assert.doesNotMatch(run.stdout + run.stderr, /was abandoned|xiu> /);
+  assert.equal(server.requests.length, 0);
+  assert.equal(await recordStatus(interrupted.file), "running");
+});
+
+test("--json with an unreadable task-run journal reports not_started rather than starting over the corrupt record", { timeout: 60_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  const journal = new TaskRunJournal(cwd, path.join(home, ".xiu", "task-runs"));
+  const directory = path.join(home, ".xiu", "task-runs", journal.workspaceId);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "corrupt.json"), "{ not json", "utf8");
+  const run = await runCli(["--json", "--provider", "fake", "--yes", "write a summary"], cwd, home);
+  assert.equal(run.exitCode, 1, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  const lines = parseLines(run.stdout);
+  assert.equal(lines.length, 1, run.stdout);
+  assert.equal(lines[0]?.type, "result");
+  assert.equal(lines[0]?.payload.outcome, "not_started");
+  assert.match(String(lines[0]?.payload.error), /task recovery journal could not be read/);
+  assert.equal(server.requests.length, 0);
 });
