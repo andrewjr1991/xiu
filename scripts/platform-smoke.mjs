@@ -13,6 +13,13 @@ if (expectedPlatform && process.platform !== expectedPlatform) {
 
 const temporaryRoot = mkdtempSync(path.join(tmpdir(), "xiu-platform-空格-"));
 const bundledNpmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+// By default each smoke run downloads every dependency into its own throw-away cache, which is the
+// slowest step of the Windows CI job. CI points XIU_SMOKE_NPM_CACHE at the cache `npm ci` already
+// warmed, so the install only fetches what is missing; the package itself still comes from the tarball.
+function npmCacheArguments(temporaryRoot) {
+  const shared = process.env.XIU_SMOKE_NPM_CACHE;
+  return shared ? [`--cache=${path.resolve(shared)}`, "--prefer-offline"] : [`--cache=${path.join(temporaryRoot, "npm-cache")}`];
+}
 const npmCli = process.env.npm_execpath && existsSync(process.env.npm_execpath) ? process.env.npm_execpath : bundledNpmCli;
 if (!existsSync(npmCli)) throw new Error("Could not locate npm CLI for platform smoke test");
 
@@ -56,7 +63,7 @@ try {
   npm(["init", "-y"], { cwd: installRoot, stdio: "ignore" });
   npm([
     "install", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false",
-    `--cache=${path.join(temporaryRoot, "npm-cache")}`,
+    ...npmCacheArguments(temporaryRoot),
     "--fetch-retries=2", "--fetch-timeout=60000",
     archive,
   ], { cwd: installRoot, stdio: "inherit" });

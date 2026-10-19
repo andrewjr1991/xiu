@@ -1087,7 +1087,7 @@ npm.cmd view '@xiu-ai/cli' version dist-tags --json --registry='https://registry
 
 1. Windows、Ubuntu、macOS 的 CI 均执行 Node.js 20.18.1 下的类型检查、完整测试、构建、打包预览和临时目录安装冒烟；失败不得以 `continue-on-error` 伪装通过。
 2. Pull Request CI 不读取模型、npm 或其他外部服务密钥，不运行真实模型任务，也不执行发布、远端写入或全局安装。
-3. `npm run smoke:package` 只在临时目录安装当前工作区生成的包，验证包名、包版本与 `xiu --version` 一致，并在成功或失败后清理临时目录。
+3. `npm run smoke:package` 只在临时目录安装当前工作区生成的包，验证包名、包版本与 `xiu --version` 一致，并在成功或失败后清理临时目录。本地默认使用独立的临时 npm 缓存（每次完整下载依赖）；CI 通过 `XIU_SMOKE_NPM_CACHE` 指向 `npm ci` 已预热的缓存并加 `--prefer-offline`，只补下缺失项，候选包本身仍来自 tarball。
 4. `README.md`、`README.zh-CN.md`、`QUICKSTART.md`、`CHANGELOG.md`、`CONTRIBUTING.md` 的本地链接全部存在；中英文平台状态、安全边界和限制描述一致。
 5. README 不得声称实时视图与 `/report` 使用同一持久账本，不得声称任务只向 `~/.xiu/` 与 `.xiu/` 写入，也不得将 CI 目标误报为真实平台验收。
 6. `SECURITY.zh-CN.md` 明确禁止显示、保存或伪造 Provider API 未返回的隐藏思维链；实时输出只包含明确面向用户的摘要和程序可核验事件。
