@@ -536,9 +536,28 @@ export async function readInteractiveInput(
   options: InteractiveInputOptions = {},
 ): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    // Piped sessions get the same contract as the terminal editor: task output is
+    // drained while the prompt waits, and an aborted wait (the running task settled)
+    // resolves empty so the caller can print the result and prompt again instead of
+    // blocking until the next input line arrives.
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    try { return await new Promise((resolve) => rl.question(prompt, resolve)); }
-    finally { rl.close(); }
+    const drain = (): void => {
+      const live = persistentLiveOutput(options.liveOutput?.() ?? "");
+      if (live) process.stdout.write(live);
+    };
+    const refreshTimer = options.liveOutput && options.refreshMs && options.refreshMs > 0 ? setInterval(drain, Math.max(100, options.refreshMs)) : undefined;
+    try {
+      return await new Promise<string>((resolve) => {
+        const onAbort = (): void => { rl.close(); resolve(""); };
+        if (options.signal?.aborted) { onAbort(); return; }
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+        rl.question(prompt, (answer) => { options.signal?.removeEventListener("abort", onAbort); resolve(answer); });
+      });
+    } finally {
+      if (refreshTimer) clearInterval(refreshTimer);
+      drain();
+      rl.close();
+    }
   }
 
   return await new Promise<string>((resolve) => {
