@@ -47,6 +47,12 @@ jobs:
           cache: npm
       - id: dependencies
         run: npm ci
+      # The two packaged smoke runs install the candidate tarball; reusing the cache that `npm ci`
+      # just warmed (restored by setup-node) removes two full dependency downloads per platform.
+      - id: smoke_cache
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        shell: bash
+        run: echo "XIU_SMOKE_NPM_CACHE=$(npm config get cache)" >> "$GITHUB_ENV"
       - id: python
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
