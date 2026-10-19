@@ -359,7 +359,7 @@ xiu report html details reports/latest.html
 xiu report json summary reports/latest.json --yes   # 已存在的文件只有加 --yes 才覆盖
 ```
 
-格式（`markdown`/`json`/`html`）、范围（`summary`/`details`）和工作区内路径三者顺序任意、都可以省略；不给路径时报告写到标准输出，提示文字走标准错误。内容与交互模式的 `/report export` 完全一致（见[会话指南](./sessions.zh-CN.md)），同样只在已信任的工作区可用，不会从管道读取任何决定；退出码 0 成功，1 用法错误、工作区未信任或还没有可报告的运行。
+格式（`markdown`/`json`/`html`）、范围（`summary`/`details`）和工作区内路径三者顺序任意、都可以省略；不给路径时报告写到标准输出，提示文字走标准错误。默认报告最近一次运行；`xiu report runs` 列出最近 50 次运行，再加 `run:<序号>` 或 `run:<运行 ID 前缀>` 选择其中一次，例如 `xiu report html run:2 reports/previous.html`。内容与交互模式的 `/report export` 完全一致（见[会话指南](./sessions.zh-CN.md)），同样只在已信任的工作区可用，不会从管道读取任何决定；退出码 0 成功，1 用法错误、工作区未信任或还没有可报告的运行。
 
 #### 在 CI 里运行
 
