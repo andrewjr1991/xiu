@@ -182,7 +182,7 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
           value: template.id,
         })),
         { label: "openai-compatible", description: localize(language, "自定义 OpenAI 兼容地址", "Custom OpenAI-compatible endpoint"), value: "openai-compatible" },
-      ], language);
+      ], language, { nonInteractive: "first" });
       if (!choice) return true;
       const template = templates.find((item) => item.id === choice);
       const kind = template?.kind ?? "openai-compatible";
@@ -274,9 +274,10 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       console.log(chalk.dim(localize(language, "没有可删除的自定义 Provider。\n", "There are no custom providers to remove.\n")));
       return true;
     }
+    // A typed [y/N] confirmation follows, so a piped session may take the first provider here.
     const selected = await selectTerminalOption(localize(language, "删除哪个 Provider？", "Remove which provider?"), removable.map((profile) => ({
       label: profile.name, description: `${profile.id} · ${profile.baseURL ?? ""}`, value: profile.id,
-    })), language);
+    })), language, { nonInteractive: "first" });
     if (!selected) {
       console.log(chalk.dim(localize(language, "已取消删除。\n", "Removal cancelled.\n")));
       return true;

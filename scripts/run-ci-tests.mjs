@@ -35,12 +35,19 @@ if (result.code !== 0) {
     const match = /^not ok \d+ - (.+)$/u.exec(lines[index]);
     if (!match) continue;
 
+    // Collect the YAML diagnostic block, including the indented continuation lines of
+    // multi-line values (`error: |-`, `actual: |-`), so the annotation carries the real
+    // assertion message and the compared text instead of just the key names.
     const details = [];
-    for (let cursor = index + 1; cursor < Math.min(lines.length, index + 30); cursor += 1) {
-      if (/^(?:not )?ok \d+ - /u.test(lines[cursor])) break;
-      if (/^\s*(?:error|code|failureType|location|stack|actual|expected):/u.test(lines[cursor])) {
-        details.push(lines[cursor].trim());
-      }
+    let budget = 3_500;
+    for (let cursor = index + 1; cursor < Math.min(lines.length, index + 400) && budget > 0; cursor += 1) {
+      const line = lines[cursor];
+      if (/^(?:not )?ok \d+ - /u.test(line) || /^\s*\.\.\.\s*$/u.test(line)) break;
+      if (/^\s*(?:duration_ms|type):/u.test(line)) continue;
+      const text = line.trim();
+      if (!text || text === "---") continue;
+      details.push(text.slice(0, budget));
+      budget -= text.length + 1;
     }
     failures.push({ title: match[1], details });
   }
