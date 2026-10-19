@@ -60,9 +60,11 @@ async function startFakeModelServer(t: TestContext): Promise<{ baseURL: string; 
 
 async function fixture(t: TestContext, options: { trusted: boolean; baseURL?: string }) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-json-cli-"));
-  const cwd = path.join(base, "project");
   const home = path.join(base, "home");
-  await fs.mkdir(cwd);
+  await fs.mkdir(path.join(base, "project"));
+  // The CLI keys per-workspace state (the task-run journal) by the path it is started in, so start it in the
+  // real path: os.tmpdir() is a symlink on macOS (/var → /private/var) and may be a short 8.3 name on Windows.
+  const cwd = await fs.realpath(path.join(base, "project"));
   await fs.mkdir(path.join(home, ".xiu"), { recursive: true });
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   if (options.trusted) await trustWorkspace(cwd, path.join(home, ".xiu", "trusted-workspaces.json"));
