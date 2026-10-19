@@ -7,6 +7,17 @@ const assert = require('node:assert/strict');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xiu-dialog-smoke-'));
 app.setPath('userData', root);
 app.disableHardwareAcceleration();
+// Under xvfb the viz compositor occasionally fails the first capture (UnknownVizError); the dialog itself is already verified above, so retry the screenshot a bounded number of times.
+async function capturePageWithRetry(webContents, attempts = 3) {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await webContents.capturePage(); }
+    catch (error) {
+      if (attempt >= attempts) throw error;
+      console.warn(`Dialog smoke: capturePage failed (attempt ${attempt}/${attempts}), retrying:`, error && error.message ? error.message : error);
+      await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+    }
+  }
+}
 app.whenReady().then(async () => {
   const theme = process.env.XIU_DIALOG_SMOKE_THEME === 'dark' ? 'dark' : 'light';
   nativeTheme.themeSource = theme;
@@ -26,7 +37,7 @@ app.whenReady().then(async () => {
     assert.equal(await child.webContents.executeJavaScript('getComputedStyle(document.body).backgroundColor'), theme === 'dark' ? 'rgb(32, 34, 38)' : 'rgb(255, 255, 255)');
     assert.equal(await child.webContents.executeJavaScript('document.activeElement.id'), 'cancel');
     assert.equal(await child.webContents.executeJavaScript('document.getElementById("accept").getBoundingClientRect().bottom <= innerHeight'), true);
-    if (action === 'accept') fs.writeFileSync(path.resolve(__dirname, '../../../.desktop-build-temp/full-access-dialog.png'), (await child.webContents.capturePage()).toPNG());
+    if (action === 'accept') fs.writeFileSync(path.resolve(__dirname, '../../../.desktop-build-temp/full-access-dialog.png'), (await capturePageWithRetry(child.webContents)).toPNG());
     if (action === 'close') child.close();
     else if (action === 'escape') await child.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));true`);
     else await child.webContents.executeJavaScript(`document.getElementById('${action === 'close-button' ? 'close' : action}').click();true`);
