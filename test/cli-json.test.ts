@@ -174,6 +174,26 @@ test("a start without a terminal in an untrusted workspace does not ask for trus
   await assert.rejects(fs.access(trustFile), "nothing was written to the trust list");
 });
 
+test("an unknown --provider id stops before MCP servers and the model and names the configured providers", { timeout: 90_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, { trusted: true });
+  const expected = /^Provider "nosuch" is not configured\. Configured providers: fake\. Pass one of those ids to --provider, or start xiu without --provider and add it with \/provider add; this run did not start\./m;
+  // Before, the run went on as "unconfigured" through MCP connection and indexing and failed at the model with "No Provider selected".
+  const plain = await runCli(["--provider", "nosuch", "Say hello"], cwd, home);
+  assert.equal(plain.exitCode, 1, plain.stderr);
+  assert.match(plain.stderr, expected);
+  assert.doesNotMatch(plain.stdout + plain.stderr, /Connecting MCP servers|Indexing project|No Provider selected/);
+  const json = await runCli(["--json", "--provider", "nosuch", "Say hello"], cwd, home);
+  assert.equal(json.exitCode, 1, json.stderr);
+  const result = parseLines(json.stdout).at(-1)!;
+  assert.equal(result.type, "result");
+  assert.equal(result.payload.outcome, "not_started");
+  assert.match(String(result.payload.error), expected);
+  const interactive = await runCli(["--provider", "nosuch"], cwd, home, "/exit\n");
+  assert.equal(interactive.exitCode, 1, interactive.stderr);
+  assert.match(interactive.stderr, expected);
+  assert.doesNotMatch(interactive.stdout + interactive.stderr, /Interactive mode|setup mode/);
+});
+
 test("--json without a task is a usage error that writes nothing to stdout", { timeout: 60_000 }, async (t) => {
   const { cwd, home } = await fixture(t, { trusted: true });
   const run = await runCli(["--json", "--provider", "fake"], cwd, home);

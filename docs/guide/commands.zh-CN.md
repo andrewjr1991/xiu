@@ -83,7 +83,7 @@
 
 | 参数 | 作用 |
 | --- | --- |
-| `-p, --provider <名称>` | `openai`、`anthropic` 或 `agnes` |
+| `-p, --provider <ID>` | 本次使用的渠道 Profile ID（`/providers` 可查看，插件提供的渠道在工作区信任后也可用）；已配置了渠道而 ID 不在其中时，启动即在标准错误列出已配置的渠道并退出码 1（`--json` 下 `result` 行为 `not_started`），不会连接 MCP 或进入配置模式；尚未配置任何渠道时仍进入首次向导 |
 | `-m, --model <模型>` | 指定文本模型 |
 | `-C, --cwd <目录>` | 指定工作区 |
 | `--base-url <URL>` | OpenAI 兼容 API 地址 |
