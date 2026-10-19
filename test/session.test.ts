@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
-import { estimateConversationTokens, formatRestoredConversation, listSessions, listSessionsWithIssues, loadSession, unreadableSessionsNote } from "../src/session.js";
+import { estimateConversationTokens, formatRestoredConversation, formatSessionTimestamp, listSessions, listSessionsWithIssues, loadSession, sessionTitle, unreadableSessionsNote } from "../src/session.js";
 import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
@@ -287,6 +287,32 @@ test("internal subagent sessions do not appear in the user resume list", async (
   assert.equal((await listSessions(cwd)).length, 0);
   const internal = await fs.readdir(path.join(cwd, ".xiu", "agent-sessions"));
   assert.equal(internal.length, 1);
+});
+
+test("a session whose task failed before its task event was logged is still listed under that task", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-title-"));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  // What a run that failed within milliseconds leaves behind: stats, a diagnostics snapshot and the turn record, no `task` event.
+  await fs.writeFile(path.join(directory, "failed-early.jsonl"), [
+    JSON.stringify({ timestamp: "2026-10-19T21:19:17.074Z", type: "stats", stats: { modelCalls: 0 } }),
+    JSON.stringify({ timestamp: "2026-10-19T21:19:17.077Z", type: "diagnostics", snapshot: { version: 1, task: "Say hello again", outcome: "failed" } }),
+    JSON.stringify({ timestamp: "2026-10-19T21:19:17.082Z", type: "ui_turn", version: 1, turn: { task: "Say hello again", inputKind: "task", supplements: [] } }),
+  ].join("\n") + "\n");
+  await fs.writeFile(path.join(directory, "empty.jsonl"), `${JSON.stringify({ timestamp: "2026-10-19T21:19:18.000Z", type: "stats", stats: { modelCalls: 0 } })}\n`);
+  const sessions = await listSessions(cwd);
+  assert.deepEqual(sessions.map((session) => [session.id, session.firstTask]), [["empty", ""], ["failed-early", "Say hello again"]]);
+  // The lists label an empty title in the interface language instead of printing "Untitled session" in Chinese.
+  assert.equal(sessionTitle(sessions[0]!, "zh-CN"), "未命名会话");
+  assert.equal(sessionTitle(sessions[0]!, "en-US"), "Untitled session");
+  assert.equal(sessionTitle({ firstTask: "  fix\n the   build  " }, "zh-CN"), "fix the build");
+  assert.equal(sessionTitle({ firstTask: "x".repeat(100) }, "en-US", 80), "x".repeat(80));
+});
+
+test("session list timestamps are local time to the second rather than raw ISO strings", () => {
+  const local = new Date(2026, 9, 19, 23, 46, 18, 223);
+  assert.equal(formatSessionTimestamp(local.toISOString()), "2026-10-19 23:46:18");
+  assert.equal(formatSessionTimestamp("not a date"), "not a date");
 });
 
 test("one unreadable session log no longer hides the others, and loading it names the reason", async () => {

@@ -118,6 +118,15 @@ export async function listSessionsWithIssues(cwd: string): Promise<SessionListin
         continue;
       }
       const firstTask = events.find((event) => event.type === "task");
+      // A task that failed before its `task` event was logged still names itself in the turn record
+      // and the diagnostics snapshot; a log with none of those is listed with an empty title.
+      const firstTurn = events.find((event) => event.type === "ui_turn");
+      const firstDiagnostics = events.find((event) => event.type === "diagnostics");
+      const title = [
+        firstTask?.task,
+        (firstTurn?.turn as Record<string, unknown> | undefined)?.task,
+        (firstDiagnostics?.snapshot as Record<string, unknown> | undefined)?.task,
+      ].find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
       const lastModel = [...events].reverse().find((event) => event.type === "model_changed" || event.type === "provider_changed" || event.type === "task");
       const lastProvider = [...events].reverse().find((event) => event.type === "provider_changed" || event.type === "task");
       items.push({
@@ -125,7 +134,7 @@ export async function listSessionsWithIssues(cwd: string): Promise<SessionListin
         file,
         createdAt: String(events[0]?.timestamp ?? stat.birthtime.toISOString()),
         updatedAt: String(events.at(-1)?.timestamp ?? stat.mtime.toISOString()),
-        firstTask: String(firstTask?.task ?? "Untitled session"),
+        firstTask: title,
         model: typeof lastModel?.model === "string"
           ? lastModel.model
           : typeof (lastModel?.config as Record<string, unknown> | undefined)?.model === "string"
@@ -144,6 +153,19 @@ export async function listSessionsWithIssues(cwd: string): Promise<SessionListin
   }
   unreadable.sort((a, b) => a.id.localeCompare(b.id));
   return { sessions: items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), unreadable };
+}
+
+/** The title a session list shows: its first task, or the language's "untitled" label. */
+export function sessionTitle(session: Pick<SessionListItem, "firstTask">, language: UiLanguage, maximum = 72): string {
+  return session.firstTask.replace(/\s+/g, " ").trim().slice(0, maximum) || localize(language, "未命名会话", "Untitled session");
+}
+
+/** A log timestamp as local `YYYY-MM-DD HH:mm:ss` for session lists; anything unparsable is returned as is. */
+export function formatSessionTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (part: number): string => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 /** One line naming how many session logs a list leaves out and why; undefined when none. */

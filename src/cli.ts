@@ -43,7 +43,7 @@ import { persistentLiveOutput, readInteractiveInput, selectTerminalOption } from
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
-import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
+import { formatSessionTimestamp, listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, formatHelpEntries, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
@@ -217,8 +217,8 @@ async function chooseSession(workspace: string, language: UiLanguage) {
   if (note) console.log(chalk.yellow(note));
   if (!sessions.length) return undefined;
   const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
-    label: session.firstTask.replace(/\s+/g, " ").slice(0, 72) || localize(language, "未命名会话", "Untitled session"),
-    description: `${new Date(session.updatedAt).toLocaleString()}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
+    label: sessionTitle(session, language),
+    description: `${formatSessionTimestamp(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
     value: session.id,
   })), language);
   return selected ? await loadSession(workspace, selected) : undefined;
@@ -438,7 +438,7 @@ async function main(): Promise<void> {
     if (options.listSessions) {
       const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
       if (!sessions.length) console.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
-      else for (const session of sessions) console.log(`${session.id}  ${session.updatedAt}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.firstTask.slice(0, 80)}`);
+      else for (const session of sessions) console.log(`${session.id}  ${formatSessionTimestamp(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
       const note = unreadableSessionsNote(unreadable, language);
       if (note) console.log(note);
       return;
@@ -2056,7 +2056,7 @@ async function main(): Promise<void> {
         const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
         const note = unreadableSessionsNote(unreadable, language);
         console.log([
-          sessions.length ? sessions.map((session) => `${session.id}  ${session.updatedAt}  ${session.firstTask.slice(0, 72)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
+          sessions.length ? sessions.map((session) => `${session.id}  ${formatSessionTimestamp(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
           ...(note ? [chalk.yellow(note)] : []),
         ].join("\n") + "\n");
         continue;
