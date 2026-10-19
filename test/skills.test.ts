@@ -121,9 +121,10 @@ test("skills the registry finds but does not list are named with a reason, and /
   const oversized = path.join(cwd, "plugin-big-SKILL.md");
   await fs.writeFile(oversized, `${skillMarkdown("big", "Too large")}${"x".repeat(120_001)}`);
   // A permission error is simulated for one file so the test does not depend on chmod (which Windows ignores).
+  // The glob hands the registry forward-slash paths on Windows, so compare resolved paths, not strings.
   const realReadFile = fs.readFile.bind(fs);
   t.mock.method(fs, "readFile", ((file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
-    if (file === locked) return Promise.reject(Object.assign(new Error(`EACCES: permission denied, open '${locked}'`), { code: "EACCES" }));
+    if (typeof file === "string" && path.resolve(file) === path.resolve(locked)) return Promise.reject(Object.assign(new Error(`EACCES: permission denied, open '${locked}'`), { code: "EACCES" }));
     return (realReadFile as (...args: unknown[]) => unknown)(file, ...rest);
   }) as typeof fs.readFile);
 
