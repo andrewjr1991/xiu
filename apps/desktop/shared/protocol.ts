@@ -328,6 +328,7 @@ export interface XiuDesktopBridge {
   deleteTask(request: DesktopTaskDeleteRequest): Promise<DesktopWorkspaceSnapshot>;
   chooseAttachments(): Promise<DesktopAttachmentResult>;
   pasteAttachments(): Promise<DesktopAttachmentResult>;
+  copyMessage(text: string): Promise<void>;
   importAttachments(request: DesktopAttachmentUploadRequest): Promise<DesktopAttachmentResult>;
   reviewSnapshot(request?: DesktopReviewRequest): Promise<DesktopReviewSnapshot>;
   previewFile(request: DesktopFilePreviewRequest): Promise<ReviewFilePreview>;
@@ -374,6 +375,7 @@ export const desktopChannels = {
   mcpDisconnect: "mcp:disconnect",
   mcpApprove: "mcp:approve",
   snapshot: "desktop:snapshot",
+  copyMessage: "desktop:copy-message",
   chooseWorkspace: "workspace:choose",
   closeWorkspace: "workspace:close",
   openRecentWorkspace: "workspace:open-recent",

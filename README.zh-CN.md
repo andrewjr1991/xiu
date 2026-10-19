@@ -14,7 +14,7 @@
 
 </div>
 
-最新已发布版本 **0.20.12**（2026-10-19）包含维护者已验收的 Computer Use 编辑器修复：[Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) · [npm 包](https://www.npmjs.com/package/@xiu-ai/cli) · [变更日志](./CHANGELOG.md)。CLI 支持 Windows、macOS、Linux；桌面端目前只提供 Windows x64 预览版安装包（未签名）。
+当前开发版本 **0.20.13** 增加桌面对话复制与记录跳转。最新已发布版本 **0.20.12**（2026-10-19）包含维护者已验收的 Computer Use 编辑器修复：[GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) · [npm 包](https://www.npmjs.com/package/@xiu-ai/cli) · [变更日志](./CHANGELOG.md)。CLI 支持 Windows、macOS、Linux；桌面端目前只提供 Windows x64 预览版安装包（未签名）。
 
 ## 安装
 

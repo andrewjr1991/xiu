@@ -3,22 +3,27 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 /** Layout changes are not user scroll intent. Never animate a moving target. */
 export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: unknown, enabled = true) {
   const following = useRef(true);
+  const manualScroll = useRef(false);
+  const leftBottom = useRef(false);
   const [paused, setPaused] = useState(false);
+  const pause = () => { manualScroll.current = true; leftBottom.current = false; following.current = false; setPaused(true); };
   const resume = () => {
     following.current = enabled;
+    manualScroll.current = false;
+    leftBottom.current = false;
     setPaused(!enabled);
     const element = ref.current;
     if (element) element.scrollTop = element.scrollHeight;
   };
   useEffect(() => {
     following.current = enabled;
+    manualScroll.current = false;
+    leftBottom.current = false;
     setPaused(!enabled);
     const element = ref.current;
     if (!element) return;
     let frame = 0;
     let touchY: number | undefined;
-    let manualScroll = false;
-    const pause = () => { manualScroll = true; following.current = false; setPaused(true); };
     const pin = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
@@ -27,8 +32,11 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
     };
     const scroll = () => {
       if (element.scrollHeight - element.scrollTop - element.clientHeight < 32) {
-        manualScroll = false; following.current = enabled; setPaused(!enabled);
-      } else if (!manualScroll) pin();
+        if (!manualScroll.current || leftBottom.current) {
+          manualScroll.current = false; following.current = enabled; setPaused(!enabled);
+        }
+      } else if (manualScroll.current) leftBottom.current = true;
+      else pin();
     };
     const wheel = (event: WheelEvent) => { if (event.deltaY < 0) pause(); };
     const pointer = (event: PointerEvent) => {
@@ -68,5 +76,5 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
   useEffect(() => {
     if (following.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   });
-  return { paused, resume };
+  return { paused, resume, pause };
 }

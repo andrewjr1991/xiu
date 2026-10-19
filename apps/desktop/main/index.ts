@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, net, protocol, session, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, net, protocol, session, type IpcMainInvokeEvent } from "electron";
 import { PreferencesStore } from "./preferences-store.js";
 import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
@@ -384,6 +384,12 @@ function registerIpc(): void {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
     return presentAttachments(workspace, await new ClipboardAttachmentManager(workspace, undefined, "zh-CN").paste());
+  });
+  ipcMain.handle(desktopChannels.copyMessage, (event, text: unknown) => {
+    assertTrustedSender(event);
+    controller.trustedWorkspacePath();
+    if (typeof text !== "string" || text.length === 0 || text.length > 200_000) throw new Error("复制内容无效或过长。");
+    clipboard.writeText(text);
   });
   ipcMain.handle(desktopChannels.attachmentsImport, async (event, request: DesktopAttachmentUploadRequest) => {
     assertTrustedSender(event);

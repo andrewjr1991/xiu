@@ -81,6 +81,7 @@ const bridge: XiuDesktopBridge = Object.freeze({
   deleteTask: (request: DesktopTaskDeleteRequest) => ipcRenderer.invoke(desktopChannels.taskDelete, request),
   chooseAttachments: () => ipcRenderer.invoke(desktopChannels.attachmentsChoose),
   pasteAttachments: () => ipcRenderer.invoke(desktopChannels.attachmentsPaste),
+  copyMessage: (text: string) => ipcRenderer.invoke(desktopChannels.copyMessage, text),
   importAttachments: (request: DesktopAttachmentUploadRequest) => ipcRenderer.invoke(desktopChannels.attachmentsImport, request),
   reviewSnapshot: (request?: DesktopReviewRequest) => ipcRenderer.invoke(desktopChannels.reviewSnapshot, request),
   previewFile: (request: DesktopFilePreviewRequest) => ipcRenderer.invoke(desktopChannels.filePreview, request),

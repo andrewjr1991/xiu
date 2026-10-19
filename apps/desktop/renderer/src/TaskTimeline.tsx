@@ -111,6 +111,18 @@ function visibleMessageText(text: string): string {
   return text.replace(/\r/g, "").split("\n").filter((line) => !/^\s*@(?:"[^"]+"|\.xiu\/attachments\/\S+)\s*$/.test(line)).join("\n").trim();
 }
 
+function CopyMessageButton({ text, label }: { text: string; label: string }) {
+  const [result, setResult] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => {
+    if (result === "idle") return;
+    const timer = setTimeout(() => setResult("idle"), 2_000);
+    return () => clearTimeout(timer);
+  }, [result, text]);
+  return <button type="button" className={`message-copy ${result}`} aria-label={`复制${label}`} title={`复制${label}`} onClick={() => {
+    void window.xiuDesktop.copyMessage(text).then(() => setResult("copied"), () => setResult("failed"));
+  }}><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="10" height="11" rx="2" /><path d="M4 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5V4" /></svg><span>{result === "copied" ? "已复制" : result === "failed" ? "复制失败" : "复制"}</span></button>;
+}
+
 function AttachmentTiles({ attachments, compact = false }: { attachments: DesktopAttachment[]; compact?: boolean }) {
   if (!attachments.length) return null;
   return <div className={`attachment-tiles ${compact ? "compact" : ""}`}>{attachments.map((attachment) => <div className={`attachment-tile ${attachment.kind}`} key={attachment.reference}>
@@ -138,6 +150,11 @@ function eventText(event: RuntimeEvent): string | undefined {
   if (event.type === "task.finished") return event.payload.result ?? event.payload.error;
   if (event.type === "workspace.changed") return `${event.payload.change.files.length} 个文件变更`;
   return undefined;
+}
+
+function timelineLabel(event: RuntimeEvent): string {
+  const preview = eventText(event)?.replace(/\s+/g, " ").slice(0, 64);
+  return preview ? `${eventTitle(event)} · ${preview}` : eventTitle(event);
 }
 
 function activityText(event: RuntimeEvent): string | undefined {
@@ -179,7 +196,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
   const start = events.find((e) => e.type === "task.started")?.timestamp ?? taskStartedAt;
   return <section className="conversation-round">
     {round.users.length > 0 && <DetailedTaskTimeline events={round.users} state="idle" modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
-    {(round.process.length > 0 || active) && <details className={`turn-process ${active ? "active" : ""}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    {(round.process.length > 0 || active) && <details className={`turn-process ${active ? "active" : ""}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)} data-timeline-jump={`process-${events[0]?.eventId}`} data-timeline-label={`运行记录 · ${round.operations} 次操作`}>
       <summary><span className={active ? "pulse" : "turn-chevron"}>{active ? "" : "›"}</span><span>{active ? `${label ?? "正在处理"} · ` : ""}{turnElapsed(start, active ? new Date(now).toISOString() : round.finished?.timestamp ?? events.at(-1)?.timestamp)}</span><small>{round.operations} 次操作{round.agents > 0 ? ` · ${round.agents} 个子任务` : ""}</small></summary>
       {round.process.length > 0 && <DetailedTaskTimeline events={round.process} state="idle" modelLabel={modelLabel} expandProcesses />}
     </details>}
@@ -213,14 +230,15 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
     {items.map((item) => item.kind === "activity" ? <details className={`process-group ${item.active ? "active" : ""}`} open={item.active || expandProcesses} key={item.id}>
       <summary><span aria-hidden="true" className={item.active ? "pulse" : "process-icon"}>{item.active ? "" : "›"}</span><strong>{item.active ? activity?.label ?? "正在处理" : "运行记录"}</strong><small>{item.active ? activity?.detail : `${item.events.length} 条事件`}</small></summary>
       <div>{(() => { const progress = modelProgressSummary(item.events); return progress && <article className={`model-progress-summary ${progress.providerVisible ? "provider-visible" : "factual"}`}><header><strong>{progress.title}</strong><small>{progress.providerVisible ? "模型公开输出" : "可核验运行事实"}</small></header><p>{progress.text}</p></article>; })()}{activityRows(item.events).map(({ event, webText, evidence }) => (webText || activityText(event)) && <div key={event.eventId}><p className={`process-row process-${event.type.replace(".", "-")}`}><span>{event.type === "workspace.changed" ? "✎" : event.type.startsWith("tool.") ? "⌘" : event.type === "plan.updated" ? "☷" : "·"}</span><span>{webText ?? activityText(event)}</span><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></p>{evidence && <details className="web-result-details"><summary>查看检索结果详情</summary><FormattedText text={webEvidenceForDisplay(evidence)} /></details>}</div>)}</div>
-    </details> : item.event.type === "subagent.updated" ? <SubagentActivity key={item.event.eventId} agent={item.event.payload.agent} /> : <article className={`event-card event-${item.event.type.replace(".", "-")}`} key={item.event.eventId}>
-      {(() => { const event = item.event; return <>
+    </details> : item.event.type === "subagent.updated" ? <SubagentActivity key={item.event.eventId} agent={item.event.payload.agent} /> : <article className={`event-card event-${item.event.type.replace(".", "-")}`} key={item.event.eventId} data-timeline-jump={item.event.type === "task.started" || item.event.type === "task.steered" || item.event.type === "assistant.message" || item.event.type === "task.finished" && Boolean(item.event.payload.result) ? item.event.eventId : undefined} data-timeline-label={timelineLabel(item.event)}>
+      {(() => { const event = item.event; const text = eventText(event); const copyable = Boolean(text) && (event.type === "task.started" || event.type === "task.steered" || event.type === "assistant.message" || event.type === "task.finished" && Boolean(event.payload.result)); return <>
       <header><span>{event.type === "assistant.message" && event.payload.hasToolCalls ? "Xiu · 公开思考摘要" : eventTitle(event)}</span><time>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>
-      {eventText(event) && <div className="event-text"><FormattedText text={eventText(event)!} /></div>}
+      {text && <div className="event-text"><FormattedText text={text} /></div>}
       {(event.type === "task.started" || event.type === "task.steered") && submittedAttachments[event.eventId]?.length > 0 && <AttachmentTiles attachments={submittedAttachments[event.eventId]} compact />}
+      {copyable && <div className="message-actions"><CopyMessageButton text={text!} label={event.type === "task.started" || event.type === "task.steered" ? "你的消息" : "Xiu 回复"} /></div>}
       </>; })()}
     </article>)}
-    {pendingMessage && <article className="event-card event-task-started pending-message"><header><span>{pendingMessage.steering ? "你 · 补充要求" : "你"}</span><time>{new Date(pendingMessage.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>{pendingMessage.text && <div className="event-text">{pendingMessage.text}</div>}<AttachmentTiles attachments={pendingMessage.attachments} compact /></article>}
+    {pendingMessage && <article className="event-card event-task-started pending-message" data-timeline-jump={`pending-${pendingMessage.timestamp}`} data-timeline-label="你 · 正在发送"><header><span>{pendingMessage.steering ? "你 · 补充要求" : "你"}</span><time>{new Date(pendingMessage.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></header>{pendingMessage.text && <div className="event-text">{pendingMessage.text}</div>}<AttachmentTiles attachments={pendingMessage.attachments} compact />{pendingMessage.text && <div className="message-actions"><CopyMessageButton text={pendingMessage.text} label="你的消息" /></div>}</article>}
     {draft && <article className="event-card draft"><header><span>Xiu · 正在生成</span><span className="pulse" /></header><div className="event-text"><FormattedText text={draft} /></div></article>}
     {activity && !items.some((item) => item.kind === "activity" && item.active) && <div className="runtime-activity"><span className="pulse" /><span><strong>{activity.label}</strong><small>{activity.detail}</small></span></div>}
   </div>;
@@ -230,7 +248,7 @@ export type ChangeEntry = DesktopReviewSnapshot["changes"]["changes"][number];
 
 export function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
   submittedAttachments = { ...submittedAttachments, ...history.attachments };
-  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => <article className={`event-card history-${entry.kind}`} key={entry.id}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={visibleMessageText(entry.text)} /></div></article>)}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
+  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => { const text = visibleMessageText(entry.text); return <article className={`event-card history-${entry.kind}`} key={entry.id} data-timeline-jump={entry.id} data-timeline-label={entry.title}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={text} /></div>{text && (entry.kind === "user" || entry.kind === "assistant") && <div className="message-actions"><CopyMessageButton text={text} label={entry.kind === "user" ? "你的消息" : "Xiu 回复"} /></div>}</article>; })}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
 }
 
 export function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: DesktopReviewSnapshot["changes"]; legacy?: boolean; onDiff: (change: ChangeEntry) => void }) {

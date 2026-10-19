@@ -396,6 +396,12 @@ app.whenReady().then(async () => {
     await clickText(window, "仅本次允许");
     await waitFor(window, `document.querySelector('.stop-button')`, "running stop control");
     await waitFor(window, `window.xiuSmoke.calls().includes('long-task:30-turns')`, "30-turn task timeline");
+    await waitFor(window, `document.querySelectorAll('.timeline-jump-rail button').length > 2`, "conversation navigation markers");
+    await evaluate(window, `document.querySelector('.event-assistant-message .message-copy').click()`);
+    await waitFor(window, `window.xiuSmoke.copiedMessage()?.includes('第 1 轮公开进展')`, "assistant message copy uses its own response");
+    await evaluate(window, `document.querySelector('.timeline-jump-rail button').click()`);
+    await waitFor(window, `document.querySelector('.return-to-latest') && document.querySelector('.task-scroll').scrollTop < 80`, "record navigation pauses automatic following and reaches the first message");
+    await evaluate(window, `document.querySelector('.return-to-latest').click()`);
     await evaluate(window, `window.xiuSmoke.emitWebFixture()`);
     await waitFor(window, `document.querySelector('.web-result-details')`, "compact web result detail");
     assert(await evaluate(window, `document.querySelector('.turn-process') && document.querySelector('.turn-process').open`), "Per-round process starts expanded while running.");
@@ -436,7 +442,7 @@ app.whenReady().then(async () => {
     await waitFor(window, `(() => {const e=document.querySelector('.task-scroll');return e.scrollHeight-e.scrollTop-e.clientHeight < 2;})()`, "resize growth follows latest output");
     await evaluate(window, `(() => {const e=document.querySelector('.task-scroll');e.dispatchEvent(new WheelEvent('wheel',{deltaY:-200,bubbles:true}));e.scrollTop=0;})()`);
     await waitFor(window, `document.querySelector('.return-to-latest')`, "manual upward intent pauses follow");
-    assert(await evaluate(window, `getComputedStyle(document.querySelector('.return-to-latest')).gridArea === getComputedStyle(document.querySelector('.task-scroll')).gridArea`), 'Return-to-latest floats over the output, without taking another composer row.');
+    assert(await evaluate(window, `getComputedStyle(document.querySelector('.return-to-latest')).gridArea === getComputedStyle(document.querySelector('.task-scroll-shell')).gridArea`), 'Return-to-latest floats over the output, without taking another composer row.');
     await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight='1900px'`);
     await settleLayout(window);
     assert(await evaluate(window, `document.querySelector('.task-scroll').scrollTop === 0`), "New content must not pull the user away from history.");
@@ -466,6 +472,32 @@ app.whenReady().then(async () => {
     await evaluate(window, `document.querySelector('[aria-label="隐藏任务概览"]').click()`);
     await settleLayout(window);
     assert(await evaluate(window, `getComputedStyle(document.querySelector('.review-inspector')).display === 'none'`), "Hiding overview removes the entire collapsed rail.");
+    await resizeViewport(window, 1920, 1126, "wide conversation layout");
+    await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight='1500px'`);
+    await waitFor(window, `Boolean(document.querySelector('.timeline-jump-rail'))`, "wide conversation navigation rail");
+    await settleLayout(window);
+    const conversationLayout = await evaluate(window, `(() => {
+      const rect = selector => { const r = document.querySelector(selector)?.getBoundingClientRect(); return r && { left: r.left, right: r.right, width: r.width }; };
+      return { scroll: rect('.task-scroll'), content: rect('.task-scroll-content'), bubble: rect('.event-task-started, .event-task-steered'), composer: rect('.composer'), rail: rect('.timeline-jump-rail') };
+    })()`);
+    assert(conversationLayout.scroll && conversationLayout.content && conversationLayout.bubble && conversationLayout.composer && conversationLayout.rail && conversationLayout.content.width <= 1081 && conversationLayout.scroll.right - conversationLayout.content.right >= 90 && conversationLayout.content.left - conversationLayout.scroll.left >= 90 && conversationLayout.composer.width <= 1081 && Math.abs((conversationLayout.composer.left + conversationLayout.composer.right) - (conversationLayout.content.left + conversationLayout.content.right)) <= 16 && conversationLayout.bubble.width <= 781 && conversationLayout.bubble.right <= conversationLayout.content.right + 1 && conversationLayout.rail.right <= conversationLayout.content.left - 4, `Wide conversation needs centered reading space, bounded user message, and nearby navigation rail: ${JSON.stringify(conversationLayout)}`);
+    const longMessageLayout = await evaluate(window, `(() => {
+      const bubble = document.querySelector('.event-task-steered');
+      const text = bubble.querySelector('.event-text');
+      const original = text.textContent;
+      text.textContent = 'A long user request with several paragraphs and details. '.repeat(70);
+      const result = { width: bubble.getBoundingClientRect().width, height: bubble.getBoundingClientRect().height, overflow: text.scrollWidth > text.clientWidth };
+      text.textContent = original;
+      return result;
+    })()`);
+    assert(longMessageLayout.width <= 781 && longMessageLayout.height > 120 && !longMessageLayout.overflow, `Long user messages should wrap inside the bounded bubble: ${JSON.stringify(longMessageLayout)}`);
+    await evaluate(window, `document.querySelector('.task-scroll-content').style.minHeight=''`);
+    await fs.promises.writeFile(path.join(smokeRoot, 'conversation-wide-1920.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate(window, `document.documentElement.dataset.theme='dark'`);
+    await settleLayout(window);
+    await fs.promises.writeFile(path.join(smokeRoot, 'conversation-wide-dark-1920.png'), (await window.webContents.capturePage()).toPNG());
+    await evaluate(window, `document.documentElement.dataset.theme='light'`);
+    await resizeViewport(window, 1366, 768);
     await evaluate(window, `document.querySelector('.workspace-header [aria-label="展开侧栏"]').click()`);
     await evaluate(window, `document.querySelector('[aria-label="显示任务概览"]').click()`);
     await waitFor(window, `Boolean(document.querySelector('.overview-content'))`, "overview content remounts after showing");
@@ -551,6 +583,10 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.historyFixture()`);
     await clickText(window, "历史续接验收", ".history-row");
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`, "old history fixture loaded");
+    await evaluate(window, `document.querySelector('.history-view .event-task-started .message-copy').click()`);
+    await waitFor(window, `window.xiuSmoke.copiedMessage()==='历史续接验收'`, "history request copy uses the saved visible text");
+    await evaluate(window, `document.querySelector('.history-view .event-assistant-message .message-copy').click()`);
+    await waitFor(window, `window.xiuSmoke.copiedMessage()==='old-snake-result-canary'`, "history response copy uses the saved visible text");
     assert(await evaluate(window, `document.querySelector('.task-scroll').innerText.includes('restored-history-image.png') && document.querySelector('.task-scroll').innerText.includes('附件缺失或不可读取') && Boolean(document.querySelector('.task-scroll .attachment-tile img'))`), "History must restore thumbnails and missing-upload placeholders.");
     await evaluate(window, `document.querySelector('.history-view h2').textContent='很长的历史任务需求，包含完整约束和验收条件。'.repeat(30)`);
     await settleLayout(window);
@@ -566,6 +602,8 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('task:continue')`, "history continuation dispatched");
     await evaluate(window, `window.xiuSmoke.finishContinuation()`);
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('new-review-result-canary')`, "new continuation result retained");
+    await evaluate(window, `document.querySelector('.conversation-round:last-child .event-task-finished .message-copy').click()`);
+    await waitFor(window, `window.xiuSmoke.copiedMessage()==='new-review-result-canary'`, "final model reply copy uses the displayed completion text");
     assert(await evaluate(window, `(() => { const rounds=[...document.querySelectorAll('.conversation-round')]; return rounds.length === 2 && rounds[0].querySelectorAll('.attachment-tile').length === 2 && rounds[0].innerText.includes('restored-history-image.png') && !rounds[0].innerText.includes('round-two-image-canary') && rounds[1].querySelectorAll('.attachment-tile').length === 1 && rounds[1].innerText.includes('round-two-image-canary') && !rounds[1].innerText.includes('restored-history-image.png'); })()`), "Restored uploads persist through continuation; round two uploads never leak into the first round.");
     await settleLayout(window);
     assert(await evaluate(window, `document.querySelector('.task-scroll .turn-process') && [...document.querySelectorAll('.task-scroll .turn-process')].every(el => !el.open)`), "Completed turn defaults to a folded process with final answer visible.");

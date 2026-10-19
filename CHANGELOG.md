@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (0.20.13)
+
+- Desktop conversation: user requests and assistant replies now have a copy action. A bounded, trusted main-process clipboard write copies only the text displayed on the chosen card. The task history includes a slim clickable message map for moving between records; choosing a marker pauses automatic follow. Wide windows center the conversation and composer in a 1080 px reading column, while user messages use a narrower, roomier neutral bubble; narrow layouts retain their compact spacing.
+
 ## 0.20.12 — 2026-10-19
 
 Published to [GitHub](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) from `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`; all nine jobs of [exact-source CI 38936632221](https://github.com/andrewjr1991/xiu/actions/runs/38936632221) passed. The five original CI assets have verified sizes and SHA-256 digests. Published to npm the same day (`latest` = 0.20.12; the 440 code and build files match the CI tarball, only the three release-note documents differ). Windows installer is unsigned.

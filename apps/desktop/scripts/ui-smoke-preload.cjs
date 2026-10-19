@@ -34,6 +34,7 @@ const runtimeListeners = new Set();
 const terminalListeners = new Set();
 const browserListeners = new Set();
 const calls = [];
+let copiedMessage;
 const manualAcceptance = new Map();
 let onboardingSnapshot;
 let providerRecoveryConfirm = false;
@@ -161,6 +162,7 @@ const bridge = {
   deleteTask: async () => workspace,
   chooseAttachments: async () => ({ insertText: "", attachments: [{ reference: '@".xiu/attachments/round-two.png"', path: ".xiu/attachments/round-two.png", name: "round-two-image-canary.png", bytes: 100, kind: "image" }] }),
   pasteAttachments: async () => ({ insertText: "", attachments: [] }),
+  copyMessage: async (text) => { copiedMessage = text; calls.push("copy-message"); },
   importAttachments: async () => ({ insertText: "", attachments: [] }),
   reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], fullDiff: undefined, preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
@@ -210,7 +212,7 @@ const bridge = {
 };
 
 contextBridge.exposeInMainWorld("xiuDesktop", Object.freeze(bridge));
-contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls],
+contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...calls], copiedMessage: () => copiedMessage,
   workflowFixture: () => {
     continuationEvents.length = 0;
     task = { id: "workflow-fixture", state: "running", taskPreview: "workflow fixture", startedAt: now(), updatedAt: now() };

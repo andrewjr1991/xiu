@@ -22,6 +22,7 @@
 :root[data-theme="dark"] .agent-avatar .agent-status { border-color: #202226; }
 :root[data-theme="dark"] .task-console, :root[data-theme="dark"] .workbench { background: #181a1d; box-shadow: none; }
 :root[data-theme="dark"] .composer { background: #25282d; }
+:root[data-theme="dark"] .event-task-started, :root[data-theme="dark"] .event-task-steered, :root[data-theme="dark"] .history-user { background: #2a2d31; }
 :root[data-theme="dark"] .dialog-backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(4px); }
 :root[data-theme="dark"] .rich-text pre, :root[data-theme="dark"] .terminal-surface { background: #11151b; color: #e5edf7; }
 :root[data-theme="dark"] .turn-alerts, :root[data-theme="dark"] .turn-alert { background: #30281f; border-color: #65503a; color: #edc38e; }
