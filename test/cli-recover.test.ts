@@ -191,3 +191,31 @@ test("xiu recover requires a trusted workspace, rejects --json and unknown actio
   assert.equal(json.stdout, "");
   assert.match(json.stderr, /--json requires exactly one one-shot task/);
 });
+
+test("a one-shot run paused by its budget blocks later runs until xiu recover abandon clears it", { timeout: 150_000 }, async (t) => {
+  const server = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, { trusted: true, baseURL: server.baseURL });
+  // One model call is the capability probe's tool round; the second call, the answer, exceeds the budget.
+  const paused = await runCli(["--json", "--provider", "fake", "--yes", "--budget-model-calls", "1", "say hello"], cwd, home);
+  assert.equal(paused.exitCode, 1, `stdout:\n${paused.stdout}\nstderr:\n${paused.stderr}`);
+  const pausedLines = paused.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
+  assert.equal(pausedLines.at(-1)?.type, "result");
+  assert.equal(pausedLines.at(-1)?.payload.outcome, "paused");
+  assert.match(String(pausedLines.at(-1)?.payload.error), /Task budget exhausted/);
+
+  // The paused record is a recoverable run: the next one-shot is refused and xiu recover describes it.
+  const refused = await runCli(["--json", "--provider", "fake", "--yes", "say hello"], cwd, home);
+  assert.equal(refused.exitCode, 1, refused.stdout);
+  assert.match(refused.stdout, /"outcome":"not_started"/);
+  const status = await runCli(["recover"], cwd, home);
+  assert.equal(status.exitCode, 2, status.stderr);
+  assert.match(status.stdout, /Interrupted task [0-9a-f]{8} \(paused when interrupted\)/);
+  assert.match(status.stdout, /Task: say hello/);
+  const id = /Interrupted task ([0-9a-f]{8})/.exec(status.stdout)![1]!;
+
+  const abandoned = await runCli(["recover", "abandon", id], cwd, home);
+  assert.equal(abandoned.exitCode, 0, abandoned.stderr);
+  const run = await runCli(["--json", "--provider", "fake", "--yes", "say hello"], cwd, home);
+  assert.equal(run.exitCode, 0, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  assert.match(run.stdout, /"outcome":"completed"/);
+});
