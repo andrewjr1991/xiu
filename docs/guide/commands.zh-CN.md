@@ -39,7 +39,7 @@
 | `/mcp remove [name]` | 删除用户级 MCP 配置 |
 | `/mcp test [name]` | 重连并测试一个或全部 MCP |
 | `/mcp reload` | 重载 MCP 配置 |
-| `/mcp resources` / `/mcp read` | 浏览和读取不可信的远端 Resource |
+| `/mcp resources` / `/mcp read` | 浏览和读取不可信的远端 Resource；0.20.13 起 `/mcp read <名称> <模板名> 变量=值` 可填参数读取 Resource Template |
 | `/mcp prompts` / `/mcp prompt` | 浏览和预览不可信的远端 Prompt |
 | `/mcp permissions` | 查看 MCP 权限清单、来源和待批准差异 |
 | `/mcp permissions approve [name]` | 批准一个 MCP 当前精确权限指纹 |

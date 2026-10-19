@@ -5,6 +5,7 @@ import { localize, type UiLanguage } from "../i18n.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { McpAuthSecretRecord } from "../mcp-auth-store.js";
 import type { McpManager, McpOAuthConfig } from "../mcp.js";
+import { expandResourceTemplate, isResourceTemplate, resourceTemplateVariables } from "../mcp-resource-template.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
 import type { StatusLine } from "../status.js";
 import type { WindowsSystemCredentialStore } from "../system-credential-store.js";
@@ -98,12 +99,8 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
     const name = parts[2] ?? await selectTerminalOption(localize(language, "选择 MCP 服务", "Choose an MCP server"), names.map((item) => ({ label: item, value: item })), language);
     if (!name) { console.log(chalk.dim(localize(language, "没有已连接的 MCP，或操作已取消。\n", "No MCP server is connected, or the operation was cancelled.\n"))); return true; }
     try {
-      let uri: string | undefined = parts[3];
-      if (!uri) {
-        const catalog = await mcpManager.listResources(name);
-        uri = await selectTerminalOption(localize(language, "选择要读取的 MCP 资源", "Choose an MCP resource to read"), catalog.resources.map((resource) => ({ label: resource.name, description: resource.uri, value: resource.uri })), language);
-      }
-      if (!uri) { console.log(chalk.dim(localize(language, "该服务没有可直接读取的资源，或操作已取消。\n", "This server has no directly readable resource, or the operation was cancelled.\n"))); return true; }
+      const uri = await resolveResourceUri(mcpManager, name, parts[3], parts.slice(4), language);
+      if (!uri) { console.log(chalk.dim(localize(language, "该服务没有可读取的资源或资源模板，或操作已取消。\n", "This server has no readable resource or resource template, or the operation was cancelled.\n"))); return true; }
       const result = await mcpManager.readResource(name, uri);
       console.log(chalk.yellow(localize(language, "以下是不可信的远端 MCP 内容，仅供查看，不会自动作为模型指令执行。", "The following is untrusted remote MCP content. It is displayed only and will not be executed as model instructions.")));
       console.log(`${chalk.cyan(`${result.server} · ${result.label}`)}\n${result.text}${result.truncated ? `\n${chalk.yellow(localize(language, "内容已按安全上限截断。", "Content was truncated at the safety limit."))}` : ""}\n`);
@@ -445,4 +442,60 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
     return true;
   }
   return false;
+}
+
+/** `name=value` words after the resource argument pre-fill template variables; anything else is a usage error. */
+function parseTemplateValues(words: readonly string[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const word of words) {
+    const separator = word.indexOf("=");
+    if (separator <= 0) throw new Error(`Expected name=value after the resource template, got ${JSON.stringify(word)}.`);
+    values[word.slice(0, separator)] = word.slice(separator + 1);
+  }
+  return values;
+}
+
+/**
+ * Turns the `/mcp read` arguments into the URI to read. A plain URI is used as given. A resource
+ * template (chosen from the catalog, named by its title or template string, or typed as a template)
+ * has every variable filled from `name=value` arguments or an interactive prompt before expansion;
+ * Xiu never fills a variable itself. Returns undefined when nothing was chosen.
+ */
+export async function resolveResourceUri(mcpManager: McpManager, server: string, argument: string | undefined, extra: readonly string[], language: UiLanguage): Promise<string | undefined> {
+  const presets = parseTemplateValues(extra);
+  if (argument && !isResourceTemplate(argument) && !extra.length) {
+    const catalog = /^[a-z][a-z0-9+.-]*:/i.test(argument) ? undefined : await mcpManager.listResources(server);
+    const template = catalog?.templates.find((item) => item.name === argument);
+    if (!template) return argument;
+    return expandWithPrompts(template.uriTemplate, presets, language);
+  }
+  let template = argument;
+  if (!template) {
+    const catalog = await mcpManager.listResources(server);
+    const chosen = await selectTerminalOption(localize(language, "选择要读取的 MCP 资源", "Choose an MCP resource to read"), [
+      ...catalog.resources.map((resource) => ({ label: resource.name, description: resource.uri, value: `uri:${resource.uri}` })),
+      ...catalog.templates.map((item) => ({ label: `${item.name} ${localize(language, "（模板）", "(template)")}`, description: item.uriTemplate, value: `template:${item.uriTemplate}` })),
+    ], language);
+    if (!chosen) return undefined;
+    if (chosen.startsWith("uri:")) return chosen.slice("uri:".length);
+    template = chosen.slice("template:".length);
+  } else if (!isResourceTemplate(template)) {
+    const catalog = await mcpManager.listResources(server);
+    const match = catalog.templates.find((item) => item.name === template || item.uriTemplate === template);
+    if (!match) throw new Error(localize(language, `${server} 没有名为 ${JSON.stringify(template)} 的资源模板；用 /mcp resources ${server} 查看。`, `${server} has no resource template named ${JSON.stringify(template)}; list them with /mcp resources ${server}.`));
+    template = match.uriTemplate;
+  }
+  return expandWithPrompts(template, presets, language);
+}
+
+async function expandWithPrompts(template: string, presets: Record<string, string>, language: UiLanguage): Promise<string> {
+  const values: Record<string, string> = {};
+  const variables = resourceTemplateVariables(template);
+  if (variables.length) console.log(chalk.dim(localize(language, `资源模板：${template}`, `Resource template: ${template}`)));
+  for (const variable of variables) {
+    values[variable] = presets[variable] ?? await askQuestion(localize(language, `${variable} 的值> `, `Value for ${variable}> `));
+  }
+  const uri = expandResourceTemplate(template, values);
+  console.log(chalk.dim(localize(language, `读取 URI：${uri}`, `Reading URI: ${uri}`)));
+  return uri;
 }
