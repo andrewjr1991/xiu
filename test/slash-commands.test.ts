@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { RUNNING_TASK_COMMAND_WORDS } from "../src/commands/running-task-commands.js";
-import { explainUnhandledSlashInput, formatSlashInputProblem, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
+import { explainOneShotSlashInput, explainUnhandledSlashInput, formatOneShotSlashProblem, formatSlashInputProblem, helpEntriesFor, knownSlashCommandWords, SLASH_COMMAND_ALIASES, slashCommands } from "../src/slash-commands.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const noPath = { pathExists: () => false };
@@ -73,8 +73,8 @@ test("the messages name the word, the guesses or usages, and that nothing reache
   assert.equal(formatSlashInputProblem(typo, "en-US"), "Unknown command /skils. Did you mean /skills? Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
   assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/zzzz", noPath)!, "en-US"), "Unknown command /zzzz. Type /help for the full list. This line was not sent to the model; if it is task text, do not start it with a slash.");
   assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/clearqueue", noPath)!, "zh-CN"), /你是想输入 \/clear、\/clear-queue 吗？/);
-  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "zh-CN"), "/plan 没有「/plan onn」这种用法。你是想输入 /plan on 吗？可用：/plan、/plan on、/plan off（/help 有说明）。这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。");
-  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "en-US"), "/plan has no usage \"/plan onn\". Did you mean /plan on? Available: /plan, /plan on, /plan off (see /help). This line was not sent to the model; if it is task text, do not start it with a slash.");
+  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "zh-CN"), "/plan 没有「/plan onn」这种用法。你是想输入 /plan on 吗？可用：/plan、/plan on、/plan off；输入 /help plan 查看说明。这一行没有发送给模型；如果它是任务内容，请不要以斜杠开头。");
+  assert.equal(formatSlashInputProblem(explainUnhandledSlashInput("/plan onn", noPath)!, "en-US"), "/plan has no usage \"/plan onn\". Did you mean /plan on? Available: /plan, /plan on, /plan off; type /help plan for details. This line was not sent to the model; if it is task text, do not start it with a slash.");
   assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/mcp", running)!, "zh-CN"), /^\/mcp 在任务运行时不可用，等任务结束后再用。运行中可用：\/cancel、\/exit、\/queue、.*\/language。这一行没有发送给模型，也没有作为补充。$/);
   assert.match(formatSlashInputProblem(explainUnhandledSlashInput("/mcp", running)!, "en-US"), /^\/mcp is not available while a task runs; use it after the task ends\. Available now: \/cancel, \/exit, .*\. This line was not sent to the model or added as steering\.$/);
 });
@@ -117,3 +117,29 @@ test("every listed command is documented in the Chinese guides", async () => {
   const undocumented = slashCommands("zh-CN").map((command) => command.name).filter((name) => !new RegExp(`(?<![\\w/])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text));
   assert.deepEqual(undocumented, [], "commands /help lists that no guide mentions");
 });
+
+test("/help narrows to one command's entries by word, by full prefix, through an alias, and to nothing for an unknown word", () => {
+  const names = (topic: string) => helpEntriesFor(topic, "en-US").map((command) => command.name);
+  assert.deepEqual(names("plan"), ["/plan", "/plan on", "/plan off"]);
+  assert.deepEqual(names("/plan"), names("plan"));
+  assert.deepEqual(names("MCP login"), ["/mcp login"]);
+  assert.deepEqual(names("mcp lgin"), names("mcp"), "an unmatched second word falls back to the command's full list");
+  assert.deepEqual(names("quit"), ["/exit"]);
+  assert.deepEqual(names("zzz"), []);
+  assert.deepEqual(names("  "), slashCommands("en-US").map((command) => command.name));
+  assert.equal(helpEntriesFor("plan", "zh-CN")[1]!.description, "开启只读 Plan 模式");
+});
+
+test("a one-shot task that is a slash command does not start, and names the script form where one exists", () => {
+  assert.deepEqual(explainOneShotSlashInput("/doctor json", noPath), { word: "/doctor", known: true, equivalent: "xiu doctor [json]", suggestions: [] });
+  assert.deepEqual(explainOneShotSlashInput("/help", noPath), { word: "/help", known: true, equivalent: undefined, suggestions: [] });
+  assert.equal(explainOneShotSlashInput("/quit", noPath)?.known, true);
+  assert.deepEqual(explainOneShotSlashInput("/skils", noPath), { word: "/skils", known: false, suggestions: ["/skills"] });
+  for (const task of ["fix the failing test", "/etc/hosts explain", "/a.b", ""]) assert.equal(explainOneShotSlashInput(task, noPath), undefined, task);
+  assert.equal(explainOneShotSlashInput("/tmp what is here", { pathExists: (word) => word === "/tmp" }), undefined);
+  assert.equal(formatOneShotSlashProblem(explainOneShotSlashInput("/doctor", noPath)!, "zh-CN"), "/doctor 是交互命令，一次性运行（xiu <任务>）不执行斜杠命令：不带任务启动 xiu 进入交互模式后再输入它。脚本里请用 xiu doctor [json]。这次运行没有开始，也没有把它发给模型。");
+  assert.equal(formatOneShotSlashProblem(explainOneShotSlashInput("/help", noPath)!, "en-US"), "/help is an interactive command; a one-shot run (xiu <task>) does not run slash commands: start xiu without a task and type it at the prompt. This run did not start and nothing was sent to the model.");
+  assert.equal(formatOneShotSlashProblem(explainOneShotSlashInput("/skils", noPath)!, "en-US"), "Unknown command /skils. Did you mean /skills? Slash commands run only at the interactive prompt, and a one-shot run does not send one to the model; if it is task text, do not start it with a slash.");
+  assert.match(formatOneShotSlashProblem(explainOneShotSlashInput("/zzzz", noPath)!, "zh-CN"), /^未知命令 \/zzzz。斜杠命令只在交互模式可用/);
+});
+

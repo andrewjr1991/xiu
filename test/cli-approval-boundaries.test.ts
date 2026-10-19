@@ -214,15 +214,41 @@ test("a mistyped slash command or usage is answered at the prompt and never reac
   assert.match(typo, /Unknown command \/skils\. Did you mean \/skills\? Type \/help for the full list\./);
   assert.doesNotMatch(typo, /write_file|Model saw:/);
   const usage = await app.command("/mcp premissions");
-  assert.match(usage, /\/mcp has no usage "\/mcp premissions"\. Did you mean \/mcp permissions\? Available: \/mcp, \/mcp permissions, .*\/mcp reload \(see \/help\)\./);
+  assert.match(usage, /\/mcp has no usage "\/mcp premissions"\. Did you mean \/mcp permissions\? Available: \/mcp, \/mcp permissions, .*\/mcp reload; type \/help mcp for details\./);
   assert.doesNotMatch(usage, /write_file|Model saw:/);
   assert.match(await app.command("/skills install"), /Usage: \/skills install <local-path-or-https-git-url>/);
+  const topic = await app.command("/help plan");
+  assert.match(topic, /\/plan on\s+Turn on read-only Plan mode/);
+  assert.doesNotMatch(topic, /\/mcp login/);
+  assert.match(await app.command("/help zzz"), /Unknown command \/zzz\. Type \/help for the full list\./);
   // A slash that starts a path is task text: it goes to the model, whose write is then denied as usual.
   const pathTask = await app.command("/etc/hosts write please");
   assert.match(pathTask, /> write_file write notes\.txt/);
   assert.doesNotMatch(pathTask, /Unknown command/);
   assertEnglishOnly(app.output);
   await app.close();
+});
+
+test("a one-shot run given a slash command does not start and says what to run instead", { timeout: 120_000 }, async (t) => {
+  const baseURL = await startFakeModelServer(t);
+  const { cwd, home } = await fixture(t, baseURL);
+
+  const help = await runOneShot(["/help"], cwd, home);
+  assert.equal(help.exitCode, 1, help.stderr);
+  assert.match(help.stderr, /\/help is an interactive command; a one-shot run \(xiu <task>\) does not run slash commands/);
+  assert.doesNotMatch(help.stdout + help.stderr, /Model saw:|write_file/);
+
+  const doctor = await runOneShot(["/doctor"], cwd, home);
+  assert.equal(doctor.exitCode, 1, doctor.stderr);
+  assert.match(doctor.stderr, /In a script, use xiu doctor \[json\]\./);
+
+  const json = await runOneShot(["--json", "/skils"], cwd, home);
+  assert.equal(json.exitCode, 1, json.stderr);
+  const lines = json.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as { type?: string; payload?: { outcome?: string; error?: string } });
+  const result = lines.at(-1)!;
+  assert.equal(result.payload?.outcome, "not_started", json.stdout);
+  assert.match(String(result.payload?.error), /^Unknown command \/skils\. Did you mean \/skills\?/);
+  assertEnglishOnly(help.stderr + doctor.stderr + json.stderr);
 });
 
 test("Plan mode stays read-only even with --yes, and writes resume once it is turned off", { timeout: 180_000 }, async (t) => {

@@ -43,7 +43,7 @@ import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, unreadableSessionsNote } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
-import { explainUnhandledSlashInput, formatSlashInputProblem, slashCommands } from "./slash-commands.js";
+import { explainOneShotSlashInput, explainUnhandledSlashInput, formatOneShotSlashProblem, formatSlashInputProblem, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
@@ -398,6 +398,15 @@ async function main(): Promise<void> {
       }
     }
     const initialTask = (program.args as string[]).join(" ").trim();
+    const oneShotSlash = initialTask ? explainOneShotSlashInput(initialTask) : undefined;
+    if (oneShotSlash) {
+      // A slash command on the command line is a mistake about modes, not a task: say so and stop before trust, plugins or the model.
+      const message = formatOneShotSlashProblem(oneShotSlash, language);
+      if (jsonStream) { process.exitCode = jsonStream.result({ outcome: "not_started", error: message }); return; }
+      console.error(chalk.yellow(`${message}\n`));
+      process.exitCode = 1;
+      return;
+    }
     const skillRegistry = new SkillRegistry(config.cwd);
     const trustedBeforePrompt = await workspaceTrusted(config.cwd);
     await skillRegistry.refresh(trustedBeforePrompt);
@@ -2137,8 +2146,11 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (task === "/help") {
-        console.log(`${slashCommands(language).map((command) => `${command.name.padEnd(20)} ${command.description}`).join("\n")}\n`);
+      if (task === "/help" || task.startsWith("/help ")) {
+        const topic = task.slice("/help".length).trim();
+        const entries = helpEntriesFor(topic, language);
+        if (entries.length) console.log(`${entries.map((command) => `${command.name.padEnd(20)} ${command.description}`).join("\n")}\n`);
+        else console.log(chalk.yellow(`${formatSlashInputProblem(explainUnhandledSlashInput(topic.startsWith("/") ? topic : `/${topic}`, { pathExists: () => false }) ?? { kind: "unknown-command", word: topic, suggestions: [] }, language)}\n`));
         continue;
       }
       const unhandledInput = explainUnhandledSlashInput(task);

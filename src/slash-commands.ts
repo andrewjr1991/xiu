@@ -135,6 +135,80 @@ export function knownSlashCommandWords(): Set<string> {
 /** What `/quit` and `/model` stand for when their usage is listed. */
 const ALIAS_TARGETS: Readonly<Record<string, string>> = { "/quit": "/exit", "/model": "/models" };
 
+/**
+ * The help entries for one command: `/help mcp`, `/help /mcp` and `/help mcp login` all narrow the list. A topic that
+ * matches nothing as a whole falls back to its first word; an alias shows what it stands for. Empty when the word is unknown.
+ */
+export function helpEntriesFor(topic: string, language: UiLanguage): SlashCommand[] {
+  const words = topic.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return slashCommands(language);
+  if (!words[0]!.startsWith("/")) words[0] = `/${words[0]}`;
+  words[0] = ALIAS_TARGETS[words[0]!] ?? words[0]!;
+  const entries = slashCommands(language);
+  const matching = (prefix: string) => entries.filter((command) => command.name === prefix || command.name.startsWith(`${prefix} `));
+  const whole = matching(words.join(" "));
+  return whole.length ? whole : matching(words[0]!);
+}
+
+/** Script-side equivalents of interactive commands, named when a one-shot run is given the interactive form. */
+const ONE_SHOT_EQUIVALENTS: Readonly<Record<string, string>> = {
+  "/doctor": "xiu doctor [json]",
+  "/report": "xiu report [markdown|json|html] [summary|details] [run:<number|id prefix>] [path]",
+  "/recover": "xiu recover [status] / xiu recover abandon <run id>",
+  "/audit": "xiu audit [approvals|credentials] [json] [limit]",
+  "/update": "xiu --check-update / xiu --update-doctor",
+  "/resume": "xiu --resume [session]",
+  "/history": "xiu --list-sessions",
+  "/language": "xiu --language zh-CN|en-US <task>",
+  "/models": "xiu --model <model> <task>",
+  "/providers": "xiu --provider <id> <task>",
+};
+
+export interface OneShotSlashProblem {
+  /** The first word of the task, for example `/help` or `/skils`. */
+  word: string;
+  /** Whether the word is an interactive command (as opposed to a typo of one). */
+  known: boolean;
+  /** The command-line form that does the same job, when one exists. */
+  equivalent?: string;
+  /** For an unknown word, the listed commands it most resembles. */
+  suggestions: string[];
+}
+
+/**
+ * Decides whether a one-shot task (`xiu <task>`) is really an interactive slash command. Slash commands run only at the
+ * interactive prompt, so such a run does not start and names the script form where one exists. The same path rule as
+ * the interactive prompt applies: `/etc/hosts explain` and a word naming an existing path are task text.
+ */
+export function explainOneShotSlashInput(task: string, options: Pick<SlashInputOptions, "pathExists"> = {}): OneShotSlashProblem | undefined {
+  const word = task.trim().split(/\s+/)[0] ?? "";
+  if (!COMMAND_WORD.test(word)) return undefined;
+  const known = knownSlashCommandWords();
+  if (known.has(word)) return { word, known: true, equivalent: ONE_SHOT_EQUIVALENTS[ALIAS_TARGETS[word] ?? word], suggestions: [] };
+  const pathExists = options.pathExists ?? ((candidate: string) => { try { return fs.existsSync(candidate); } catch { return false; } });
+  if (pathExists(word)) return undefined;
+  const listed = [...known].filter((candidate) => !SLASH_COMMAND_ALIASES.includes(candidate)).sort();
+  return { word, known: false, suggestions: closest(listed.map((name) => ({ name, score: similarity(word.toLowerCase(), name) }))) };
+}
+
+/** One localized paragraph for stderr (or the `--json` result line): why the run did not start and what to run instead. */
+export function formatOneShotSlashProblem(problem: OneShotSlashProblem, language: UiLanguage): string {
+  const zh = language === "zh-CN";
+  const list = (items: string[]) => items.join(zh ? "、" : ", ");
+  const sentences = problem.known
+    ? [
+      localize(language, `${problem.word} 是交互命令，一次性运行（xiu <任务>）不执行斜杠命令：不带任务启动 xiu 进入交互模式后再输入它。`, `${problem.word} is an interactive command; a one-shot run (xiu <task>) does not run slash commands: start xiu without a task and type it at the prompt.`),
+      problem.equivalent ? localize(language, `脚本里请用 ${problem.equivalent}。`, `In a script, use ${problem.equivalent}.`) : "",
+      localize(language, "这次运行没有开始，也没有把它发给模型。", "This run did not start and nothing was sent to the model."),
+    ]
+    : [
+      localize(language, `未知命令 ${problem.word}。`, `Unknown command ${problem.word}.`),
+      problem.suggestions.length ? localize(language, `你是想输入 ${list(problem.suggestions)} 吗？`, `Did you mean ${list(problem.suggestions)}?`) : "",
+      localize(language, "斜杠命令只在交互模式可用，一次性运行不会把它发给模型；如果它是任务内容，请不要以斜杠开头。", "Slash commands run only at the interactive prompt, and a one-shot run does not send one to the model; if it is task text, do not start it with a slash."),
+    ];
+  return sentences.filter(Boolean).join(zh ? "" : " ");
+}
+
 export type SlashInputProblem =
   /** A lone slash word no command owns, for example `/skils`. */
   | { kind: "unknown-command"; word: string; suggestions: string[] }
@@ -218,7 +292,7 @@ export function formatSlashInputProblem(problem: SlashInputProblem, language: Ui
       ? [
         localize(language, `${problem.word} 没有「${problem.input}」这种用法。`, `${problem.word} has no usage "${problem.input}".`),
         guess(problem.suggestions),
-        localize(language, `可用：${list(problem.usage)}（/help 有说明）。`, `Available: ${list(problem.usage)} (see /help).`),
+        localize(language, `可用：${list(problem.usage)}；输入 /help ${problem.word.slice(1)} 查看说明。`, `Available: ${list(problem.usage)}; type /help ${problem.word.slice(1)} for details.`),
         notSent,
       ]
       : [
