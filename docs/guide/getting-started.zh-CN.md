@@ -339,6 +339,8 @@ v0.8.2 新增只读工具 `verify_output`，专门验收没有项目测试套件
 xiu '检查项目架构并列出最重要的三个问题'
 ```
 
+退出码与任务结果一致：0 完成，2 已改动但未通过验证，3 模型提出了问题等待回答（一次性运行无法回答，请改用交互模式），1 失败、取消或因预算暂停；下文的 `--json` 用同一套退出码。
+
 脚本或 CI 里调用时加 `--json`：标准输出只写 JSON Lines（每行一个对象），标准错误才是给人看的文字，两者可以分别重定向。第一行是 `session.started`（版本、渠道、模型、工作区、语言），随后是任务的每个运行时事件（`task.started`、`model.started`、`tool.started`、`tool.finished`、`approval.requested`、`approval.decided`、`assistant.message`、`workspace.changed`、`task.finished` 等，字段与桌面端共用同一套 `schemaVersion: 1` 协议，已经做过脱敏），最后一行固定是 `result`：
 
 ```powershell

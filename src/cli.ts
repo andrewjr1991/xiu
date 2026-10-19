@@ -42,7 +42,7 @@ import { PluginRegistry } from "./plugins.js";
 import { listSessions, loadSession, type RestoredSession, type SessionReplayTurn } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { StatusLine } from "./status.js";
-import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream } from "./json-event-stream.js";
+import { createJsonEventStream, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
@@ -1617,7 +1617,8 @@ async function main(): Promise<void> {
         });
         return;
       }
-      if (agent.status().outcome === "unverified") process.exitCode = 2;
+      // Same contract as --json: 0 completed, 2 unverified, 3 waiting for an answer, 1 failed, cancelled or paused.
+      process.exitCode = oneShotExitCode(agent.status().outcome);
       return;
     }
 
