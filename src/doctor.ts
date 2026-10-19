@@ -104,6 +104,8 @@ export interface DoctorOptions {
   sensitive?: readonly string[];
   /** Replaces the real look at the workspace's task-run journal and session logs. */
   workspaceRecords?: () => Promise<WorkspaceRecordsProbe>;
+  /** How `~/.xiu/settings.json` was read (`SettingsStore.inspect()`); omitted, the report says nothing about the file. */
+  settingsFile?: { state: "read" | "absent" | "unreadable"; cause?: string };
 }
 
 function reasonWithoutPath(error: unknown): string {
@@ -245,7 +247,21 @@ async function defaultUvAvailable(platform: NodeJS.Platform, env: NodeJS.Process
   return undefined;
 }
 
-function installationSection(result: UpdateDoctorResult | undefined, failure: unknown, nodeVersion: string): DoctorSection {
+function settingsFileItem(probe: NonNullable<DoctorOptions["settingsFile"]>): DoctorItem {
+  const label: [string, string] = ["设置文件", "Settings file"];
+  if (probe.state === "unreadable") {
+    const cause = (probe.cause ?? "unreadable").replace(/\s+/g, " ").slice(0, 160);
+    return item("settings", "failure", label,
+      [`~/.xiu/settings.json 无法读取（${cause}）`, `~/.xiu/settings.json could not be read (${cause})`],
+      ["修复其中的 JSON 或把文件移走后再运行 xiu；语言与联网搜索设置保存在这里。修好之前，除 xiu doctor 外的命令都会以这个错误退出，不会悄悄改用默认设置。",
+        "Fix its JSON or move the file away, then run xiu again; the language and web-search settings live there. Until then every command but xiu doctor exits with this error instead of silently using defaults."]);
+  }
+  return probe.state === "read"
+    ? item("settings", "pass", label, ["~/.xiu/settings.json 已读取", "~/.xiu/settings.json read"])
+    : item("settings", "pass", label, ["不存在，使用默认设置", "absent, defaults in use"]);
+}
+
+function installationSection(result: UpdateDoctorResult | undefined, failure: unknown, nodeVersion: string, settingsFile?: DoctorOptions["settingsFile"]): DoctorSection {
   const labels: Record<UpdateDoctorItem["id"], [string, string]> = {
     runtime: ["运行环境", "Runtime"], package: ["包完整性", "Package integrity"], command: ["命令来源", "Command resolution"], prefix: ["npm prefix", "npm prefix"],
     proxy: ["更新代理", "Update proxy"], cache: ["更新缓存", "Update cache"], registry: ["官方 Registry", "Official registry"], release: ["发布元数据", "Release metadata"],
@@ -260,6 +276,7 @@ function installationSection(result: UpdateDoctorResult | undefined, failure: un
     const english = explainError(failure, "en-US");
     items.push(item("update-doctor", "warning", ["更新诊断", "Update diagnostics"], [`未能完成：${explanation.cause}`, `Did not complete: ${english.cause}`], [explanation.nextStep, english.nextStep]));
   }
+  if (settingsFile) items.push(settingsFileItem(settingsFile));
   if (parseMajor(nodeVersion) === 20) {
     items.push(item("node-eol", "warning", ["Node.js 版本", "Node.js version"],
       [`Node ${nodeVersion} 已于 2026-04-30 停止维护；Xiu 0.22 起要求 Node 22.12 或更高。`, `Node ${nodeVersion} reached end of life on 2026-04-30; Xiu 0.22 will require Node 22.12 or newer.`],
@@ -503,7 +520,7 @@ export async function collectDoctorReport(options: DoctorOptions): Promise<Docto
   const workspace = await (options.workspaceRecords ?? (() => probeWorkspaceRecords(cwd)))();
 
   const sections: DoctorSection[] = [
-    installationSection(updateResult, updateFailure, nodeVersion),
+    installationSection(updateResult, updateFailure, nodeVersion, options.settingsFile),
     providers.section,
     webSearch.section,
     proxy,

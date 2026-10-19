@@ -228,3 +228,21 @@ test("an untrusted workspace's records are not read and the section says so", as
   assert.deepEqual(section?.items.map((entry) => [entry.id, entry.level]), [["workspace-trust", "info"]], "an untrusted workspace is information, not a warning");
   assert.match(formatDoctorReport(report, "en-US"), /\[Workspace records\]\n· Trust: This workspace is not trusted yet, so its task records and session logs were not read\n {2}Run xiu interactively once/);
 });
+
+test("the installation section says how the settings file was read, and a damaged file is a failure with the fix", async () => {
+  const collect = (settingsFile: { state: "read" | "absent" | "unreadable"; cause?: string }) => collectDoctorReport({
+    version: "0.21.0", workspaceRecords: NO_RECORDS, settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "22.12.0", osRelease: "6.1",
+    cwd: "/work/project", homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, settingsFile,
+  });
+  const damaged = await collect({ state: "unreadable", cause: "Expected property name or '}' in JSON at position 2 (line 1 column 3)" });
+  assert.equal(damaged.status, "failure");
+  const zh = formatDoctorReport(damaged, "zh-CN");
+  assert.match(zh, /✗ 设置文件: ~\/\.xiu\/settings\.json 无法读取（Expected property name or '}' in JSON at position 2 \(line 1 column 3\)）\n {2}修复其中的 JSON 或把文件移走后再运行 xiu/);
+  assert.match(formatDoctorReport(damaged, "en-US"), /✗ Settings file: ~\/\.xiu\/settings\.json could not be read \(Expected property name.*\)\n {2}Fix its JSON or move the file away/);
+  assert.equal(damaged.sections[0]!.items.find((entry) => entry.id === "settings")?.level, "failure");
+
+  const read = await collect({ state: "read" });
+  assert.match(formatDoctorReport(read, "zh-CN"), /✓ 设置文件: ~\/\.xiu\/settings\.json 已读取/);
+  assert.match(formatDoctorReport(await collect({ state: "absent" }), "en-US"), /✓ Settings file: absent, defaults in use/);
+  assert.equal((await collect({ state: "absent" })).sections[0]!.items.find((entry) => entry.id === "settings")?.level, "pass");
+});
