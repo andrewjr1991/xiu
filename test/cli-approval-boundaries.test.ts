@@ -205,6 +205,22 @@ test("a piped session without --yes denies write approvals instead of prompting 
   await app.close();
 });
 
+test("a mistyped slash command is answered at the prompt and never reaches the model", { timeout: 120_000 }, async (t) => {
+  const baseURL = await startFakeModelServer(t);
+  const { cwd, home, processes } = await fixture(t, baseURL);
+  const app = await launch(processes, cwd, home, []);
+
+  const typo = await app.command("/skils");
+  assert.match(typo, /Unknown command \/skils\. Did you mean \/skills\? Type \/help for the full list\./);
+  assert.doesNotMatch(typo, /write_file|Model saw:/);
+  // A slash that starts a path is task text: it goes to the model, whose write is then denied as usual.
+  const pathTask = await app.command("/etc/hosts write please");
+  assert.match(pathTask, /> write_file write notes\.txt/);
+  assert.doesNotMatch(pathTask, /Unknown command/);
+  assertEnglishOnly(app.output);
+  await app.close();
+});
+
 test("Plan mode stays read-only even with --yes, and writes resume once it is turned off", { timeout: 180_000 }, async (t) => {
   const baseURL = await startFakeModelServer(t);
   const { cwd, home, processes } = await fixture(t, baseURL);

@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommandIO } from "../src/commands/provider-recovery.js";
 import { DesktopProviderRecoveryController } from "../apps/desktop/main/provider-recovery-controller.js";
+import { configureProcessStartTimeProbe } from "../src/process-identity.js";
 
 const canary = "fixture_jE73r!M-only-not-a-real-key";
 async function fixture(t: TestContext) {
@@ -265,8 +266,13 @@ test("CLI current action keeps valid settings and clearly distinguishes dead-loc
   const pid = child.pid!;
   await new Promise<void>((resolve, reject) => { child.once("exit", () => resolve()); child.once("error", reject); });
   const lock = path.join(`${f.filename}.recovery`, "write.lock");
-  // The recorded start time lies an hour back, so even if Windows hands the exited child's PID to a new process the lock still reads as dead.
+  // The recorded start time lies an hour back, so even if the OS hands the exited child's PID to a new process the lock still reads as dead.
+  // On Windows `process.kill(pid, 0)` can still succeed right after exit (the PID stays reserved while a handle is open), and the real
+  // probe (PowerShell Get-Process) then answers "unknown" for a vanished or slow-to-query PID, which keeps the lock and fails the recover
+  // step as "busy". Pin the probe so the verdict depends on the recorded time alone, which is what this test is about.
   const staleStart = new Date(Date.now() - 3_600_000).toISOString();
+  configureProcessStartTimeProbe({ sync: () => Date.now(), async: async () => Date.now() });
+  t.after(() => configureProcessStartTimeProbe());
   await privateLockFixture(lock, pid, "fixture", staleStart);
   const output = io("RECOVER");
   const recovered = await runProviderRecoveryCommand(f.registry, { action: "recover", backupId: "current" }, output.value);
