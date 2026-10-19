@@ -6,7 +6,7 @@
 
 ### 22.0 错误提示的格式与错误码
 
-从 0.21 起，渠道配置、连接测试、联网搜索和后台任务的失败按统一格式显示，最多四行：第一行是出错的操作和一句人话原因，第二行“下一步”说明你可以做什么，第三行“诊断”给出一条只读命令（有的话），第四行“详情”保留错误码和脱敏后的原始信息，方便反馈给维护者。Key、Token 等秘密在任何一行都不会出现。
+从 0.21 起，渠道配置、连接测试、联网搜索和后台任务的失败按统一格式显示（0.20.13 起启动时读到损坏的设置文件、信任名单或 MCP 配置也是），最多四行：第一行是出错的操作和一句人话原因，第二行“下一步”说明你可以做什么，第三行“诊断”给出一条只读命令（有的话），第四行“详情”保留错误码和脱敏后的原始信息，方便反馈给维护者。Key、Token 等秘密在任何一行都不会出现。
 
 下表是全部错误码。`unknown` 表示 Xiu 没有识别出原因，此时第一行直接显示脱敏后的原始信息。
 
@@ -24,6 +24,10 @@
 | `provider-config/reload` | 上一次保存渠道配置失败，或配置在别处被修改，Xiu 没有自动重试。 | 重新打开渠道设置（CLI 为 /providers）读取最新配置后再改。（诊断：`xiu --provider-config-diagnostics`） |
 | `provider-config/write-unverified` | 渠道配置写入后没能回读确认，文件可能已更新也可能没有。 | 运行诊断命令确认当前内容后再决定是否重做。（诊断：`xiu --provider-config-diagnostics`） |
 | `provider-config/io` | 读写渠道配置文件时出错，已有备份保留。 | 检查 ~/.xiu 是否可写、是否被安全软件拦截，然后运行诊断命令。（诊断：`xiu --provider-config-diagnostics`） |
+| `config/settings` | Xiu 的设置文件（~/.xiu/settings.json）无法读取或不是有效的 JSON，Xiu 不会悄悄改用默认值。 | 修好它的 JSON，或把这个文件移走后重新启动；它只保存语言与联网搜索设置。（诊断：`xiu doctor`） |
+| `config/trust-store` | 信任名单（~/.xiu/trusted-workspaces.json）无法读取，Xiu 无法判断任何工作区是否受信任，所以没有继续。 | 修好它的 JSON，或把这个文件移走；移走后每个工作区会重新询问一次是否信任。（诊断：`xiu doctor`） |
+| `config/extension-permissions` | 扩展授权记录（~/.xiu/extension-permissions.json）无法读取，插件、Skill 与 MCP 都无法确认是否已获授权。 | 修好它的 JSON，或把这个文件移走；移走后已授权的插件、Skill 和 MCP 需要重新授权一次。（诊断：`xiu doctor`） |
+| `config/mcp` | MCP 配置文件无法读取，或其中某个服务条目无效，这次没有连接任何 MCP 服务；其他功能照常可用。 | 按详情里的说明修正 ~/.xiu/mcp.json 或工作区的 .xiu/mcp.json，然后执行 /mcp reload 或重新启动。（诊断：`xiu doctor`） |
 | `credential/missing` | 这个渠道还没有可用的 API Key。 | 在渠道设置里保存 Key（CLI 为 /provider key），或先设置渠道对应的环境变量。 |
 | `http/401` | 服务拒绝了这个 API Key：Key 错误、已过期，或不属于这个地址。 | 核对 Key 和 Base URL 是否来自同一个服务商，然后重新保存 Key（CLI 为 /provider key）。 |
 | `http/403` | 服务拒绝访问：账号没有这个模型的权限，或企业网关/代理拦截了请求。 | 在服务商控制台确认模型权限；公司网络请检查网关规则或用 --proxy 指定允许的代理。 |

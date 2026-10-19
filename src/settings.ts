@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ConfigFileError } from "./config-file-error.js";
 import { normalizeLanguage, type UiLanguage } from "./i18n.js";
 import type { WebSearchConfig, WebSearchProvider } from "./web-search.js";
 
@@ -103,7 +104,7 @@ export class SettingsStore {
    */
   async load(): Promise<XiuSettings> {
     const inspection = await this.inspect();
-    if (inspection.problem) throw new Error(inspection.problem);
+    if (inspection.problem) throw new ConfigFileError("settings", inspection.file, inspection.problem);
     return inspection.settings;
   }
 

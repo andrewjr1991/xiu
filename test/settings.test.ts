@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ConfigFileError } from "../src/config-file-error.js";
 import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT, XIU_BETA_SEARXNG_TOKEN_ENV } from "../src/settings.js";
 
 const managedBetaSearch = {
@@ -210,6 +211,7 @@ test("a damaged settings file fails closed with its path, while inspect() still 
   assert.doesNotMatch(damaged.cause!, /settings\.json/, "the cause is the parser's message alone");
   assert.match(damaged.problem!, new RegExp(`^Could not read Xiu settings file ${filename.replace(/[\\/.]/g, "\\$&")}: .*JSON.*Fix its JSON or move the file away`));
   await assert.rejects(store.load(), { message: damaged.problem }, "load() keeps failing closed instead of resetting the user's settings");
+  await assert.rejects(store.load(), (error: unknown) => error instanceof ConfigFileError && error.kind === "settings" && error.file === filename, "as a ConfigFileError the CLI can explain");
 
   const asDirectory = new SettingsStore(path.join(directory, "folder.json"), {});
   await fs.mkdir(asDirectory.file);
