@@ -6,12 +6,12 @@ import type { AgentConfig } from "../config.js";
 import { formatTaskDiagnostics } from "../diagnostics.js";
 import { auditRecordDetails } from "./audit-command.js";
 import { buildExecutionReport, type ExecutionReportFormat, type ExecutionReportScope, formatExecutionReport, serializeExecutionReport, writeExecutionReport } from "../execution-report.js";
-import { collectExecutionReportInputs, defaultExecutionReportSources, type ExecutionReportSources, listReportableRuns } from "../execution-report-query.js";
+import { collectExecutionReportInputs, defaultExecutionReportSources, type ExecutionReportSources } from "../execution-report-query.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { redactSecrets } from "../secret-redaction.js";
 import type { SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
-import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
-import { RUN_LIST_LIMIT, RUN_SELECTOR } from "./run-selection.js";
+import type { TaskRunJournal, TaskRunJournalScan, TaskRunRecord } from "../task-run.js";
+import { listRecentRunsWithIssues, RUN_LIST_LIMIT, RUN_SELECTOR, unreadableRunsNote } from "./run-selection.js";
 import { renderTerminalMarkdown } from "../terminal-markdown.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { isWorkspaceTrusted } from "../trust.js";
@@ -33,8 +33,9 @@ function noReportableRun(language: UiLanguage): string {
 /** Up to this many recent runs are listed and selectable by index or run-id prefix. */
 export const REPORT_RUN_LIST_LIMIT = RUN_LIST_LIMIT;
 
-export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): string {
-  if (!runs.length) return noReportableRun(language);
+export function formatRunList(runs: TaskRunRecord[], language: UiLanguage, unreadable: TaskRunJournalScan["unreadable"] = []): string {
+  const note = unreadableRunsNote(unreadable, language);
+  if (!runs.length) return note ? `${noReportableRun(language)}\n${note}` : noReportableRun(language);
   const header = localize(language, "序号  运行 ID   开始时间              状态          任务", "#     run id    started               status        task");
   const lines = runs.map((run, index) => {
     const number = String(index + 1).padEnd(5);
@@ -45,7 +46,8 @@ export function formatRunList(runs: TaskRunRecord[], language: UiLanguage): stri
   });
   return [header, ...lines, localize(language,
     `选择方式：run:<序号> 或 run:<运行 ID 前缀>（至少 4 位），例如 /report run:2、xiu report run:${runs[0]!.runId.slice(0, 8)}`,
-    `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`)].join("\n");
+    `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`),
+  ...(note ? [note] : [])].join("\n");
 }
 
 export interface ReportCliOptions {
@@ -105,9 +107,9 @@ export async function runReportCommand(args: readonly string[], options: ReportC
   try {
     const sources: ExecutionReportSources = options.sources ? { cwd, ...options.sources } : defaultExecutionReportSources(cwd);
     if (listRuns) {
-      const runs = await listReportableRuns(sources.taskRunJournal);
-      if (!runs.length) { stderr(noReportableRun(language)); return 1; }
-      stdout(formatRunList(runs, language));
+      const { runs, unreadable } = await listRecentRunsWithIssues(sources.taskRunJournal);
+      if (!runs.length) { stderr(formatRunList(runs, language, unreadable)); return 1; }
+      stdout(formatRunList(runs, language, unreadable));
       return 0;
     }
     const inputs = await collectExecutionReportInputs(sources, selector, language);
@@ -139,7 +141,8 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
   if (task === "/report" || task.startsWith("/report ")) {
     try {
       if (/^\/report\s+runs$/i.test(task)) {
-        console.log(`${formatRunList(await listReportableRuns(taskRunJournal), language)}\n`);
+        const { runs, unreadable } = await listRecentRunsWithIssues(taskRunJournal);
+        console.log(`${formatRunList(runs, language, unreadable)}\n`);
         return true;
       }
       const preview = task.match(/^\/report(?:\s+run:(\S+))?$/i);

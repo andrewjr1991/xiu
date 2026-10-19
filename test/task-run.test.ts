@@ -6,7 +6,7 @@ import test from "node:test";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { Agent } from "../src/agent.js";
-import { recoveryContinuation, renameTaskRunFile, safeTaskPreview, TaskRunJournal, taskOperationSignature, taskToolSideEffect } from "../src/task-run.js";
+import { recoveryContinuation, renameTaskRunFile, safeTaskPreview, TASK_RUN_SCHEMA_VERSION, TaskRunJournal, type TaskRunRecord, taskOperationSignature, taskToolSideEffect } from "../src/task-run.js";
 import { processStartTime } from "../src/process-identity.js";
 import type { AgentTool, ModelProvider } from "../src/types.js";
 
@@ -179,6 +179,34 @@ test("rejects corrupt and unknown-version journals", async (t) => {
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "bad.json"), JSON.stringify({ version: 99, runId: "bad" }));
   await assert.rejects(() => item.journal.read("bad"), /Unsupported or corrupt/);
+});
+
+test("one unreadable journal record no longer hides the others from recent(), and scan names it", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const directory = path.join(item.journalRoot, item.journal.workspaceId);
+  await fs.mkdir(directory, { recursive: true });
+  const good: TaskRunRecord = {
+    version: TASK_RUN_SCHEMA_VERSION, runId: "3f2a9c1e-0000-4000-8000-000000000001", workspaceId: item.journal.workspaceId, sessionId: "session-1",
+    taskPreview: "good run", providerId: "provider", model: "model", status: "completed",
+    startedAt: "2026-10-19T01:00:00.000Z", updatedAt: "2026-10-19T01:00:10.000Z", finishedAt: "2026-10-19T01:00:10.000Z",
+    ownerPid: 1, ownerInstance: "instance", operations: [], recoveryPoints: [], events: [],
+  };
+  await fs.writeFile(path.join(directory, `${good.runId}.json`), JSON.stringify(good));
+  await fs.writeFile(path.join(directory, "bad-version.json"), JSON.stringify({ version: 99, runId: "bad-version" }));
+  await fs.writeFile(path.join(directory, "not-json.json"), "{not json");
+  await fs.writeFile(path.join(directory, "other-workspace.json"), JSON.stringify({ ...good, runId: "other-workspace", workspaceId: "0123456789abcdef" }));
+
+  const scan = await item.journal.scan(50);
+  assert.deepEqual(scan.records.map((record) => record.runId), [good.runId]);
+  assert.deepEqual(scan.unreadable, [
+    { runId: "bad-version", reason: "corrupt" },
+    { runId: "not-json", reason: "corrupt" },
+    { runId: "other-workspace", reason: "other-workspace" },
+  ]);
+  assert.deepEqual((await item.journal.recent(50)).map((record) => record.runId), [good.runId], "recent() skips what it cannot read");
+  assert.equal((await item.journal.latest())?.runId, good.runId);
+  await assert.rejects(() => item.journal.interrupted(), /Unsupported or corrupt|in JSON/, "the interrupted-run check still fails closed on an unreadable record");
 });
 
 test("a budget pause remains explicitly recoverable", async (t) => {

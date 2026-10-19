@@ -1,5 +1,5 @@
 import { localize, type UiLanguage } from "../i18n.js";
-import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
+import type { TaskRunJournal, TaskRunJournalScan, TaskRunRecord } from "../task-run.js";
 
 /** Up to this many recent runs are listed and selectable by index or run-id prefix. */
 export const RUN_LIST_LIMIT = 50;
@@ -9,9 +9,30 @@ export const RUN_ID_PREFIX_MINIMUM = 4;
 
 export const RUN_SELECTOR = /^run:(.+)$/i;
 
+/** The journal methods the run lists need; `scan` is optional so a narrow test store still works. */
+export type RunListJournal = Pick<TaskRunJournal, "recent"> & Partial<Pick<TaskRunJournal, "scan">>;
+
 /** Recent runs, newest first, as listed by `/report runs`, `xiu report runs` and `/diff runs`; index 1 is the latest. */
-export async function listRecentRuns(taskRunJournal: Pick<TaskRunJournal, "recent">): Promise<TaskRunRecord[]> {
+export async function listRecentRuns(taskRunJournal: RunListJournal): Promise<TaskRunRecord[]> {
   return taskRunJournal.recent(RUN_LIST_LIMIT);
+}
+
+/** `listRecentRuns` plus the journal records that could not be read, so a list can say what it leaves out. */
+export async function listRecentRunsWithIssues(taskRunJournal: RunListJournal): Promise<{ runs: TaskRunRecord[]; unreadable: TaskRunJournalScan["unreadable"] }> {
+  if (!taskRunJournal.scan) return { runs: await listRecentRuns(taskRunJournal), unreadable: [] };
+  const scan = await taskRunJournal.scan(RUN_LIST_LIMIT);
+  return { runs: scan.records, unreadable: scan.unreadable };
+}
+
+/** One line naming how many journal records a list leaves out and why; undefined when none. */
+export function unreadableRunsNote(unreadable: TaskRunJournalScan["unreadable"], language: UiLanguage): string | undefined {
+  if (!unreadable.length) return undefined;
+  const counts = new Map<string, number>();
+  for (const item of unreadable) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
+  const reasons = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ×${count}`).join(localize(language, "、", ", "));
+  return localize(language,
+    `另有 ${unreadable.length} 条运行记录无法读取（${reasons}），未列出；它们不影响这里的其他运行，中断任务的检查仍按原规则进行。`,
+    `${unreadable.length} more run record(s) could not be read (${reasons}) and are not listed; the runs shown are unaffected, and the interrupted-task check is unchanged.`);
 }
 
 /**
@@ -20,7 +41,7 @@ export async function listRecentRuns(taskRunJournal: Pick<TaskRunJournal, "recen
  * print the list, so the error tells the user where to look.
  */
 export async function selectRun(
-  taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">,
+  taskRunJournal: Pick<TaskRunJournal, "latest"> & RunListJournal,
   selector: string | undefined,
   language: UiLanguage,
   listCommands: string,

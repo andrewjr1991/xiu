@@ -3,7 +3,7 @@ import { redactSecrets } from "../secret-redaction.js";
 import { loadTaskChangeHistory } from "../task-change-history.js";
 import { formatTaskChanges, type TaskChangeEntry, type TaskChangeReport } from "../task-changes.js";
 import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
-import { listRecentRuns, RUN_SELECTOR, selectRun } from "./run-selection.js";
+import { listRecentRunsWithIssues, RUN_SELECTOR, type RunListJournal, selectRun, unreadableRunsNote } from "./run-selection.js";
 
 export type DiffCommand =
   | { kind: "view"; view: "task" | "workspace" | "staged" }
@@ -14,7 +14,7 @@ export type DiffCommand =
 /** Where saved change records and the run list come from; narrow so tests can supply their own stores. */
 export interface DiffReplaySources {
   cwd: string;
-  taskRunJournal: Pick<TaskRunJournal, "latest" | "recent">;
+  taskRunJournal: Pick<TaskRunJournal, "latest"> & RunListJournal;
   loadHistory?: (cwd: string, runId: string) => Promise<TaskChangeReport | undefined>;
 }
 
@@ -74,8 +74,9 @@ function noHistory(run: TaskRunRecord, language: UiLanguage): string {
 
 /** `/diff runs`: recent runs, newest first, with the number of changed files each saved record holds. */
 export async function formatRunChangeList(sources: DiffReplaySources, language: UiLanguage): Promise<string> {
-  const runs = await listRecentRuns(sources.taskRunJournal);
-  if (!runs.length) return localize(language, "本工作区还没有任务运行记录。", "This workspace has no task run yet.");
+  const { runs, unreadable } = await listRecentRunsWithIssues(sources.taskRunJournal);
+  const note = unreadableRunsNote(unreadable, language);
+  if (!runs.length) return [localize(language, "本工作区还没有任务运行记录。", "This workspace has no task run yet."), ...(note ? [note] : [])].join("\n");
   const load = sources.loadHistory ?? loadTaskChangeHistory;
   const header = localize(language, "序号  运行 ID   开始时间              状态          改动文件  任务", "#     run id    started               status        changed   task");
   const lines: string[] = [];
@@ -85,7 +86,8 @@ export async function formatRunChangeList(sources: DiffReplaySources, language: 
   }
   return [header, ...lines, localize(language,
     `“-”表示没有保存的改动记录，“!”表示记录存在但无法读取（损坏、被改动或超出限制）。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`,
-    `"-" means no saved change record, "!" a record that exists but cannot be read (corrupt, altered or over its limits). Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`)].join("\n");
+    `"-" means no saved change record, "!" a record that exists but cannot be read (corrupt, altered or over its limits). Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`),
+  ...(note ? [note] : [])].join("\n");
 }
 
 function normalizePath(value: string): string {
