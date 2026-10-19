@@ -69,6 +69,7 @@ import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
 import { diffUsage, formatRunChangeList, parseDiffCommand, replayRunChanges } from "./commands/diff-commands.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
+import { runAuditCommand } from "./commands/audit-command.js";
 import { runRecoverCommand } from "./commands/recover-command.js";
 import { handleSkillCommand } from "./commands/skill-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage } from "./commands/running-task-commands.js";
@@ -291,8 +292,8 @@ async function main(): Promise<void> {
   const options = program.opts();
   trustGrantedByFlag = Boolean(options.trustWorkspace);
   if (options.json) {
-    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover";
-    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, update, session-list or recovery commands.");
+    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover" || program.args[0] === "audit";
+    if (!program.args.length || exitEarly) throw new Error("--json requires exactly one one-shot task and cannot be combined with doctor, report, audit, update, session-list or recovery commands.");
     // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
     const redirected = redirectHumanOutputToStderr();
     jsonStream = createJsonEventStream(redirected.writeStdout, undefined, (value) => redactSecrets(value));
@@ -319,6 +320,11 @@ async function main(): Promise<void> {
   if (program.args[0] === "recover") {
     const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
     process.exitCode = await runRecoverCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
+    return;
+  }
+  if (program.args[0] === "audit") {
+    const language = normalizeLanguage(options.language ?? process.env.XIU_LANGUAGE ?? settings.language) ?? "en-US";
+    process.exitCode = await runAuditCommand((program.args as string[]).slice(1), { cwd: path.resolve(options.cwd ?? process.cwd()), language, isTrusted: workspaceTrusted });
     return;
   }
   if (options.doctor || (program.args.length === 1 && program.args[0] === "doctor")) {
