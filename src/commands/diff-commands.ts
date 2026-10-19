@@ -53,6 +53,19 @@ function runHeading(run: TaskRunRecord, language: UiLanguage): string {
     `Run ${run.runId.slice(0, 8)} · ${run.startedAt.slice(0, 19)} · ${run.status} · ${preview}`);
 }
 
+/** Why a saved change record could not be read: the system error code when there is one, else the loader's own message; never a path. */
+function unreadableReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof code === "string" && code) return code;
+  return redactSecrets(error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").slice(0, 160);
+}
+
+function unreadableHistory(run: TaskRunRecord, error: unknown, language: UiLanguage): string {
+  return localize(language,
+    `运行 ${run.runId.slice(0, 8)} 的改动记录无法读取（${unreadableReason(error)}）：记录存在但已损坏、被改动或超出限制。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
+    `The change record of run ${run.runId.slice(0, 8)} cannot be read (${unreadableReason(error)}): the record exists but is corrupt, altered or over its limits. The current workspace diff is not shown in its place; use /diff workspace for the present state.`);
+}
+
 function noHistory(run: TaskRunRecord, language: UiLanguage): string {
   return localize(language,
     `运行 ${run.runId.slice(0, 8)} 没有保存的改动记录（任务在旧版本运行、被中断于记录之前，或记录已删除）。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
@@ -67,13 +80,12 @@ export async function formatRunChangeList(sources: DiffReplaySources, language: 
   const header = localize(language, "序号  运行 ID   开始时间              状态          改动文件  任务", "#     run id    started               status        changed   task");
   const lines: string[] = [];
   for (const [index, run] of runs.entries()) {
-    const report = await load(sources.cwd, run.runId).catch(() => undefined);
-    const changed = report ? String(report.changes.length) : "-";
+    const changed = await load(sources.cwd, run.runId).then((report) => (report ? String(report.changes.length) : "-"), () => "!");
     lines.push(`${String(index + 1).padEnd(5)} ${run.runId.slice(0, 8).padEnd(9)} ${run.startedAt.slice(0, 19).padEnd(21)} ${run.status.padEnd(13)} ${changed.padEnd(9)} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`);
   }
   return [header, ...lines, localize(language,
-    `“-”表示没有保存的改动记录。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`,
-    `"-" means no saved change record. Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`)].join("\n");
+    `“-”表示没有保存的改动记录，“!”表示记录存在但无法读取（损坏、被改动或超出限制）。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`,
+    `"-" means no saved change record, "!" a record that exists but cannot be read (corrupt, altered or over its limits). Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`)].join("\n");
 }
 
 function normalizePath(value: string): string {
@@ -100,12 +112,15 @@ function formatFileChange(entry: TaskChangeEntry, language: UiLanguage): string 
 /**
  * `/diff run:<selector> [file]`: replays the change record saved when that run finished. Without a
  * file the whole report is shown in the `/diff task` layout; with a file, that file's saved complete
- * diff. Throws a localized Error for an unknown selector, a run without a record, or an unknown file.
+ * diff. Throws a localized Error for an unknown selector, a run without a record, a record that cannot
+ * be read (corrupt, altered, over its limits; the reason is named, never a path), or an unknown file.
  */
 export async function replayRunChanges(sources: DiffReplaySources, selector: string, file: string | undefined, language: UiLanguage): Promise<string> {
   const run = await selectRun(sources.taskRunJournal, selector, language, listCommands(language));
   if (!run) throw new Error(localize(language, "本工作区还没有任务运行记录。", "This workspace has no task run yet."));
-  const report = await (sources.loadHistory ?? loadTaskChangeHistory)(sources.cwd, run.runId);
+  let report: TaskChangeReport | undefined;
+  try { report = await (sources.loadHistory ?? loadTaskChangeHistory)(sources.cwd, run.runId); }
+  catch (error) { throw new Error(unreadableHistory(run, error, language)); }
   if (!report) throw new Error(noHistory(run, language));
   const heading = runHeading(run, language);
   const replayed = localize(language, "以下是任务结束时保存的改动记录，不是当前工作区状态。", "This is the change record saved when the task finished, not the current workspace state.");

@@ -95,6 +95,25 @@ test("/diff run:<selector> <file> shows that file's saved complete diff, falls b
   await assert.rejects(replayRunChanges(f, "1", "src/missing.ts", "en-US"), /has no "src\/missing\.ts"; it covers 2 file\(s\), listed by \/diff run:1/);
 });
 
+test("a saved change record that cannot be read is told apart from a missing one", async () => {
+  const f = await fixture();
+  const file = path.join(await fs.realpath(f.cwd), ".xiu", "task-change-history", `${RUN_IDS[2]}.json`);
+  await fs.writeFile(file, JSON.stringify({ schemaVersion: 99, runId: RUN_IDS[2], savedAt: "2026-10-17T01:00:10.000Z", report: {} }));
+
+  const list = await formatRunChangeList(f, "en-US");
+  assert.match(list.split("\n")[3]!, /^3\s+7b00c0de\s+2026-10-17T01:00:00\s+cancelled\s+!\s+older task 3/, "an unreadable record shows ! where a missing one shows -");
+  assert.match(list, /"!" a record that exists but cannot be read/);
+  assert.match(await formatRunChangeList(f, "zh-CN"), /“!”表示记录存在但无法读取/);
+
+  await assert.rejects(replayRunChanges(f, "3", undefined, "en-US"), /^Error: The change record of run 7b00c0de cannot be read \(Unsupported or corrupt task change history file\.\): the record exists but is corrupt, altered or over its limits\. The current workspace diff is not shown in its place/);
+  await assert.rejects(replayRunChanges(f, "3", "src/a.ts", "zh-CN"), /^Error: 运行 7b00c0de 的改动记录无法读取（Unsupported or corrupt task change history file\.）：记录存在但已损坏/);
+  await assert.rejects(replayRunChanges(f, "3", undefined, "en-US"), (error: Error) => !error.message.includes(f.cwd), "no path leaks into the message");
+
+  await fs.rm(file);
+  await fs.mkdir(file);
+  await assert.rejects(replayRunChanges(f, "3", undefined, "en-US"), /cannot be read \(Unsafe or oversized task change history file\.\)/);
+});
+
 test("/diff runs on a workspace without runs says so", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-diff-commands-empty-"));
   const journal = new TaskRunJournal(root, path.join(root, "task-runs"));
