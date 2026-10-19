@@ -4,7 +4,9 @@ import { resolveConfig } from "../config.js";
 import { defaultLanguage } from "../i18n.js";
 import { createMediaTools } from "../media-tools.js";
 import { createComputerUseTools, computerVisionRoute, type ComputerUseHost } from "../computer-use-tools.js";
+import { xiuPackageVersion } from "../package-version.js";
 import { TaskPlanManager, createPlanTools } from "../plan.js";
+import { PluginRegistry } from "../plugins.js";
 import { ProjectIndex, createProjectIndexTools } from "../project-index.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile } from "../provider-registry.js";
 import { createProvider } from "../providers.js";
@@ -38,6 +40,8 @@ export interface WorkspaceAgentHost {
   sanitize?: (value: string) => string;
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
   mcp?: WorkspaceMcpService;
+  /** Plugins already approved with `/plugin approve`; the desktop adds no approval of its own. */
+  plugins?: { active: number; errors: string[] };
   coordinator?: MultiAgentCoordinator;
   background?: () => BackgroundProcessSummary[];
   close?: () => Promise<void>;
@@ -79,7 +83,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
  * Electron dependency, so the execution and approval authority remains in the
  * shared Node runtime rather than the renderer.
  */
-export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; computerUse?: ComputerUseHost } = {}): Promise<WorkspaceAgentHost> {
+export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; computerUse?: ComputerUseHost; pluginRegistry?: PluginRegistry } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
   try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
@@ -87,6 +91,18 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
 
   const registry = new ProviderRegistry(undefined, credentialStore);
   await registry.load();
+  // The host only exists for a trusted workspace, so project plugins are discovered exactly as the
+  // CLI does after trust. Only plugins the user already approved (`/plugin approve`, same grant
+  // store) contribute; declarative contributions reuse the Provider registry, Skill registry and
+  // MCP manager, whose own approvals (MCP permission manifests, tool risk) still apply.
+  const pluginRegistry = options.pluginRegistry ?? new PluginRegistry(workspace, undefined, xiuPackageVersion());
+  await pluginRegistry.refresh(true);
+  const plugins = await pluginRegistry.loadApprovedContributions();
+  try { registry.setPluginProfiles(plugins.providers); }
+  catch (error) {
+    registry.setPluginProfiles([]);
+    plugins.errors.push({ pluginId: "providers", message: error instanceof Error ? error.message : String(error) });
+  }
   const savedProviderId = registry.activeId();
   const requestedProviderId = resolveStartupProviderId(undefined, savedProviderId, process.env.XIU_PROVIDER);
   const requestedProfile = startupProviderProfile(registry, requestedProviderId);
@@ -103,6 +119,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   config.autoApprove = false;
 
   const [projectIndex, skillRegistry] = [new ProjectIndex(workspace), new SkillRegistry(workspace)];
+  skillRegistry.setPluginFiles(plugins.skillFiles);
   await Promise.all([projectIndex.initialize(), skillRegistry.refresh(true)]);
   const planManager = new TaskPlanManager(undefined, false, language);
   const checkpointManager = new CheckpointManager(workspace);
@@ -219,6 +236,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
+  mcpManager.setPluginServers(plugins.mcpServers);
   const computerNames = new Set(initialComputerTools.map(tool => tool.name));
   const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name) && !computerNames.has(tool.name)), ...createMediaTools(next), ...(options.computerUse ? createComputerUseTools(next, options.computerUse) : []), ...mcpManager.tools()];
   const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)));
@@ -253,6 +271,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       agent.setAccessMode(mode === "full" ? "full" : "workspace");
     },
     management, sanitize,
+    plugins: { active: pluginRegistry.list().filter((plugin) => plugin.active).length, errors: plugins.errors.map((item) => redactSecrets(`${item.pluginId}: ${item.message}`)) },
     coordinator, background: () => background.list().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
   };
 }
