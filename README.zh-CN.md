@@ -75,7 +75,7 @@ xiu --resume   # 恢复本工作区的会话
 - **自主编码循环**：阅读项目、定位问题、修改文件、运行测试/类型检查/Lint/构建、按结果迭代；自动识别技术栈和项目脚本（`/check`）。
 - **可审查**：运行时逐轮显示模型摘要、工具活动、文件变化和验证进度；结束后 `/report` 生成脱敏执行报告；`/diff` 查看本任务、工作区或暂存区的改动。
 - **可恢复**：会话、检查点、崩溃恢复、任务预算与停滞诊断；结果未知的副作用只报告、不静默重放。
-- **多渠道模型**：能力探测、故障转移、分阶段路由；Provider 中立的视觉、生图、视频、音频模型配置；系统凭据可选存入 Windows 凭据管理器。
+- **多渠道模型**：能力探测、故障转移、分阶段路由；Provider 中立的视觉、生图、视频、音频模型配置；系统凭据可选存入系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）。
 - **免 Key 联网搜索**：默认在本机用固定版本的开源 [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) 聚合多个引擎（桌面安装包内置 uv，CLI 首次使用自动下载并校验），本机不可用时回退 Xiu 托管搜索；企业策略禁止本机子进程时用 `/web configure managed` 直接选择托管搜索。引用必须真实打开过，证据不足时失败而不是靠记忆补。
 - **扩展**：Skills、MCP（stdio / Streamable HTTP、Resource、Prompt、OAuth、精确权限清单）、带摘要和可选签名校验的声明式插件。
 - **多 Agent**：Explorer / Implementer / Reviewer / Tester 在隔离 Git Worktree 中并行，冲突检测、审查证据和显式确认后才集成。
@@ -101,7 +101,7 @@ Xiu 用当前操作系统账号读写文件和运行命令，不是容器沙箱�
 | --- | --- | --- | --- |
 | CLI 与 Agent 循环 | 主要平台，真机验收 | CI 通过，外部验收待完成 | CI 通过，外部验收待完成 |
 | MCP、Skills、插件 | 主要平台，真机验收 | CI 通过 | CI 通过 |
-| 系统凭据后端 | 凭据管理器（可选） | 未实现 | 未实现 |
+| 系统凭据后端 | 凭据管理器（可选） | 钥匙串（可选，待真机验收） | Secret Service（可选，待真机验收） |
 | 桌面工作台 | x64 预览版，未签名 | 未提供 | 未提供 |
 | 电脑操作（Computer Use） | 预览，逐窗口授权 | 不支持 | 不支持 |
 | 剪贴板图片附件 | 支持 | 使用 `@路径` | 使用 `@路径` |
@@ -109,7 +109,7 @@ Xiu 用当前操作系统账号读写文件和运行命令，不是容器沙箱�
 ## 配置与存储
 
 - 用户设置、会话和本地记录位于 `~/.xiu/`；项目级状态位于工作区的 `.xiu/`。
-- 渠道 Key 可来自环境变量、本机配置文件或 Windows 凭据管理器；Xiu 只保存必要的引用，不把 Key 写进日志。
+- 渠道 Key 可来自环境变量、本机配置文件或系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）；Xiu 只保存必要的引用，不把 Key 写进日志。
 - 项目根目录的 `AGENTS.md` 或 `XIU.md` 会作为项目指令，在工作区信任后读取。
 - 启动参数（`--provider`、`--model`、`--proxy`、预算与上下文限制等）见 `xiu --help` 和[命令速查](./docs/guide/commands.zh-CN.md)。
 
@@ -161,7 +161,7 @@ CI 在 Windows、Ubuntu、macOS 上运行 CLI 与桌面作业，另有 Node 22/2
 
 - 不是容器沙箱：命令以当前账号权限执行，受审批策略约束。
 - 检查点只覆盖 Xiu 的文件工具；任意命令和远端副作用需要 Git 或系统手段恢复。
-- macOS Keychain、Linux Secret Service 和 MCP Sampling 未实现。
+- MCP Sampling 未实现；macOS 钥匙串与 Linux Secret Service 后端只经 CI 假后端验证，待真机验收。
 - 多 Agent 冲突会被检测并保留，不自动解决。
 - 桌面端仅 Windows x64 预览，安装器未签名；电脑操作不支持密码、支付、删除、发布等高风险流程。
 - 尚无公开的真实模型评测基线。

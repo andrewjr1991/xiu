@@ -534,7 +534,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     setBusy(true); setProviderNotice(undefined); setError(undefined);
     try {
       applyProviderMutation(await window.xiuDesktop.saveProviderCredential({ providerId, apiKey }));
-      setCredentialEditing(undefined); setApiKey(""); setProviderNotice("凭据已保存到 Windows Credential Manager。");
+      setCredentialEditing(undefined); setApiKey(""); setProviderNotice("凭据已保存到系统凭据库。");
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setApiKey(""); setBusy(false); }
   };

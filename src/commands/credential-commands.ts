@@ -5,14 +5,14 @@ import { describeFailure } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { ProviderProfile, ProviderRegistry } from "../provider-registry.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
-import { probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "../system-credential-store.js";
+import { probeSystemCredentialStore, systemCredentialBackend, systemCredentialBackendName, type SystemCredentialProbeResult, type SystemCredentialStore } from "../system-credential-store.js";
 import { askQuestion } from "../terminal-prompts.js";
 
 export interface CredentialCommandContext {
   auditCredential: (action: string, subject: string | undefined, outcome: SecurityAuditOutcome) => Promise<void>;
   config: AgentConfig;
-  ensureSystemCredentialStore: () => Promise<WindowsSystemCredentialStore<string, "provider-api-key">>;
-  formatCredentialProbe: (probe: WindowsCredentialProbeResult) => string;
+  ensureSystemCredentialStore: () => Promise<SystemCredentialStore<string, "provider-api-key">>;
+  formatCredentialProbe: (probe: SystemCredentialProbeResult) => string;
   language: UiLanguage;
   printCredentialStatus: () => Promise<void>;
   providerRegistry: ProviderRegistry;
@@ -28,16 +28,18 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
     return true;
   }
   if (task === "/credentials probe") {
+    const backendName = systemCredentialBackendName();
+    const backendId = systemCredentialBackend()?.id ?? process.platform;
     const confirmed = await askQuestion(chalk.yellow(localize(language,
-      "将在 Windows Credential Manager 写入一个随机临时 Canary，回读验证后立即删除。继续？[y/N] ",
-      "A random temporary canary will be written to Windows Credential Manager, verified, and immediately deleted. Continue? [y/N] ")));
+      `将在 ${backendName} 写入一个随机临时 Canary，回读验证后立即删除。继续？[y/N] `,
+      `A random temporary canary will be written to ${backendName}, verified, and immediately deleted. Continue? [y/N] `)));
     if (!/^(y|yes)$/i.test(confirmed.trim())) {
-      await auditCredential("system-probe", "windows", "cancelled");
+      await auditCredential("system-probe", backendId, "cancelled");
       console.log(chalk.dim(localize(language, "已取消系统凭证库探测。\n", "System credential probe cancelled.\n")));
       return true;
     }
-    const probe = await probeWindowsSystemCredentialStore(true);
-    await auditCredential("system-probe", "windows", probe.status.available ? "succeeded" : "failed");
+    const probe = await probeSystemCredentialStore(true);
+    await auditCredential("system-probe", backendId, probe.status.available ? "succeeded" : "failed");
     console.log(`${probe.status.available ? chalk.green(formatCredentialProbe(probe)) : chalk.red(formatCredentialProbe(probe))}\n`);
     return true;
   }
@@ -59,9 +61,10 @@ export async function handleCredentialCommand(task: string, ctx: CredentialComma
         ids = [selected];
       }
       const names = ids.join(", ");
+      const backendName = systemCredentialBackendName();
       const confirmed = await selectTerminalOption(localize(language,
-        `将 ${names} 的 Key 复制到 Windows Credential Manager，回读校验后切换引用；暂不删除旧明文。继续？`,
-        `Copy keys for ${names} to Windows Credential Manager, verify them, and switch references without deleting plaintext yet?`), [
+        `将 ${names} 的 Key 复制到 ${backendName}，回读校验后切换引用；暂不删除旧明文。继续？`,
+        `Copy keys for ${names} to ${backendName}, verify them, and switch references without deleting plaintext yet?`), [
         { label: localize(language, "继续迁移", "Migrate"), value: "yes" },
         { label: localize(language, "取消", "Cancel"), value: "no" },
       ], language);

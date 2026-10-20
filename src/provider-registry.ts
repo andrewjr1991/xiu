@@ -678,7 +678,7 @@ export class ProviderRegistry {
       const hasLegacy = receipt.legacyCopyPresent && this.credentials.has(legacyRef);
       let restoredFromSystem = false;
       if (!hasLegacy) {
-        if (!this.systemCredentials) throw new Error(`Windows Credential Manager is unavailable; ${id} could not be restored`);
+        if (!this.systemCredentials) throw new Error(`The system credential store is unavailable; ${id} could not be restored`);
         const systemValue = this.systemCredentials.get(ref);
         if (!systemValue) throw new Error(`The active system credential could not be read for rollback: ${id}`);
         this.credentials.set(legacyRef, systemValue);
@@ -708,7 +708,7 @@ export class ProviderRegistry {
       if (!this.get(id)) throw new Error(`Provider profile not found: ${id}`);
       const ref = this.file.credentialRefs?.[id];
       if (ref) {
-        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the system credential was not changed");
+        if (!this.systemCredentials) throw new Error("The system credential store is unavailable; the system credential was not changed");
         this.systemCredentials.delete(ref);
         delete this.file.credentialRefs?.[id];
         delete this.file.credentialMigrations?.[id];
@@ -832,7 +832,7 @@ export class ProviderRegistry {
       if (apiKey !== undefined && (!apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey))) throw new Error("apiKey must be 1-4096 characters without line breaks");
       const systemRef = this.file.credentialRefs?.[id];
       if (systemRef) {
-        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the credential was not changed");
+        if (!this.systemCredentials) throw new Error("The system credential store is unavailable; the credential was not changed");
         if (apiKey) {
           const updatedRef = this.systemCredentials.set(systemRef, apiKey);
           this.file.credentialRefs![id] = updatedRef;
@@ -858,7 +858,7 @@ export class ProviderRegistry {
       if (next.length === this.file.profiles.length) throw new Error(`Provider profile not found: ${id}`);
       const systemRef = this.file.credentialRefs?.[id];
       if (systemRef) {
-        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; the provider was not removed");
+        if (!this.systemCredentials) throw new Error("The system credential store is unavailable; the provider was not removed");
         this.systemCredentials.delete(systemRef);
       }
       this.file.profiles = next;

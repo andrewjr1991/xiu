@@ -28,9 +28,9 @@ Xiu ships with no provider. Starting `xiu` in a terminal with none configured op
 | `/provider fallback [add\|remove\|clear]` | Failover chain used when the current provider fails |
 | `/routing [on\|off\|set\|clear]` | Different providers for planning, implementation and verification |
 | `/models` | Discover and pick the model for the current provider |
-| `/credentials ...` | Inspect credential sources; on Windows, optionally migrate keys into Credential Manager |
+| `/credentials ...` | Inspect credential sources; optionally migrate keys into the system credential store (Windows Credential Manager, macOS Keychain or Linux Secret Service) |
 
-Keys come from an environment variable, the local file `~/.xiu/providers.json`, or Windows Credential Manager. Xiu never writes keys into logs, sessions or reports. Local servers need no key.
+Keys come from an environment variable, the local file `~/.xiu/providers.json`, or the system credential store (Windows Credential Manager, macOS Keychain or Linux Secret Service). Xiu never writes keys into logs, sessions or reports. Local servers need no key.
 
 ## Working in a session
 

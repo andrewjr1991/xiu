@@ -123,7 +123,7 @@ Invoke-RestMethod 'https://search.example.com/search?q=xiu&format=json' -Headers
 
 内测包预置了 `https://search.jingran.vip` 及其设备认证端点，但不包含共享 Token、邀请码、管理 Token 或其他可直接使用的秘密。新安装和从旧版本升级的用户无需设置环境变量：Xiu 启动时只注册 `web_search` 与 `web_open` 工具，第一次真正搜索时才自动登记本机并申请 15 分钟短期 Token，因此不会拖慢普通启动。
 
-设备凭证优先保存到当前 Windows 账号的凭证管理器；企业策略或可选原生模块不可用时，降级保存到当前用户目录 `~/.xiu/search-auth.json`，文件权限收紧为仅当前用户可读写。该凭证仅属于这一台安装，可由服务器单独撤销；15 分钟访问 Token 只存在于当前进程内存，不写入设置、会话、报告或日志，并会在到期前自动续签。
+设备凭证优先保存到当前账号的系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）；系统后端不可用（企业策略、可选原生模块缺失、Linux 没有 D-Bus 会话）时，降级保存到当前用户目录 `~/.xiu/search-auth.json`，文件权限收紧为仅当前用户可读写。该凭证仅属于这一台安装，可由服务器单独撤销；15 分钟访问 Token 只存在于当前进程内存，不写入设置、会话、报告或日志，并会在到期前自动续签。
 
 优先级规则：
 
@@ -184,7 +184,7 @@ sudo bash scripts/install-xiu-search-auth-vps.sh \
 - `auth.env` 与 `admin.txt` 权限为 `600`，不得上传、截图或提交 Git。
 - 公开登记必须保留每日 IP 配额；关闭公开登记后，邀请码只用于设备首次登记并应定期轮换。
 - 公司 IP 免邀请码注册只应填写可确认的公网出口地址，不要使用 `0.0.0.0/0`。
-- 每台设备的长期凭证优先保存在 Windows 凭证管理器；兼容文件仅限当前用户访问。访问 Token 只保存在内存并在到期前续签。
+- 每台设备的长期凭证优先保存在系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）；兼容文件仅限当前用户访问。访问 Token 只保存在内存并在到期前续签。
 - 真实宝塔 VPS 已完成无 Token 拒绝、设备登记、短期 Token、认证搜索、设备撤销及撤销后拒绝的闭环验收。
 
 ### 搜索失败与证据门禁（v0.15.3）
@@ -232,7 +232,7 @@ Windows 上使用支持系统证书读取的 Node.js 时，Xiu 会合并 Node �
 - `/web reset`：在明确确认后删除当前电脑的托管搜索设备凭证和内存 Token。下一次搜索或 `/web doctor` 会把这台电脑作为新设备重新登记。
 - `/web proxy`：只读显示联网工具当前使用的独立代理；`/web proxy set [URL]` 保存并立即应用 HTTP(S) 代理，`/web proxy clear` 清除已保存代理并让当前会话改为直连。它们不会修改 Agnes、OpenAI、Anthropic 或其他模型 Provider 的代理。
 
-`/web reset` 不会删除 Tavily、Brave 或自建 SearXNG 的 API Key 环境变量，也不会修改联网代理。若系统凭证引用仍存在但 Windows 凭证管理器不可用，Xiu 会拒绝重置并保留原状态，避免出现“界面说已删除、实际仍可使用”的不一致。普通启动不会自动执行 `/web doctor`，因此诊断功能不会重新引入启动等待。
+`/web reset` 不会删除 Tavily、Brave 或自建 SearXNG 的 API Key 环境变量，也不会修改联网代理。若系统凭证引用仍存在但系统凭证库不可用，Xiu 会拒绝重置并保留原状态，避免出现“界面说已删除、实际仍可使用”的不一致。普通启动不会自动执行 `/web doctor`，因此诊断功能不会重新引入启动等待。
 
 ### 托管搜索服务端设备只读观测（v0.15.6）
 

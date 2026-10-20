@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { localize, type UiLanguage } from "../i18n.js";
+import { systemCredentialBackendName } from "../system-credential-store.js";
 import { describeFailure, formatUserFacingError } from "../user-facing-errors.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import type { ManagedWebSearchAuth } from "../managed-web-search-auth.js";
@@ -60,7 +61,7 @@ async function managedSearchCredentialSummary(settings: XiuSettings, language: U
     return localize(language, "托管搜索凭证：不适用。", "Managed search credential: not applicable.");
   }
   const state = await managedWebSearchAuth.credentialStatus();
-  const storage = state.storage === "system" ? localize(language, "Windows 凭证管理器", "Windows Credential Manager")
+  const storage = state.storage === "system" ? systemCredentialBackendName()
     : state.storage === "compatibility-file" ? localize(language, "本机兼容文件", "local compatibility file")
       : state.storage === "system-unavailable" ? localize(language, "系统凭证后端不可用", "system credential backend unavailable")
         : localize(language, "尚未注册（首次搜索时自动注册）", "not registered yet (automatic on first search)");

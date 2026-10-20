@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { McpAuthStore, type McpAuthIdentity, type McpAuthSecretRecord } from "../src/mcp-auth-store.js";
-import { WindowsSystemCredentialStore } from "../src/system-credential-store.js";
+import { SystemCredentialStore } from "../src/system-credential-store.js";
 
 class FakeCredentialEntry {
   static values = new Map<string, string>();
@@ -15,8 +15,8 @@ class FakeCredentialEntry {
   deleteCredential(): boolean { return FakeCredentialEntry.values.delete(this.key); }
 }
 
-function fakeSystemStore(): WindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> {
-  return new WindowsSystemCredentialStore("mcp-oauth-record", FakeCredentialEntry);
+function fakeSystemStore(): SystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> {
+  return new SystemCredentialStore("mcp-oauth-record", FakeCredentialEntry);
 }
 
 const first: McpAuthIdentity = {
@@ -158,7 +158,7 @@ test("MCP OAuth migration records an interruption and safely resumes", async () 
   class WriteThenThrowEntry extends FakeCredentialEntry {
     override setPassword(value: string): void { super.setPassword(value); throw new Error("simulated interruption"); }
   }
-  const interruptedSystem = new WindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record", WriteThenThrowEntry);
+  const interruptedSystem = new SystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record", WriteThenThrowEntry);
   try {
     await assert.rejects(store.migrateResource(first.resource, interruptedSystem), /write failed/i);
     const interruptedText = await fs.readFile(file, "utf8");

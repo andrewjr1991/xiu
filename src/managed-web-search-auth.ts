@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { credentialRef, type CredentialRef } from "./credential-store.js";
-import { createWindowsSystemCredentialStore, type WindowsSystemCredentialStore } from "./system-credential-store.js";
+import { createSystemCredentialStore, type SystemCredentialStore } from "./system-credential-store.js";
 
 export interface SearchDeviceCredential {
   deviceId: string;
@@ -19,7 +19,7 @@ interface SearchAuthState {
 
 interface TokenResponse { accessToken: string; expiresAt: number }
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
-type SystemStoreFactory = () => Promise<WindowsSystemCredentialStore<SearchDeviceCredential, "web-search-device"> | undefined>;
+type SystemStoreFactory = () => Promise<SystemCredentialStore<SearchDeviceCredential, "web-search-device"> | undefined>;
 
 export interface ManagedWebSearchCredentialStatus {
   present: boolean;
@@ -142,7 +142,7 @@ async function atomicSave(filename: string, state: SearchAuthState): Promise<voi
 
 export class ManagedWebSearchAuth {
   private state?: SearchAuthState;
-  private systemStore?: WindowsSystemCredentialStore<SearchDeviceCredential, "web-search-device">;
+  private systemStore?: SystemCredentialStore<SearchDeviceCredential, "web-search-device">;
   private token?: TokenResponse;
   private inflight?: Promise<string>;
 
@@ -151,9 +151,7 @@ export class ManagedWebSearchAuth {
     private readonly filename = path.join(os.homedir(), ".xiu", "search-auth.json"),
     private readonly fetchImpl: FetchLike = fetch,
     private readonly now: () => number = () => Date.now(),
-    private readonly createStore: SystemStoreFactory = async () => process.platform === "win32"
-      ? createWindowsSystemCredentialStore("web-search-device", [CREDENTIAL_ID])
-      : undefined,
+    private readonly createStore: SystemStoreFactory = async () => createSystemCredentialStore("web-search-device", [CREDENTIAL_ID]),
   ) {}
 
   private async load(): Promise<SearchAuthState> {
@@ -164,7 +162,7 @@ export class ManagedWebSearchAuth {
     return this.state;
   }
 
-  private async store(): Promise<WindowsSystemCredentialStore<SearchDeviceCredential, "web-search-device"> | undefined> {
+  private async store(): Promise<SystemCredentialStore<SearchDeviceCredential, "web-search-device"> | undefined> {
     if (this.systemStore) return this.systemStore;
     try { this.systemStore = await this.createStore(); }
     catch { return undefined; }

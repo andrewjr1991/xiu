@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { BUILTIN_PROVIDER_PROFILES, formatUnknownProviderMessage, ProviderRegistry, providerTemplate, providerTemplateById, providerTemplates, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, validateProviderProfile, VENDOR_PROVIDER_TEMPLATES } from "../src/provider-registry.js";
-import { WindowsSystemCredentialStore } from "../src/system-credential-store.js";
+import { SystemCredentialStore } from "../src/system-credential-store.js";
 
 class FakeCredentialEntry {
   static values = new Map<string, string>();
@@ -23,8 +23,8 @@ class FakeCredentialEntry {
   }
 }
 
-function fakeSystemStore(): WindowsSystemCredentialStore<string, "provider-api-key"> {
-  return new WindowsSystemCredentialStore("provider-api-key", FakeCredentialEntry);
+function fakeSystemStore(): SystemCredentialStore<string, "provider-api-key"> {
+  return new SystemCredentialStore("provider-api-key", FakeCredentialEntry);
 }
 
 // Credential/routing fixtures explicitly add channels; production starts empty.
@@ -375,7 +375,7 @@ test("batch Provider migration rolls back every system write when one copy fails
   await registry.setApiKey("agnes", "first-secret");
   await registry.setApiKey("openai", "second-secret");
   FakeCredentialEntry.failWriteFor = "provider:openai:api-key";
-  await assert.rejects(registry.migrateApiKeysToSystem(["agnes", "openai"], store), /Windows Credential Manager write failed/);
+  await assert.rejects(registry.migrateApiKeysToSystem(["agnes", "openai"], store), / write failed/);
   FakeCredentialEntry.failWriteFor = undefined;
 
   assert.equal(store.has(store.ref("provider:agnes:api-key")), false);
@@ -486,7 +486,7 @@ test("an interrupted migration keeps a non-secret intent and safely resumes", as
   class WriteThenThrowEntry extends FakeCredentialEntry {
     override setPassword(value: string): void { super.setPassword(value); throw new Error("simulated interruption"); }
   }
-  const interruptedStore = new WindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key", WriteThenThrowEntry);
+  const interruptedStore = new SystemCredentialStore<string, "provider-api-key">("provider-api-key", WriteThenThrowEntry);
   await assert.rejects(registry.migrateApiKeysToSystem(["ollama"], interruptedStore), /write failed/);
   const interrupted = JSON.parse(await fs.readFile(filename, "utf8")) as { credentialMigrationIntents?: Record<string, unknown>; credentials?: Record<string, string> };
   assert.ok(interrupted.credentialMigrationIntents?.ollama);

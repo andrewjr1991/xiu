@@ -73,7 +73,7 @@
 - 系统凭证迁移必须经过预检、复制、回读验证、原子切换、独立清理；不得静默删除或静默回退明文。
 - Provider 与 MCP OAuth 支持显式迁移、回退、清理、遗忘和注销。
 - 配置只保存必要的非秘密引用和 revision。
-- Windows 系统凭证后端在 ARM64、企业策略和真实 OAuth 迁移矩阵完成前保持可选。
+- 系统凭证后端按平台选择：Windows 凭据管理器、macOS 钥匙串、Linux Secret Service（经 D-Bus，需要 GNOME Keyring、KWallet 一类提供者），其他平台明确报告不可用；三者经同一可选原生模块访问，错误文本只含后端名称与操作，不回显原生错误。Linux 上该模块在没有 Secret Service 时会静默退回内核 keyring（keyutils，重启即丢失），Xiu 在创建后端前先经只走 Secret Service 的搜索确认服务可达，不可达则根本不创建系统后端，不接受这一回退。任何平台都只在显式迁移后选用系统后端；已选定的后端不可用（原生模块缺失、策略拦截、无 D-Bus 会话、钥匙串锁定）时失败关闭，不静默回退明文。Windows 在 ARM64、企业策略和真实 OAuth 迁移矩阵完成前，macOS 与 Linux 在真机验收前，都保持可选、不设为默认。
 
 ### Provider 配置备份与恢复（0.20.3-preview.4 候选）
 
