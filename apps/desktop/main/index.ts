@@ -22,12 +22,12 @@ import { registerWorkspaceIpc } from "./ipc-workspace.js";
 import { registerTerminalIpc } from "./ipc-terminal.js";
 import { registerTaskIpc } from "./ipc-task.js";
 import { registerReviewIpc } from "./ipc-review.js";
+import { registerAttachmentsIpc } from "./ipc-attachments.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
-import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopWorkspaceSnapshot } from "../shared/protocol.js";
+import { desktopChannels, type DesktopWorkspaceSnapshot } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -157,8 +157,6 @@ function assertTrustedSender(event: IpcMainInvokeEvent, recovery = false): void 
   if (!recovery) providerRecoveryController.assertCanContinue();
 }
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
-
 /** Scales a decoded image to at most 1280×960 for an inline conversation preview; undefined when it cannot be decoded. */
 function boundedImageThumbnail(data: Buffer): string | undefined {
   const image = nativeImage.createFromBuffer(data);
@@ -166,31 +164,6 @@ function boundedImageThumbnail(data: Buffer): string | undefined {
   const size = image.getSize();
   const scale = Math.min(1, 1280 / Math.max(1, size.width), 960 / Math.max(1, size.height));
   return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
-}
-
-async function presentAttachments(workspace: string, result: Awaited<ReturnType<ClipboardAttachmentManager["attachFiles"]>>): Promise<DesktopAttachmentResult> {
-  const root = path.resolve(workspace);
-  const attachments = await Promise.all(result.attachments.map(async (relative) => {
-    const normalized = relative.replace(/\\/g, "/");
-    const absolute = path.resolve(root, relative);
-    const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-    if (absolute !== root && !absolute.startsWith(prefix)) throw new Error("附件路径超出工作区。");
-    const stat = await fs.lstat(absolute);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("附件不是安全的普通文件。");
-    const kind = IMAGE_EXTENSIONS.has(path.extname(absolute).toLowerCase()) ? "image" as const : "file" as const;
-    let previewDataUrl: string | undefined;
-    if (kind === "image" && stat.size <= 25 * 1024 * 1024) {
-      const image = nativeImage.createFromPath(absolute);
-      if (!image.isEmpty()) {
-        const size = image.getSize();
-        const scale = Math.min(1, 180 / Math.max(1, size.width), 120 / Math.max(1, size.height));
-        previewDataUrl = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
-      }
-    }
-    const reference = /\s/.test(normalized) ? `@${JSON.stringify(normalized)}` : `@${normalized}`;
-    return { reference, path: normalized, name: path.basename(relative), bytes: stat.size, kind, ...(previewDataUrl ? { previewDataUrl } : {}) };
-  }));
-  return { insertText: "", attachments, ...(result.notice ? { notice: result.notice } : {}) };
 }
 
 function emitSnapshot(snapshot: DesktopWorkspaceSnapshot): DesktopWorkspaceSnapshot {
@@ -265,32 +238,24 @@ function registerIpc(): void {
       return confirmSubagentCancel(mainWindow);
     },
   });
-  handleIpc(desktopChannels.attachmentsChoose, async (event) => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: "添加文件或图片",
-      properties: ["openFile", "multiSelections", "dontAddToRecent"],
-    });
-    if (result.canceled || result.filePaths.length === 0) return { insertText: "", attachments: [] };
-    return presentAttachments(workspace, await new ClipboardAttachmentManager(workspace, undefined, "zh-CN").attachFiles(result.filePaths));
-  });
-  handleIpc(desktopChannels.attachmentsPaste, async (event) => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    return presentAttachments(workspace, await new ClipboardAttachmentManager(workspace, undefined, "zh-CN").paste());
-  });
-  handleIpc(desktopChannels.copyMessage, (event, text: unknown) => {
-    assertTrustedSender(event);
-    controller.trustedWorkspacePath();
-    if (typeof text !== "string" || text.length === 0 || text.length > 200_000) throw new Error("复制内容无效或过长。");
-    clipboard.writeText(text);
-  });
-  handleIpc(desktopChannels.attachmentsImport, async (event, request: DesktopAttachmentUploadRequest) => {
-    assertTrustedSender(event);
-    if (!request || !Array.isArray(request.files)) throw new Error("Invalid attachment request.");
-    const workspace = controller.trustedWorkspacePath();
-    return presentAttachments(workspace, await new ClipboardAttachmentManager(workspace, undefined, "zh-CN").attachBytes(request.files));
+  registerAttachmentsIpc({
+    handleIpc, assertTrustedSender,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    chooseAttachmentFiles: async () => {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: "添加文件或图片",
+        properties: ["openFile", "multiSelections", "dontAddToRecent"],
+      });
+      return result.canceled || result.filePaths.length === 0 ? undefined : result.filePaths;
+    },
+    writeClipboardText: (text) => clipboard.writeText(text),
+    imageThumbnail: (absolute) => {
+      const image = nativeImage.createFromPath(absolute);
+      if (image.isEmpty()) return undefined;
+      const size = image.getSize();
+      const scale = Math.min(1, 180 / Math.max(1, size.width), 120 / Math.max(1, size.height));
+      return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
+    },
   });
   registerReviewIpc({
     handleIpc, assertTrustedSender, serializeWriterStart,
