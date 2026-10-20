@@ -44,7 +44,7 @@
 ## 2. 工具与命令
 
 - 优先使用 `program + args[]` 的原生进程执行，减少 Shell 二次解释。
-- Shell 命令按实际执行的每一段分级：组合（`&&`、`||`、`&`、换行、重定向、`$(...)`/反引号替换）一律不是只读；危险程序在控制符之后、`sh -c`/`cmd /c`/`powershell -Command`/`Invoke-Expression` 内联脚本中、`sudo`/`env`/`xargs` 等包装器之后及 `find -delete/-exec` 中同样识别为危险。程序名被拆分引号（`"r"m`）、ANSI-C 引号（`$'rm'`）、`$IFS`、反斜杠（`r\m`）或通配符（`/bin/r?`）遮掩，以及 `eval`、`busybox` 之后的危险程序同样识别为危险。只有单一、未组合的白名单调用可判为只读（只读跳过审批且是 Plan 模式唯一允许的风险）；无法检查的内容（编码脚本、管道输入 Shell、带转义的 ANSI-C 引号、通配符程序名）按危险处理。
+- Shell 命令按实际执行的每一段分级：组合（`&&`、`||`、`&`、换行、重定向、`$(...)`/反引号替换）一律不是只读；危险程序在控制符之后、`sh -c`/`cmd /c`/`powershell -Command`/`Invoke-Expression` 内联脚本中、`sudo`/`env`/`xargs` 等包装器之后及 `find -delete/-exec` 中同样识别为危险。程序名被拆分引号（`"r"m`）、ANSI-C 引号（`$'rm'`）、`$IFS`、反斜杠（`r\m`）或通配符（`/bin/r?`）遮掩，以及 `eval`、`busybox` 之后的危险程序同样识别为危险。只有单一、未组合的白名单调用可判为只读（只读跳过审批且是 Plan 模式唯一允许的风险）；无法检查的内容（编码脚本、管道输入 Shell、带转义的 ANSI-C 引号、通配符程序名）按危险处理。丢弃工作成果的 Git 命令与 `reset --hard`、`clean -f` 同为危险级（维护者 2026-10-20 决定）：`checkout -- <路径>`、`checkout <ref> -- <路径>`、`checkout .`、`checkout -f`，`restore` 凡会改写工作树的形式（只带 `--staged`/`-S` 的除外），`stash drop`、`stash clear`，`push --force`/`-f`/`--force-with-lease`/`--force-if-includes`/`+refspec`/`--delete`/`-d`/`--mirror`/`--prune`，`branch -D`/`--delete --force`，`worktree remove --force`；切换分支、仅暂存区的 `restore --staged`、`stash`/`stash pop`、普通 `push` 和 `branch -d` 仍为执行级。Git 选项区分大小写，分级按原始大小写判断。
 - Shell 命令保留给确实需要 PowerShell 语法的场景，并接受更严格风险判断。
 - 命令分级在审批之前运行，输入来自模型（可能受网页等不可信内容影响），因此分词与分级必须在线性时间内完成；不得引入可灾难性回溯的正则，回归测试覆盖超长未闭合引号与转义。
 - 已产生输出或副作用、结果未知、用户取消和权限失败的操作不得静默重放。

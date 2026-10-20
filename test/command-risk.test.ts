@@ -8,7 +8,7 @@ import { classifyCommand, classifyProcess } from "../src/tools.js";
 const commandCases: Array<[string, "read" | "execute" | "dangerous"]> = [
  ["git status","read"],["git status && npm publish","execute"],["git status\nnode evil.js","execute"],["git log & node evil.js","execute"],
  ["git status > out.txt","execute"],["get-content a.txt > b.txt","execute"],['git diff "$(node evil.js)"',"execute"],["git status `node x`","execute"],
- ["git -c core.fsmonitor='touch x' status","execute"],["git diff --output=x","execute"],["git branch --list -D main","execute"],["git branch --list","read"],
+ ["git -c core.fsmonitor='touch x' status","execute"],["git diff --output=x","execute"],["git branch --list -D main","dangerous"],["git branch --list","read"],
  ["ls && rm -rf x","dangerous"],["echo hi\nrm -rf build","dangerous"],["sh -c 'rm -rf build'","dangerous"],['bash -lc "rm -rf /"',"dangerous"],
  ["git status | xargs rm","dangerous"],["find . -name '*.tmp' -delete","dangerous"],["find . -exec rm {} ;","dangerous"],["sudo rm -rf /","dangerous"],
  ["env FOO=1 /bin/rm x","dangerous"],["echo $(rm -rf x)","dangerous"],['echo "$(rm -rf x)"',"dangerous"],["echo 'rm -rf x'","execute"],
@@ -26,6 +26,19 @@ const commandCases: Array<[string, "read" | "execute" | "dangerous"]> = [
  // Inspectable commands keep their class: a script file, a sourced file, a variable assignment and globbed arguments are not obfuscation.
  ["sh build.sh","execute"],["source ~/.nvm/nvm.sh && nvm use 20","execute"],["$files = Get-ChildItem","execute"],["x=rm; $x -rf y","execute"],
  ["timeout 5 ls *.txt","execute"],["Get-ChildItem *.txt","read"],[`git commit -m "it''s $IFS"`,"execute"],["$'r''m' -rf build","dangerous"],
+ // Git commands that discard work are dangerous (maintainer decision 2026-10-20); switching, staging and plain pushes are not.
+ ["git checkout -- .","dangerous"],["git checkout -- src/app.ts","dangerous"],["git checkout main -- src/app.ts","dangerous"],["git checkout .","dangerous"],
+ ["git checkout -f main","dangerous"],["git checkout main","execute"],["git checkout -b feature","execute"],["git switch main","execute"],
+ ["git restore .","dangerous"],["git restore src/app.ts","dangerous"],["git restore --staged --worktree .","dangerous"],["git restore -W src/app.ts","dangerous"],
+ ["git restore --source=HEAD~1 src/app.ts","dangerous"],["git restore -s HEAD~1 src/app.ts","dangerous"],["git restore --staged src/app.ts","execute"],["git restore -S .","execute"],
+ ["git stash drop","dangerous"],["git stash drop stash@{1}","dangerous"],["git stash clear","dangerous"],["git stash","execute"],["git stash pop","execute"],["git stash list","execute"],
+ ["git push --force","dangerous"],["git push -f origin main","dangerous"],["git push --force-with-lease","dangerous"],["git push --force-with-lease=main:abc origin main","dangerous"],
+ ["git push origin +main","dangerous"],["git push origin --delete feature","dangerous"],["git push -d origin feature","dangerous"],["git push --mirror backup","dangerous"],
+ ["git push","execute"],["git push -u origin feature","execute"],["git push origin main","execute"],
+ ["git branch -D feature","dangerous"],["git branch --delete --force feature","dangerous"],["git branch -df feature","dangerous"],["git branch -d feature","execute"],["git branch feature","execute"],
+ ["git worktree remove --force .xiu/worktrees/x","dangerous"],["git worktree remove -f x","dangerous"],["git worktree remove x","execute"],["git worktree list","read"],
+ ["git -c core.fsmonitor=x push -f","dangerous"],["git -C sub stash drop","dangerous"],["sh -c 'git push -f'","dangerous"],["npm test && git checkout -- .","dangerous"],
+ ["echo 'git push -f'","execute"],['git commit -m "git checkout -- ."',"execute"],
 ];
 
 for (const [command, expected] of commandCases) {
@@ -47,6 +60,9 @@ test("direct processes inspect wrappers, inline shell scripts and git output opt
   assert.equal(classifyProcess("eval", ["rm", "-rf", "x"]), "dangerous");
   assert.equal(classifyProcess("r\\m", ["-rf", "x"]), "dangerous");
   assert.equal(classifyProcess("/bin/r?", ["-rf", "x"]), "dangerous");
+  assert.equal(classifyProcess("git", ["push", "--force"]), "dangerous");
+  assert.equal(classifyProcess("git", ["restore", "--staged", "x"]), "execute");
+  assert.equal(classifyProcess("git", ["checkout", "--", "."]), "dangerous");
 });
 
 test("command words join adjacent quoted and unquoted parts the way a shell does", async () => {

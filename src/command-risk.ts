@@ -259,11 +259,45 @@ function gitRisk(args: string[]): ToolRisk {
   const lowered = rest.map((token) => token.toLowerCase());
   if (subcommand === "reset" && lowered.includes("--hard")) return "dangerous";
   if (subcommand === "clean" && lowered.some((item) => /^-[a-z]*f/i.test(item) || item === "--force")) return "dangerous";
+  if (discardsWork(subcommand, rest)) return "dangerous";
   if (configured || lowered.some((item) => item.startsWith("--output"))) return "execute";
   if (["status", "log", "diff", "show", "rev-parse"].includes(subcommand ?? "")) return "read";
   if (subcommand === "branch" && lowered.includes("--list") && !rest.some((item) => GIT_BRANCH_MUTATIONS.test(item))) return "read";
   if (subcommand === "worktree" && lowered[0] === "list") return "read";
   return "execute";
+}
+
+/**
+ * Git commands that throw away uncommitted work, stashes, branches or remote
+ * history (maintainer decision 2026-10-20): discarding is as irreversible as
+ * `reset --hard`, so it is confirmed even where execute-level commands are
+ * auto-approved. Branch switches, staging-only restores, safe branch deletes
+ * and ordinary pushes stay at "execute". Options are case-sensitive in Git
+ * (`restore -S` stages, `-s` names a source), so `args` keep their case.
+ */
+function discardsWork(subcommand: string | undefined, args: string[]): boolean {
+  const has = (...flags: string[]) => args.some((item) => flags.includes(item));
+  // A short option letter anywhere in a clustered flag (`-fu` contains `f`).
+  const short = (letter: string) => args.some((item) => /^-[A-Za-z]+$/.test(item) && item.includes(letter));
+  switch (subcommand) {
+    case "checkout":
+      // `checkout -- <paths>`, `checkout <ref> -- <paths>`, `checkout .` and `checkout -f` overwrite the working tree.
+      return has("--", ".", "--force") || short("f");
+    case "restore":
+      // Only `--staged`/`-S` without `--worktree`/`-W` leaves the working tree alone.
+      return !(has("--staged") || short("S")) || has("--worktree") || short("W");
+    case "stash":
+      return args[0] === "drop" || args[0] === "clear";
+    case "push":
+      return has("--force", "--force-with-lease", "--force-if-includes", "--delete", "--mirror", "--prune") || short("f") || short("d")
+        || args.some((item) => item.startsWith("--force-with-lease=") || item.startsWith("+"));
+    case "branch":
+      return short("D") || (has("--delete") || short("d")) && (has("--force") || short("f"));
+    case "worktree":
+      return args[0] === "remove" && (has("--force") || short("f"));
+    default:
+      return false;
+  }
 }
 
 const READ_ONLY_CMDLETS = new Set(["get-content", "get-childitem", "test-path", "select-string", "get-filehash", "measure-object", "select-object", "where-object", "compare-object"]);
