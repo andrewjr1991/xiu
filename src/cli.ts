@@ -41,8 +41,7 @@ import { persistentLiveOutput, readInteractiveInput, selectTerminalOption } from
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
-import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "./session.js";
-import { formatLocalTime } from "./local-time.js";
+import { loadSession, type RestoredSession, type SessionReplayTurn } from "./session.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
@@ -76,7 +75,7 @@ import { handleAgentCommand } from "./commands/agent-commands.js";
 import { handleInspectCommand } from "./commands/inspect-commands.js";
 import { handleMediaCommand } from "./commands/media-command.js";
 import { handleRuntimeCommand } from "./commands/runtime-commands.js";
-import { chooseSession, handleSessionCommand, resolveStartupRecovery } from "./commands/session-commands.js";
+import { applyRestoredSession, chooseSession, handleSessionCommand, printSessionList, resolveStartupRecovery } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
@@ -426,29 +425,17 @@ async function main(): Promise<void> {
       }
     }
     if (options.listSessions) {
-      const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
-      if (!sessions.length) console.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
-      else for (const session of sessions) console.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
-      const note = unreadableSessionsNote(unreadable, language);
-      if (note) console.log(note);
+      await printSessionList(config.cwd, language);
       return;
     }
     const resumeRequested = options.resume !== undefined && options.resume !== false;
     let restored = resumeRequested && typeof options.resume === "string"
       ? await loadSession(config.cwd, options.resume)
       : undefined;
-    if (restored?.providerId && !options.provider) {
-      const restoredProfile = providerRegistry.get(restored.providerId);
-      if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
-    }
-    if (restored?.model) {
-      const previous = config.model;
-      config.model = restored.model;
-      if (config.capabilities) {
-        config.capabilities.text = restored.model;
-        if (config.capabilities.vision === previous) config.capabilities.vision = restored.model;
-      }
-    }
+    // A restored session brings its provider (unless --provider chose one) and model with it; the same rule applies
+    // after the session picker below and after a confirmed recovery.
+    const restoredSessionDeps = { providerRegistry, profileConfig, providerOverridden: Boolean(options.provider) };
+    applyRestoredSession(config, restored, restoredSessionDeps);
     const initialTask = (program.args as string[]).join(" ").trim();
     const oneShotSlash = initialTask ? explainOneShotSlashInput(initialTask) : undefined;
     if (oneShotSlash) {
@@ -552,18 +539,7 @@ async function main(): Promise<void> {
         console.log(chalk.dim(localize(language, "未选择会话，将开始新会话。\n", "No session selected. Starting a new session.\n")));
       }
     }
-    if (restored?.providerId && !options.provider) {
-      const restoredProfile = providerRegistry.get(restored.providerId);
-      if (restoredProfile) Object.assign(config, profileConfig(restoredProfile, restored.model));
-    }
-    if (restored?.model && restored.model !== config.model) {
-      const previous = config.model;
-      config.model = restored.model;
-      if (config.capabilities) {
-        config.capabilities.text = restored.model;
-        if (config.capabilities.vision === previous) config.capabilities.vision = restored.model;
-      }
-    }
+    applyRestoredSession(config, restored, restoredSessionDeps);
 
     status.start(localize(language, "正在索引项目", "Indexing project"));
     const projectIndex = new ProjectIndex(config.cwd);

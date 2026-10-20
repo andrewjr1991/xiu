@@ -128,6 +128,49 @@ export async function resolveStartupRecovery(ctx: StartupRecoveryContext): Promi
   return { action: "exit", failed: action === undefined };
 }
 
+export interface RestoredSessionConfigDeps {
+  providerRegistry: Pick<ProviderRegistry, "get">;
+  /** Builds the runtime config for a provider profile and model, the way startup does for the default provider. */
+  profileConfig: (profile: ProviderProfile, model?: string) => AgentConfig;
+  /** True when `--provider` was given on the command line: the session's provider then does not replace it. */
+  providerOverridden: boolean;
+}
+
+/**
+ * Points the live config at the provider and model a restored session used (`--resume`, the session picker, a confirmed
+ * recovery): the provider only when the command line did not choose one, the model always, with the text capability and a
+ * vision capability that followed the old text model moving with it. Nothing is persisted.
+ */
+export function applyRestoredSession(config: AgentConfig, restored: Pick<RestoredSession, "providerId" | "model"> | undefined, deps: RestoredSessionConfigDeps): void {
+  if (!restored) return;
+  if (restored.providerId && !deps.providerOverridden) {
+    const restoredProfile = deps.providerRegistry.get(restored.providerId);
+    if (restoredProfile) Object.assign(config, deps.profileConfig(restoredProfile, restored.model));
+  }
+  if (restored.model && restored.model !== config.model) {
+    const previous = config.model;
+    config.model = restored.model;
+    if (config.capabilities) {
+      config.capabilities.text = restored.model;
+      if (config.capabilities.vision === previous) config.capabilities.vision = restored.model;
+    }
+  }
+}
+
+export interface SessionListIo {
+  list: (cwd: string) => ReturnType<typeof listSessionsWithIssues>;
+  log: (line: string) => void;
+}
+
+/** `--list-sessions`: one line per saved session (id, local time, model, title), then a note on logs that could not be read. */
+export async function printSessionList(cwd: string, language: UiLanguage, io: SessionListIo = { list: listSessionsWithIssues, log: (line) => console.log(line) }): Promise<void> {
+  const { sessions, unreadable } = await io.list(cwd);
+  if (!sessions.length) io.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
+  else for (const session of sessions) io.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
+  const note = unreadableSessionsNote(unreadable, language);
+  if (note) io.log(note);
+}
+
 /** Lists the workspace's sessions and lets the user pick one; undefined when there is none or the choice was cancelled. */
 export async function chooseSession(workspace: string, language: UiLanguage): Promise<RestoredSession | undefined> {
   const { sessions, unreadable } = await listSessionsWithIssues(workspace);
