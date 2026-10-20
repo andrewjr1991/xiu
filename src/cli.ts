@@ -16,7 +16,7 @@ import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type 
 import { runProviderRecoveryCommand, type ProviderRecoveryCommand } from "./commands/provider-recovery.js";
 import { captureTaskBaseline, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { saveTaskChangeHistory } from "./task-change-history.js";
-import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
+import { applyCapabilityProbe } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
 import { resolveConfig, type AgentConfig } from "./config.js";
 import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./credential-store.js";
@@ -26,12 +26,11 @@ import { UsageError } from "./usage-error.js";
 import { createSystemCredentialStore, probeSystemCredentialStore, type SystemCredentialProbeResult, type SystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
-import { runFirstRunWizard } from "./first-run-wizard.js";
 import { collectDoctorReport } from "./doctor.js";
 import { runDoctorCommand } from "./commands/doctor-command.js";
 import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
-import { createProvider, probeProvider } from "./providers.js";
+import { createProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile, formatUnknownProviderMessage } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
 import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
@@ -66,7 +65,7 @@ import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
 import { XiuRuntime } from "./runtime/xiu-runtime.js";
-import { askQuestion, askSecret, InputEndedError } from "./terminal-prompts.js";
+import { askQuestion, InputEndedError } from "./terminal-prompts.js";
 import { installBrokenPipeHandling, setBrokenPipeHandler } from "./broken-pipe.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
@@ -80,6 +79,7 @@ import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
 import { type DiffCommandContext, handleDiffCommand } from "./commands/diff-commands.js";
 import { handleProjectCheckCommand } from "./commands/project-check-commands.js";
+import { createProviderSession } from "./commands/provider-session.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
 import { runAuditCommand } from "./commands/audit-command.js";
 import { runRecoverCommand } from "./commands/recover-command.js";
@@ -1218,168 +1218,15 @@ async function main(): Promise<void> {
       });
       agent.setRecoverySource(recoverySource);
     }
-    const featureNames = (profile: ProviderProfile, model = profile.model): string => {
-      profile = runtimeProfile(profile, model);
-      const names = [localize(language, "文本", "text")];
-      if (profile.features.tools) names.push(localize(language, "工具", "tools"));
-      if (profile.features.vision) names.push(localize(language, "视觉", "vision"));
-      if (profile.features.image) names.push(localize(language, "生图", "image"));
-      if (profile.features.video) names.push(localize(language, "视频", "video"));
-      if (profile.features.audio) names.push(localize(language, "音频", "audio"));
-      return names.join("/");
-    };
-    const capabilityStateName = (state: CapabilityProbeState): string => ({
-      supported: localize(language, "支持", "supported"),
-      unsupported: localize(language, "不支持", "unsupported"),
-      unknown: localize(language, "未知", "unknown"),
-      "not-tested": localize(language, "未测试", "not tested"),
-    })[state];
-    const capabilityProbeSummary = (profile: ProviderProfile, model = profile.model): string => {
-      const probe = providerRegistry.capabilityProbe(profile.id, model);
-      if (!probe) return localize(language, "能力未探测", "capabilities not tested");
-      const context = probe.contextWindow ? localize(language, ` · 上下文 ${probe.contextWindow.toLocaleString()}（API）`, ` · context ${probe.contextWindow.toLocaleString()} (API)`) : "";
-      return localize(language,
-        `探测：工具 ${capabilityStateName(probe.tools)} · 视觉 ${capabilityStateName(probe.vision)}${context} · ${formatLocalTime(probe.checkedAt)}`,
-        `Probe: tools ${capabilityStateName(probe.tools)} · vision ${capabilityStateName(probe.vision)}${context} · ${formatLocalTime(probe.checkedAt)}`);
-    };
-    const compactCapabilityProbeSummary = (profile: ProviderProfile, model = profile.model): string => {
-      const probe = providerRegistry.capabilityProbe(profile.id, model);
-      if (!probe) return localize(language, "未探测", "not tested");
-      return localize(language,
-        `工具 ${capabilityStateName(probe.tools)} / 视觉 ${capabilityStateName(probe.vision)}`,
-        `tools ${capabilityStateName(probe.tools)} / vision ${capabilityStateName(probe.vision)}`);
-    };
+    const providerSession = createProviderSession({
+      agent, config, language: () => language, profileConfig, providerRegistry,
+      refreshTools: () => { baseTools = buildBaseTools(); return [...baseTools, ...mcpManager.tools()]; },
+      runtimeProfile, status,
+    });
+    const { featureNames, capabilityProbeSummary, compactCapabilityProbeSummary, switchProviderProfile } = providerSession;
     const policy = createProviderPolicy(providerRegistry, profileConfig, (candidate) => [...buildBaseTools(candidate), ...mcpManager.tools()], language);
     agent.setFailoverController(policy.failover);
     agent.setRoutingController(policy.routing);
-    const switchProviderProfile = async (profile: ProviderProfile, persist = true, preferredModel?: string, forceCapabilityProbe = false): Promise<boolean> => {
-      status.start(localize(language, `正在测试 ${profile.name} 连接`, `Testing ${profile.name}`));
-      try {
-        let targetModel = preferredModel ?? profile.model;
-        let candidateConfig = profileConfig(profile, targetModel);
-        const connectionModel = candidateConfig.model;
-        const connection = await probeProvider(candidateConfig);
-        let nextProvider = connection.provider;
-        const discovered = connection.models;
-        if (candidateConfig.model === "local-model" && discovered[0]?.id) {
-          targetModel = discovered[0].id;
-        }
-        let capabilityProbe = providerRegistry.capabilityProbe(profile.id, targetModel);
-        const discoveredWindow = discovered.find((model) => model.id === targetModel)?.contextWindow;
-        const apiContextWindow = discoveredWindow ?? capabilityProbe?.contextWindow;
-        candidateConfig = profileConfig(profile, targetModel, apiContextWindow);
-        if (candidateConfig.model !== connectionModel) nextProvider = createProvider(candidateConfig);
-        if (forceCapabilityProbe || !probeIsFresh(capabilityProbe)) {
-          status.start(localize(language, `正在探测 ${targetModel} 的工具与视觉能力`, `Probing tool and vision capabilities for ${targetModel}`));
-          capabilityProbe = await probeModelCapabilities(candidateConfig, { provider: nextProvider });
-          if (apiContextWindow) {
-            capabilityProbe.contextWindow = apiContextWindow;
-            capabilityProbe.contextWindowSource = "api";
-          }
-          await providerRegistry.setCapabilityProbe(capabilityProbe);
-        }
-        const nextConfig = profileConfig(profile, targetModel, apiContextWindow);
-        await agent.replaceProvider(nextConfig, nextProvider);
-        baseTools = buildBaseTools();
-        agent.replaceTools([...baseTools, ...mcpManager.tools()]);
-        if (persist) await providerRegistry.setActive(profile.id, targetModel);
-        status.stop();
-        const activeContextWindow = nextConfig.contextWindow ?? 128_000;
-        const activeContextLimit = nextConfig.contextLimit ?? Math.floor(activeContextWindow * 0.8);
-        console.log(chalk.green(localize(language, `Provider 已切换为 ${profile.name}，模型 ${nextConfig.model}。`, `Provider changed to ${profile.name}, model ${nextConfig.model}.`)));
-        console.log(chalk.dim(localize(language, `上下文：${activeContextWindow.toLocaleString()} · 压缩点 ${activeContextLimit.toLocaleString()}（${nextConfig.contextWindowSource ?? "fallback"}）`, `Context: ${activeContextWindow.toLocaleString()} · compact at ${activeContextLimit.toLocaleString()} (${nextConfig.contextWindowSource ?? "fallback"})`)));
-        console.log(chalk.dim(localize(language, `能力：${featureNames(profile, targetModel)}${discovered.length ? ` · 发现 ${discovered.length} 个模型` : ""}`, `Capabilities: ${featureNames(profile, targetModel)}${discovered.length ? ` · discovered ${discovered.length} models` : ""}`)));
-        console.log(chalk.dim(`${capabilityProbeSummary(profile, targetModel)}\n`));
-        if (connection.discoveryError) console.log(chalk.dim(localize(language, "该服务未提供兼容的模型列表接口；已通过最小聊天请求验证连接。\n", "The service has no compatible model-list endpoint; connection verified with a minimal chat request.\n")));
-        return true;
-      } catch (error) {
-        status.stop();
-        console.error(chalk.red(`${formatUserFacingError(localize(language, "Provider 连接失败", "Provider connection failed"), error, language, { sensitive: profile.apiKey ? [profile.apiKey] : [], diagnostic: "/provider test" })}\n`));
-        return false;
-      }
-    };
-
-    const configureStartupProvider = async (): Promise<void> => {
-      if (!startupProviderError) return;
-      if (!providerRegistry.list().length) {
-        // Piped sessions keep the one-line hint so scripts stay predictable; a terminal gets the three-step wizard.
-        // The wizard saves nothing until its connection test passes, so leaving it never creates a half-finished channel.
-        if (process.stdin.isTTY && process.stdout.isTTY) {
-          const outcome = await runFirstRunWizard({
-            language,
-            registry: providerRegistry,
-            env: process.env,
-            probe: async (profile) => {
-              const probed = await probeProvider(profileConfig(profile));
-              return { models: probed.models, discoveryError: probed.discoveryError };
-            },
-            activate: (profile, model) => switchProviderProfile(profile, true, model),
-            io: {
-              select: (title, options) => selectTerminalOption(title, options, language),
-              ask: askQuestion,
-              askSecret,
-              log: (line) => console.log(`${line}\n`),
-            },
-          });
-          if (outcome.status === "configured") { startupProviderError = undefined; return; }
-        }
-        console.log(chalk.yellow(localize(language, "尚未添加任何渠道。请输入 /provider add，选择 Agnes、OpenAI、本地模型或兼容服务；无需先设置环境变量。\n", "No Providers added. Enter /provider add to choose Agnes, OpenAI, a local model, or a compatible service. Environment variables are optional.\n")));
-        return;
-      }
-      console.log(chalk.yellow(localize(language,
-        `当前 Provider ${config.providerLabel ?? config.providerId} 尚未配置（${startupProviderError.message}）。Xiu 已进入配置模式，不会退出。`,
-        `The current provider ${config.providerLabel ?? config.providerId} is not configured (${startupProviderError.message}). Xiu is staying open in setup mode.`)));
-      console.log(chalk.dim(localize(language,
-        "你可以现在完成引导，也可以稍后使用 /provider key 保存 Key，或使用 /providers 切换服务。\n",
-        "You can finish the guided setup now, or later use /provider key to save a key or /providers to switch services.\n")));
-
-      // Piped/non-interactive sessions must remain scriptable. They receive the
-      // same setup guidance, but no prompt is forced in front of their input.
-      if (!process.stdin.isTTY || !process.stdout.isTTY) return;
-
-      const action = await selectTerminalOption(localize(language, "首次使用配置", "First-run setup"), [
-        {
-          label: localize(language, `配置 ${config.providerLabel ?? config.providerId} 的 API Key`, `Configure the API key for ${config.providerLabel ?? config.providerId}`),
-          description: localize(language, "Key 仅保存在本机凭证配置中，输入内容不会显示", "The key stays in local credential storage and input is hidden"),
-          value: "key" as const,
-        },
-        {
-          label: localize(language, "选择其他 Provider", "Choose another provider"),
-          description: localize(language, "可选择 Agnes、本地模型或已经配置的服务", "Choose Agnes, a local model, or another configured service"),
-          value: "provider" as const,
-        },
-        {
-          label: localize(language, "稍后配置", "Configure later"),
-          description: localize(language, "先进入 xiu>，不会关闭程序", "Continue to xiu> without closing the program"),
-          value: "later" as const,
-        },
-      ], language);
-
-      if (action === "key") {
-        try {
-          const apiKey = await askSecret(localize(language, "输入 API Key（输入内容不会显示，直接回车取消）：", "API key (input is hidden; press Enter to cancel): "));
-          if (!apiKey) return;
-          await providerRegistry.setApiKey(config.providerId, apiKey);
-          const saved = providerRegistry.get(config.providerId);
-          if (!saved) throw new Error(localize(language, "Provider 配置不存在。", "Provider profile not found."));
-          if (await switchProviderProfile(saved, true, config.model)) startupProviderError = undefined;
-        } catch (error) {
-          console.error(chalk.red(`${formatUserFacingError(localize(language, "配置 Provider 失败", "Could not configure provider"), error, language)}\n`));
-        }
-        return;
-      }
-
-      if (action === "provider") {
-        const profiles = providerRegistry.list();
-        const selected = await selectTerminalOption(localize(language, "选择 Provider", "Choose a provider"), profiles.map((profile) => ({
-          label: profile.name,
-          description: `${profile.id} · ${profile.kind} · ${profile.model} · ${featureNames(profile)}`,
-          value: profile.id,
-        })), language);
-        if (selected && await switchProviderProfile(providerRegistry.get(selected)!)) startupProviderError = undefined;
-      }
-    };
-
     /**
      * Saves the bounded, redacted change report of the run that just finished to
      * `.xiu/task-change-history/<runId>.json`, the same record the desktop writes, so that
@@ -1495,7 +1342,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    await configureStartupProvider();
+    if (startupProviderError && await providerSession.configureStartupProvider(startupProviderError)) startupProviderError = undefined;
 
     if (initialTask) {
       let taskStarted = false;
