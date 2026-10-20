@@ -8,7 +8,7 @@ import { Agent } from "../src/agent.js";
 import { AgentRuntimeAdapter } from "../src/runtime/agent-adapter.js";
 import { applyRuntimeEvent, XIU_RUNTIME_SCHEMA_VERSION, type RuntimeEvent, type XiuRuntimeSnapshot } from "../src/runtime/protocol.js";
 import { XiuRuntime, type RuntimeTaskDriver } from "../src/runtime/xiu-runtime.js";
-import type { ModelProvider } from "../src/types.js";
+import type { ApprovalRequest, ModelProvider } from "../src/types.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -235,7 +235,7 @@ test("session approval remembers only an explicit non-dangerous operation scope"
   await running;
 });
 
-test("session approval cannot remember an unscoped or dangerous operation", async () => {
+test("session approval cannot remember an unscoped operation; a scoped dangerous one needs the risk confirmation", async () => {
   const driver = new FakeDriver();
   const runtime = new XiuRuntime();
   runtime.attachDriver(driver);
@@ -246,12 +246,23 @@ test("session approval cannot remember an unscoped or dangerous operation", asyn
   assert.throws(() => runtime.decideApproval(unscopedId, true, undefined, true), /explicitly scoped/);
   runtime.decideApproval(unscopedId, false);
   assert.equal(await unscoped, false);
-  const dangerous = runtime.requestApproval({ description: "delete", risk: "dangerous", sessionScope: "dangerous:delete" });
+  const dangerous = runtime.requestApproval({ description: "generate cover.png", risk: "dangerous", sessionScope: "billable-media:image" });
   const dangerousId = runtime.snapshot().task?.pendingApproval?.id;
   assert.ok(dangerousId);
-  assert.throws(() => runtime.decideApproval(dangerousId, true, "dangerous", true), /non-dangerous/);
-  runtime.decideApproval(dangerousId, false);
-  assert.equal(await dangerous, false);
+  assert.throws(() => runtime.decideApproval(dangerousId, true, undefined, true), /explicit risk confirmation/);
+  runtime.decideApproval(dangerousId, true, "dangerous", true);
+  assert.equal(await dangerous, true);
+  // The remembered family skips the prompt, like the CLI's "always allow this session"; another family and a forced retry (no scope) still ask.
+  const notices: string[] = [];
+  runtime.subscribe((event) => { if (event.type === "runtime.notice") notices.push(event.payload.message); });
+  const again: ApprovalRequest = { description: "generate hero.png", risk: "dangerous", sessionScope: "billable-media:image" };
+  assert.equal(await runtime.requestApproval(again), true);
+  assert.equal(again.decisionSource, "remembered");
+  assert.match(notices.at(-1) ?? "", /记住的精确权限/);
+  const forced = runtime.requestApproval({ description: "generate cover.png again", risk: "dangerous" });
+  assert.equal(runtime.snapshot().task?.state, "waiting_approval");
+  runtime.decideApproval(runtime.snapshot().task!.pendingApproval!.id, false);
+  assert.equal(await forced, false);
   driver.outcome = "completed";
   driver.result.resolve("done");
   await running;

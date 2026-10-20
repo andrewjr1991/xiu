@@ -184,10 +184,12 @@ const bridge = {
     calls.push(`plan-mode:${enabled}`);
     return runtime();
   },
-  decideApproval: async ({ approvalId, allowed }) => {
+  decideApproval: async ({ approvalId, allowed, rememberForSession, confirmedRisk }) => {
     calls.push(`approval:${allowed}`);
+    if (rememberForSession) calls.push(`approval:remember:${approvalId}:${confirmedRisk ?? "unconfirmed"}`);
     task = { ...task, state: "running", pendingApproval: undefined, updatedAt: now() };
     emit("approval.decided", { approvalId, allowed, source: "handler" });
+    if (approvalId === "approval-media") return runtime();
     const rubric = [
       "---",
       "## Rubric 结构",
@@ -318,6 +320,9 @@ contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...cal
     emit('runtime.notice', { kind: 'failure', message: 'run_process: Exit code: 1' });
     emit('tool.finished', { name: 'run_process', summary: output, result: { status: 'failure', output, retryable: false, sideEffectState: 'none' } });
     emit('model.progress', { chunks: 8, textCharacters: 0, argumentCharacters: 3783 });
+  },
+  emitMediaApprovalFixture: () => {
+    emit("approval.requested", { approval: { id: "approval-media", description: "生成 assets/cover.png（计费媒体验收）", risk: "dangerous", preview: "image-model · 1024x1024", sessionScope: "billable-media:image", scope: "once", effects: ["调用计费的图片模型"], recovery: "只新增文件，不改动已有内容", requestedAt: now() } });
   },
   emitMediaFixture: () => {
     emit("tool.started", { name: "generate_image", description: "generate assets/media-preview-canary.png with image-model", changesWorkspace: true, verification: false, risk: "dangerous" });
