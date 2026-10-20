@@ -38,7 +38,7 @@ import { MediaOperationStore, type MediaOperationRecord } from "./media-operatio
 import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager } from "./mcp.js";
 import { createMcpManager } from "./runtime/mcp-service.js";
-import { createMultiAgentTools, formatAgentRun, formatIntegrationPlan, MultiAgentCoordinator, requireCompletedSubagent, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
+import { createMultiAgentTools, MultiAgentCoordinator, requireCompletedSubagent, selectSubagentTools, type SubagentTask } from "./multi-agent.js";
 import { persistentLiveOutput, readInteractiveInput, selectTerminalOption } from "./interactive-ui.js";
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
@@ -67,10 +67,11 @@ import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { AgentRuntimeAdapter } from "./runtime/agent-adapter.js";
 import { XiuRuntime } from "./runtime/xiu-runtime.js";
-import { askQuestion, askSecret, askYesNo, InputEndedError } from "./terminal-prompts.js";
+import { askQuestion, askSecret, InputEndedError } from "./terminal-prompts.js";
 import { installBrokenPipeHandling, setBrokenPipeHandler } from "./broken-pipe.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
+import { handleAgentCommand } from "./commands/agent-commands.js";
 import { handleInspectCommand } from "./commands/inspect-commands.js";
 import { handleSessionCommand } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
@@ -2109,39 +2110,7 @@ async function main(): Promise<void> {
       if (await handlePluginCommand(task, { applyApprovedPlugins, config, language, pluginRegistry, status })) continue;
       if (await handleSkillCommand(task, { agent, language, skillRegistry, status })) continue;
       if (await handleMcpCommand(task, { attachMcpTools, auditCredential, ensureMcpSystemCredentialStore, language, mcpManager, projectMcpTrusted, status })) continue;
-      if (task === "/agents" || task.startsWith("/agents ")) {
-        const parts = task.split(/\s+/);
-        try {
-          if (parts.length === 1) {
-            const runs = coordinator.list();
-            console.log(runs.length ? `${runs.map((run) => formatAgentRun(run, language)).join("\n\n")}\n` : chalk.dim(localize(language, "没有多 Agent 运行记录。\n", "No multi-agent runs.\n")));
-          } else if (parts[1] === "cancel" && parts[2] && parts[3]) {
-            const cancelled = await coordinator.cancel(parts[2], parts[3]);
-            console.log(chalk.yellow(localize(language, `Agent ${cancelled.id} 状态：${cancelled.status}。\n`, `Agent ${cancelled.id} is ${cancelled.status}.\n`)));
-          } else if (parts[1] === "retry" && parts[2] && parts[3]) {
-            console.log(`${formatAgentRun(await coordinator.retry(parts[2], parts[3]), language)}\n`);
-          } else if (parts[1] === "integrate" && parts[2] && parts[3]) {
-            const plan = await coordinator.analyzeIntegration(parts[2], parts[3]);
-            console.log(`${formatIntegrationPlan(plan, language)}\n`);
-            if (!plan.canIntegrate) {
-              console.log(chalk.red(localize(language, "合并已被冲突或证据门禁阻止；主工作区和 Agent Worktree 均未修改。\n", "Integration is blocked by conflicts or evidence gates; the main workspace and Agent Worktree were not modified.\n")));
-              continue;
-            }
-            if (!(await askYesNo(chalk.yellow("[write]") + localize(language, ` 将此 Agent 补丁合并到 ${config.cwd}？[y/N] `, ` Integrate this Agent patch into ${config.cwd}? [y/N] `)))) console.log(chalk.dim(localize(language, "已取消 Agent 集成。\n", "Agent integration cancelled.\n")));
-            else {
-              console.log(chalk.green(`${await coordinator.integrate(parts[2], parts[3])}\n`));
-              projectIndex.invalidate();
-            }
-          } else if (parts.length === 2) {
-            console.log(`${formatAgentRun(coordinator.get(parts[1]), language)}\n`);
-          } else {
-            console.log(chalk.yellow(localize(language, "用法：/agents [运行ID] | /agents cancel|retry|integrate <运行ID> <任务ID>\n", "Usage: /agents [run-id] | /agents cancel|retry|integrate <run-id> <task-id>\n")));
-          }
-        } catch (error) {
-          console.error(chalk.red(`${describeFailure(localize(language, "Agent 命令失败", "Agent command failed"), error, language)}\n`));
-        }
-        continue;
-      }
+      if (await handleAgentCommand(task, { coordinator, cwd: config.cwd, language, onIntegrated: () => projectIndex.invalidate() })) continue;
       if (await handleBackgroundCommand(task, { config, language, background })) continue;
       if (await handleReportCommand(task, { agent, config, language, securityAudit, taskRunJournal })) continue;
       if (await handleCredentialCommand(task, { auditCredential, config, ensureSystemCredentialStore, formatCredentialProbe, language, printCredentialStatus, providerRegistry, switchProviderProfile })) continue;
