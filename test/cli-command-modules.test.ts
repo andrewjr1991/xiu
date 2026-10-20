@@ -4,10 +4,12 @@ import { TaskInputQueue } from "../src/task-queue.js";
 import { handleAgentCommand, type AgentCommandContext } from "../src/commands/agent-commands.js";
 import { handleBackgroundCommand, type BackgroundCommandContext } from "../src/commands/background-commands.js";
 import { handleCredentialCommand, type CredentialCommandContext } from "../src/commands/credential-commands.js";
+import { handleDiffCommand, type DiffCommandContext } from "../src/commands/diff-commands.js";
 import { handleInspectCommand, type InspectCommandContext } from "../src/commands/inspect-commands.js";
 import { handleMcpCommand, type McpCommandContext } from "../src/commands/mcp-commands.js";
 import { handleMediaCommand, type MediaCommandContext } from "../src/commands/media-command.js";
 import { handlePluginCommand, type PluginCommandContext } from "../src/commands/plugin-commands.js";
+import { handleProjectCheckCommand, type ProjectCheckCommandContext } from "../src/commands/project-check-commands.js";
 import { handleProviderCommand, type ProviderCommandContext } from "../src/commands/provider-commands.js";
 import { handleReportCommand, type ReportCommandContext } from "../src/commands/report-commands.js";
 import { handleRuntimeCommand, type RuntimeCommandContext } from "../src/commands/runtime-commands.js";
@@ -23,6 +25,8 @@ import { sharedFreeSearchBackend } from "../src/free-search.js";
 import { PermissionGrantStore } from "../src/extension-permissions.js";
 import { McpAuthStore } from "../src/mcp-auth-store.js";
 import { McpManager } from "../src/mcp.js";
+import { captureTaskBaseline } from "../src/task-changes.js";
+import { TaskRunJournal } from "../src/task-run.js";
 
 // The interactive loop tries each handler in turn, so a handler must decline input it does not own
 // without touching its context (an empty context would throw on any access).
@@ -30,9 +34,11 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
   ["agents", (task) => handleAgentCommand(task, {} as AgentCommandContext)],
   ["background", (task) => handleBackgroundCommand(task, {} as BackgroundCommandContext)],
   ["credentials", (task) => handleCredentialCommand(task, {} as CredentialCommandContext)],
+  ["diff", (task) => handleDiffCommand(task, {} as DiffCommandContext)],
   ["mcp", (task) => handleMcpCommand(task, {} as McpCommandContext)],
   ["media", (task) => handleMediaCommand(task, {} as MediaCommandContext)],
   ["plugins", (task) => handlePluginCommand(task, {} as PluginCommandContext)],
+  ["project checks", (task) => handleProjectCheckCommand(task, {} as ProjectCheckCommandContext)],
   ["providers", (task) => handleProviderCommand(task, {} as ProviderCommandContext)],
   ["reports", (task) => handleReportCommand(task, {} as ReportCommandContext)],
   ["runtime", (task) => handleRuntimeCommand(task, {} as RuntimeCommandContext)],
@@ -43,7 +49,7 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
 
 for (const [name, handle] of declining) {
   test(`${name} command handler declines ordinary tasks and other slash commands`, async () => {
-    for (const task of ["fix the failing test", "/help", "/status", "/agentsx", "/mediax", "/model", "/modelsx", "/languagex", "/pluginsx", "/mcpx", "/webx"]) {
+    for (const task of ["fix the failing test", "/help", "/status", "/agentsx", "/mediax", "/diffx", "/checkx", "/model", "/modelsx", "/languagex", "/pluginsx", "/mcpx", "/webx"]) {
       assert.equal(await handle(task), false, task);
     }
   });
@@ -597,4 +603,102 @@ test("the media command lists records with their status and the recovery hint", 
   } finally {
     console.log = originalLog;
   }
+});
+
+function captureConsole(): { logs: string[]; errors: string[]; restore: () => void } {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  return { logs, errors, restore: () => { console.log = originalLog; console.error = originalError; } };
+}
+
+test("the diff command keeps its views: usage, the session baseline, redaction and the saved run list", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-diff-command-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "workspace");
+  await fs.mkdir(cwd, { recursive: true });
+  await fs.writeFile(path.join(cwd, "kept.txt"), "kept\n");
+  const taskRunJournal = new TaskRunJournal(cwd, path.join(root, "task-runs"));
+  const console_ = captureConsole();
+  t.after(console_.restore);
+  let baseline: Awaited<ReturnType<typeof captureTaskBaseline>> | undefined;
+  const context: DiffCommandContext = {
+    config: { cwd, apiKey: "sk-diff-secret-1234567890" },
+    language: "en-US",
+    latestTaskBaseline: () => baseline,
+    redact: (value) => value.replaceAll("sk-diff-secret-1234567890", "[redacted]"),
+    taskRunJournal,
+  };
+  assert.equal(await handleDiffCommand("/diff nonsense", context), true);
+  assert.match(console_.logs.at(-1) ?? "", /Usage: \/diff/);
+  assert.equal(await handleDiffCommand("/diff task", context), true);
+  assert.match(console_.logs.at(-1) ?? "", /No task baseline is available in this session/);
+  assert.equal(await handleDiffCommand("/diff runs", context), true);
+  assert.doesNotMatch(console_.logs.at(-1) ?? "", /Error/);
+  assert.equal(console_.errors.length, 0);
+  baseline = await captureTaskBaseline(cwd);
+  await fs.writeFile(path.join(cwd, "added.txt"), "token sk-diff-secret-1234567890\n");
+  assert.equal(await handleDiffCommand("/diff task", context), true);
+  const report = console_.logs.at(-1) ?? "";
+  assert.match(report, /added\.txt/);
+  assert.doesNotMatch(report, /sk-diff-secret/);
+  assert.equal(await handleDiffCommand("/diff", context), true);
+  assert.match(console_.logs.at(-1) ?? "", /added\.txt/);
+  assert.equal(console_.errors.length, 0);
+});
+
+test("the check command lists scripts, reruns nothing on a bare /check, and runs through approval, Plan mode and cancellation tracking", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-check-command-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const console_ = captureConsole();
+  t.after(console_.restore);
+  const calls: string[] = [];
+  let planMode = false;
+  let approved = false;
+  let latest: ReturnType<ProjectCheckCommandContext["latestProjectCheck"]>;
+  const controllers: Array<AbortController | undefined> = [];
+  const context: ProjectCheckCommandContext = {
+    activities: { start: (kind, title, description) => { calls.push(`activity:${kind}:${title}:${description}`); return "activity-1"; }, finish: (id, _detail, failed) => { calls.push(`finish:${id}:${failed}`); } },
+    agent: { status: () => ({ planMode }) as ReturnType<ProjectCheckCommandContext["agent"]["status"]> },
+    approve: async (request) => { calls.push(`approve:${request.description}`); return approved; },
+    config: { cwd, apiKey: undefined },
+    language: "en-US",
+    latestProjectCheck: () => latest,
+    setLatestProjectCheck: (run) => { latest = run; calls.push(`record:${run.status}`); },
+    setActiveCheck: (controller) => { controllers.push(controller); },
+    onChecksExecuted: () => { calls.push("index:invalidate"); },
+    redact: (value) => value,
+    status: { start: (label) => { calls.push(`status:${label}`); }, stop: () => { calls.push("status:stop"); } },
+  };
+  assert.equal(await handleProjectCheckCommand("/check nonsense", context), true);
+  assert.match(console_.logs.at(-1) ?? "", /Usage: \/check/);
+  assert.equal(controllers.length, 0, "a usage error never starts a run");
+
+  assert.equal(await handleProjectCheckCommand("/check", context), true);
+  assert.ok(console_.logs.some((line) => /lint:.*package\.json/.test(line)), "without package.json every check says why it is unavailable");
+  assert.ok(!calls.some((call) => call.startsWith("record:")), "a bare /check records nothing");
+  assert.deepEqual(controllers.map((controller) => controller === undefined), [false, true], "the run is tracked while it lasts and cleared after");
+
+  await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ name: "demo", scripts: { lint: "node -e \"process.exit(0)\"" } }));
+  assert.equal(await handleProjectCheckCommand("/check lint", context), true);
+  assert.ok(calls.some((call) => call.startsWith("approve:")), "running a check asks for approval");
+  assert.match(console_.logs.find((line) => line.includes("lint: denied")) ?? "", /denied/);
+  assert.ok(calls.includes("record:blocked") && calls.includes("index:invalidate") && calls.includes("finish:activity-1:true"));
+  assert.ok(calls.some((call) => call.startsWith("status:Checking lint")) && calls.at(-1) === "status:stop");
+
+  planMode = true;
+  approved = true;
+  const approvalsBefore = calls.filter((call) => call.startsWith("approve:")).length;
+  assert.equal(await handleProjectCheckCommand("/check all", context), true);
+  assert.equal(calls.filter((call) => call.startsWith("approve:")).length, approvalsBefore, "Plan mode never reaches the approval prompt");
+  assert.ok(calls.includes("record:blocked"));
+  assert.ok(console_.logs.some((line) => line.includes("lint: skipped")) && console_.logs.some((line) => line.includes("Plan mode is read-only")));
+
+  planMode = false;
+  assert.equal(await handleProjectCheckCommand("/check", context), true);
+  assert.ok(console_.logs.some((line) => line.includes("Previous check record (not rerun):")));
+  assert.equal(console_.errors.length, 0);
 });
