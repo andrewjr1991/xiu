@@ -152,7 +152,7 @@ test("Chinese task view localizes progress, actions, and footer controls", () =>
   view.setPhase("思考中");
   view.recordImportantAction("验证通过：npm test");
   const footer = formatRunningInputFooter(view, 0, 0, "自动 | model");
-  assert.match(footer, /运行中：轮次 3/);
+  assert.match(footer, /运行中：第 3 轮 \| 思考中 \| \d+ 秒 \|/);
   assert.match(footer, /进度：自动/);
   assert.match(footer, /当前：思考中/);
   assert.match(footer, /Ctrl\+O 显示详情/);
@@ -185,7 +185,7 @@ test("running task view changes language without recreating the active task", ()
   view.setLanguage("zh-CN");
   const switched = formatRunningInputFooter(view, 0, 0, "自动 | model");
   assert.equal(view.language(), "zh-CN");
-  assert.match(switched, /运行中：轮次 2/);
+  assert.match(switched, /运行中：第 2 轮/);
   assert.match(switched, /当前：处理中/);
   assert.doesNotMatch(switched, /Working|Understand the task/);
 });

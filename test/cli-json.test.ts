@@ -101,9 +101,12 @@ interface RunCliOptions {
 
 async function runCli(args: string[], cwd: string, home: string, stdin = "", options: RunCliOptions = {}): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   const { closeStdoutWhen, terminateWhen, signal = "SIGTERM", closeStdoutOnSignal = false } = options;
+  // `xiu doctor` asks the npm registry and the release metadata for the latest version; routing the
+  // update check through a closed local port keeps this file off the network (the doctor reports the
+  // registry as unavailable, which these tests do not look at) and about two seconds faster per run.
   const child = spawn(process.execPath, ["--import", tsxLoader, cli, "--language", "en", ...args], {
     cwd,
-    env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost" },
+    env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_API_KEY: "fake-key-not-a-secret", OPENAI_API_KEY: "", AGNES_API_KEY: "", ANTHROPIC_API_KEY: "", XIU_PROVIDER: "", FORCE_COLOR: "0", NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost", XIU_UPDATE_PROXY: "http://127.0.0.1:9" },
     windowsHide: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
