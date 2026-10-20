@@ -59,7 +59,7 @@ import { formatCredentialBackendStatus } from "./status-labels.js";
 import type { AgentTool, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
-import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
+import { TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
 import { createWebFetch, createWebSearchTools } from "./web-search.js";
 import { ManagedWebSearchAuth } from "./managed-web-search-auth.js";
 import { redactSecrets } from "./secret-redaction.js";
@@ -75,7 +75,7 @@ import { handleAgentCommand } from "./commands/agent-commands.js";
 import { handleInspectCommand } from "./commands/inspect-commands.js";
 import { handleMediaCommand } from "./commands/media-command.js";
 import { handleRuntimeCommand } from "./commands/runtime-commands.js";
-import { chooseSession, handleSessionCommand } from "./commands/session-commands.js";
+import { chooseSession, handleSessionCommand, resolveStartupRecovery } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
@@ -738,54 +738,20 @@ async function main(): Promise<void> {
       console.log(chalk.red(message));
       process.exitCode = jsonStream ? jsonStream.result({ outcome: "not_started", error: redactTerminalOutput(message) }) : 1;
     };
-    try {
-      recoverySource = await taskRunJournal.interrupted();
-    } catch (error) {
-      refuseToStart(localize(language,
-        `任务恢复日志无法读取：${error instanceof Error ? error.message : String(error)}。为避免错误重放，Xiu 不会开始新任务。`,
-        `The task recovery journal could not be read: ${error instanceof Error ? error.message : String(error)}. Xiu will not start a new task because replay safety cannot be established.`));
+    const recovery = await resolveStartupRecovery({ config, language, oneShot: Boolean(initialTask), refuseToStart, taskRunJournal });
+    if (recovery.action === "refused") return;
+    if (recovery.action === "exit") {
+      if (recovery.failed) process.exitCode = 1;
       return;
     }
-    if (recoverySource) {
-      if (initialTask) {
-        refuseToStart(localize(language,
-          `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先在可交互终端里不带任务参数启动 xiu 确认恢复或放弃，或运行 xiu recover abandon ${recoverySource.runId.slice(0, 8)} 明确放弃，然后再运行新任务。`,
-          `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task in an interactive terminal to resume or abandon it, or run xiu recover abandon ${recoverySource.runId.slice(0, 8)} to abandon it explicitly, before running a new task.`));
-        return;
+    if (recovery.action === "resume") {
+      recoverySource = recovery.run;
+      restored = recovery.restored;
+      if (recovery.restored.providerId) {
+        const profile = providerRegistry.get(recovery.restored.providerId);
+        if (profile) Object.assign(config, profileConfig(profile, recovery.restored.model));
       }
-      const point = recoverySource.recoveryPoints.at(-1);
-      console.log(chalk.yellow(localize(language,
-        `检测到异常中断任务：${recoverySource.taskPreview || "（无摘要）"}\n最后恢复点：${point?.evidence ?? "尚无安全恢复点"}\n待核验副作用：${recoverySource.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,
-        `Interrupted task detected: ${recoverySource.taskPreview || "(no summary)"}\nLast recovery point: ${point?.evidence ?? "no safe recovery point"}\nSide effects awaiting verification: ${recoverySource.pendingSideEffects.length}. Xiu will not replay them automatically.`)));
-      const action = await selectTerminalOption(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
-        { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "恢复会话，先核验未知副作用，再继续剩余任务", "Restore the session, verify unknown side effects, then continue"), value: "resume" as const },
-        { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "将旧任务标记为已放弃，不执行任何旧操作", "Mark it abandoned without executing any old operation"), value: "abandon" as const },
-        { label: localize(language, "退出", "Exit"), description: localize(language, "保持恢复记录，暂不继续", "Keep the recovery record and do nothing"), value: "exit" as const },
-      ], language);
-      if (action === "resume") {
-        try {
-          restored = await loadSession(config.cwd, recoverySource.sessionId);
-        } catch (error) {
-          console.log(chalk.red(localize(language,
-            `无法加载关联会话：${error instanceof Error ? error.message : String(error)}。恢复记录已保留。`,
-            `The linked session could not be loaded: ${error instanceof Error ? error.message : String(error)}. The recovery record was preserved.`)));
-          return;
-        }
-        if (restored.providerId) {
-          const profile = providerRegistry.get(restored.providerId);
-          if (profile) Object.assign(config, profileConfig(profile, restored.model));
-        }
-        confirmedRecoveryTask = recoveryContinuation(recoverySource, language);
-      } else if (action === "abandon") {
-        await taskRunJournal.abandon(recoverySource.runId);
-        console.log(chalk.green(localize(language, "旧任务已标记为放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
-        recoverySource = undefined;
-      } else {
-        // "Exit" is the user's own choice (exit code 0); a menu cancelled because there is no terminal means a
-        // scripted session ran none of its input, which is a failure.
-        if (action === undefined) process.exitCode = 1;
-        return;
-      }
+      confirmedRecoveryTask = recovery.continuation;
     }
 
     const visibleAgentStates = new Map<string, string>();
