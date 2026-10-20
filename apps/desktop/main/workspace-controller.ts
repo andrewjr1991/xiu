@@ -100,7 +100,7 @@ export class DesktopWorkspaceController {
         const status: DesktopTaskSummary["status"] = run?.status ?? "session";
         return {
           id,
-          title: boundedTitle(session?.firstTask ?? run?.taskPreview ?? "未命名任务"),
+          title: boundedTitle(session?.firstTask || run?.taskPreview || "未命名任务"),
           updatedAt: [session?.updatedAt, run?.updatedAt].filter((value): value is string => Boolean(value)).sort().at(-1)!,
           status,
           manualAccepted: run?.manualAcceptance?.decision === "passed",
