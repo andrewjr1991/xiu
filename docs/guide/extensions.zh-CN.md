@@ -155,7 +155,7 @@ MCP 工具默认按 execute 风险处理并请求审批。只有确认工具不�
 
 v0.12.2 起，MCP 可声明 `process:execute`、`network:access`、`external:read`、`external:write`、`workspace:write` 和 `credentials:access`。Xiu 会根据 transport、认证、risk 和工作区变化配置推导最低权限；显式清单可以更严格，但不能少报。旧配置首次升级会建立兼容基线；新配置或权限扩大时保持断开，并提示使用 `/mcp permissions approve [名称]` 审批当前精确指纹。修改命令、端点、认证、风险、工作区副作用或权限都会使旧授权失效。授权摘要保存在 `~/.xiu/extension-permissions.json`，不会保存明文端点，也不会代替每次工具调用的核心安全审批。
 
-OAuth 登录后可使用 `/mcp credentials [status] [名称]` 查看来源，但不会看到 Token。`/mcp credentials migrate [名称]` 将秘密复制到系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）并校验，`cleanup` 单独删除旧明文，`rollback` 显式切回兼容文件。迁移不会自动清理，`-y` 也不能跳过 cleanup 的完整 MCP 名称确认。系统引用生效后若后端不可用，Xiu 不会静默读取保留明文；应恢复系统后端或显式回退。
+OAuth 登录后可使用 `/mcp credentials [status] [名称]` 查看来源，但不会看到 Token。`/mcp credentials migrate [名称]` 将秘密复制到系统凭证库（Windows 凭据管理器、macOS 钥匙串或 Linux Secret Service）并校验，`cleanup` 单独删除旧明文，`rollback` 显式切回兼容文件。迁移不会自动清理，`-y` 也不能跳过 cleanup 的完整 MCP 名称确认。系统引用生效后若后端不可用，Xiu 不会静默读取保留明文；应恢复系统后端或显式回退。桌面「扩展」面板从 0.20.14 起在每个 OAuth 服务条目里显示同样的登录状态与凭据来源（相当于 `/mcp auth` 与 `/mcp credentials status`，不显示 Token），并提供迁移、清理（同样要输入完整 MCP 名称）与回退按钮，操作走同一套流程并写入同一份审计账本。
 
 Windows stdio MCP 启动失败时，Xiu 会对 UTF-8、UTF-16LE 和常见 GB18030/GBK stderr 做有界解码，避免把本地中文错误显示为乱码；错误内容仍会截断并脱敏。
 

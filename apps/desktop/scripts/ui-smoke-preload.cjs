@@ -44,7 +44,9 @@ const providerRecoveryView = () => JSON.parse(JSON.stringify(providerRecoverySta
 const mcpDetails = (extra = {}) => ({ enabled: true, risk: "execute", env: [], headers: [], cwd: false, toolRisks: {}, toolChangesWorkspace: {}, permissionsDeclared: false, sampling: false, ...extra });
 const mcp = { servers: [
   { name: "smoke", origin: "user", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" }, details: mcpDetails({ args: 0 }) },
-  { name: "secure", origin: "user", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true, details: mcpDetails({ headers: ["Authorization"], oauth: { registration: "auto", scopes: ["read"], clientMetadataUrl: false, callbackPort: false } }) },
+  { name: "secure", origin: "user", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true, details: mcpDetails({ headers: ["Authorization"], oauth: { registration: "auto", scopes: ["read"], clientMetadataUrl: false, callbackPort: false } }),
+    auth: { authenticated: true, expired: false, issuer: "https://auth.test", scopes: ["read"], expiresAt: "2026-12-01T00:00:00.000Z" },
+    credentials: { backend: "系统凭据管理器", records: [{ source: "legacy-file", legacyCopyPresent: true, systemCopyPresent: false, interruptedMigration: false }], migratable: true, cleanable: false, rollbackable: false } },
   { name: "plugin_acme_search", origin: "plugin", transport: "streamable-http", state: "permission-required", tools: 0, approved: false, permissions: ["network:access"], added: ["network:access"], fingerprint: "e".repeat(64), removable: false, details: mcpDetails({ env: ["SEARCH_API_KEY"], toolRisks: { search: "read" }, permissionsDeclared: true }) },
 ] };
 const mcpView = () => JSON.parse(JSON.stringify(mcp));
@@ -120,6 +122,13 @@ const bridge = {
     if(request.action==="login") mcp.oauthFlow={id:"ui-oauth",name:request.name,state:"confirmation",issuer:"https://auth.test",resource:"https://mcp.test",scopes:["read"],callback:"http://127.0.0.1:53122"};
     if(request.action==="oauth-decision") mcp.oauthFlow={...mcp.oauthFlow,state:request.allowed?"waiting":"cancelled",browserOpened:false,authorizationUrl:"https://auth.test/authorize?state=ui-test"};
     if(request.action==="oauth-cancel") mcp.oauthFlow={...mcp.oauthFlow,state:"cancelled"};
+    if(request.action==="credentials") {
+      const server=mcp.servers.find(s=>s.name===request.name);
+      if (!server || request.confirmed !== true || request.fingerprint !== server.fingerprint || (request.operation === "cleanup" && request.typedName !== request.name)) throw new Error("bad credential confirmation");
+      calls.push(`mcp:credentials:${request.operation}:${request.name}`);
+      if (request.operation === "migrate") server.credentials = { ...server.credentials, records: [{ source: "system", legacyCopyPresent: true, systemCopyPresent: true, interruptedMigration: false, migratedAt: "2026-10-20T00:00:00.000Z" }], migratable: false, cleanable: true, rollbackable: true };
+      if (request.operation === "cleanup") server.credentials = { ...server.credentials, records: [{ ...server.credentials.records[0], legacyCopyPresent: false }], cleanable: false };
+    }
     return mcpView();
   },
   browseMcp: async ({name,action,value,args}) => {

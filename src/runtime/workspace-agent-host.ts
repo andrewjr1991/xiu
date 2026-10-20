@@ -15,6 +15,8 @@ import { SecurityAuditLog } from "../security-audit.js";
 import { SettingsStore } from "../settings.js";
 import { SkillRegistry, createSkillTools } from "../skills.js";
 import { createSystemCredentialStore } from "../system-credential-store.js";
+import type { CredentialStore } from "../credential-store.js";
+import type { McpAuthSecretRecord } from "../mcp-auth-store.js";
 import { TaskRunJournal } from "../task-run.js";
 import { builtinTools, createBackgroundTools } from "../tools.js";
 import type { ApprovalRequest, ModelProvider } from "../types.js";
@@ -253,15 +255,20 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     steer: (text) => adapter.steer(text), status: () => adapter.status(),
     setPlanMode: (enabled) => adapter.setPlanMode(enabled),
   });
-  let mcpCredentials;
-  try { mcpCredentials = await createSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
+  let mcpCredentials: CredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> | undefined;
+  const mcpSystemCredentials = async () => mcpCredentials ??= await createSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record");
+  try { await mcpSystemCredentials(); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
   mcpManager.setSamplingModel(() => agent.currentModel());
   mcpManager.setPluginServers(plugins.mcpServers);
   const computerNames = new Set(initialComputerTools.map(tool => tool.name));
   const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name) && !computerNames.has(tool.name)), ...createMediaTools(next), ...(options.computerUse ? createComputerUseTools(next, options.computerUse) : []), ...mcpManager.tools()];
-  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)));
+  const mcp = new WorkspaceMcpService(mcpManager, () => agent.replaceTools(currentTools(config)), undefined, {
+    systemCredentials: mcpSystemCredentials,
+    // The desktop's explicit credential operations land in the same ledger as the CLI's `/mcp credentials`.
+    audit: async (action, subject, outcome) => { await securityAudit.record({ category: "credential", action, outcome, subject, source: "command" }); },
+  });
   const policy = createProviderPolicy(registry, (target, targetModel) => {
     const next = createWorkspaceProviderConfig(target, targetModel, workspace, registry.credentialRevision(target.id), language);
     next.projectConfigurationTrusted = true;

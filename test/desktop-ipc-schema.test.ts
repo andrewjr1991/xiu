@@ -83,6 +83,10 @@ test("malformed requests are rejected with the channel and field, never the valu
   rejects(desktopChannels.browser, [{ action: "layout", bounds: { x: 0, y: 0, width: -1, height: 1 }, visible: true }], /bounds\.width must be a finite number between 0/);
   rejects(desktopChannels.mcpManage, [{ action: "save", draft: { name: "n", transport: "http", risk: "read" } }], /draft\.transport must be one of "stdio", "streamable-http"/);
   rejects(desktopChannels.mcpManage, [{ action: "delete", name: "n", fingerprint: "f" }], /argument 1\.confirmed must be one of true/);
+  assert.deepEqual(validateIpcArguments(desktopChannels.mcpManage, [{ action: "credentials", operation: "cleanup", name: "secure", fingerprint: "f".repeat(64), confirmed: true, typedName: "secure" }]),
+    [{ action: "credentials", operation: "cleanup", name: "secure", fingerprint: "f".repeat(64), confirmed: true, typedName: "secure" }]);
+  rejects(desktopChannels.mcpManage, [{ action: "credentials", operation: "forget", name: "secure", fingerprint: "f".repeat(64), confirmed: true }], /operation must be one of "migrate", "cleanup", "rollback"/);
+  rejects(desktopChannels.mcpManage, [{ action: "credentials", operation: "migrate", name: "secure", fingerprint: "f".repeat(64), confirmed: false }], /confirmed must be one of true/);
   rejects(desktopChannels.mcpBrowse, [{ name: "n", action: "read", args: { key: 1 } }], /argument 1\.args\.key must be a string/);
   rejects(desktopChannels.managementChange, [{ action: "stage", revision: "r", phase: "deploy" }], /phase must be one of "planning", "implementation", "verification"/);
   rejects(desktopChannels.pluginChange, [{ action: "approve", id: "acme.demo", fingerprint: "f".repeat(64), confirmed: false }], /confirmed must be one of true/);

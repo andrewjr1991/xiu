@@ -1,8 +1,9 @@
 import { permissionFingerprint, type ExtensionPermission } from "../extension-permissions.js";
-import { McpAuthStore, type McpAuthSecretRecord } from "../mcp-auth-store.js";
+import { McpAuthStore, type McpAuthCredentialInfo, type McpAuthSecretRecord } from "../mcp-auth-store.js";
 import { McpManager, type McpServerStatus, type McpOAuthConfig, type McpServerConfig } from "../mcp.js";
 import { expandResourceTemplate, isResourceTemplate, resourceTemplateVariables } from "../mcp-resource-template.js";
 import type { CredentialStore } from "../credential-store.js";
+import { systemCredentialBackendName } from "../system-credential-store.js";
 import { randomUUID } from "node:crypto";
 import type { ToolRisk } from "../types.js";
 
@@ -48,7 +49,43 @@ export interface WorkspaceMcpSnapshot {
     diagnostic?: string;
     /** Read-only, secret-free summary of the stored configuration, also for project, plugin and advanced entries the editor refuses. */
     details: WorkspaceMcpConfigDetails;
+    /** OAuth servers: what `/mcp auth` prints, without tokens. */
+    auth?: WorkspaceMcpOAuthState;
+    /** OAuth servers: what `/mcp credentials status` prints, plus which explicit operations apply right now. */
+    credentials?: WorkspaceMcpCredentialState;
+    /** Set when the auth or credential state could not be read; the reason never carries backend detail. */
+    credentialDiagnostic?: string;
   }>;
+}
+
+export interface WorkspaceMcpOAuthState {
+  authenticated: boolean;
+  expired: boolean;
+  issuer?: string;
+  scopes: string[];
+  /** ISO time. */
+  expiresAt?: string;
+}
+
+export type WorkspaceMcpCredentialOperation = "migrate" | "cleanup" | "rollback";
+
+export interface WorkspaceMcpCredentialState {
+  /** The platform's system credential backend name, for the confirmation copy. */
+  backend: string;
+  records: Array<Pick<McpAuthCredentialInfo, "source" | "legacyCopyPresent" | "systemCopyPresent" | "interruptedMigration" | "migratedAt">>;
+  /** Legacy plaintext secrets exist that `migrate` would copy to the system store. */
+  migratable: boolean;
+  /** A system reference is in place and the retained plaintext copy can be deleted. */
+  cleanable: boolean;
+  /** A migrated record can be switched back to the compatibility file. */
+  rollbackable: boolean;
+}
+
+export interface WorkspaceMcpServiceOptions {
+  /** Creates (or returns) the system credential store a migration writes to; absent or throwing means migration fails closed. */
+  systemCredentials?: () => Promise<CredentialStore<McpAuthSecretRecord, "mcp-oauth-record">>;
+  /** Writes the same `credential` audit facts the CLI records for `/mcp credentials`. */
+  audit?: (action: string, subject: string, outcome: "succeeded" | "failed" | "cancelled") => Promise<void>;
 }
 
 export interface WorkspaceMcpConfigDetails {
@@ -77,7 +114,7 @@ export class WorkspaceMcpService {
   private loginAbort?: AbortController;
   private confirmLogin?: (allowed: boolean) => void;
   get busy(): boolean { return Boolean(this.loginAbort); }
-  constructor(readonly manager: McpManager, private readonly toolsChanged: () => void, private readonly openBrowser?: (url: URL) => Promise<void>) {}
+  constructor(readonly manager: McpManager, private readonly toolsChanged: () => void, private readonly openBrowser?: (url: URL) => Promise<void>, private readonly options: WorkspaceMcpServiceOptions = {}) {}
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.pending.then(operation, operation);
@@ -112,6 +149,7 @@ export class WorkspaceMcpService {
         toolChangesWorkspace: Object.fromEntries(Object.entries(config.toolChangesWorkspace ?? {}).slice(0, 128)), permissionsDeclared: config.permissions !== undefined, sampling: config.sampling === true,
         ...(config.auth ? { oauth: { registration: config.auth.registration, scopes: [...(config.auth.scopes ?? [])].slice(0, 32), clientMetadataUrl: Boolean(config.auth.clientMetadataUrl), callbackPort: config.auth.callbackPort !== undefined } } : {}),
       };
+      const credentialState = entry.config.auth?.type === "oauth" && entry.config.url ? await this.credentialState(entry.name) : {};
       return {
         name: manifest.name, origin: entry.origin,
         transport: manifest.details?.includes("transport:streamable-http") ? "streamable-http" : "stdio",
@@ -121,9 +159,65 @@ export class WorkspaceMcpService {
         approved: manifest.approved, permissions: [...manifest.permissions], added: [...manifest.added],
         fingerprint: permissionFingerprint(manifest),
         ...(status?.state === "failed" ? { diagnostic: /XIU_NODE_NOT_FOUND|ENOENT|not recognized|not found|无法|找不到/i.test(status.error ?? "") ? "找不到启动程序。请安装 Node.js 并检查用户 PATH，关闭并重新打开 Xiu 后重连。" : "服务启动或协议握手失败。请检查该服务的启动命令、工作目录和运行环境；不会自动安装或修改配置。" } : {}),
-        ...(editable ? { editable } : {}), removable: entry.origin === "user", oauth: Boolean(entry.config.auth), details,
+        ...(editable ? { editable } : {}), removable: entry.origin === "user", oauth: Boolean(entry.config.auth), details, ...credentialState,
       };
     })) };
+  }
+
+  /** Token-free OAuth and credential-source state; a backend that cannot answer yields a diagnostic, never a failed snapshot. */
+  private async credentialState(name: string): Promise<Pick<WorkspaceMcpSnapshot["servers"][number], "auth" | "credentials" | "credentialDiagnostic">> {
+    try {
+      const [status] = await this.manager.authStatus(name, true);
+      const records = await this.manager.oauthCredentialInfo(name, true);
+      const auth: WorkspaceMcpOAuthState | undefined = status ? {
+        authenticated: status.authenticated, expired: status.expired, scopes: status.scopes.slice(0, 64),
+        ...(status.issuer ? { issuer: status.issuer } : {}), ...(status.expiresAt ? { expiresAt: new Date(status.expiresAt).toISOString() } : {}),
+      } : undefined;
+      const credentials: WorkspaceMcpCredentialState = {
+        backend: systemCredentialBackendName(),
+        records: records.slice(0, 16).map((record) => ({
+          source: record.source, legacyCopyPresent: record.legacyCopyPresent, systemCopyPresent: record.systemCopyPresent, interruptedMigration: record.interruptedMigration,
+          ...(record.migratedAt ? { migratedAt: record.migratedAt } : {}),
+        })),
+        migratable: records.some((record) => record.source === "legacy-file"),
+        cleanable: records.some((record) => record.source === "system" && record.legacyCopyPresent),
+        rollbackable: records.some((record) => record.source === "system" && Boolean(record.migratedAt)),
+      };
+      return { ...(auth ? { auth } : {}), credentials };
+    } catch {
+      return { credentialDiagnostic: "OAuth 登录状态或凭据来源暂时无法读取；请检查系统凭据库后刷新。" };
+    }
+  }
+
+  /**
+   * The desktop counterpart of `/mcp credentials migrate|cleanup|rollback`: the same store operations,
+   * the same fail-closed system backend, the same typed-name confirmation for cleanup, the same audit facts.
+   */
+  async credentials(operation: WorkspaceMcpCredentialOperation, name: string, fingerprint: string, confirmed: boolean, typedName?: string): Promise<WorkspaceMcpSnapshot> {
+    return this.serialize(async () => {
+      const audit = async (outcome: "succeeded" | "failed" | "cancelled") => { await this.options.audit?.(`mcp-${operation}`, name, outcome); };
+      if (!["migrate", "cleanup", "rollback"].includes(operation) || !/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error("Invalid MCP credential request.");
+      const server = (await this.snapshot()).servers.find((item) => item.name === name);
+      if (confirmed !== true || !server?.oauth || !server.credentials || server.fingerprint !== fingerprint) throw new Error("MCP credential operations require current configuration confirmation.");
+      if (operation === "cleanup" && typedName !== name) { await audit("cancelled"); throw new Error("Cleanup requires the exact MCP name."); }
+      const eligible = operation === "migrate" ? server.credentials.migratable : operation === "cleanup" ? server.credentials.cleanable : server.credentials.rollbackable;
+      if (!eligible) throw new Error(`No OAuth credentials of ${name} are eligible for ${operation}.`);
+      try {
+        if (operation === "migrate") {
+          let store: CredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> | undefined;
+          try { store = await this.options.systemCredentials?.(); } catch { store = undefined; }
+          // Never downgrade: without a reachable system backend nothing is copied and the plaintext stays where it was.
+          if (!store) throw new Error(`${systemCredentialBackendName()} is unavailable; the migration was not started.`);
+          await this.manager.migrateOAuthCredentials(name, store, true);
+        } else if (operation === "cleanup") await this.manager.cleanupOAuthCredentials(name, true);
+        else await this.manager.rollbackOAuthCredentials(name, true);
+      } catch (error) {
+        await audit("failed");
+        throw error;
+      }
+      await audit("succeeded");
+      return this.snapshot();
+    });
   }
 
   private async editor(name: string, config: McpServerConfig, fingerprint: string): Promise<WorkspaceMcpDraft | undefined> {

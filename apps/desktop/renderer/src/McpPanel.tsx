@@ -21,6 +21,21 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
   const [catalog, setCatalog] = useState<{ server: string; templates: Array<{ name: string; uriTemplate: string; description?: string; variables: string[] }> }>();
   const templateVariables = (template: string) => [...new Set([...template.matchAll(/\{([+#./;?&]?)([^{}]*)\}/g)].flatMap((match) => match[2]!.split(",").map((item) => item.trim()).filter(Boolean)))];
   const originLabels: Record<string, string> = { user: "用户配置", project: "项目配置", plugin: "插件贡献" };
+  const [typedName, setTypedName] = useState("");
+  const sourceLabels: Record<string, string> = { "legacy-file": "兼容文件", system: "系统凭据库", none: "无秘密" };
+  const describeAuth = (auth: NonNullable<WorkspaceMcpSnapshot["servers"][number]["auth"]>) => [
+    auth.authenticated ? auth.expired ? "已过期" : "已登录" : "未登录",
+    auth.issuer ? `签发方 ${auth.issuer}` : undefined, auth.scopes.length ? `scopes ${auth.scopes.join(" ")}` : "scopes（默认）",
+    auth.expiresAt ? `到期 ${new Date(auth.expiresAt).toLocaleString()}` : undefined,
+  ].filter(Boolean).join(" · ");
+  const describeRecords = (credentials: NonNullable<WorkspaceMcpSnapshot["servers"][number]["credentials"]>) => credentials.records.length
+    ? credentials.records.map((record) => `${sourceLabels[record.source] ?? record.source} · 旧明文 ${record.legacyCopyPresent ? "有" : "无"} · 系统副本 ${record.systemCopyPresent ? "可用" : record.source === "system" ? "不可用" : "无"}${record.interruptedMigration ? " · 迁移待恢复" : ""}`).join("；")
+    : "尚无本地 OAuth 凭据";
+  const credentialOperations = (credentials: NonNullable<WorkspaceMcpSnapshot["servers"][number]["credentials"]>) => [
+    credentials.migratable ? { operation: "migrate" as const, label: `迁移到${credentials.backend}`, confirm: "确认迁移", text: `把 OAuth Token 与 Client Secret 复制到 ${credentials.backend}，回读校验后切换引用；Scope 等非秘密元数据仍留在配置文件，旧明文暂时保留，之后可单独清理。` } : undefined,
+    credentials.cleanable ? { operation: "cleanup" as const, label: "清理旧明文", confirm: "确认清理", text: "再次校验系统副本后永久删除旧明文 Token。请先确认重启后仍能连接，然后输入 MCP 名称确认。" } : undefined,
+    credentials.rollbackable ? { operation: "rollback" as const, label: "回退到兼容文件", confirm: "确认回退", text: "切回本机兼容文件并删除系统凭据引用；若旧明文已清理，会先从系统凭据恢复。" } : undefined,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
   const [prompt, setPrompt] = useState("");
   const [promptArgs, setPromptArgs] = useState("{}");
   const flow = snapshot?.oauthFlow;
@@ -105,6 +120,14 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
       {server.added.length > 0 && !server.approved && <p>待确认权限：{server.added.join("、")}</p>}
       {server.editable ? <button disabled={blocked} onClick={() => edit(server.editable!)}>编辑 {server.name}</button> : <small>{server.origin === "plugin" ? "插件贡献的配置只读，随插件授权变化。" : server.origin === "project" ? "项目配置只读，请编辑项目 .xiu/mcp.json。" : "含高级字段或可能含凭据的配置只读，请编辑 ~/.xiu/mcp.json。"}</small>}
       {!server.approved && server.editable?.enabled !== false && (confirmation === server.fingerprint ? <div><p>我确认此来源和上述权限清单；后续连接可能启动外部程序或访问网络。</p><button disabled={blocked} onClick={() => { setConfirmation(undefined); onApprove(server.name, server.fingerprint); }}>确认此权限清单</button><button onClick={() => setConfirmation(undefined)}>取消</button></div> : <button disabled={blocked} onClick={() => setConfirmation(server.fingerprint)}>核对并授权</button>)}
+      {server.auth && <p className="mcp-config-details">OAuth 状态：{describeAuth(server.auth)}。</p>}
+      {server.credentialDiagnostic && <p className="review-warning">{server.credentialDiagnostic}</p>}
+      {server.credentials && <div className="mcp-credentials" aria-label={`${server.name} 的 OAuth 凭据`}><p className="mcp-config-details">凭据来源：{describeRecords(server.credentials)}。Token 不在此显示。</p>
+        {credentialOperations(server.credentials).map((item) => <button key={item.operation} disabled={blocked} onClick={() => { setTypedName(""); setConfirmation(`credentials:${item.operation}:${server.fingerprint}`); }}>{item.label}</button>)}
+        {credentialOperations(server.credentials).map((item) => confirmation === `credentials:${item.operation}:${server.fingerprint}` && <div key={`confirm-${item.operation}`}><p>{item.text}</p>
+          {item.operation === "cleanup" && <label>输入 MCP 名称“{server.name}”确认<input aria-label="清理确认名称" value={typedName} onChange={(event) => setTypedName(event.target.value)} /></label>}
+          <button disabled={blocked || (item.operation === "cleanup" && typedName !== server.name)} onClick={() => { setConfirmation(undefined); void onManage({ action: "credentials", operation: item.operation, name: server.name, fingerprint: server.fingerprint, confirmed: true, ...(item.operation === "cleanup" ? { typedName } : {}) }); }}>{item.confirm}</button><button onClick={() => setConfirmation(undefined)}>取消</button></div>)}
+      </div>}
       {server.oauth && <><button disabled={blocked || !server.approved} onClick={() => void onManage({ action: "login", name: server.name, fingerprint: server.fingerprint })}>OAuth 登录</button><button disabled={blocked} onClick={() => setConfirmation(`logout:${server.fingerprint}`)}>退出 OAuth</button></>}
       {server.removable && <button disabled={blocked} onClick={() => setConfirmation(`delete:${server.fingerprint}`)}>删除 {server.name}</button>}
       {["delete", "logout"].map((action) => confirmation === `${action}:${server.fingerprint}` && <div key={action}><p>{action === "delete" ? "删除用户配置并断开连接？OAuth 凭据需单独退出清理。" : "清理本机 OAuth 凭据并断开？此操作不保证远端授权撤销，请在服务端检查。"}</p><button disabled={blocked} onClick={() => { setConfirmation(undefined); void onManage({ action: action as "delete" | "logout", name: server.name, fingerprint: server.fingerprint, confirmed: true }); }}>确认{action === "delete" ? "删除" : "退出"}</button><button onClick={() => setConfirmation(undefined)}>取消</button></div>)}

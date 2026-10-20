@@ -170,7 +170,20 @@ export class DesktopTaskController {
 
   async manageMcp(workspace: string, request: import("../shared/protocol.js").DesktopMcpManageRequest) {
     const host = await this.ensure(workspace);
-    if (!host.mcp || !request || !["save", "delete", "login", "logout", "oauth-decision", "oauth-cancel"].includes(request.action)) throw new Error("无效的 MCP 管理请求。");
+    if (!host.mcp || !request || !["save", "delete", "login", "logout", "oauth-decision", "oauth-cancel", "credentials"].includes(request.action)) throw new Error("无效的 MCP 管理请求。");
+    if (request.action === "credentials") {
+      await this.assertCanReconfigure(workspace);
+      this.mcpBusy = true;
+      try { return await host.mcp.credentials(request.operation, request.name, request.fingerprint, request.confirmed === true, request.typedName); }
+      catch (error) {
+        // Store errors name only the backend and the operation; anything else is reduced to a fixed sentence.
+        const reason = error instanceof Error ? error.message : "";
+        throw new Error(/unavailable|not reachable|No system credential backend/i.test(reason) ? "系统凭据库不可用，操作未开始，旧凭据未改动。"
+          : /exact MCP name/i.test(reason) ? "MCP 名称不匹配，已取消清理。"
+            : /eligible|No legacy OAuth credentials/i.test(reason) ? "当前没有符合该操作条件的 OAuth 凭据，请刷新后核对。"
+              : "MCP 凭据操作未完成：请刷新后核对登录状态与凭据来源；不会自动重试，也不会回退为明文。");
+      } finally { this.mcpBusy = false; }
+    }
     try {
       if (request.action === "oauth-decision") { host.mcp.decideLogin(request.flowId, request.allowed); return await host.mcp.snapshot(); }
       if (request.action === "oauth-cancel") { host.mcp.cancelLogin(request.flowId); return await host.mcp.snapshot(); }
