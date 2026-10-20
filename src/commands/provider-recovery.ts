@@ -1,6 +1,7 @@
 import type { ProviderRegistry, ProviderConfigurationDiagnostics, ProviderConfigurationRecoveryPreview } from "../provider-registry.js";
 import { ProviderConfigurationError } from "../provider-config-migration.js";
 import { localize, type UiLanguage } from "../i18n.js";
+import { formatLocalTime } from "../local-time.js";
 
 export type ProviderRecoveryRegistry = Pick<ProviderRegistry, "configurationDiagnostics" | "previewConfigurationRecovery" | "confirmConfigurationRecovery">;
 export type ProviderRecoveryCommand = { action: "list" } | { action: "preview" | "recover"; backupId: string };
@@ -21,7 +22,7 @@ function formatDiagnostics(value: ProviderConfigurationDiagnostics, language: Ui
     `${value.state} · schema ${value.sourceVersion ?? "unknown"} · supported ${value.supportedVersion}`,
     value.compatibilityNotice, ...value.issues.map((issue) => `- ${issue}`),
     localize(language, "可验证的受保护备份：", "Verified protected backups:")];
-  lines.push(...value.backups.map((backup) => `${backup.id} · schema ${backup.sourceVersion ?? "unknown"} · ${backup.reason} · ${backup.createdAt}`));
+  lines.push(...value.backups.map((backup) => `${backup.id} · schema ${backup.sourceVersion ?? "unknown"} · ${backup.reason} · ${formatLocalTime(backup.createdAt)}`));
   if (!value.backups.length) lines.push(localize(language, "没有可用备份。不会重置或覆盖当前配置。", "No available backup. Current settings will not be reset or overwritten."));
   if (value.issues.includes("interrupted-write-can-keep-current")) lines.push(localize(language,
     "current：保留当前配置，仅清理已确认退出进程的中断写锁（不是恢复备份）。", "current: Keep current settings and clear the verified dead process's interrupted write lock (does not restore a backup)."));

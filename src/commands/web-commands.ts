@@ -9,6 +9,7 @@ import { askQuestion } from "../terminal-prompts.js";
 import { FREE_SEARCH_VERSION, sharedFreeSearchBackend } from "../free-search.js";
 import { XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT } from "../settings.js";
 import type { WebSearchConfig, WebSearchProvider } from "../web-search.js";
+import { formatLocalTime } from "../local-time.js";
 
 export interface WebCommandContext {
   auditCredential: (action: string, subject: string | undefined, outcome: SecurityAuditOutcome) => Promise<void>;
@@ -188,10 +189,10 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
     })[action] ?? action;
     const deviceLines = result.devices.map((device) => {
       const id = device.id.length > 12 ? `…${device.id.slice(-8)}` : device.id;
-      return `- ${id} · ${deviceStatus(device.status)}${device.createdAt ? ` · ${localize(language, "创建", "created")} ${device.createdAt}` : ""}${device.lastSeenAt ? ` · ${localize(language, "最近使用", "last seen")} ${device.lastSeenAt}` : ""}${device.revokedAt ? ` · ${localize(language, "撤销", "revoked")} ${device.revokedAt}` : ""}`;
+      return `- ${id} · ${deviceStatus(device.status)}${device.createdAt ? ` · ${localize(language, "创建", "created")} ${formatLocalTime(device.createdAt)}` : ""}${device.lastSeenAt ? ` · ${localize(language, "最近使用", "last seen")} ${formatLocalTime(device.lastSeenAt)}` : ""}${device.revokedAt ? ` · ${localize(language, "撤销", "revoked")} ${formatLocalTime(device.revokedAt)}` : ""}`;
     });
     const requestLabel = localize(language, "请求", "request");
-    const auditLines = result.audit.map((event) => `- ${auditAction(event.action)} · ${event.deviceId.length > 12 ? `…${event.deviceId.slice(-8)}` : event.deviceId}${event.occurredAt ? ` · ${event.occurredAt}` : ""}${event.requestId ? ` · ${requestLabel} ${event.requestId}` : ""}`);
+    const auditLines = result.audit.map((event) => `- ${auditAction(event.action)} · ${event.deviceId.length > 12 ? `…${event.deviceId.slice(-8)}` : event.deviceId}${event.occurredAt ? ` · ${formatLocalTime(event.occurredAt)}` : ""}${event.requestId ? ` · ${requestLabel} ${event.requestId}` : ""}`);
     console.log(`${localize(language, "服务端设备（只读）", "Server devices (read-only)")}${result.requestId ? ` · ${requestLabel} ${result.requestId}` : ""}\n${deviceLines.length ? deviceLines.join("\n") : localize(language, "- 无设备记录", "- No device records")}\n${localize(language, "撤销审计", "Revocation audit")}\n${auditLines.length ? auditLines.join("\n") : localize(language, "- 无审计记录", "- No audit records")}\n`);
   };
 

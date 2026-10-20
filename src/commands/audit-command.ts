@@ -2,6 +2,7 @@ import { localize, type UiLanguage } from "../i18n.js";
 import { describeFailure } from "../user-facing-errors.js";
 import { type SecurityAuditCategory, SecurityAuditLog, type SecurityAuditRecord } from "../security-audit.js";
 import { isWorkspaceTrusted } from "../trust.js";
+import { formatLocalTime } from "../local-time.js";
 
 /**
  * `xiu audit [approvals|credentials] [json] [<limit>]`: the non-interactive `/audit`, for scripts
@@ -67,7 +68,7 @@ export async function runAuditCommand(args: readonly string[], options: AuditCli
       "本工作区的本机安全审计（不包含命令正文、Prompt、文件内容或凭证）",
       "Local security audit of this workspace (excludes command text, prompts, file contents, and credentials)")];
     if (!result.records.length) lines.push(localize(language, "暂无匹配记录。", "No matching records."));
-    else for (const record of result.records) lines.push(`${record.timestamp} · ${auditRecordDetails(record)}`);
+    else for (const record of result.records) lines.push(`${formatLocalTime(record.timestamp)} · ${auditRecordDetails(record)}`);
     if (result.truncated) lines.push(localize(language, `仅显示最近 ${limit ?? DEFAULT_LIMIT} 条匹配记录。`, `Showing only the ${limit ?? DEFAULT_LIMIT} most recent matching records.`));
     if (result.invalidLines) lines.push(localize(language, `忽略了 ${result.invalidLines} 条损坏记录。`, `Ignored ${result.invalidLines} invalid record(s).`));
     stdout(lines.join("\n"));

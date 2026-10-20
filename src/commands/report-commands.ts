@@ -16,6 +16,7 @@ import { listRecentRunsWithIssues, RUN_LIST_LIMIT, RUN_SELECTOR, unreadableRunsN
 import { renderTerminalMarkdown } from "../terminal-markdown.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { isWorkspaceTrusted } from "../trust.js";
+import { formatLocalTime } from "../local-time.js";
 
 export interface ReportCommandContext {
   agent: Agent;
@@ -198,7 +199,7 @@ export async function handleReportCommand(task: string, ctx: ReportCommandContex
       console.log(chalk.cyan(localize(language, "本机安全审计（不包含命令正文、Prompt、文件内容或凭证）", "Local security audit (excludes command text, prompts, file contents, and credentials)")));
       if (!result.records.length) console.log(chalk.dim(localize(language, "暂无匹配记录。", "No matching records.")));
       else for (const record of result.records) {
-        console.log(`${chalk.dim(record.timestamp)} · ${auditRecordDetails(record)}`);
+        console.log(`${chalk.dim(formatLocalTime(record.timestamp))} · ${auditRecordDetails(record)}`);
       }
       if (result.truncated) console.log(chalk.dim(localize(language, "仅显示最近 50 条匹配记录。", "Showing only the 50 most recent matching records.")));
       if (result.invalidLines) console.log(chalk.yellow(localize(language, `忽略了 ${result.invalidLines} 条损坏记录。`, `Ignored ${result.invalidLines} invalid record(s).`)));

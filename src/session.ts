@@ -160,14 +160,6 @@ export function sessionTitle(session: Pick<SessionListItem, "firstTask">, langua
   return session.firstTask.replace(/\s+/g, " ").trim().slice(0, maximum) || localize(language, "未命名会话", "Untitled session");
 }
 
-/** A log timestamp as local `YYYY-MM-DD HH:mm:ss` for session lists; anything unparsable is returned as is. */
-export function formatSessionTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const pad = (part: number): string => String(part).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 /** One line naming how many session logs a list leaves out and why; undefined when none. */
 export function unreadableSessionsNote(unreadable: SessionListing["unreadable"], language: "zh-CN" | "en-US"): string | undefined {
   if (!unreadable.length) return undefined;

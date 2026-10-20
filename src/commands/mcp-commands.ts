@@ -11,6 +11,7 @@ import type { SecurityAuditOutcome } from "../security-audit.js";
 import type { StatusLine } from "../status.js";
 import type { WindowsSystemCredentialStore } from "../system-credential-store.js";
 import { askQuestion } from "../terminal-prompts.js";
+import { formatLocalTime } from "../local-time.js";
 
 export interface McpCommandContext {
   attachMcpTools: () => void;
@@ -250,7 +251,7 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
     const entries = await mcpManager.authStatus(requested, projectMcpTrusted);
     if (!entries.length) console.log(chalk.dim(localize(language, "没有匹配的 OAuth MCP。\n", "No matching OAuth MCP server.\n")));
     else console.log(`${entries.map((entry) => {
-      const expiry = entry.expiresAt ? new Date(entry.expiresAt).toLocaleString() : localize(language, "未知", "unknown");
+      const expiry = entry.expiresAt ? formatLocalTime(entry.expiresAt) : localize(language, "未知", "unknown");
       return [
         chalk.cyan(entry.name),
         localize(language, `状态：${entry.authenticated ? entry.expired ? "已过期" : "已登录" : "未登录"}`, `Status: ${entry.authenticated ? entry.expired ? "expired" : "authenticated" : "not authenticated"}`),
