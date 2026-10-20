@@ -20,12 +20,13 @@ import { VisionProbeController } from "./vision-probe-controller.js";
 import { registerProviderIpc } from "./ipc-provider.js";
 import { registerManagementIpc } from "./ipc-management.js";
 import { registerWorkspaceIpc } from "./ipc-workspace.js";
+import { registerTerminalIpc } from "./ipc-terminal.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopWorkspaceSnapshot, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -425,29 +426,10 @@ function registerIpc(): void {
     trustedWorkspacePath: () => controller.trustedWorkspacePath(),
     providers: getProviderController, tasks: taskController, visionProbe, mainWindow: () => mainWindow, confirmVisionProbe,
   });
-  handleIpc(desktopChannels.terminalSnapshot, async (event) => {
-    assertTrustedSender(event);
-    return terminalController.snapshot(controller.trustedWorkspacePath());
-  });
-  handleIpc(desktopChannels.terminalStart, async (event, request?: DesktopTerminalStartRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      await taskController.assertCanUseTerminal(workspace);
-      return terminalController.start(workspace, request);
-    });
-  });
-  handleIpc(desktopChannels.terminalWrite, async (event, request: DesktopTerminalWriteRequest) => {
-    assertTrustedSender(event);
-    terminalController.write(controller.trustedWorkspacePath(), request);
-  });
-  handleIpc(desktopChannels.terminalResize, async (event, request: DesktopTerminalResizeRequest) => {
-    assertTrustedSender(event);
-    return terminalController.resize(controller.trustedWorkspacePath(), request);
-  });
-  handleIpc(desktopChannels.terminalStop, async (event, request: DesktopTerminalSessionRequest) => {
-    assertTrustedSender(event);
-    return terminalController.stop(controller.trustedWorkspacePath(), request?.sessionId);
+  registerTerminalIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    tasks: taskController, terminals: terminalController,
   });
 }
 
