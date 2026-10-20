@@ -358,6 +358,15 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.querySelector('[aria-label="OAuth 授权状态"] textarea')?.value.includes('state=ui-test')`, "OAuth browser fallback URL");
     await clickText(window, "取消登录", ".mcp-panel button");
     await waitFor(window, `document.querySelector('[aria-label="OAuth 授权状态"]').innerText.includes('登录已取消')`, "OAuth cancellation");
+    assert(await evaluate(window, `(() => { const entry = [...document.querySelectorAll('.mcp-panel article')].find(el => el.querySelector('.mcp-server-details') && el.querySelector('header strong')?.textContent === 'secure'); return Boolean(entry) && entry.textContent.includes('OAuth 状态：已登录') && entry.textContent.includes('签发方 https://auth.test') && entry.textContent.includes('凭据来源：兼容文件') && !entry.textContent.includes('清理旧明文'); })()`), "OAuth entries must show token-free login state and credential source.");
+    await clickText(window, "迁移到系统凭据管理器", ".mcp-panel button");
+    await clickText(window, "确认迁移", ".mcp-panel button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('mcp:credentials:migrate:secure') && document.querySelector('.mcp-panel').textContent.includes('凭据来源：系统凭据库')`, "MCP credential migration through explicit confirmation");
+    await clickText(window, "清理旧明文", ".mcp-panel button");
+    assert(await evaluate(window, `[...document.querySelectorAll('.mcp-panel button')].find(b => b.textContent.trim() === '确认清理').disabled`), "Cleanup must stay disabled until the MCP name is typed.");
+    await evaluate(window, `(() => { const input = document.querySelector('.mcp-panel [aria-label="清理确认名称"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'secure'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await clickText(window, "确认清理", ".mcp-panel button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('mcp:credentials:cleanup:secure') && document.querySelector('.mcp-panel').textContent.includes('旧明文 无')`, "MCP plaintext cleanup after typed-name confirmation");
     await clickText(window, "新增 MCP", ".mcp-actions button");
     await waitFor(window, `Boolean(document.querySelector('.mcp-editor'))`, "MCP add form");
     await evaluate(window, `(() => {const fields=document.querySelectorAll('.mcp-editor input');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(fields[0],'ui-added');fields[0].dispatchEvent(new Event('input',{bubbles:true}));setter.call(fields[1],'node');fields[1].dispatchEvent(new Event('input',{bubbles:true}));})()`);

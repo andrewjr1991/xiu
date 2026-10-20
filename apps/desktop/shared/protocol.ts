@@ -16,7 +16,9 @@ export type DesktopMcpManageRequest =
   | { action: "delete" | "logout"; name: string; fingerprint: string; confirmed: true }
   | { action: "login"; name: string; fingerprint: string }
   | { action: "oauth-decision"; flowId: string; allowed: boolean }
-  | { action: "oauth-cancel"; flowId: string };
+  | { action: "oauth-cancel"; flowId: string }
+  /** `/mcp credentials migrate|cleanup|rollback`; cleanup also carries the MCP name the user typed. */
+  | { action: "credentials"; operation: "migrate" | "cleanup" | "rollback"; name: string; fingerprint: string; confirmed: true; typedName?: string };
 export interface DesktopMcpBrowseRequest { name: string; action: "resources" | "read" | "prompts" | "prompt"; value?: string; args?: Record<string, string> }
 
 export type WorkspaceTrustState = "none" | "required" | "trusted";

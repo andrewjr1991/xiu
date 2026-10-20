@@ -175,6 +175,7 @@ const argumentSchemas: Record<string, Parser[]> = {
     login: mcpTarget,
     "oauth-decision": { flowId: id, allowed: boolean },
     "oauth-cancel": { flowId: id },
+    credentials: { ...mcpTarget, confirmed, operation: literal("migrate", "cleanup", "rollback"), typedName: optional(id) },
   })],
   [desktopChannels.mcpBrowse]: [object({ name: id, action: literal("resources", "read", "prompts", "prompt"), value: optional(string(URL)), args: optional(record(string(URL), 64)) })],
   [desktopChannels.mcpSnapshot]: NONE,
