@@ -12,8 +12,12 @@ import { summarizeUserFacingError } from "../../../src/user-facing-errors.js";
 import { createSystemCredentialStore, systemCredentialBackendName } from "../../../src/system-credential-store.js";
 import { createWorkspaceProviderConfig } from "../../../src/runtime/workspace-agent-host.js";
 import type { AvailableModel } from "../../../src/types.js";
+import type { SecurityAuditOutcome } from "../../../src/security-audit.js";
 import type {
+  DesktopProviderCredentialManageRequest,
+  DesktopProviderCredentialOperation,
   DesktopProviderCredentialRequest,
+  DesktopProviderProfile,
   DesktopProviderDeleteRequest,
   DesktopProviderModelsRequest,
   DesktopProviderSelectRequest,
@@ -25,12 +29,14 @@ import type {
 } from "../shared/protocol.js";
 
 type ProviderRegistryLike = Pick<ProviderRegistry,
-  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "upsert" | "remove"
+  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "rollbackSystemApiKey" | "forgetLocalApiKey" | "upsert" | "remove"
 > & Partial<Pick<ProviderRegistry, "load">>;
 
 interface ProviderControllerDependencies {
   registry?: ProviderRegistryLike;
   systemCredentialStore?: CredentialStore<string, "provider-api-key">;
+  /** Writes `provider-migrate|cleanup|rollback|forget` to the local security audit ledger; failures never change the outcome. */
+  audit?: (action: string, subject: string | undefined, outcome: SecurityAuditOutcome) => Promise<void>;
   discover?: (profile: ProviderProfile, model: string, workspace: string, revision: number) => Promise<AvailableModel[]>;
   test?: (profile: ProviderProfile, model: string, workspace: string, revision: number) => Promise<number>;
   modelCacheFile?: string;
@@ -47,6 +53,7 @@ export class DesktopProviderController {
     private readonly discoverModels: NonNullable<ProviderControllerDependencies["discover"]>,
     private readonly testConnection: NonNullable<ProviderControllerDependencies["test"]>,
     private readonly modelCacheFile?: string,
+    private readonly audit?: ProviderControllerDependencies["audit"],
   ) {}
 
   static async create(dependencies: ProviderControllerDependencies = {}): Promise<DesktopProviderController> {
@@ -71,12 +78,13 @@ export class DesktopProviderController {
         return result.models.length;
       }),
       dependencies.modelCacheFile ?? (dependencies.registry ? undefined : path.join(os.homedir(), ".xiu", "desktop-model-catalog.json")),
+      dependencies.audit,
     );
     await controller.loadModelCache();
     return controller;
   }
 
-  snapshot(providerId?: string, discoveryError?: string): DesktopProviderSnapshot {
+  snapshot(providerId?: string, discoveryError?: string, credentialNotice?: string): DesktopProviderSnapshot {
     const templates: DesktopProviderTemplate[] = providerTemplates().map((profile) => ({
       id: profile.id, name: profile.name, kind: profile.kind, model: profile.model, preset: profile.preset,
       // Generic kinds keep onboarding free of environment variables; vendor presets suggest the usual variable name.
@@ -112,27 +120,92 @@ export class DesktopProviderController {
       models,
       modelsByProvider,
       capabilityModelsByProvider,
-      profiles: profiles.map((profile) => {
-        const info = credentials.get(profile.id);
-        const keyOptional = KEY_OPTIONAL.has(profile.kind);
-        const source = keyOptional && (!info || info.source === "missing")
-          ? "not-required"
-          : info?.source ?? "missing";
-        const configured = source !== "missing" && source !== "not-required"
-          || (this.discovered.get(profile.id)?.length ?? 0) > 0;
-        return {
-          id: profile.id, name: profile.name, kind: profile.kind, defaultModel: profile.model,
-          selectedModel: this.registry.activeModel(profile.id) ?? profile.model, builtin: Boolean(profile.builtin),
-          ...(profile.baseURL ? { baseURL: profile.baseURL } : {}),
-          ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
-          ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
-          credential: { source, configured, editable: source !== "environment" && !keyOptional },
-          capabilityModels: { ...(profile.capabilityModels ?? {}) },
-          features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
-        };
-      }),
+      profiles: profiles.map((profile) => ({
+        id: profile.id, name: profile.name, kind: profile.kind, defaultModel: profile.model,
+        selectedModel: this.registry.activeModel(profile.id) ?? profile.model, builtin: Boolean(profile.builtin),
+        ...(profile.baseURL ? { baseURL: profile.baseURL } : {}),
+        ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
+        ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
+        credential: this.credentialState(profile, credentials.get(profile.id)),
+        capabilityModels: { ...(profile.capabilityModels ?? {}) },
+        features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
+      })),
       ...(discoveryError ? { discoveryError } : {}),
+      ...(credentialNotice ? { credentialNotice } : {}),
     };
+  }
+
+  /** What `/credentials` prints for one profile, without the key: source, local copies and which explicit operations apply. */
+  private credentialState(profile: ProviderProfile, info = this.registry.credentialInfo().find((item) => item.providerId === profile.id)): DesktopProviderProfile["credential"] {
+    const keyOptional = KEY_OPTIONAL.has(profile.kind);
+    const source = keyOptional && (!info || info.source === "missing")
+      ? "not-required"
+      : info?.source ?? "missing";
+    const configured = source !== "missing" && source !== "not-required"
+      || (this.discovered.get(profile.id)?.length ?? 0) > 0;
+    const legacyCopyPresent = info?.legacyCopyPresent === true;
+    const systemCopyPresent = info?.systemCopyPresent === true;
+    const interruptedMigration = info?.interruptedMigration === true;
+    const migrated = Boolean(info?.migration);
+    return {
+      source, configured, editable: source !== "environment" && !keyOptional,
+      backend: systemCredentialBackendName(),
+      legacyCopyPresent, systemCopyPresent, interruptedMigration,
+      ...(info?.migration ? { migratedAt: info.migration.migratedAt } : {}),
+      // Same candidate rules as the CLI: migrate a plaintext key that has no system reference yet,
+      // clean up only after a migration while plaintext remains, roll back a migrated key, forget any local copy.
+      migratable: legacyCopyPresent && !migrated && info?.source !== "system",
+      cleanable: migrated && legacyCopyPresent,
+      rollbackable: migrated && (legacyCopyPresent || systemCopyPresent),
+      forgettable: legacyCopyPresent || systemCopyPresent || migrated || interruptedMigration,
+    };
+  }
+
+  /**
+   * Explicit credential operations from the renderer, one profile at a time. The request carries a
+   * literal confirmation and, for the two deletions, the typed Provider ID; migration fails closed when
+   * no system backend exists and never touches the plaintext copy. Every outcome is audited like the CLI.
+   */
+  async manageCredential(request: DesktopProviderCredentialManageRequest): Promise<DesktopProviderSnapshot> {
+    const operations: DesktopProviderCredentialOperation[] = ["migrate", "cleanup", "rollback", "forget"];
+    const operation = request?.operation;
+    if (!operations.includes(operation)) throw new Error("凭据操作无效。");
+    if (request?.confirmed !== true) throw new Error("凭据操作需要明确确认。");
+    const profile = this.profile(request?.providerId);
+    const record = async (outcome: SecurityAuditOutcome) => { await this.audit?.(`provider-${operation}`, profile.id, outcome); };
+    if ((operation === "cleanup" || operation === "forget") && request.typedId !== profile.id) {
+      await record("cancelled");
+      throw new Error("请输入完整的 Provider 标识以确认；未做更改。");
+    }
+    const state = this.credentialState(profile);
+    if (operation === "migrate" && !state.migratable) throw new Error("该渠道没有可迁移的旧明文 Key。");
+    if (operation === "cleanup" && !state.cleanable) throw new Error("该渠道没有可清理的旧明文 Key。");
+    if (operation === "rollback" && !state.rollbackable) throw new Error("该渠道的 Key 不在系统凭据库中，无需回退。");
+    if (operation === "forget" && !state.forgettable) throw new Error("该渠道没有本地 Key 副本。");
+    let notice: string | undefined;
+    try {
+      if (operation === "migrate") {
+        if (!this.systemCredentialStore) throw new Error(`${systemCredentialBackendName()}不可用；迁移未开始，旧明文 Key 未改动。`);
+        await this.registry.migrateApiKeysToSystem([profile.id], this.systemCredentialStore);
+        notice = `已把 ${profile.name} 的 Key 复制到${systemCredentialBackendName()}并回读校验，运行时已切换；旧明文仍保留，确认重启后可用再单独清理。`;
+      } else if (operation === "cleanup") {
+        await this.registry.cleanupLegacyApiKey(profile.id);
+        notice = `已再次校验系统副本并删除 ${profile.name} 的旧明文 Key。`;
+      } else if (operation === "rollback") {
+        const systemDeleted = await this.registry.rollbackSystemApiKey(profile.id);
+        notice = systemDeleted
+          ? `已把 ${profile.name} 切回兼容文件中的 Key，系统副本已删除。`
+          : `已把 ${profile.name} 切回兼容文件中的 Key，但系统副本未能删除；可用“遗忘本地 Key”明确清理。`;
+      } else {
+        await this.registry.forgetLocalApiKey(profile.id);
+        notice = `已删除 ${profile.name} 在系统凭据库和兼容文件中的全部本地 Key；环境变量不受影响。`;
+      }
+    } catch (error) {
+      await record("failed");
+      throw new Error(this.safeError(error, profile));
+    }
+    await record("succeeded");
+    return this.snapshot(profile.id, undefined, notice);
   }
 
   /** Explicit picker refresh reloads configuration; never retries a mutation or clears recovery locks. */

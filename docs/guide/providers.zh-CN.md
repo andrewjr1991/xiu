@@ -35,7 +35,7 @@ v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录
 
 阶段 E 起，Xiu 会把当前运行时实际使用的 Provider Key、MCP Access/Refresh/ID Token 和 Client Secret 作为脱敏词表，仅在内存中用于清理错误文本；它们不会被写入诊断、会话、故障转移回执或 MCP Resource/Prompt 错误。系统凭证损坏、缺失或无法读取时，`cleanup` 会拒绝删除旧副本；迁移中断后可重新执行相同迁移继续，不需要手工编辑配置。
 
-阶段 C 只为 Provider API Key 提供显式迁移。输入 `/credentials migrate` 可选择一个 Key；`/credentials migrate --all` 会批量复制，但只有所有 Key 均写入并回读一致后才切换全部引用。迁移流程永远保留旧明文，不再连带提供删除选项；请先重启并确认系统凭证可用，再单独使用 `/credentials cleanup [Provider ID]` 删除。`cleanup` 和 `forget` 都要求再次输入完整 Provider ID，且不会被 `-y` 自动确认。`/credentials rollback [Provider ID]` 可显式切回；旧明文已经清理时，它会从仍然有效的系统凭据重新生成兼容文件副本后再切换。`/credentials forget [Provider ID]` 会在影响确认后删除系统与兼容文件中的所有本地副本，环境变量不受影响。
+阶段 C 只为 Provider API Key 提供显式迁移。输入 `/credentials migrate` 可选择一个 Key；`/credentials migrate --all` 会批量复制，但只有所有 Key 均写入并回读一致后才切换全部引用。迁移流程永远保留旧明文，不再连带提供删除选项；请先重启并确认系统凭证可用，再单独使用 `/credentials cleanup [Provider ID]` 删除。`cleanup` 和 `forget` 都要求再次输入完整 Provider ID，且不会被 `-y` 自动确认。`/credentials rollback [Provider ID]` 可显式切回；旧明文已经清理时，它会从仍然有效的系统凭据重新生成兼容文件副本后再切换。`/credentials forget [Provider ID]` 会在影响确认后删除系统与兼容文件中的所有本地副本，环境变量不受影响。0.20.14 起桌面设置 → 模型与渠道对每个渠道提供同样的四个操作：按钮只在对应状态下出现（有旧明文且未迁移才能迁移，迁移后仍保留旧明文才能清理），清理与遗忘同样要输入完整的 Provider 标识，系统凭据库不可用时迁移不会开始，结果写入同一份审计账本。
 
 解析顺序保持为：Profile 明确配置的环境变量、已迁移的系统引用、尚未迁移的 Legacy File、Provider 默认环境变量。系统引用一旦生效，即使旧明文仍在，系统后端缺失、记录丢失或损坏时也不会静默退回明文。可重新启用系统后端、执行显式回退，或重新保存 Key。`providers.json` 现在只为已迁移项保存非秘密引用、revision 和迁移回执；Key 本身位于系统凭证库。迁移失败会保留原引用和旧 Key，错误与回执不包含秘密或秘密哈希。
 

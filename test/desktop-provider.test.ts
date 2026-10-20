@@ -281,3 +281,79 @@ test("desktop provider deletion requires confirmation even for the active channe
   assert.deepEqual(empty.profiles, []);
   assert.equal(empty.activeProviderId, "");
 });
+
+test("desktop provider credentials migrate, clean up, roll back and forget through explicit confirmations with audit records", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const audits: string[] = [];
+  const controller = await DesktopProviderController.create({
+    registry: item.registry, systemCredentialStore: item.system, discover: async () => [], test: async () => 1, modelCacheFile: item.modelCacheFile,
+    audit: async (action, subject, outcome) => { audits.push(`${action}:${subject}:${outcome}`); },
+  });
+  const secret = "xiu-canary-legacy-provider-key-77310";
+  await item.registry.setApiKey("office", secret);
+  const legacy = controller.snapshot().profiles.find((profile) => profile.id === "office")!.credential;
+  assert.equal(legacy.source, "legacy-file");
+  assert.deepEqual([legacy.migratable, legacy.cleanable, legacy.rollbackable, legacy.forgettable, legacy.legacyCopyPresent, legacy.systemCopyPresent], [true, false, false, true, true, false]);
+  assert.equal(typeof legacy.backend, "string");
+  assert.doesNotMatch(JSON.stringify(controller.snapshot()), new RegExp(secret));
+
+  await assert.rejects(() => controller.manageCredential({ providerId: "office", operation: "migrate", confirmed: false as unknown as true }), /明确确认/);
+  await assert.rejects(() => controller.manageCredential({ providerId: "office", operation: "cleanup", confirmed: true, typedId: "office" }), /没有可清理/);
+  assert.deepEqual(audits, [], "refused requests before any change are not audited as operations");
+
+  const migrated = await controller.manageCredential({ providerId: "office", operation: "migrate", confirmed: true });
+  const afterMigrate = migrated.profiles.find((profile) => profile.id === "office")!.credential;
+  assert.equal(afterMigrate.source, "system");
+  assert.deepEqual([afterMigrate.migratable, afterMigrate.cleanable, afterMigrate.rollbackable, afterMigrate.legacyCopyPresent, afterMigrate.systemCopyPresent], [false, true, true, true, true]);
+  assert.ok(afterMigrate.migratedAt);
+  assert.match(migrated.credentialNotice ?? "", /旧明文仍保留/);
+  assert.equal(item.system.get(credentialRef("system", "provider-api-key", "provider:office:api-key", 1)), secret);
+  assert.match(await fs.readFile(item.registryFile, "utf8"), new RegExp(secret), "migration keeps the plaintext copy");
+
+  await assert.rejects(() => controller.manageCredential({ providerId: "office", operation: "cleanup", confirmed: true, typedId: "offic" }), /完整的 Provider 标识/);
+  assert.match(await fs.readFile(item.registryFile, "utf8"), new RegExp(secret));
+  const cleaned = await controller.manageCredential({ providerId: "office", operation: "cleanup", confirmed: true, typedId: "office" });
+  const afterCleanup = cleaned.profiles.find((profile) => profile.id === "office")!.credential;
+  assert.deepEqual([afterCleanup.source, afterCleanup.legacyCopyPresent, afterCleanup.cleanable, afterCleanup.rollbackable], ["system", false, false, true]);
+  assert.doesNotMatch(await fs.readFile(item.registryFile, "utf8"), new RegExp(secret));
+
+  const rolledBack = await controller.manageCredential({ providerId: "office", operation: "rollback", confirmed: true });
+  const afterRollback = rolledBack.profiles.find((profile) => profile.id === "office")!.credential;
+  assert.deepEqual([afterRollback.source, afterRollback.legacyCopyPresent, afterRollback.systemCopyPresent, afterRollback.migratable], ["legacy-file", true, false, true]);
+  assert.match(rolledBack.credentialNotice ?? "", /系统副本已删除/);
+  assert.equal(item.system.list().length, 0);
+
+  await assert.rejects(() => controller.manageCredential({ providerId: "office", operation: "forget", confirmed: true }), /完整的 Provider 标识/);
+  const forgotten = await controller.manageCredential({ providerId: "office", operation: "forget", confirmed: true, typedId: "office" });
+  const afterForget = forgotten.profiles.find((profile) => profile.id === "office")!.credential;
+  assert.deepEqual([afterForget.source, afterForget.legacyCopyPresent, afterForget.systemCopyPresent, afterForget.forgettable], ["missing", false, false, false]);
+  assert.doesNotMatch(await fs.readFile(item.registryFile, "utf8"), new RegExp(secret));
+  assert.deepEqual(audits, [
+    "provider-migrate:office:succeeded",
+    "provider-cleanup:office:cancelled",
+    "provider-cleanup:office:succeeded",
+    "provider-rollback:office:succeeded",
+    "provider-forget:office:cancelled",
+    "provider-forget:office:succeeded",
+  ]);
+});
+
+test("desktop provider credential migration fails closed without a system backend and leaves the plaintext key untouched", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-provider-migrate-closed-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const registryFile = path.join(root, "providers.json");
+  const registry = new ProviderRegistry(registryFile);
+  await registry.load();
+  await registry.upsert(providerTemplate("openai")!);
+  const secret = "xiu-canary-stays-in-place-5521";
+  await registry.setApiKey("openai", secret);
+  const audits: string[] = [];
+  const controller = await DesktopProviderController.create({ registry, discover: async () => [], test: async () => 0, audit: async (action, subject, outcome) => { audits.push(`${action}:${subject}:${outcome}`); } });
+  assert.equal(controller.snapshot().profiles.find((profile) => profile.id === "openai")?.credential.migratable, true);
+  await assert.rejects(() => controller.manageCredential({ providerId: "openai", operation: "migrate", confirmed: true }), /不可用；迁移未开始/);
+  const after = controller.snapshot().profiles.find((profile) => profile.id === "openai")!.credential;
+  assert.deepEqual([after.source, after.legacyCopyPresent, after.interruptedMigration], ["legacy-file", true, false]);
+  assert.match(await fs.readFile(registryFile, "utf8"), new RegExp(secret));
+  assert.deepEqual(audits, ["provider-migrate:openai:failed"]);
+});

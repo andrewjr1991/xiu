@@ -89,6 +89,16 @@ export interface DesktopProviderProfile {
     source: "environment" | "system" | "legacy-file" | "missing" | "not-required";
     configured: boolean;
     editable: boolean;
+    /** Name of the platform's system credential backend; the migration button names it. */
+    backend: string;
+    legacyCopyPresent: boolean;
+    systemCopyPresent: boolean;
+    interruptedMigration: boolean;
+    migratedAt?: string;
+    migratable: boolean;
+    cleanable: boolean;
+    rollbackable: boolean;
+    forgettable: boolean;
   };
   capabilityModels: { vision?: string; image?: string; video?: string; audio?: string };
   features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
@@ -136,12 +146,17 @@ export interface DesktopProviderSnapshot {
     audio: DesktopModelOption[];
   }>;
   discoveryError?: string;
+  /** Outcome of the last credential operation that the renderer should show (never credential material). */
+  credentialNotice?: string;
 }
 
 export type DesktopProviderCapability = "vision" | "image" | "video" | "audio";
 export interface DesktopProviderSelectRequest { providerId: string; model: string; capability?: DesktopProviderCapability }
 export interface DesktopProviderModelsRequest { providerId: string }
 export interface DesktopProviderCredentialRequest { providerId: string; apiKey: string }
+export type DesktopProviderCredentialOperation = "migrate" | "cleanup" | "rollback" | "forget";
+/** Same flows as the CLI's `/credentials migrate|cleanup|rollback|forget`; cleanup and forget also need the typed Provider ID. */
+export interface DesktopProviderCredentialManageRequest { providerId: string; operation: DesktopProviderCredentialOperation; confirmed: true; typedId?: string }
 export interface DesktopProviderTestRequest { providerId: string; model?: string }
 export interface DesktopProviderTestResult { ok: true; message: string; modelsDiscovered: number }
 export interface DesktopProviderMutationResult {
@@ -345,6 +360,7 @@ export interface XiuDesktopBridge {
   discoverProviderModels(request: DesktopProviderModelsRequest): Promise<DesktopProviderSnapshot>;
   selectProvider(request: DesktopProviderSelectRequest): Promise<DesktopProviderMutationResult>;
   saveProviderCredential(request: DesktopProviderCredentialRequest): Promise<DesktopProviderMutationResult>;
+  manageProviderCredential(request: DesktopProviderCredentialManageRequest): Promise<DesktopProviderMutationResult>;
   testProvider(request: DesktopProviderTestRequest): Promise<DesktopProviderTestResult>;
   testVisionProvider(request: DesktopProviderSelectRequest & { allCandidates?: boolean }): Promise<{ status: "passed" | "failed" | "unknown" | "cancelled"; message: string; results?: Array<{ model: string; status: "passed" | "failed" | "unknown" | "cancelled"; message: string }> }>;
   visionProbeProgress(): Promise<{ total: number; current?: string; results: Array<{ model: string; status: "passed" | "failed" | "unknown" | "cancelled"; message: string }> }>;
@@ -417,6 +433,7 @@ export const desktopChannels = {
   providerModels: "provider:models",
   providerSelect: "provider:select",
   providerCredentialSave: "provider:credential-save",
+  providerCredentialManage: "provider:credential-manage",
   providerTest: "provider:test",
   providerVisionTest: "provider:vision-test",
   providerVisionCancel: "provider:vision-cancel",

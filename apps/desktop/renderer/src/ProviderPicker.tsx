@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { DesktopProviderCapability, DesktopProviderKind, DesktopProviderProfile, DesktopProviderSnapshot, DesktopProviderUpsertRequest } from "../../shared/protocol.js";
+import type { DesktopProviderCapability, DesktopProviderCredentialManageRequest, DesktopProviderCredentialOperation, DesktopProviderKind, DesktopProviderProfile, DesktopProviderSnapshot, DesktopProviderUpsertRequest } from "../../shared/protocol.js";
 import { Select } from "./Select.js";
 
-export function ProviderPicker({ settings, selectedProviderId, busy, disabled, management, credentialEditing, apiKey, notice, onChooseProvider, onDiscover, onSelect, onEditCredential, onApiKey, onSaveCredential, onCancelCredential, onTest, onUpsert, onDelete, onClose }: {
+export function ProviderPicker({ settings, selectedProviderId, busy, disabled, management, credentialEditing, apiKey, notice, onChooseProvider, onDiscover, onSelect, onEditCredential, onApiKey, onSaveCredential, onCancelCredential, onManageCredential, onTest, onUpsert, onDelete, onClose }: {
   settings?: DesktopProviderSnapshot;
   selectedProviderId?: string;
   busy: boolean;
@@ -18,6 +18,7 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
   onApiKey: (value: string) => void;
   onSaveCredential: () => void;
   onCancelCredential: () => void;
+  onManageCredential: (request: DesktopProviderCredentialManageRequest) => Promise<void>;
   onTest: (providerId: string, model: string) => void;
   onUpsert: (request: DesktopProviderUpsertRequest) => Promise<void>;
   onDelete: (profile: DesktopProviderProfile) => Promise<void>;
@@ -26,6 +27,8 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
   const blankProvider = (): DesktopProviderUpsertRequest => ({ id: "", name: "", kind: "openai-compatible", model: "", baseURL: "https://", apiKeyEnv: "", apiKey: "", contextWindow: 128000, capabilityModels: {}, features: { tools: true, vision: false, image: false, video: false, audio: false } });
   const [editing, setEditing] = useState<DesktopProviderUpsertRequest & { templateId?: string }>();
   const [deleting, setDeleting] = useState<DesktopProviderProfile>();
+  const [credentialAction, setCredentialAction] = useState<DesktopProviderCredentialOperation>();
+  const [typedId, setTypedId] = useState("");
   const [visionTesting, setVisionTesting] = useState(false);
   const [visionNotice, setVisionNotice] = useState<string>();
   const [visionProgress, setVisionProgress] = useState<Awaited<ReturnType<typeof window.xiuDesktop.visionProbeProgress>>>({ total: 0, results: [] });
@@ -41,6 +44,7 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
     finally { setVisionTesting(false); }
   };
   useEffect(() => { setVisionNotice(undefined); setVisionProgress({ total: 0, results: [] }); }, [settings]);
+  useEffect(() => { setCredentialAction(undefined); setTypedId(""); }, [selectedProviderId, settings]);
   useEffect(() => {
     if (!visionTesting) return;
     let live = true;
@@ -50,6 +54,17 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
   useEffect(() => () => { void window.xiuDesktop.cancelVisionProbe(); }, []);
   const selected = settings?.profiles.find((profile) => profile.id === selectedProviderId) ?? settings?.profiles.find((profile) => profile.id === settings.activeProviderId);
   const credentialLabel = (profile: DesktopProviderProfile) => profile.credential.source === "system" ? "系统凭据" : profile.credential.source === "environment" ? "环境变量" : profile.credential.source === "legacy-file" ? "兼容凭据" : profile.credential.source === "not-required" ? "无需 Key" : "未配置";
+  // Mirrors the CLI's /credentials status line: source and local copies, never the key itself.
+  const describeCredential = (credential: DesktopProviderProfile["credential"]) => {
+    const source = credential.source === "system" ? "系统凭据库" : credential.source === "environment" ? `环境变量${credential.legacyCopyPresent || credential.systemCopyPresent ? "（本地还有旧副本）" : ""}` : credential.source === "legacy-file" ? "兼容文件" : credential.source === "not-required" ? "无需 Key" : "未配置";
+    return `${source} · 旧明文 ${credential.legacyCopyPresent ? "有" : "无"} · 系统副本 ${credential.systemCopyPresent ? "可用" : credential.source === "system" ? "不可用" : "无"}${credential.interruptedMigration ? " · 迁移待恢复" : ""}${credential.migratedAt ? ` · 迁移于 ${new Date(credential.migratedAt).toLocaleString()}` : ""}`;
+  };
+  const credentialOperations = (credential: DesktopProviderProfile["credential"]) => [
+    credential.migratable ? { operation: "migrate" as const, label: `迁移到${credential.backend}`, confirm: "确认迁移", typed: false, text: `把这个渠道的 Key 复制到${credential.backend}，回读校验后切换引用；旧明文暂时保留，请先重启并确认可用，再单独清理。` } : undefined,
+    credential.cleanable ? { operation: "cleanup" as const, label: "清理旧明文", confirm: "确认清理", typed: true, text: "再次校验系统副本后永久删除旧明文 Key。此操作不可逆，请输入完整的 Provider 标识确认。" } : undefined,
+    credential.rollbackable ? { operation: "rollback" as const, label: "回退到兼容文件", confirm: "确认回退", typed: false, text: "切回兼容文件中的 Key 并尝试删除系统副本；若旧明文已清理，会先从系统凭据恢复。" } : undefined,
+    credential.forgettable ? { operation: "forget" as const, label: "遗忘本地 Key", confirm: "永久遗忘", typed: true, text: "删除系统凭据库和兼容文件中的全部本地 Key 副本；环境变量不会改变。此操作不可逆，请输入完整的 Provider 标识确认。" } : undefined,
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
   const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels }, features: { ...profile.features } });
   const updateEditing = <K extends keyof DesktopProviderUpsertRequest>(key: K, value: DesktopProviderUpsertRequest[K]) => setEditing((current) => current ? { ...current, [key]: value } : current);
   // Only the generic per-kind template follows a type change; vendor presets are chosen explicitly below.
@@ -113,6 +128,11 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
         <div className="provider-actions"><button disabled={busy || disabled || visionTesting} onClick={() => void testVision(selected.id, selected.capabilityModels?.vision ?? selected.selectedModel)}>测试视觉能力（可能计费）</button></div>
         <div className="provider-actions"><button disabled={busy || disabled || !settings.capabilityModelsByProvider[selected.id]?.vision.length} onClick={() => void testVision(selected.id, selected.capabilityModels?.vision ?? selected.selectedModel, true)}>测试全部视觉候选（{settings.capabilityModelsByProvider[selected.id]?.vision.length ?? 0} 个，可能计费）</button></div></>}
         {settings.discoveryError && settings.modelProviderId === selected.id && <p className="provider-warning">在线发现失败：{settings.discoveryError}</p>}
+        {management && <div className="provider-credentials" aria-label={`${selected.name} 的凭据`}><p className="provider-credential-details">凭据来源：{describeCredential(selected.credential)}。Key 不在此显示。</p>
+          {credentialOperations(selected.credential).length > 0 && <div className="provider-actions">{credentialOperations(selected.credential).map((item) => <button key={item.operation} disabled={busy || disabled} onClick={() => { setTypedId(""); setCredentialAction(item.operation); }}>{item.label}</button>)}</div>}
+          {credentialOperations(selected.credential).map((item) => credentialAction === item.operation && <div className="credential-form" key={`confirm-${item.operation}`}><label htmlFor={item.typed ? "provider-credential-typed-id" : undefined}>{item.text}</label>
+            {item.typed && <input id="provider-credential-typed-id" aria-label="输入 Provider 标识确认" autoComplete="off" value={typedId} onChange={(event) => setTypedId(event.target.value)} placeholder={selected.id} />}
+            <div><button onClick={() => { setCredentialAction(undefined); setTypedId(""); }}>取消</button><button className={item.typed ? "danger-button" : "primary-button compact"} disabled={busy || disabled || (item.typed && typedId !== selected.id)} onClick={() => { const request = { providerId: selected.id, operation: item.operation, confirmed: true as const, ...(item.typed ? { typedId } : {}) }; setCredentialAction(undefined); setTypedId(""); void onManageCredential(request); }}>{item.confirm}</button></div></div>)}</div>}
         {management && credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
         <div className="model-groups">
           <section className="model-group"><h4>对话模型</h4><div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div></section>

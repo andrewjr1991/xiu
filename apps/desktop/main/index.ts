@@ -18,11 +18,12 @@ import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-h
 import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
 import { VisionProbeController } from "./vision-probe-controller.js";
 import { readEnvironmentCredential } from "../../../src/credential-store.js";
+import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -121,7 +122,14 @@ const providerRecoveryController = new DesktopProviderRecoveryController({
 });
 let writerStartQueue: Promise<void> = Promise.resolve();
 function getProviderController(): Promise<DesktopProviderController> {
-  return providerController ??= DesktopProviderController.create();
+  return providerController ??= DesktopProviderController.create({
+    // Same ledger and record shape as the CLI's /credentials commands; the ledger is per user, scoped to the open workspace.
+    audit: async (action, subject, outcome) => {
+      let workspace: string;
+      try { workspace = controller.trustedWorkspacePath(); } catch { workspace = process.cwd(); }
+      await new SecurityAuditLog(undefined, workspace).record({ category: "credential", action, outcome, subject, source: "command" });
+    },
+  });
 }
 
 function serializeWriterStart<T>(operation: () => Promise<T>, recovery = false): Promise<T> {
@@ -522,6 +530,13 @@ function registerIpc(): void {
     const workspace = controller.trustedWorkspacePath();
     await taskController.assertCanReconfigure(workspace);
     const settings = await (await getProviderController()).saveCredential(request);
+    return { settings, connection: await taskController.reload(workspace) };
+  }));
+  handleIpc(desktopChannels.providerCredentialManage, async (event, request: DesktopProviderCredentialManageRequest) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    await taskController.assertCanReconfigure(workspace);
+    const settings = await (await getProviderController()).manageCredential(request);
     return { settings, connection: await taskController.reload(workspace) };
   }));
   handleIpc(desktopChannels.providerTest, async (event, request: DesktopProviderTestRequest) => serializeWriterStart(async () => {

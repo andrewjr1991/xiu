@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultPreferences, type DesktopPreferences } from "../../shared/preferences.js";
-import { applyRuntimeEvent, type DesktopApprovalMode, type DesktopAttachment, type DesktopAttachmentResult, type DesktopChangeView, type DesktopMcpBrowseRequest, type DesktopMcpManageRequest, type DesktopProviderCapability, type DesktopProviderProfile, type DesktopProviderSnapshot, type DesktopProviderUpsertRequest, type DesktopReviewSnapshot, type DesktopReviewTab, type DesktopRuntimeConnection, type DesktopTaskHistorySnapshot, type DesktopWorkspaceSnapshot, type ReviewFilePreview, type RuntimeEvent, type WorkspaceMcpSnapshot, type XiuRuntimeSnapshot } from "../../shared/protocol.js";
+import { applyRuntimeEvent, type DesktopApprovalMode, type DesktopAttachment, type DesktopAttachmentResult, type DesktopChangeView, type DesktopMcpBrowseRequest, type DesktopMcpManageRequest, type DesktopProviderCapability, type DesktopProviderCredentialManageRequest, type DesktopProviderProfile, type DesktopProviderSnapshot, type DesktopProviderUpsertRequest, type DesktopReviewSnapshot, type DesktopReviewTab, type DesktopRuntimeConnection, type DesktopTaskHistorySnapshot, type DesktopWorkspaceSnapshot, type ReviewFilePreview, type RuntimeEvent, type WorkspaceMcpSnapshot, type XiuRuntimeSnapshot } from "../../shared/protocol.js";
 import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "../../shared/provider-recovery.js";
 import { ManagementPanel } from "./ManagementPanel.js";
 import { McpPanel } from "./McpPanel.js";
@@ -539,6 +539,16 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     finally { setApiKey(""); setBusy(false); }
   };
 
+  const manageProviderCredential = async (request: DesktopProviderCredentialManageRequest) => {
+    setBusy(true); setProviderNotice(undefined); setError(undefined);
+    try {
+      const next = await window.xiuDesktop.manageProviderCredential(request);
+      applyProviderMutation(next);
+      setProviderNotice(next.settings.credentialNotice ?? "凭据操作已完成。");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
+  };
+
   const testProvider = async (providerId: string, model: string) => {
     setBusy(true); setProviderNotice(undefined); setError(undefined);
     try { setProviderNotice((await window.xiuDesktop.testProvider({ providerId, model })).message); }
@@ -595,7 +605,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const timelineEvents = events;
   const taskView = selectedTaskView(historyView, isActive, Boolean(pendingMessage || draft), pendingMessage && !pendingMessage.steering ? [] : currentTaskEvents, runtime?.task?.subagents);
   const activeConversationId = historyView?.taskId ?? connection?.conversationId;
-  const providerPicker = providerOpen ? <ProviderPicker key={providerPlacement} management={providerPlacement === "settings"} settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
+  const providerPicker = providerOpen ? <ProviderPicker key={providerPlacement} management={providerPlacement === "settings"} settings={providerSettings} selectedProviderId={selectedProviderId} busy={busy} disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} credentialEditing={credentialEditing} apiKey={apiKey} notice={providerNotice} onChooseProvider={(id) => { setSelectedProviderId(id); setCredentialEditing(undefined); setApiKey(""); setProviderNotice(undefined); }} onDiscover={(id) => void discoverProviderModels(id)} onSelect={(providerId, model, capability) => void selectProvider(providerId, model, capability)} onEditCredential={(id) => { setCredentialEditing(id); setApiKey(""); }} onApiKey={setApiKey} onSaveCredential={() => void saveProviderCredential()} onCancelCredential={() => { setCredentialEditing(undefined); setApiKey(""); }} onManageCredential={manageProviderCredential} onTest={(providerId, model) => void testProvider(providerId, model)} onUpsert={upsertProvider} onDelete={deleteProviderProfile} onClose={closeProviderPicker} /> : null;
 
   return <PreferencesContext.Provider value={preferences}><main className="app-shell">
     {managementOpen && <ManagementPanel disabled={isActive || ["active-elsewhere", "recovery-required"].includes(connection?.writer ?? "")} onClose={() => setManagementOpen(false)} onConnection={(next) => { setConnection(next); setRuntime(next.runtime.snapshot); runtimeRef.current = next.runtime.snapshot; setEvents(next.runtime.events.slice(-1_000)); setDraft(undefined); }} />}

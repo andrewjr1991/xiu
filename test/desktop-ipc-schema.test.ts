@@ -58,6 +58,13 @@ test("well-formed requests pass through in canonical form", () => {
   rejects(desktopChannels.preferencesSave, [], /argument 1 must be present/);
 });
 
+test("provider credential operations carry a literal confirmation and only the declared fields", () => {
+  assert.deepEqual(validateIpcArguments(desktopChannels.providerCredentialManage, [{ providerId: "office", operation: "migrate", confirmed: true, extra: "dropped" }]),
+    [{ providerId: "office", operation: "migrate", confirmed: true }]);
+  assert.deepEqual(validateIpcArguments(desktopChannels.providerCredentialManage, [{ providerId: "office", operation: "forget", confirmed: true, typedId: "office" }]),
+    [{ providerId: "office", operation: "forget", confirmed: true, typedId: "office" }]);
+});
+
 test("malformed requests are rejected with the channel and field, never the value", () => {
   rejects(desktopChannels.snapshot, ["unexpected"], /at most 0 arguments/);
   rejects(desktopChannels.taskCreate, [{ text: "ok" }, "extra"], /at most 1 argument\./);
@@ -108,6 +115,9 @@ test("malformed requests are rejected with the channel and field, never the valu
   rejects(desktopChannels.computerUse, [{ action: "input", input: { kind: "key", frameId: "f", key: "Backspace", repeat: 0 } }], /input\.repeat must be an integer between 1/);
   rejects(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "openai", model: "m", features: { tools: true, vision: false, image: false, video: false } }], /features\.audio must be a boolean/);
   rejects(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "google", model: "m", features: { tools: true, vision: false, image: false, video: false, audio: false } }], /kind must be one of/);
+  rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "delete", confirmed: true }], /operation must be one of "migrate", "cleanup", "rollback", "forget"/);
+  rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "migrate", confirmed: false }], /confirmed must be one of true/);
+  rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "cleanup", confirmed: true, typedId: 7 }], /typedId must be a string/);
   // A rejected credential never comes back in the message.
   const secret = "sk-live-top-secret-value";
   assert.throws(() => validateIpcArguments(desktopChannels.providerCredentialSave, [{ providerId: 7, apiKey: secret }]), (error: Error) => {
