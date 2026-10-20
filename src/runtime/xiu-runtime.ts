@@ -244,7 +244,9 @@ export class XiuRuntime {
   async requestApproval(request: ApprovalRequest): Promise<boolean> {
     if (!this.task || this.task.state !== "running") throw new Error("Approval requested without an active task.");
     if (this.pendingApproval) throw new Error("Another approval is already pending.");
-    if (request.sessionScope && this.sessionApprovalScopes.has(request.sessionScope) && request.risk !== "dangerous") {
+    // A scope is declared by the tool for one exact operation family (the CLI remembers the same scopes); among
+    // dangerous tools only billable media generation declares one, and the user confirmed its risk when remembering it.
+    if (request.sessionScope && this.sessionApprovalScopes.has(request.sessionScope)) {
       request.decisionSource = "remembered";
       this.notice("checkpoint", `已按本次会话记住的精确权限自动允许：${request.description}`);
       return true;
@@ -286,8 +288,8 @@ export class XiuRuntime {
     }
     if (rememberForSession) {
       const pending = this.pendingApproval?.snapshot;
-      if (!allowed || !pending?.sessionScope || pending.risk === "dangerous") {
-        throw new Error("Session approval requires an allowed, non-dangerous, explicitly scoped operation.");
+      if (!allowed || !pending?.sessionScope) {
+        throw new Error("Session approval requires an allowed, explicitly scoped operation.");
       }
       this.sessionApprovalScopes.add(pending.sessionScope);
     }

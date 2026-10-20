@@ -485,6 +485,13 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.emitMediaFixture()`);
     await waitFor(window, `(() => { const media=document.querySelector('.conversation-round:last-child .generated-media.image.ready'); return media && media.querySelector('img')?.naturalWidth === 2 && media.innerText.includes('media-preview-canary.png') && media.innerText.includes('生成的图片') && window.xiuSmoke.calls().includes('media-preview:assets/media-preview-canary.png'); })()`, "generated image previews inline in the conversation as soon as the tool reports it");
     assert(await evaluate(window, `document.querySelectorAll('.generated-media').length === 1 && !document.querySelector('.conversation-round:last-child').innerText.includes('assets.example')`), "One media card per saved file; the tool's source URL stays out of the conversation card.");
+    await evaluate(window, `window.xiuSmoke.emitMediaApprovalFixture()`);
+    await waitFor(window, `document.querySelector('.approval-card.risk-dangerous')?.innerText.includes('计费媒体验收')`, "billable media approval card");
+    assert(await evaluate(window, `(() => { const card=document.querySelector('.approval-card'); const always=[...card.querySelectorAll('footer button')].find((b)=>b.textContent.trim()==='本次会话始终允许'); return always && always.disabled && card.innerText.includes('确认风险后记住这一类操作'); })()`), "A dangerous billable-media approval offers the session option, locked until the risk is confirmed.");
+    await evaluate(window, `document.querySelector('.approval-card .danger-check input').click()`);
+    await waitFor(window, `[...document.querySelectorAll('.approval-card footer button')].find((b)=>b.textContent.trim()==='本次会话始终允许')?.disabled === false`, "session option unlocked by the risk confirmation");
+    await clickText(window, "本次会话始终允许", ".approval-card footer button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('approval:remember:approval-media:dangerous') && !document.querySelector('.approval-card')`, "session approval carries the confirmed risk and clears the card");
     await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
     await waitFor(window, `document.querySelector('.turn-process').open`, "reopen running process");
     assert(await evaluate(window, `document.querySelector('.subagent-activity .agent-avatar')?.getAttribute('aria-label') === '调查员头像'`), "Child activity uses an accessible role avatar.");
