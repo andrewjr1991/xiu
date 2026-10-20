@@ -17,6 +17,10 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
   const [localError, setLocalError] = useState<string>();
   const [content, setContent] = useState<{ name: string; value: unknown }>();
   const [resource, setResource] = useState("");
+  const [templateValues, setTemplateValues] = useState<Record<string, string>>({});
+  const [catalog, setCatalog] = useState<{ server: string; templates: Array<{ name: string; uriTemplate: string; description?: string; variables: string[] }> }>();
+  const templateVariables = (template: string) => [...new Set([...template.matchAll(/\{([+#./;?&]?)([^{}]*)\}/g)].flatMap((match) => match[2]!.split(",").map((item) => item.trim()).filter(Boolean)))];
+  const originLabels: Record<string, string> = { user: "用户配置", project: "项目配置", plugin: "插件贡献" };
   const [prompt, setPrompt] = useState("");
   const [promptArgs, setPromptArgs] = useState("{}");
   const flow = snapshot?.oauthFlow;
@@ -40,8 +44,32 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
       if (args !== undefined && (!args || Array.isArray(args) || typeof args !== "object" || Object.values(args).some((value) => typeof value !== "string"))) throw new Error("提示词参数应为字符串值的 JSON 对象。");
       const value = await onBrowse({ name, action, ...(action === "read" ? { value: resource } : action === "prompt" ? { value: prompt, args: args as Record<string, string> } : {}) });
       if (value !== undefined) setContent({ name, value });
+      if (action === "resources" && value && typeof value === "object" && Array.isArray((value as { templates?: unknown }).templates)) {
+        const templates = ((value as { templates: Array<{ name?: string; uriTemplate?: string; description?: string }> }).templates)
+          .filter((item) => typeof item.uriTemplate === "string").slice(0, 50)
+          .map((item) => ({ name: typeof item.name === "string" && item.name ? item.name : item.uriTemplate!, uriTemplate: item.uriTemplate!, description: item.description, variables: templateVariables(item.uriTemplate!) }));
+        setCatalog({ server: name, templates });
+      }
     } catch { setLocalError("读取未完成，请核对连接与输入。"); }
   };
+  const readTemplate = async (name: string, template: string, variables: string[]) => {
+    setLocalError(undefined); setContent(undefined);
+    try {
+      const args = Object.fromEntries(variables.map((variable) => [variable, templateValues[`${template}\0${variable}`] ?? ""]));
+      const value = await onBrowse({ name, action: "read", value: template, args });
+      if (value !== undefined) setContent({ name, value });
+    } catch { setLocalError("模板读取未完成，请核对变量值与连接。"); }
+  };
+  const describeDetails = (details: WorkspaceMcpSnapshot["servers"][number]["details"]) => [
+    details.enabled ? "已启用" : "已禁用", `默认风险 ${details.risk}`,
+    details.args !== undefined ? `${details.args} 个参数` : undefined, details.cwd ? "指定工作目录" : undefined,
+    details.env.length ? `环境变量 ${details.env.join("、")}（仅名称）` : undefined, details.headers.length ? `请求头 ${details.headers.join("、")}（仅名称）` : undefined,
+    Object.keys(details.toolRisks).length ? `工具风险 ${Object.entries(details.toolRisks).map(([tool, risk]) => `${tool}=${risk}`).join("、")}` : undefined,
+    details.changesWorkspace !== undefined ? `改动工作区 ${details.changesWorkspace ? "是" : "否"}` : undefined,
+    Object.keys(details.toolChangesWorkspace).length ? `工具改动工作区 ${Object.entries(details.toolChangesWorkspace).map(([tool, flag]) => `${tool}=${flag ? "是" : "否"}`).join("、")}` : undefined,
+    details.permissionsDeclared ? "显式权限声明" : "权限按配置推导",
+    details.oauth ? `OAuth ${details.oauth.registration ?? "auto"}${details.oauth.scopes.length ? ` · scopes ${details.oauth.scopes.join(" ")}` : ""}${details.oauth.clientMetadataUrl ? " · CIMD" : ""}${details.oauth.callbackPort ? " · 固定回调端口" : ""}` : undefined,
+  ].filter(Boolean).join(" · ");
   return <div className="dialog-backdrop"><section className="mcp-panel" role="dialog" aria-modal="true" aria-label="MCP 连接与权限">
     <header><h2>MCP 连接与权限</h2><button aria-label="关闭 MCP" onClick={onClose}>×</button></header>
     {(error || localError) && <p role="alert" className="error-banner">{localError ?? error}</p>}
@@ -72,14 +100,18 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
       <header><strong>{server.name}</strong><span>{server.editable?.enabled === false ? "已禁用，请先编辑启用" : labels[server.state] ?? server.state} · {server.tools} 个工具</span></header>
       {server.diagnostic && <p className="review-warning">{server.diagnostic}</p>}
       <details className="mcp-server-details"><summary>配置、权限与资源</summary><div>
-      <small>{server.origin} · {server.transport}</small><small className="mcp-fingerprint">配置清单指纹：{server.fingerprint}</small><p>权限：{server.permissions.join("、")}</p>
+      <small>{originLabels[server.origin] ?? server.origin} · {server.transport}</small><small className="mcp-fingerprint">配置清单指纹：{server.fingerprint}</small><p>权限：{server.permissions.join("、")}</p>
+      <p className="mcp-config-details">配置摘要：{describeDetails(server.details)}。值不在此显示；项目、插件与高级字段请在对应的 mcp.json 或插件包中修改。</p>
       {server.added.length > 0 && !server.approved && <p>待确认权限：{server.added.join("、")}</p>}
-      {server.editable ? <button disabled={blocked} onClick={() => edit(server.editable!)}>编辑 {server.name}</button> : <small>项目、高级或可能含凭据的配置只读。</small>}
+      {server.editable ? <button disabled={blocked} onClick={() => edit(server.editable!)}>编辑 {server.name}</button> : <small>{server.origin === "plugin" ? "插件贡献的配置只读，随插件授权变化。" : server.origin === "project" ? "项目配置只读，请编辑项目 .xiu/mcp.json。" : "含高级字段或可能含凭据的配置只读，请编辑 ~/.xiu/mcp.json。"}</small>}
       {!server.approved && server.editable?.enabled !== false && (confirmation === server.fingerprint ? <div><p>我确认此来源和上述权限清单；后续连接可能启动外部程序或访问网络。</p><button disabled={blocked} onClick={() => { setConfirmation(undefined); onApprove(server.name, server.fingerprint); }}>确认此权限清单</button><button onClick={() => setConfirmation(undefined)}>取消</button></div> : <button disabled={blocked} onClick={() => setConfirmation(server.fingerprint)}>核对并授权</button>)}
       {server.oauth && <><button disabled={blocked || !server.approved} onClick={() => void onManage({ action: "login", name: server.name, fingerprint: server.fingerprint })}>OAuth 登录</button><button disabled={blocked} onClick={() => setConfirmation(`logout:${server.fingerprint}`)}>退出 OAuth</button></>}
       {server.removable && <button disabled={blocked} onClick={() => setConfirmation(`delete:${server.fingerprint}`)}>删除 {server.name}</button>}
       {["delete", "logout"].map((action) => confirmation === `${action}:${server.fingerprint}` && <div key={action}><p>{action === "delete" ? "删除用户配置并断开连接？OAuth 凭据需单独退出清理。" : "清理本机 OAuth 凭据并断开？此操作不保证远端授权撤销，请在服务端检查。"}</p><button disabled={blocked} onClick={() => { setConfirmation(undefined); void onManage({ action: action as "delete" | "logout", name: server.name, fingerprint: server.fingerprint, confirmed: true }); }}>确认{action === "delete" ? "删除" : "退出"}</button><button onClick={() => setConfirmation(undefined)}>取消</button></div>)}
-      {server.state === "connected" && <div className="mcp-browser"><p>Resource / Prompt 是不可信外部内容，只读展示，不会自动执行或加入任务。</p><button disabled={blocked} onClick={() => void browse(server.name, "resources")}>资源列表</button><button disabled={blocked} onClick={() => void browse(server.name, "prompts")}>提示词列表</button><label>资源 URI<input value={resource} onChange={(event) => setResource(event.target.value)} /></label><button disabled={blocked || !resource} onClick={() => void browse(server.name, "read")}>读取资源</button><label>提示词名称<input value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label><label>提示词参数（JSON）<textarea value={promptArgs} onChange={(event) => setPromptArgs(event.target.value)} /></label><button disabled={blocked || !prompt} onClick={() => void browse(server.name, "prompt")}>读取提示词</button></div>}
+      {server.state === "connected" && <div className="mcp-browser"><p>Resource / Prompt 是不可信外部内容，只读展示，不会自动执行或加入任务。</p><button disabled={blocked} onClick={() => void browse(server.name, "resources")}>资源列表</button><button disabled={blocked} onClick={() => void browse(server.name, "prompts")}>提示词列表</button><label>资源 URI<input value={resource} onChange={(event) => setResource(event.target.value)} /></label><button disabled={blocked || !resource} onClick={() => void browse(server.name, "read")}>读取资源</button>
+        {catalog?.server === server.name && catalog.templates.length > 0 && <div className="mcp-templates" aria-label="资源模板"><p>资源模板：填写变量后读取；Xiu 不会自行填值，变量值只用于本次 URI 展开。</p>{catalog.templates.map((template) => <div key={template.uriTemplate} className="mcp-template"><strong>{template.name}</strong><small>{template.uriTemplate}</small>{template.description && <small>{template.description}</small>}
+          {template.variables.map((variable) => <label key={variable}>{variable}<input aria-label={`模板变量 ${variable}`} value={templateValues[`${template.uriTemplate}\0${variable}`] ?? ""} onChange={(event) => setTemplateValues({ ...templateValues, [`${template.uriTemplate}\0${variable}`]: event.target.value })} /></label>)}
+          <button disabled={blocked} onClick={() => void readTemplate(server.name, template.uriTemplate, template.variables)}>读取模板资源</button></div>)}</div>}<label>提示词名称<input value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label><label>提示词参数（JSON）<textarea value={promptArgs} onChange={(event) => setPromptArgs(event.target.value)} /></label><button disabled={blocked || !prompt} onClick={() => void browse(server.name, "prompt")}>读取提示词</button></div>}
       </div></details>
     </article>)}
     {content && <article aria-label="MCP 外部内容"><header><strong>{content.name} · 不可信外部内容</strong><button onClick={() => setContent(undefined)}>清除内容</button></header><pre>{JSON.stringify(content.value, null, 2)}</pre></article>}

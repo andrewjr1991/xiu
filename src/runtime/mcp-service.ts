@@ -1,6 +1,7 @@
 import { permissionFingerprint, type ExtensionPermission } from "../extension-permissions.js";
 import { McpAuthStore, type McpAuthSecretRecord } from "../mcp-auth-store.js";
 import { McpManager, type McpServerStatus, type McpOAuthConfig, type McpServerConfig } from "../mcp.js";
+import { expandResourceTemplate, isResourceTemplate, resourceTemplateVariables } from "../mcp-resource-template.js";
 import type { CredentialStore } from "../credential-store.js";
 import { randomUUID } from "node:crypto";
 import type { ToolRisk } from "../types.js";
@@ -45,7 +46,26 @@ export interface WorkspaceMcpSnapshot {
     removable?: boolean;
     oauth?: boolean;
     diagnostic?: string;
+    /** Read-only, secret-free summary of the stored configuration, also for project, plugin and advanced entries the editor refuses. */
+    details: WorkspaceMcpConfigDetails;
   }>;
+}
+
+export interface WorkspaceMcpConfigDetails {
+  enabled: boolean;
+  risk: string;
+  /** Number of command arguments (stdio); their values may carry secrets and stay out. */
+  args?: number;
+  /** Names only; values never cross the bridge. */
+  env: string[];
+  headers: string[];
+  cwd: boolean;
+  toolRisks: Record<string, string>;
+  changesWorkspace?: boolean;
+  toolChangesWorkspace: Record<string, boolean>;
+  /** The entry declares its own permission list instead of the compatibility derivation. */
+  permissionsDeclared: boolean;
+  oauth?: { registration?: string; scopes: string[]; clientMetadataUrl: boolean; callbackPort: boolean };
 }
 
 /** Desktop view exposes only a validated basic editor projection, never raw config, tokens or errors. */
@@ -81,8 +101,17 @@ export class WorkspaceMcpService {
       const manifest = manifests.find((item) => item.name === entry.name) ?? { ...entry.manifest, approved: false, added: [] };
       const status = statuses.find((item) => item.name === manifest.name);
       const editable = entry.origin === "user" ? await this.editor(entry.name, entry.config, permissionFingerprint(manifest)) : undefined;
+      const config = entry.config;
+      const details: WorkspaceMcpConfigDetails = {
+        enabled: config.enabled !== false, risk: config.risk ?? "execute",
+        ...(config.url ? {} : { args: config.args?.length ?? 0 }),
+        env: Object.keys(config.env ?? {}).slice(0, 64).sort(), headers: Object.keys(config.headers ?? {}).slice(0, 64).sort(), cwd: Boolean(config.cwd),
+        toolRisks: Object.fromEntries(Object.entries(config.toolRisks ?? {}).slice(0, 128)), changesWorkspace: config.changesWorkspace,
+        toolChangesWorkspace: Object.fromEntries(Object.entries(config.toolChangesWorkspace ?? {}).slice(0, 128)), permissionsDeclared: config.permissions !== undefined,
+        ...(config.auth ? { oauth: { registration: config.auth.registration, scopes: [...(config.auth.scopes ?? [])].slice(0, 32), clientMetadataUrl: Boolean(config.auth.clientMetadataUrl), callbackPort: config.auth.callbackPort !== undefined } } : {}),
+      };
       return {
-        name: manifest.name, origin: manifest.origin,
+        name: manifest.name, origin: entry.origin,
         transport: manifest.details?.includes("transport:streamable-http") ? "streamable-http" : "stdio",
         // An on-disk edit revokes the displayed grant even before reconnecting.
         state: !manifest.approved ? "permission-required" : status?.state === "permission-required" ? "disconnected" : status?.state ?? "disconnected",
@@ -90,7 +119,7 @@ export class WorkspaceMcpService {
         approved: manifest.approved, permissions: [...manifest.permissions], added: [...manifest.added],
         fingerprint: permissionFingerprint(manifest),
         ...(status?.state === "failed" ? { diagnostic: /XIU_NODE_NOT_FOUND|ENOENT|not recognized|not found|无法|找不到/i.test(status.error ?? "") ? "找不到启动程序。请安装 Node.js 并检查用户 PATH，关闭并重新打开 Xiu 后重连。" : "服务启动或协议握手失败。请检查该服务的启动命令、工作目录和运行环境；不会自动安装或修改配置。" } : {}),
-        ...(editable ? { editable } : {}), removable: entry.origin === "user", oauth: Boolean(entry.config.auth),
+        ...(editable ? { editable } : {}), removable: entry.origin === "user", oauth: Boolean(entry.config.auth), details,
       };
     })) };
   }
@@ -214,8 +243,19 @@ export class WorkspaceMcpService {
       const server = (await this.snapshot()).servers.find((item) => item.name === name);
       if (!server?.approved || server.state !== "connected") throw new Error("Connect an approved MCP server first.");
       const signal = AbortSignal.timeout(15_000);
+      // A resource template is expanded only from values the user typed (the desktop's variable form), never guessed.
+      let uri = value;
+      if (action === "read") {
+        if (typeof value !== "string" || !value) throw new Error("Resource URI required.");
+        if (isResourceTemplate(value)) {
+          const variables = resourceTemplateVariables(value);
+          const missing = variables.filter((variable) => typeof args?.[variable] !== "string");
+          if (missing.length) throw new Error(`Resource template variables without a value: ${missing.join(", ")}`);
+          uri = expandResourceTemplate(value, Object.fromEntries(variables.map((variable) => [variable, args![variable]!])));
+        } else if (args && Object.keys(args).length) throw new Error("A plain resource URI takes no template variables.");
+      }
       const result = action === "resources" ? await this.manager.listResources(name, signal)
-        : action === "read" ? await this.manager.readResource(name, value!, signal)
+        : action === "read" ? await this.manager.readResource(name, uri!, signal)
         : action === "prompts" ? await this.manager.listPrompts(name, signal) : await this.manager.getPrompt(name, value!, args ?? {}, signal);
       const sanitize = await this.manager.serverTextSanitizer(name);
       const clean = async (value: unknown): Promise<unknown> => {

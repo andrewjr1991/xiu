@@ -41,9 +41,11 @@ let providerRecoveryConfirm = false;
 const providerRecoveryState = { contextId: "fixture-recovery-context", restartRequired: false,
   diagnostics: { supportedVersion: 5, sourceVersion: null, state: "invalid", backups: [{ id: "12345678-1234-1234-1234-123456789abc", sourceVersion: 4, reason: "upgrade", createdAt: "2026-10-01T00:00:00.000Z" }], issues: ["invalid-settings"], compatibilityNotice: "Upgrade CLI and desktop together." } };
 const providerRecoveryView = () => JSON.parse(JSON.stringify(providerRecoveryState));
+const mcpDetails = (extra = {}) => ({ enabled: true, risk: "execute", env: [], headers: [], cwd: false, toolRisks: {}, toolChangesWorkspace: {}, permissionsDeclared: false, ...extra });
 const mcp = { servers: [
-  { name: "smoke", origin: "user:smoke", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" } },
-  { name: "secure", origin: "user:secure", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true },
+  { name: "smoke", origin: "user", transport: "stdio", state: "permission-required", tools: 0, approved: false, permissions: ["process:execute", "external:write"], added: ["process:execute", "external:write"], fingerprint: "a".repeat(64), removable: true, editable: { name: "smoke", fingerprint: "a".repeat(64), transport: "stdio", command: "node", args: [], risk: "execute" }, details: mcpDetails({ args: 0 }) },
+  { name: "secure", origin: "user", transport: "streamable-http", state: "auth-required", tools: 0, approved: true, permissions: ["network:access", "credentials:access"], added: [], fingerprint: "b".repeat(64), oauth: true, details: mcpDetails({ headers: ["Authorization"], oauth: { registration: "auto", scopes: ["read"], clientMetadataUrl: false, callbackPort: false } }) },
+  { name: "plugin_acme_search", origin: "plugin", transport: "streamable-http", state: "permission-required", tools: 0, approved: false, permissions: ["network:access"], added: ["network:access"], fingerprint: "e".repeat(64), removable: false, details: mcpDetails({ env: ["SEARCH_API_KEY"], toolRisks: { search: "read" }, permissionsDeclared: true }) },
 ] };
 const mcpView = () => JSON.parse(JSON.stringify(mcp));
 
@@ -113,14 +115,19 @@ const bridge = {
   disconnectMcp: async () => { calls.push("mcp:disconnect"); for (const server of mcp.servers) {server.state="disconnected"; server.tools=0;} return mcpView(); },
   manageMcp: async (request) => {
     calls.push(`mcp:${request.action}:${request.draft?.name ?? request.name ?? request.flowId}`);
-    if(request.action==="save") { const draft=request.draft; const server={ name:draft.name, origin:`user:${draft.name}`, transport:draft.transport, state:"permission-required", tools:0, approved:false, permissions:["process:execute"], added:["process:execute"], fingerprint:"c".repeat(64), editable:{...draft,fingerprint:"c".repeat(64)},removable:true }; mcp.servers=mcp.servers.filter(s=>s.name!==draft.name).concat(server); }
+    if(request.action==="save") { const draft=request.draft; const server={ name:draft.name, origin:"user", transport:draft.transport, state:"permission-required", tools:0, approved:false, permissions:["process:execute"], added:["process:execute"], fingerprint:"c".repeat(64), editable:{...draft,fingerprint:"c".repeat(64)},removable:true, details: mcpDetails({ args: (draft.args ?? []).length }) }; mcp.servers=mcp.servers.filter(s=>s.name!==draft.name).concat(server); }
     if(request.action==="delete") mcp.servers=mcp.servers.filter(s=>s.name!==request.name);
     if(request.action==="login") mcp.oauthFlow={id:"ui-oauth",name:request.name,state:"confirmation",issuer:"https://auth.test",resource:"https://mcp.test",scopes:["read"],callback:"http://127.0.0.1:53122"};
     if(request.action==="oauth-decision") mcp.oauthFlow={...mcp.oauthFlow,state:request.allowed?"waiting":"cancelled",browserOpened:false,authorizationUrl:"https://auth.test/authorize?state=ui-test"};
     if(request.action==="oauth-cancel") mcp.oauthFlow={...mcp.oauthFlow,state:"cancelled"};
     return mcpView();
   },
-  browseMcp: async ({name,action}) => { calls.push(`mcp:browse:${action}`); return {server:name, content:"external-resource-canary", warning:"untrusted"}; },
+  browseMcp: async ({name,action,value,args}) => {
+    calls.push(`mcp:browse:${action}`);
+    if (action === "resources") return { server: name, resources: [{ name: "Greeting", uri: "test://greeting" }], templates: [{ name: "Document", uriTemplate: "test://docs/{id}", description: "external-resource-canary" }], truncated: false };
+    if (action === "read" && /\{/.test(value ?? "")) { if (!args || typeof args.id !== "string") throw new Error("template variables missing"); calls.push(`mcp:browse:read-template:${args.id}`); return { server: name, uri: `test://docs/${args.id}`, content: "template-resource-canary", warning: "untrusted" }; }
+    return { server: name, content: "external-resource-canary", warning: "untrusted" };
+  },
   snapshot: async () => workspace,
   chooseWorkspace: async () => workspace,
   closeWorkspace: async () => workspace,

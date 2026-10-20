@@ -168,15 +168,20 @@ test("desktop MCP user editor saves without granting, preserves other entries an
 });
 
 test("desktop MCP editor rejects inline credentials and does not export secret-bearing or advanced configurations", async (t) => {
-  const { file, service } = await setup(t);
+  const { root, file, service } = await setup(t);
   const draft = { name: "remote", transport: "streamable-http" as const, risk: "read" as const };
   for (const url of ["https://user:pass@service.example/mcp", "https://service.example/mcp?api_key=canary"]) await assert.rejects(service.save({ ...draft, url }));
   await assert.rejects(service.save({ name: "local", transport: "stdio", risk: "read", command: "node", args: ["--api-key", "opaque-canary-value"] }));
   await assert.rejects(service.save({ name: "local", transport: "stdio", risk: "read", command: "node", args: {} as never }));
-  await fs.writeFile(file, JSON.stringify({ mcpServers: { private: { url: "https://service.example/mcp", headers: { Authorization: "Bearer opaque-canary-value" } } } }));
+  await fs.writeFile(file, JSON.stringify({ mcpServers: { private: { url: "https://service.example/mcp", headers: { Authorization: "Bearer opaque-canary-value" }, toolRisks: { wipe: "dangerous" }, permissions: ["network:access", "credentials:access", "external:write"] }, local: { command: process.execPath, args: [fixture], env: { PRIVATE_TOKEN: "opaque-env-canary" }, cwd: root } } }));
   const snapshot = await service.snapshot();
   assert.equal(snapshot.servers[0]?.editable, undefined);
-  assert.doesNotMatch(JSON.stringify(snapshot), /opaque-canary-value|service.example/);
+  assert.doesNotMatch(JSON.stringify(snapshot), /opaque-canary-value|opaque-env-canary|service.example/);
+  // The read-only summary names fields, never values.
+  assert.deepEqual(snapshot.servers[0]?.details, { enabled: true, risk: "execute", env: [], headers: ["Authorization"], cwd: false, toolRisks: { wipe: "dangerous" }, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: true });
+  assert.deepEqual(snapshot.servers[1]?.details, { enabled: true, risk: "execute", args: 1, env: ["PRIVATE_TOKEN"], headers: [], cwd: true, toolRisks: {}, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: false });
+  assert.equal(snapshot.servers[1]?.editable, undefined, "env and cwd are advanced fields the basic editor does not expose");
+  assert.equal(snapshot.servers[0]?.origin, "user");
   const saved = await service.save({ ...draft, url: "https://safe.example/mcp", bearerTokenEnvironment: "XIU_TEST_BEARER" });
   assert.equal(saved.servers.find((item) => item.name === "remote")?.editable?.bearerTokenEnvironment, "XIU_TEST_BEARER");
 });
@@ -186,7 +191,16 @@ test("desktop MCP Resource and Prompt browsing is bounded, redacted and requires
   await assert.rejects(service.browse("test", "resources"), /Connect/);
   await service.approve("test", (await service.snapshot()).servers[0]!.fingerprint);
   await service.reload();
-  assert.match(JSON.stringify(await service.browse("test", "resources")), /Greeting|Second/);
+  const catalog = await service.browse("test", "resources") as { templates: Array<{ uriTemplate: string }> };
+  assert.match(JSON.stringify(catalog), /Greeting|Second/);
+  assert.deepEqual(catalog.templates.map((item) => item.uriTemplate), ["test://docs/{id}"]);
+  // Templates expand only from values the user supplied; nothing is guessed and plain URIs take no variables.
+  const expanded = await service.browse("test", "read", "test://docs/{id}", { id: "42 a" }) as { uri?: string };
+  assert.match(JSON.stringify(expanded), /test:\/\/docs\/42%20a/);
+  await assert.rejects(service.browse("test", "read", "test://docs/{id}", {}), /without a value: id/);
+  await assert.rejects(service.browse("test", "read", "test://docs/{id}"), /without a value: id/);
+  await assert.rejects(service.browse("test", "read", "test://greeting", { id: "1" }), /takes no template variables/);
+  await assert.rejects(service.browse("test", "read", "test://docs/{id*}", { id: "1" }), /modifier/);
   assert.match(JSON.stringify(await service.browse("test", "prompts")), /review/);
   const old = process.env.XIU_TEST_SECRET;
   process.env.XIU_TEST_SECRET = "opaque-desktop-mcp-canary";
