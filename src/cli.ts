@@ -49,7 +49,7 @@ import { StatusLine } from "./status.js";
 import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
-import { localizeToolDescription, localizeToolProgress, summarizeToolResult } from "./tool-display.js";
+import { localizeToolDescription, localizeToolProgress } from "./tool-display.js";
 import { failureRecoveryOptions, formatRunningInputFooter, RunningTaskView, TaskInputQueue } from "./task-queue.js";
 import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools, createBackgroundTools } from "./tools.js";
@@ -80,6 +80,7 @@ import { handleProviderCommand } from "./commands/provider-commands.js";
 import { type DiffCommandContext, handleDiffCommand } from "./commands/diff-commands.js";
 import { handleProjectCheckCommand } from "./commands/project-check-commands.js";
 import { createProviderSession } from "./commands/provider-session.js";
+import { createTerminalAgentEvents } from "./terminal-agent-events.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
 import { runAuditCommand } from "./commands/audit-command.js";
 import { runRecoverCommand } from "./commands/recover-command.js";
@@ -88,12 +89,6 @@ import { handleRunningTaskCommand, incompleteTaskMessage, RUNNING_TASK_COMMAND_W
 import { handleWebCommand } from "./commands/web-commands.js";
 
 const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
-
-function compactTerminalDescription(value: string, maximum = 180): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  const characters = [...normalized];
-  return characters.length > maximum ? `${characters.slice(0, maximum - 3).join("")}...` : normalized;
-}
 
 function printUpdateMessage(message: UpdateMessage): void {
   const formatted = message.kind === "error" ? chalk.red(message.text)
@@ -972,9 +967,6 @@ async function main(): Promise<void> {
       };
     }
 
-    let activeToolActivity: string | undefined;
-    let activeToolDetails: { name: string; description: string; verification: boolean; risk: "read" | "write" | "execute" | "dangerous" } | undefined;
-    let verificationReadyForSummary = false;
     const xiuRuntime = new XiuRuntime({
       sanitize: redactTerminalOutput,
       approvalHandler: approveRequest,
@@ -984,186 +976,20 @@ async function main(): Promise<void> {
       const stream = jsonStream;
       xiuRuntime.subscribe((event) => stream.event(event));
     }
+    const terminalEvents = createTerminalAgentEvents({
+      activities, config, language: () => language, runningTaskView: () => runningTaskView,
+      emitLine, emitWrite, redact: redactTerminalOutput, startPhase, stopPhase,
+      onDetachedWorkspaceChange: (change) => {
+        if (initialTask) oneShotChanges.push(change);
+        printWorkspaceChanges([change]);
+      },
+    });
     const agent = new Agent({
       config,
       provider,
       tools,
       approve: (request) => xiuRuntime.requestApproval(request),
-      events: xiuRuntime.agentEvents({
-        onModelStart: (turn) => {
-          runningTaskView?.clearDraftPreview();
-          runningTaskView?.setTurn(turn, config.maxTurns);
-          const modelTurn = localize(language, `模型第 ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} 轮开始`, `Model turn ${turn}${config.maxTurns ? `/${config.maxTurns}` : ""} started`);
-          runningTaskView?.activity(modelTurn);
-          if (runningTaskView) emitLine(chalk.cyan(`● ${modelTurn}`));
-          startPhase(verificationReadyForSummary
-            ? localize(language, "验证已通过，正在整理最终结果", "Verification passed; preparing the final result")
-            : localize(language, "思考中", "Thinking"));
-        },
-        onModelEnd: () => {
-          runningTaskView?.clearDraftPreview();
-          stopPhase();
-        },
-        onDraftPreview: (text, receivedChars) => {
-          runningTaskView?.setDraftPreview(redactTerminalOutput(text), receivedChars);
-          if (!runningTaskView) startPhase(localize(language, `正在接收回复 · ${receivedChars} 字符`, `Receiving response · ${receivedChars} characters`));
-        },
-        onText: (text) => {
-          // Interactive final text is rendered once, after the complete turn
-          // has passed normalization and evidence gates. Tool-bound narration
-          // is persisted by onAssistantTurn below.
-          if (!runningTaskView) emitLine(`${text}\n`);
-        },
-        onTextDelta: (text) => {
-          stopPhase();
-          // Interactive tasks wait until the complete assistant turn is known
-          // before making text persistent. This prevents a streamed draft that
-          // is later rejected by a verification/evidence gate from leaking into
-          // terminal scrollback. One-shot mode continues to stream directly.
-          if (!runningTaskView) emitWrite(text);
-        },
-        onTextStreamEnd: () => {
-          if (!runningTaskView) emitWrite("\n\n");
-        },
-        onAssistantTurn: (text, hasToolCalls) => {
-          if (!hasToolCalls || !runningTaskView) return;
-          const narration = runningTaskView.narrate(text);
-          if (narration) emitLine(`${chalk.cyan(localize(language, "思考摘要：", "Reasoning summary: "))}${redactTerminalOutput(narration)}\n`);
-        },
-        onToolStart: (name, description, details) => {
-          if (!details.verification) verificationReadyForSummary = false;
-          const displayDescription = localizeToolDescription(name, description, language);
-          const terminalDescription = compactTerminalDescription(displayDescription);
-          activeToolActivity = activities.start("tool", name, displayDescription);
-          activeToolDetails = { name, description: terminalDescription, verification: details.verification, risk: details.risk };
-          runningTaskView?.beginTool(name, terminalDescription, details.changesWorkspace, details.verification);
-          emitLine(`${chalk.cyan(`> ${name}`)} ${chalk.dim(terminalDescription)}`);
-          startPhase(localize(language, `正在运行 ${name}`, `Running ${name}`));
-        },
-        onToolProgress: (name, message) => {
-          const displayMessage = localizeToolProgress(message, language);
-          if (activeToolActivity) activities.progress(activeToolActivity, displayMessage);
-          runningTaskView?.activity(`${name}: ${displayMessage}`);
-          startPhase(`${name}: ${displayMessage}`);
-        },
-        onToolEnd: (_name, result, details) => {
-          stopPhase();
-          const failed = details ? details.result.status !== "success"
-            : /^(?:Tool error:|Tool execution denied|Tool execution blocked by crash recovery:|Unknown tool:|Exit code: (?!0\b)|Process timed out|Command timed out|Verification (?:timed out|unavailable|failed)|(?:Process|Command|Verification) cancelled)/i.test(result);
-          if (failed) verificationReadyForSummary = false;
-          if (activeToolActivity) activities.finish(activeToolActivity, result, failed);
-          activeToolActivity = undefined;
-          const summary = redactTerminalOutput(summarizeToolResult(_name, result, language) ?? result.replace(/\s+/g, " ").trim());
-          runningTaskView?.activity(`${_name}: ${failed ? localize(language, "失败", "failed") : localize(language, "已完成", "finished")} - ${summary.slice(0, 100)}`);
-          // onPlanUpdate already writes the bounded user-facing receipt. Avoid
-          // printing the tool result again (historically this was the full plan).
-          if (_name !== "update_task_plan") {
-            emitLine(`${chalk.dim(summary.length > 240 ? `${summary.slice(0, 240)}... ${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : summary)}\n`);
-          }
-          if (!failed && activeToolDetails) {
-            if (details?.verification) {
-              verificationReadyForSummary = true;
-              runningTaskView?.markVerificationPassed();
-              runningTaskView?.recordImportantAction(localize(language, `验证通过：${activeToolDetails.description}`, `Verified: ${activeToolDetails.description}`));
-            }
-            else if (activeToolDetails.risk === "execute" || activeToolDetails.risk === "dangerous") runningTaskView?.recordImportantAction(localize(language, `已执行：${activeToolDetails.description}`, `Ran: ${activeToolDetails.description}`));
-          }
-          activeToolDetails = undefined;
-        },
-        onCompletionGate: () => {
-          verificationReadyForSummary = false;
-          emitLine(chalk.yellow(localize(language, "完成前需要验证。\n", "Verification required before completion.\n")));
-        },
-        onCompaction: (message) => startPhase(message),
-        onRetry: (message) => startPhase(localizeToolProgress(message, language)),
-        onBudgetWarning: (message) => {
-          runningTaskView?.activity(message);
-          emitLine(chalk.yellow(`! ${message}\n`));
-        },
-        onFailure: (message) => {
-          stopPhase();
-          runningTaskView?.activity(`${localize(language, "失败", "Failure")}: ${message}`);
-          emitLine(chalk.red(`${message}\n`));
-        },
-        onProviderFailover: (details) => {
-          stopPhase();
-          const message = localize(language,
-            `Provider 故障转移：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}（原请求在输出前连续失败）`,
-            `Provider failover: ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel} (the original request failed repeatedly before output)`);
-          runningTaskView?.activity(message);
-          emitLine(`${chalk.yellow(`↪ ${message}`)}\n`);
-          if (details.skipped.length) emitLine(`${chalk.dim(details.skipped.map((item) => `${item.providerId}: ${item.reason}`).join(" · "))}\n`);
-          startPhase(localize(language, `已切换到 ${details.toProviderId}，正在继续任务`, `Continuing with ${details.toProviderId}`));
-        },
-        onProviderFailoverUnavailable: (details) => {
-          const skipped = details.skipped.length ? ` ${details.skipped.map((item) => `${item.providerId}: ${item.reason}`).join(" · ")}` : "";
-          runningTaskView?.activity(localize(language, `备用 Provider 不可用：${details.reason}`, `No fallback provider available: ${details.reason}`));
-          emitLine(`${chalk.dim(localize(language, `未执行故障转移：${details.reason}${skipped}`, `Failover not performed: ${details.reason}${skipped}`))}\n`);
-        },
-        onProviderRoute: (details) => {
-          stopPhase();
-          const message = localize(language,
-            `阶段路由（${details.phase}）：${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`,
-            `Stage route (${details.phase}): ${details.fromProviderId}/${details.fromModel} → ${details.toProviderId}/${details.toModel}`);
-          runningTaskView?.activity(message);
-          emitLine(`${chalk.cyan(`↪ ${message}`)}\n${chalk.dim(details.reason)}\n`);
-        },
-        onProviderRouteSkipped: (details) => {
-          const message = localize(language,
-            `阶段路由（${details.phase}）未切换${details.targetProviderId ? `到 ${details.targetProviderId}` : ""}：${details.reason}`,
-            `Stage route (${details.phase}) did not switch${details.targetProviderId ? ` to ${details.targetProviderId}` : ""}: ${details.reason}`);
-          runningTaskView?.activity(message);
-          emitLine(`${chalk.dim(message)}\n`);
-        },
-        onProviderRouteRestore: (details) => {
-          runningTaskView?.activity(localize(language, `已恢复用户选择的 Provider：${details.providerId}/${details.model}`, `Restored the user-selected provider: ${details.providerId}/${details.model}`));
-        },
-        onPlanUpdate: (plan) => {
-          runningTaskView?.setPlan(plan);
-          const completed = plan.steps.filter((step) => step.status === "completed").length;
-          const current = plan.steps.find((step) => step.status === "in_progress")?.title
-            ?? plan.steps.find((step) => step.status === "pending")?.title
-            ?? localize(language, "等待最终总结", "awaiting final summary");
-          emitLine(`${chalk.cyan(localize(language, `任务计划已更新：${completed}/${plan.steps.length}；当前：${compactTerminalDescription(current, 100)}`, `Task plan updated: ${completed}/${plan.steps.length}; now: ${compactTerminalDescription(current, 100)}`))}\n${chalk.dim(localize(language, "完整计划可使用 /tasks 查看。", "Use /tasks to view the full plan."))}\n`);
-        },
-        onWorkspaceChange: (change) => {
-          if (runningTaskView) {
-            runningTaskView.recordWorkspaceChange(change);
-            emitLine(chalk.yellow(localize(language, `△ 文件变化：${redactTerminalOutput(change.description)}`, `△ File change: ${redactTerminalOutput(change.description)}`)));
-            for (const file of change.files) {
-              const label = ({ created: localize(language, "已创建", "Created"), modified: localize(language, "已修改", "Modified"), deleted: localize(language, "已删除", "Deleted") } as const)[file.kind];
-              const counts = file.additions !== undefined && file.deletions !== undefined ? ` +${file.additions} -${file.deletions}` : "";
-              emitLine(`  ${chalk.green("√")} ${label} ${file.path}${counts}`);
-              if (file.hunk) emitLine(chalk.dim(`    ${redactTerminalOutput(file.hunk)}`));
-              for (const preview of file.preview.slice(0, 8)) {
-                const color = preview.startsWith("+") ? chalk.green : preview.startsWith("-") ? chalk.red : chalk.dim;
-                emitLine(`    ${color(redactTerminalOutput(preview))}`);
-              }
-            }
-            emitLine();
-          } else {
-            if (initialTask) oneShotChanges.push(change);
-            printWorkspaceChanges([change]);
-          }
-        },
-        onCheckpoint: (message) => emitLine(chalk.dim(`${message}\n`)),
-        onTaskComplete: (summary) => {
-          runningTaskView?.markFinishing();
-          const verification = summary.changed ? (summary.verified ? localize(language, "已验证", "verified") : localize(language, "已尝试验证", "verification noted")) : localize(language, "无文件变化", "no changes");
-          const recoveredFailures = (summary.diagnostics?.model.failures ?? 0) + (summary.diagnostics?.tools.failures ?? 0);
-          const outcomeLabel = summary.outcome === "completed"
-            ? localize(language, "✓ 已完成", "✓ Done")
-            : summary.outcome === "failed"
-              ? localize(language, "! 任务未完成", "! Task incomplete")
-              : localize(language, "! 未验证完成", "! Stopped unverified");
-          const recoveryNote = summary.outcome === "completed" && recoveredFailures
-            ? localize(language, `（过程中有 ${recoveredFailures} 次可恢复失败）`, ` (${recoveredFailures} recoverable failure(s) during execution)`)
-            : "";
-          const message = `${outcomeLabel}${recoveryNote} · ${(summary.durationMs / 1000).toFixed(1)}${localize(language, " 秒", "s")} · ${summary.turns} ${localize(language, "轮模型调用", "model turn(s)")} · ${summary.toolCalls} ${localize(language, "次工具调用", "tool call(s)")} · ${summary.diagnostics ? `${(summary.diagnostics.model.inputTokens + summary.diagnostics.model.outputTokens).toLocaleString()} tokens · ${localize(language, `失败 ${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} 次`, `${summary.diagnostics.model.failures + summary.diagnostics.tools.failures} failure(s)`)} · ` : ""}${verification}`;
-          if (runningTaskView) runningTaskView.setCompletion(message, summary.outcome === "completed");
-          else emitLine(summary.outcome === "completed" ? chalk.green(message) : chalk.yellow(message));
-        },
-      }),
+      events: xiuRuntime.agentEvents(terminalEvents.events),
       restored,
       projectIndex,
       planManager,
@@ -1479,7 +1305,7 @@ async function main(): Promise<void> {
         first = false;
         const replayChanges: WorkspaceChangeNotice[] = [];
         const replaySupplements: string[] = [];
-        verificationReadyForSummary = false;
+        terminalEvents.reset();
         const skillsBeforeTask = new Set(skillRegistry.list().map((skill) => skill.name.toLowerCase()));
         const view = new RunningTaskView(256_000, language);
         const existingPlan = planManager.snapshot();
