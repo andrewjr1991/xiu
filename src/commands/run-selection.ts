@@ -1,4 +1,7 @@
 import { localize, type UiLanguage } from "../i18n.js";
+import { terminalDisplayWidth } from "../interactive-ui.js";
+import { formatLocalTime } from "../local-time.js";
+import { taskRunStatusLabel } from "../status-labels.js";
 import type { TaskRunJournal, TaskRunJournalScan, TaskRunRecord } from "../task-run.js";
 
 /** Up to this many recent runs are listed and selectable by index or run-id prefix. */
@@ -22,6 +25,20 @@ export async function listRecentRunsWithIssues(taskRunJournal: RunListJournal): 
   if (!taskRunJournal.scan) return { runs: await listRecentRuns(taskRunJournal), unreadable: [] };
   const scan = await taskRunJournal.scan(RUN_LIST_LIMIT);
   return { runs: scan.records, unreadable: scan.unreadable };
+}
+
+/** Pads by display width, so a Chinese label fills the same columns as an English one. */
+function padColumn(value: string, width: number): string {
+  return value + " ".repeat(Math.max(0, width - terminalDisplayWidth(value)));
+}
+
+/**
+ * The columns every run list starts with: 1-based index, the first 8 characters of the run id, the
+ * start time as local `YYYY-MM-DD HH:mm:ss`, and the status in the user's language. Column widths
+ * match the headers of `/report runs` and `/diff runs`; the caller appends its own columns.
+ */
+export function formatRunListColumns(run: TaskRunRecord, index: number, language: UiLanguage): string {
+  return `${String(index + 1).padEnd(5)} ${run.runId.slice(0, 8).padEnd(9)} ${padColumn(formatLocalTime(run.startedAt), 21)} ${padColumn(taskRunStatusLabel(run.status, language), 13)}`;
 }
 
 /** One line naming how many journal records a list leaves out and why; undefined when none. */

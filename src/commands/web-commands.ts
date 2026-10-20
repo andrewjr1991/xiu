@@ -176,6 +176,20 @@ export async function handleWebCommand(task: string, ctx: WebCommandContext): Pr
 
   const printManagedWebSearchDevices = async (): Promise<void> => {
     if (settings.webSearch?.managedAuth !== "xiu-device" || !managedWebSearchAuth) throw new Error(localize(language, "当前配置未使用 Xiu 托管搜索设备凭证。", "The current configuration does not use a Xiu managed search device credential."));
+    // Without a device credential there is nothing to query with. Say so instead of sending nothing
+    // and reporting a failure; the credential is created by the first search, never by this command.
+    const credential = await managedWebSearchAuth.credentialStatus();
+    if (!credential.present && credential.storage === "none") {
+      console.log(localize(language,
+        "这台设备尚未注册托管搜索凭证，服务端没有可查询的设备记录；首次联网搜索时会自动注册，之后再用 /web devices 查看。本次没有发送任何请求。\n",
+        "This device has no managed search credential yet, so there is no server-side device record to query; the first web search registers it automatically, after which /web devices shows it. No request was sent.\n"));
+      return;
+    }
+    if (!credential.present && credential.storage === "system-unavailable") {
+      throw new Error(localize(language,
+        "托管搜索设备凭证保存在系统凭证管理器中，但该后端当前不可用，无法读取；用 /web doctor 查看详情。本次没有发送任何请求。",
+        "The managed search device credential is stored in the system credential manager, but that backend is unavailable, so it cannot be read; see /web doctor. No request was sent."));
+    }
     const result = await managedWebSearchAuth.listDevices();
     await auditCredential("web-search-devices", result.currentDeviceId ?? "managed-search-device", "allowed");
     const deviceStatus = (status: string): string => ({

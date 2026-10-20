@@ -12,7 +12,7 @@ import { describeFailure } from "../user-facing-errors.js";
 import { redactSecrets } from "../secret-redaction.js";
 import type { SecurityAuditCategory, SecurityAuditLog } from "../security-audit.js";
 import type { TaskRunJournal, TaskRunJournalScan, TaskRunRecord } from "../task-run.js";
-import { listRecentRunsWithIssues, RUN_LIST_LIMIT, RUN_SELECTOR, unreadableRunsNote } from "./run-selection.js";
+import { formatRunListColumns, listRecentRunsWithIssues, RUN_LIST_LIMIT, RUN_SELECTOR, unreadableRunsNote } from "./run-selection.js";
 import { renderTerminalMarkdown } from "../terminal-markdown.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { isWorkspaceTrusted } from "../trust.js";
@@ -39,13 +39,7 @@ export function formatRunList(runs: TaskRunRecord[], language: UiLanguage, unrea
   const note = unreadableRunsNote(unreadable, language);
   if (!runs.length) return note ? `${noReportableRun(language)}\n${note}` : noReportableRun(language);
   const header = localize(language, "序号  运行 ID   开始时间              状态          任务", "#     run id    started               status        task");
-  const lines = runs.map((run, index) => {
-    const number = String(index + 1).padEnd(5);
-    const id = run.runId.slice(0, 8).padEnd(9);
-    const started = run.startedAt.slice(0, 19).padEnd(21);
-    const status = run.status.padEnd(13);
-    return `${number} ${id} ${started} ${status} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`;
-  });
+  const lines = runs.map((run, index) => `${formatRunListColumns(run, index, language)} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`);
   return [header, ...lines, localize(language,
     `选择方式：run:<序号> 或 run:<运行 ID 前缀>（至少 4 位），例如 /report run:2、xiu report run:${runs[0]!.runId.slice(0, 8)}`,
     `Select with run:<number> or run:<run-id prefix> (at least 4 characters), for example /report run:2 or xiu report run:${runs[0]!.runId.slice(0, 8)}`),

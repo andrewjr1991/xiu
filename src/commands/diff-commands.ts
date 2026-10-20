@@ -3,7 +3,7 @@ import { redactSecrets } from "../secret-redaction.js";
 import { loadTaskChangeHistory } from "../task-change-history.js";
 import { formatTaskChanges, type TaskChangeEntry, type TaskChangeReport } from "../task-changes.js";
 import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
-import { listRecentRunsWithIssues, RUN_SELECTOR, type RunListJournal, selectRun, unreadableRunsNote } from "./run-selection.js";
+import { formatRunListColumns, listRecentRunsWithIssues, RUN_SELECTOR, type RunListJournal, selectRun, unreadableRunsNote } from "./run-selection.js";
 
 export type DiffCommand =
   | { kind: "view"; view: "task" | "workspace" | "staged" }
@@ -82,7 +82,7 @@ export async function formatRunChangeList(sources: DiffReplaySources, language: 
   const lines: string[] = [];
   for (const [index, run] of runs.entries()) {
     const changed = await load(sources.cwd, run.runId).then((report) => (report ? String(report.changes.length) : "-"), () => "!");
-    lines.push(`${String(index + 1).padEnd(5)} ${run.runId.slice(0, 8).padEnd(9)} ${run.startedAt.slice(0, 19).padEnd(21)} ${run.status.padEnd(13)} ${changed.padEnd(9)} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`);
+    lines.push(`${formatRunListColumns(run, index, language)} ${changed.padEnd(9)} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`);
   }
   return [header, ...lines, localize(language,
     `“-”表示没有保存的改动记录，“!”表示记录存在但无法读取（损坏、被改动或超出限制）。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`,
