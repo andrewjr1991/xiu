@@ -21,12 +21,13 @@ import { registerProviderIpc } from "./ipc-provider.js";
 import { registerManagementIpc } from "./ipc-management.js";
 import { registerWorkspaceIpc } from "./ipc-workspace.js";
 import { registerTerminalIpc } from "./ipc-terminal.js";
+import { registerTaskIpc } from "./ipc-task.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopWorkspaceSnapshot, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskHistoryRequest, type DesktopWorkspaceSnapshot } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -239,52 +240,13 @@ function registerIpc(): void {
       return result.canceled || result.filePaths.length !== 1 ? undefined : result.filePaths[0]!;
     },
   });
-  handleIpc(desktopChannels.runtimeConnect, async (event, request?: RuntimeConnectRequest) => {
-    assertTrustedSender(event);
-    const after = request?.afterSequence;
-    if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw new Error("Invalid runtime sequence.");
-    return taskController.connect(controller.trustedWorkspacePath(), after);
-  });
-  handleIpc(desktopChannels.taskCreate, async (event, request: RuntimeTaskRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再启动 Agent 任务。");
-      return taskController.createTask(workspace, request?.text, request?.answerTo);
-    });
-  });
-  handleIpc(desktopChannels.taskContinue, async (event, request: DesktopTaskContinueRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再继续 Agent 任务。");
-      return taskController.continueTask(workspace, request?.taskId, request?.text);
-    });
-  });
-  handleIpc(desktopChannels.conversationNew, async (event) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(() => taskController.newConversation(controller.trustedWorkspacePath()));
-  });
-  handleIpc(desktopChannels.taskSteer, async (event, request: RuntimeTaskRequest) => {
-    assertTrustedSender(event);
-    return taskController.steerTask(controller.trustedWorkspacePath(), request?.text);
-  });
-  handleIpc(desktopChannels.taskStop, async (event) => {
-    assertTrustedSender(event);
-    return taskController.stopTask(controller.trustedWorkspacePath());
-  });
-  handleIpc(desktopChannels.planModeSet, async (event, request: DesktopPlanModeRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行，请先关闭终端再切换 Plan 模式。");
-      computerUseController?.stop();
-      return taskController.setPlanMode(workspace, request);
-    });
-  });
-  handleIpc(desktopChannels.approvalModeSet, async (event, request: DesktopApprovalModeRequest) => {
-    assertTrustedSender(event);
-    return taskController.setApprovalMode(controller.trustedWorkspacePath(), request, async () => {
+  registerTaskIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart, emitSnapshot,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    tasks: taskController, terminalRunning: (workspace) => terminalController.isRunning(workspace),
+    stopComputerUse: () => { computerUseController?.stop(); },
+    workspaceSnapshot: () => controller.snapshot(),
+    confirmFullAccess: async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return false;
       await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
       const workspace = controller.trustedWorkspacePath();
@@ -292,18 +254,16 @@ function registerIpc(): void {
       const accepted = await confirmFullAccess(mainWindow, route);
       if (accepted && route && controller.trustedWorkspacePath() === workspace) computerUseController?.grantFullAccess(workspace, route);
       return accepted;
-    });
-  });
-  handleIpc(desktopChannels.approvalDecide, async (event, request: RuntimeApprovalDecisionRequest) => {
-    assertTrustedSender(event);
-    return taskController.decideApproval(controller.trustedWorkspacePath(), request);
-  });
-  handleIpc(desktopChannels.computerAcceptance, async (event, request: import("../shared/protocol.js").DesktopComputerAcceptanceRequest) => {
-    assertTrustedSender(event);
-    return taskController.computerAcceptance(controller.trustedWorkspacePath(), request, async () => {
+    },
+    confirmComputerAcceptance: async (request) => {
       if (!mainWindow || mainWindow.isDestroyed()) return false;
       return confirmComputerAction(mainWindow, request.decision === "passed" ? "确认电脑操作结果通过？" : "记录电脑操作结果未通过？", "仅记录你对这一轮电脑操作结果的人工判断，不覆盖程序验证、失败校验或过程提醒，不授予执行或恢复权限。确认前请检查目标应用的最终结果。后续轮次不会继承本次验收。");
-    });
+    },
+    confirmSubagentCancel: async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
+      return confirmSubagentCancel(mainWindow);
+    },
   });
   handleIpc(desktopChannels.taskHistoryOpen, async (event, request: DesktopTaskHistoryRequest) => {
     assertTrustedSender(event);
@@ -319,15 +279,6 @@ function registerIpc(): void {
     // Do not send results from a workspace closed/switched while files loaded.
     if (controller.trustedWorkspacePath() !== workspace) throw new Error("Workspace changed while loading history.");
     return { ...history, attachments };
-  });
-  handleIpc(desktopChannels.taskDelete, async (event, request: DesktopTaskDeleteRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (request?.confirmed !== true) throw new Error("删除任务需要明确确认。");
-      await taskController.deleteTask(workspace, request, request.confirmed);
-      return emitSnapshot(await controller.snapshot());
-    });
   });
   handleIpc(desktopChannels.attachmentsChoose, async (event) => {
     assertTrustedSender(event);
@@ -359,14 +310,6 @@ function registerIpc(): void {
   handleIpc(desktopChannels.reviewSnapshot, async (event, request?: DesktopReviewRequest) => {
     assertTrustedSender(event);
     return taskController.reviewSnapshot(controller.trustedWorkspacePath(), request?.changeView);
-  });
-  handleIpc(desktopChannels.subagentCancel, async (event, request: import("../shared/protocol.js").DesktopSubagentCancelRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => taskController.cancelSubagent(controller.trustedWorkspacePath(), request, async () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return false;
-      await browserController?.control({ action: "layout", bounds: { x: 0, y: 56, width: 0, height: 0 }, visible: false });
-      return confirmSubagentCancel(mainWindow);
-    }));
   });
   handleIpc(desktopChannels.filePreview, async (event, request: DesktopFilePreviewRequest) => {
     assertTrustedSender(event);
