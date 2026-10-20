@@ -1387,3 +1387,90 @@ test("context compaction uses the failover chain without exposing tools or parti
   assert.deepEqual(failures, []);
   assert.equal(agent.status().model, "backup-model");
 });
+
+function selfVerifyingTool(cwd: string, name = "generate_asset"): AgentTool {
+  return {
+    name, description: "save a generated asset", risk: "write", changesWorkspace: true, verifiesOwnOutput: true,
+    inputSchema: { type: "object", properties: { output_path: { type: "string" } }, required: ["output_path"] },
+    describe: (input) => `generate ${String(input.output_path)}`,
+    execute: async (input) => {
+      const target = path.join(cwd, String(input.output_path));
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, "png-bytes");
+      return `Generated image with image-model\nRequest: req-1\nSaved: ${String(input.output_path)}`;
+    },
+  };
+}
+
+test("a self-verifying media write completes without a completion gate or a second check", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-media-"));
+  const prompts: string[] = [];
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (messages.at(-1)?.role === "user") prompts.push(messages.at(-1)!.content);
+      if (calls === 1) return { text: "Generating.", toolCalls: [{ id: "gen", name: "generate_asset", input: { output_path: "assets/cat.png" } }], raw: {} };
+      assert.match(messages.at(-1)?.content ?? "", /^Generated image/);
+      return { text: "Saved to assets/cat.png.", toolCalls: [], raw: {} };
+    },
+  };
+  let summary: { changed: boolean; verified: boolean; outcome: string } | undefined;
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 5, autoApprove: true },
+    provider, tools: [...builtinTools, selfVerifyingTool(cwd)], approve: async () => true,
+    events: { onTaskComplete: (result) => { summary = result; } },
+  });
+  assert.equal(await agent.run("Draw a cat"), "Saved to assets/cat.png.");
+  assert.equal(calls, 2);
+  assert.equal(agent.status().outcome, "completed");
+  assert.equal(summary?.changed, true);
+  assert.ok(!prompts.some((prompt) => /Completion gate/.test(prompt)), "no completion gate for a self-verified artifact");
+});
+
+test("a self-verifying write does not excuse an unverified code change in the same task", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-media-mixed-"));
+  let calls = 0;
+  let gated = false;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (calls === 1) return { text: "Editing.", toolCalls: [{ id: "w", name: "write_file", input: { path: "notes.txt", content: "draft" } }], raw: {} };
+      if (calls === 2) return { text: "Generating.", toolCalls: [{ id: "gen", name: "generate_asset", input: { output_path: "cover.png" } }], raw: {} };
+      if (/Completion gate/.test(messages.at(-1)?.content ?? "")) gated = true;
+      return { text: "Done.", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 6, autoApprove: true },
+    provider, tools: [...builtinTools, selfVerifyingTool(cwd)], approve: async () => true,
+  });
+  await agent.run("Edit notes and draw a cover");
+  assert.equal(gated, true, "the text edit still needs a check");
+  assert.equal(agent.status().outcome, "unverified");
+});
+
+test("a self-verifying write keeps an earlier passing check valid", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-agent-media-after-check-"));
+  let calls = 0;
+  const provider: ModelProvider = {
+    async complete(_system, messages) {
+      calls++;
+      if (calls === 1) return { text: "Writing.", toolCalls: [{ id: "w", name: "write_file", input: { path: "result.html", content: "<!DOCTYPE html><p>001</p>" } }], raw: {} };
+      if (calls === 2) return { text: "Checking.", toolCalls: [{ id: "v", name: "verify_output", input: { path: "result.html", required_substrings: ["<!DOCTYPE html>", "001"] } }], raw: {} };
+      if (calls === 3) {
+        assert.match(messages.at(-1)?.content ?? "", /^Verification passed:/);
+        return { text: "Illustrating.", toolCalls: [{ id: "gen", name: "generate_asset", input: { output_path: "hero.png" } }], raw: {} };
+      }
+      assert.doesNotMatch(messages.at(-1)?.content ?? "", /Completion gate/);
+      return { text: "Page and image are ready.", toolCalls: [], raw: {} };
+    },
+  };
+  const agent = new Agent({
+    config: { provider: "openai", providerId: "openai", model: "test", cwd, maxTurns: 6, autoApprove: true },
+    provider, tools: [...builtinTools, selfVerifyingTool(cwd)], approve: async () => true,
+  });
+  assert.equal(await agent.run("Build the page with a hero image"), "Page and image are ready.");
+  assert.equal(calls, 4);
+  assert.equal(agent.status().outcome, "completed");
+});

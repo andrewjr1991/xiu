@@ -592,6 +592,18 @@ button, input, textarea { font: inherit; }
 .agent-avatar .agent-status { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 2px solid white; margin: 0; }
 .conversation-timeline { gap: 20px; }
 .conversation-round { min-width: 0; }
+.generated-media-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.generated-media { display: flex; min-width: 0; max-width: 100%; flex-direction: column; gap: 6px; margin: 0; padding: 6px; border: 1px solid var(--tone-d9e4f1, #d9e4f1); border-radius: 12px; background: var(--tone-f7faff, #f7faff); }
+.generated-media.image.ready { width: min(100%, 520px); }
+.generated-media.video.ready { width: min(100%, 520px); }
+.generated-media.audio.ready { width: min(100%, 360px); }
+.generated-media img, .generated-media video { display: block; width: 100%; max-height: 480px; border-radius: 8px; background: var(--tone-eaf0f7, #eaf0f7); object-fit: contain; }
+.generated-media audio { display: block; width: 100%; }
+.generated-media-placeholder { display: grid; width: 180px; height: 96px; place-items: center; border-radius: 8px; background: var(--tone-eaf0f7, #eaf0f7); }
+.generated-media-placeholder .file-glyph { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 8px; color: var(--tone-177bdc, #177bdc); background: var(--tone-e5f1ff, #e5f1ff); }
+.generated-media figcaption { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding: 0 2px; color: var(--tone-3d4e65, #3d4e65); }
+.generated-media figcaption strong { overflow: hidden; font-size: calc(11px * var(--ui-scale, 1)); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.generated-media figcaption small { color: var(--tone-8b97a8, #8b97a8); font-size: calc(10px * var(--ui-scale, 1)); overflow-wrap: anywhere; }
 .conversation-round > .timeline { padding: 0; }
 .turn-process { margin: 14px 0 20px; border-bottom: 1px solid var(--tone-e2e9f3, #e2e9f3); padding-bottom: 12px; }
 .turn-process > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--tone-74849e, #74849e); font-size: calc(13px * var(--ui-scale, 1)); cursor: pointer; list-style: none; }

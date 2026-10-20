@@ -379,3 +379,10 @@ test("a compatible provider with vision disabled exposes no media tools", () => 
   });
   assert.deepEqual(tools, []);
 });
+
+test("media tools that save an asset verify their own output; analysis and listing do not", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-media-self-verified-"));
+  const tools = createMediaTools(config(cwd), new MockMediaBackend());
+  const flags = Object.fromEntries(tools.map((tool) => [tool.name, tool.verifiesOwnOutput === true]));
+  assert.deepEqual(flags, { analyze_image: false, generate_image: true, generate_audio: true, generate_video: true, list_media_operations: false, resume_media_operation: true });
+});

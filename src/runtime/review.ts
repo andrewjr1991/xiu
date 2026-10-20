@@ -8,6 +8,8 @@ const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 12 * 1024 * 1024;
 const MAX_FILES = 800;
+/** Largest source image the host may still scale down for an inline conversation preview. */
+const MAX_THUMBNAIL_SOURCE_BYTES = 25 * 1024 * 1024;
 const EXCLUDED_DIRECTORIES = new Set([".git", ".xiu", "node_modules"]);
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
@@ -28,6 +30,15 @@ export interface ReviewFilePreview {
   truncated: boolean;
   source?: string;
   safeHtml?: string;
+  dataUrl?: string;
+  warning?: string;
+}
+
+/** Inline preview of a media file a task produced; `dataUrl` is absent when the file is outside the bounds. */
+export interface MediaPreview {
+  path: string;
+  kind: "image" | "audio" | "video";
+  bytes: number;
   dataUrl?: string;
   warning?: string;
 }
@@ -142,6 +153,23 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
   const mediaType = AUDIO_TYPES[extension] ?? VIDEO_TYPES[extension];
   const mediaKind = AUDIO_TYPES[extension] ? "audio" as const : VIDEO_TYPES[extension] ? "video" as const : undefined;
   if (mediaType && stat.size > MAX_MEDIA_BYTES) return { path: relative, kind: mediaKind!, bytes: stat.size, truncated: true, warning: "媒体文件超过 12 MiB，未载入内嵌预览。" };
+  const maximum = IMAGE_TYPES[extension] ? MAX_IMAGE_BYTES : mediaType ? MAX_MEDIA_BYTES : MAX_TEXT_BYTES;
+  const exact = await readBounded(target, stat, maximum);
+  if (IMAGE_TYPES[extension]) return { path: relative, kind: "image", bytes: stat.size, truncated: false, dataUrl: `data:${IMAGE_TYPES[extension]};base64,${exact.toString("base64")}` };
+  if (mediaType && mediaKind) return { path: relative, kind: mediaKind, bytes: stat.size, truncated: false, dataUrl: `data:${mediaType};base64,${exact.toString("base64")}` };
+  const kind = fileKind(relative, exact);
+  if (kind === "binary") return { path: relative, kind, bytes: stat.size, truncated: stat.size > exact.length, warning: "二进制文件不提供文本预览。" };
+  const source = redactSecrets(new TextDecoder("utf-8", { fatal: false }).decode(exact));
+  const truncated = stat.size > exact.length;
+  return {
+    path: relative, kind, bytes: stat.size, truncated, source,
+    ...(kind === "markdown" ? { safeHtml: await sanitizeHtmlPreview(markdownToSafeHtml(source)) } : {}),
+    ...(kind === "html" ? { safeHtml: await sanitizeHtmlPreview(source) } : {}),
+  };
+}
+
+/** Reads at most `maximum` bytes of an already validated regular file, refusing files that change meanwhile. */
+async function readBounded(target: string, stat: Stats, maximum: number): Promise<Buffer> {
   const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = await handle.stat();
@@ -149,23 +177,34 @@ export async function previewReviewFile(workspace: string, relative: string): Pr
     if (!opened.isFile() || current.isSymbolicLink() || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs || opened.ino !== stat.ino || opened.dev !== stat.dev) {
       throw new Error("文件在打开预览时发生变化，请刷新后重试。");
     }
-    const maximum = IMAGE_TYPES[extension] ? MAX_IMAGE_BYTES : mediaType ? MAX_MEDIA_BYTES : MAX_TEXT_BYTES;
     const size = Math.min(stat.size, maximum);
     const data = Buffer.alloc(size);
     const { bytesRead } = await handle.read(data, 0, size, 0);
-    const exact = data.subarray(0, bytesRead);
     const after = await handle.stat();
     if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) throw new Error("文件在读取预览时发生变化，请刷新后重试。");
-    if (IMAGE_TYPES[extension]) return { path: relative, kind: "image", bytes: stat.size, truncated: false, dataUrl: `data:${IMAGE_TYPES[extension]};base64,${exact.toString("base64")}` };
-    if (mediaType && mediaKind) return { path: relative, kind: mediaKind, bytes: stat.size, truncated: false, dataUrl: `data:${mediaType};base64,${exact.toString("base64")}` };
-    const kind = fileKind(relative, exact);
-    if (kind === "binary") return { path: relative, kind, bytes: stat.size, truncated: stat.size > size, warning: "二进制文件不提供文本预览。" };
-    const source = redactSecrets(new TextDecoder("utf-8", { fatal: false }).decode(exact));
-    const truncated = stat.size > bytesRead;
-    return {
-      path: relative, kind, bytes: stat.size, truncated, source,
-      ...(kind === "markdown" ? { safeHtml: await sanitizeHtmlPreview(markdownToSafeHtml(source)) } : {}),
-      ...(kind === "html" ? { safeHtml: await sanitizeHtmlPreview(source) } : {}),
-    };
+    return data.subarray(0, bytesRead);
   } finally { await handle.close(); }
+}
+
+/**
+ * Inline conversation preview of a generated media file. The same path rules as the file panel apply. Audio and
+ * video keep the panel's 12 MiB bound; an image within the panel's 2 MiB bound is returned as is, a larger one up
+ * to 25 MiB goes through the host's bounded `thumbnail` scaler when one is supplied, anything else only reports why.
+ */
+export async function previewGeneratedMedia(workspace: string, relative: string, thumbnail?: (data: Buffer, mediaType: string) => string | undefined): Promise<MediaPreview> {
+  const extension = path.extname(relative).toLowerCase();
+  const imageType = IMAGE_TYPES[extension];
+  if (!imageType) {
+    if (!AUDIO_TYPES[extension] && !VIDEO_TYPES[extension]) throw new Error("只能内嵌预览图片、音频或视频文件。");
+    const preview = await previewReviewFile(workspace, relative);
+    if (preview.kind !== "audio" && preview.kind !== "video") throw new Error("只能内嵌预览图片、音频或视频文件。");
+    return { path: relative, kind: preview.kind, bytes: preview.bytes, ...(preview.dataUrl ? { dataUrl: preview.dataUrl } : {}), ...(preview.warning ? { warning: preview.warning } : {}) };
+  }
+  const { target, stat } = await safeRegularFile(workspace, relative);
+  const base = { path: relative, kind: "image" as const, bytes: stat.size };
+  if (stat.size <= MAX_IMAGE_BYTES) return { ...base, dataUrl: `data:${imageType};base64,${(await readBounded(target, stat, MAX_IMAGE_BYTES)).toString("base64")}` };
+  if (!thumbnail) return { ...base, warning: "图片超过 2 MiB，未载入预览。" };
+  if (stat.size > MAX_THUMBNAIL_SOURCE_BYTES) return { ...base, warning: "图片超过 25 MiB，未载入预览。" };
+  const dataUrl = thumbnail(await readBounded(target, stat, MAX_THUMBNAIL_SOURCE_BYTES), imageType);
+  return dataUrl ? { ...base, dataUrl } : { ...base, warning: "图片无法解码，未载入预览。" };
 }

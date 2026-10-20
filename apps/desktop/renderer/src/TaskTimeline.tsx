@@ -1,12 +1,12 @@
 import { type ReactNode, useEffect, useState } from "react";
-import type { DesktopAttachment, DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent, RuntimeTaskState } from "../../shared/protocol.js";
+import type { DesktopAttachment, DesktopMediaPreview, DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent, RuntimeTaskState } from "../../shared/protocol.js";
 import { ComputerAcceptance } from "./ComputerAcceptance.js";
 import { SubagentActivity } from "./TaskDataPanel.js";
 import { changeStats } from "./change-stats.js";
 import { usePreferences } from "./preferences.js";
 import { activityRows, currentRuntimeActivity, groupedTimelineItems, modelProgressSummary } from "./task-presentation.js";
 import { safeSourceUrl, webEvidenceForDisplay } from "./text-presentation.js";
-import { conversationRounds, roundPresentation, turnElapsed } from "./turn-presentation.js";
+import { conversationRounds, type GeneratedMediaItem, roundPresentation, turnElapsed } from "./turn-presentation.js";
 
 export function Logo() {
   return <div className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 7.5c4.5 0 5.4 7 8 8.5 2.8 1.6 3.6 8.5 8 8.5" /><path d="M24 7.5c-4.5 0-5.4 7-8 8.5-2.8 1.6-3.6 8.5-8 8.5" /></svg></div>;
@@ -192,6 +192,33 @@ export function EditableAttachmentTiles({ attachments, onRemove }: { attachments
   </div>)}</div>;
 }
 
+const mediaKindLabels: Record<GeneratedMediaItem["kind"], string> = { image: "生成的图片", audio: "生成的音频", video: "生成的视频" };
+
+/** A media file the task saved, shown in the conversation as soon as the tool reports it; the main process loads a bounded preview. */
+function GeneratedMediaCard({ item }: { item: GeneratedMediaItem }) {
+  const [preview, setPreview] = useState<DesktopMediaPreview | { error: string }>();
+  useEffect(() => {
+    let current = true;
+    setPreview(undefined);
+    window.xiuDesktop.previewMedia({ path: item.path }).then(
+      (loaded) => { if (current) setPreview(loaded); },
+      (reason) => { if (current) setPreview({ error: reason instanceof Error ? reason.message : String(reason) }); },
+    );
+    return () => { current = false; };
+  }, [item.path, item.eventId]);
+  const displayPath = item.path.replace(/\\/g, "/");
+  const name = displayPath.split("/").pop() ?? displayPath;
+  const loaded = preview && !("error" in preview) ? preview : undefined;
+  const note = !preview ? "正在载入预览…" : "error" in preview ? preview.error : preview.warning ?? `${Math.max(1, Math.ceil(preview.bytes / 1024))} KB`;
+  return <figure className={`generated-media ${item.kind} ${loaded?.dataUrl ? "ready" : "pending"}`} data-media-path={displayPath}>
+    {loaded?.dataUrl && item.kind === "image" && <img src={loaded.dataUrl} alt={name} />}
+    {loaded?.dataUrl && item.kind === "video" && <video controls preload="metadata" src={loaded.dataUrl} />}
+    {loaded?.dataUrl && item.kind === "audio" && <audio controls preload="metadata" src={loaded.dataUrl} />}
+    {!loaded?.dataUrl && <div className="generated-media-placeholder" role="status"><span className="file-glyph">{item.kind === "image" ? "▧" : "◫"}</span></div>}
+    <figcaption><strong title={displayPath}>{name}</strong><small>{mediaKindLabels[item.kind]} · {note}</small></figcaption>
+  </figure>;
+}
+
 function eventText(event: RuntimeEvent): string | undefined {
   if (event.type === "task.started") return visibleMessageText(event.payload.taskPreview);
   if (event.type === "task.steered") return visibleMessageText(event.payload.text);
@@ -263,6 +290,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
       })}
     </details>}
     {round.finished?.type === "task.finished" && !["completed", "waiting_user"].includes(round.finished.payload.state) && !(computerResult && round.finished.payload.state === "unverified") && <div className="review-warning" role="status">程序验收：{stateLabels[round.finished.payload.state]}。{round.finished.payload.error?.split("\n")[0] ?? "请查看运行提醒和证据。"}{round.answer ? " 以下是模型回复，不代表程序验收通过。" : ""}{round.finished.payload.error?.includes("\n") && <details><summary>查看未通过校验</summary><pre className="turn-alert-detail">{round.finished.payload.error.split("\n").slice(1).join("\n")}</pre></details>}</div>}
+    {round.media.length > 0 && <div className="generated-media-list">{round.media.map((item) => <GeneratedMediaCard key={`${item.eventId}:${item.path}`} item={item} />)}</div>}
     {computerResult && round.finished?.type === "task.finished" && ["completed", "failed", "unverified"].includes(round.finished.payload.state) && <ComputerAcceptance taskId={round.finished.taskId} programState={round.finished.payload.state} disabled={activeStates.has(state)} onChange={onAcceptance} />}
     {round.answer && <DetailedTaskTimeline events={[round.answer]} state="idle" modelLabel={modelLabel} />}
   </section>;

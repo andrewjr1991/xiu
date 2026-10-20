@@ -23,7 +23,7 @@ import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -154,6 +154,15 @@ function assertTrustedSender(event: IpcMainInvokeEvent, recovery = false): void 
 }
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+
+/** Scales a decoded image to at most 1280×960 for an inline conversation preview; undefined when it cannot be decoded. */
+function boundedImageThumbnail(data: Buffer): string | undefined {
+  const image = nativeImage.createFromBuffer(data);
+  if (image.isEmpty()) return undefined;
+  const size = image.getSize();
+  const scale = Math.min(1, 1280 / Math.max(1, size.width), 960 / Math.max(1, size.height));
+  return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
+}
 
 async function presentAttachments(workspace: string, result: Awaited<ReturnType<ClipboardAttachmentManager["attachFiles"]>>): Promise<DesktopAttachmentResult> {
   const root = path.resolve(workspace);
@@ -427,6 +436,10 @@ function registerIpc(): void {
   handleIpc(desktopChannels.filePreview, async (event, request: DesktopFilePreviewRequest) => {
     assertTrustedSender(event);
     return taskController.previewFile(controller.trustedWorkspacePath(), request);
+  });
+  handleIpc(desktopChannels.mediaPreview, async (event, request: DesktopMediaPreviewRequest) => {
+    assertTrustedSender(event);
+    return taskController.previewMedia(controller.trustedWorkspacePath(), request, boundedImageThumbnail);
   });
   handleIpc(desktopChannels.checkpointRestore, async (event, request: DesktopCheckpointRestoreRequest) => {
     assertTrustedSender(event);

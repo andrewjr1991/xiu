@@ -482,6 +482,9 @@ app.whenReady().then(async () => {
     await evaluate(window, `document.querySelector('.turn-alerts > summary').click(); document.querySelector('.turn-alert > summary').click()`);
     assert(await evaluate(window, `(() => { const detail=document.querySelector('.turn-alert-detail'); return detail.getBoundingClientRect().height <= 181 && detail.scrollHeight > detail.clientHeight && detail.textContent.includes('# log-format-canary') && !detail.querySelector('h1'); })()`), 'Full error evidence is scrollable and plain text, not giant Markdown headings.');
     await evaluate(window, `document.querySelector('.turn-alerts > summary').click()`);
+    await evaluate(window, `window.xiuSmoke.emitMediaFixture()`);
+    await waitFor(window, `(() => { const media=document.querySelector('.conversation-round:last-child .generated-media.image.ready'); return media && media.querySelector('img')?.naturalWidth === 2 && media.innerText.includes('media-preview-canary.png') && media.innerText.includes('生成的图片') && window.xiuSmoke.calls().includes('media-preview:assets/media-preview-canary.png'); })()`, "generated image previews inline in the conversation as soon as the tool reports it");
+    assert(await evaluate(window, `document.querySelectorAll('.generated-media').length === 1 && !document.querySelector('.conversation-round:last-child').innerText.includes('assets.example')`), "One media card per saved file; the tool's source URL stays out of the conversation card.");
     await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
     await waitFor(window, `document.querySelector('.turn-process').open`, "reopen running process");
     assert(await evaluate(window, `document.querySelector('.subagent-activity .agent-avatar')?.getAttribute('aria-label') === '调查员头像'`), "Child activity uses an accessible role avatar.");
