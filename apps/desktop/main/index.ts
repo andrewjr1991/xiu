@@ -17,13 +17,13 @@ import { ComputerUseController } from "./computer-use-controller.js";
 import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
 import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
 import { VisionProbeController } from "./vision-probe-controller.js";
-import { readEnvironmentCredential } from "../../../src/credential-store.js";
+import { registerProviderIpc } from "./ipc-provider.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -474,11 +474,6 @@ function registerIpc(): void {
     });
     return taskController.abandonRecovery(controller.trustedWorkspacePath(), request, confirmation.response === 1);
   });
-  handleIpc(desktopChannels.providerSnapshot, async (event) => {
-    assertTrustedSender(event);
-    controller.trustedWorkspacePath();
-    return (await getProviderController()).refresh();
-  });
   handleIpc(desktopChannels.managementSnapshot, async (event) => {
     assertTrustedSender(event);
     return taskController.managementSnapshot(controller.trustedWorkspacePath());
@@ -526,84 +521,11 @@ function registerIpc(): void {
     if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改插件。");
     return taskController.changePlugin(workspace, request);
   }));
-  handleIpc(desktopChannels.providerModels, async (event, request: DesktopProviderModelsRequest) => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    return (await getProviderController()).discover(workspace, request);
+  registerProviderIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    providers: getProviderController, tasks: taskController, visionProbe, mainWindow: () => mainWindow, confirmVisionProbe,
   });
-  handleIpc(desktopChannels.providerSelect, async (event, request: DesktopProviderSelectRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    const settings = await (await getProviderController()).select(request);
-    return { settings, connection: await taskController.reload(workspace) };
-  }));
-  handleIpc(desktopChannels.providerCredentialSave, async (event, request: DesktopProviderCredentialRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    const settings = await (await getProviderController()).saveCredential(request);
-    return { settings, connection: await taskController.reload(workspace) };
-  }));
-  handleIpc(desktopChannels.providerCredentialManage, async (event, request: DesktopProviderCredentialManageRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    const settings = await (await getProviderController()).manageCredential(request);
-    return { settings, connection: await taskController.reload(workspace) };
-  }));
-  handleIpc(desktopChannels.providerTest, async (event, request: DesktopProviderTestRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    return (await getProviderController()).test(workspace, request);
-  }));
-  handleIpc(desktopChannels.providerVisionCancel, (event) => { assertTrustedSender(event); visionProbe.cancel(); });
-  handleIpc(desktopChannels.providerVisionProgress, (event) => { assertTrustedSender(event); return visionProbe.snapshot(); });
-  handleIpc(desktopChannels.providerVisionTest, async (event, request: DesktopProviderSelectRequest & { allCandidates?: boolean }) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    const providers = await getProviderController();
-    await providers.refresh();
-    const config = providers.visionProbeConfig(workspace, request);
-    const models = request.allCandidates === true ? [...new Set(providers.snapshot(request.providerId).capabilityModelsByProvider[request.providerId]?.vision.map(model => model.id) ?? [])] : [request.model];
-    if (!models.length || models.length > 200) throw new Error("批量视觉测试需要 1–200 个候选；请先刷新或整理模型列表。");
-    const configs = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
-    // Compared in memory only: credential values are never hashed, stored or logged.
-    const fingerprint = () => {
-      const current = models.map(model => providers.visionProbeConfig(workspace, { providerId: request.providerId, model }));
-      return JSON.stringify([current, readEnvironmentCredential(config.apiKeyEnv), readEnvironmentCredential("AGNES_API_KEY"), readEnvironmentCredential("OPENAI_API_KEY"), readEnvironmentCredential("ANTHROPIC_API_KEY"), process.env.AGNES_BASE_URL]);
-    };
-    const initial = fingerprint();
-    const validate = async () => {
-      assertTrustedSender(event);
-      if (controller.trustedWorkspacePath() !== workspace) throw new Error("工作区已改变，视觉测试取消。");
-      await taskController.assertCanReconfigure(workspace);
-      if ((await taskController.connect(workspace)).runtime.snapshot.planMode) throw new Error("Plan 只读模式不执行付费视觉测试。");
-      await providers.refresh();
-      if (fingerprint() !== initial) throw new Error("渠道配置已改变，请重新测试。");
-    };
-    await validate();
-    const parent = mainWindow!;
-    const cancel = () => visionProbe.cancel();
-    parent.once("closed", cancel);
-    try { return request.allCandidates === true ? await visionProbe.runBatch(configs, (route, signal) => confirmVisionProbe(parent, route, signal, true), validate) : await visionProbe.run(config, (route, signal) => confirmVisionProbe(parent, route, signal), validate); }
-    finally { if (!parent.isDestroyed()) parent.removeListener("closed", cancel); }
-  }));
-  handleIpc(desktopChannels.providerUpsert, async (event, request: DesktopProviderUpsertRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    const settings = await (await getProviderController()).upsert(request);
-    return { settings, connection: await taskController.reload(workspace) };
-  }));
-  handleIpc(desktopChannels.providerDelete, async (event, request: DesktopProviderDeleteRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    await taskController.assertCanReconfigure(workspace);
-    const settings = await (await getProviderController()).delete(request);
-    return { settings, connection: await taskController.reload(workspace) };
-  }));
   handleIpc(desktopChannels.terminalSnapshot, async (event) => {
     assertTrustedSender(event);
     return terminalController.snapshot(controller.trustedWorkspacePath());
