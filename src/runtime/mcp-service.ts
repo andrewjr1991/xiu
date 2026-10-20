@@ -18,6 +18,8 @@ export interface WorkspaceMcpDraft {
   oauth?: McpOAuthConfig;
   risk: ToolRisk;
   enabled?: boolean;
+  /** Serve `sampling/createMessage` for this server; adds the `model:sampling` permission, every request is still confirmed. */
+  sampling?: boolean;
 }
 export interface WorkspaceMcpOAuthFlow {
   id: string; name: string;
@@ -223,13 +225,13 @@ export class WorkspaceMcpService {
   private async editor(name: string, config: McpServerConfig, fingerprint: string): Promise<WorkspaceMcpDraft | undefined> {
     // Explicit/custom permission declarations must not be silently discarded by the basic editor.
     if (config.permissions !== undefined) return undefined;
-    if (Object.keys(config).some((key) => !["transport", "command", "args", "url", "headers", "auth", "risk", "permissions", "enabled"].includes(key))) return undefined;
+    if (Object.keys(config).some((key) => !["transport", "command", "args", "url", "headers", "auth", "risk", "permissions", "enabled", "sampling"].includes(key))) return undefined;
     const headers = Object.entries(config.headers ?? {});
     const bearer = headers.length === 1 && headers[0]![0].toLowerCase() === "authorization" ? /^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(headers[0]![1])?.[1] : undefined;
     if (headers.length && !bearer) return undefined;
     const draft: WorkspaceMcpDraft = { name, fingerprint, transport: config.url ? "streamable-http" : "stdio", risk: config.risk ?? "execute", enabled: config.enabled !== false,
       ...(config.url ? { url: config.url } : { command: config.command, args: config.args ?? [] }),
-      ...(bearer ? { bearerTokenEnvironment: bearer } : {}), ...(config.auth ? { oauth: structuredClone(config.auth) } : {}),
+      ...(bearer ? { bearerTokenEnvironment: bearer } : {}), ...(config.auth ? { oauth: structuredClone(config.auth) } : {}), ...(config.sampling ? { sampling: true } : {}),
     };
     try { await this.validateDraft(draft); return draft; } catch { return undefined; }
   }
@@ -238,6 +240,7 @@ export class WorkspaceMcpService {
     if (!draft || !/^[A-Za-z0-9_-]{1,64}$/.test(draft.name) || !["stdio", "streamable-http"].includes(draft.transport)
       || !["read", "write", "execute", "dangerous"].includes(draft.risk) || JSON.stringify(draft).length > 32_000) throw new Error("Invalid MCP editor fields.");
     if (draft.fingerprint !== undefined && !/^[a-f0-9]{64}$/.test(draft.fingerprint)) throw new Error("Invalid MCP configuration revision.");
+    if (draft.sampling !== undefined && typeof draft.sampling !== "boolean") throw new Error("Invalid MCP sampling flag.");
     if (draft.args && (!Array.isArray(draft.args) || draft.args.length > 64 || draft.args.some((arg) => typeof arg !== "string" || arg.length > 4096))) throw new Error("MCP arguments exceed limits.");
     if (draft.bearerTokenEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(draft.bearerTokenEnvironment)) throw new Error("Use an environment variable name, never a token.");
     if (draft.url) {
@@ -253,7 +256,7 @@ export class WorkspaceMcpService {
     for (const value of [draft.url, draft.command, ...(draft.args ?? []), ...(draft.oauth?.scopes ?? []), draft.oauth?.clientId, draft.oauth?.clientMetadataUrl]) {
       if (value && (typeof value !== "string" || sanitize(value) !== value)) throw new Error("Secret-bearing configuration cannot be edited here.");
     }
-    const config: McpServerConfig = { transport: draft.transport, risk: draft.risk, enabled: draft.enabled !== false,
+    const config: McpServerConfig = { transport: draft.transport, risk: draft.risk, enabled: draft.enabled !== false, ...(draft.sampling ? { sampling: true } : {}),
       ...(draft.transport === "stdio" ? { command: draft.command, args: draft.args ?? [] } : { url: draft.url,
         ...(draft.oauth ? { auth: draft.oauth } : {}), ...(draft.bearerTokenEnvironment ? { headers: { Authorization: `Bearer \${${draft.bearerTokenEnvironment}}` } } : {}),
       }),

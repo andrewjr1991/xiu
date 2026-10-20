@@ -377,10 +377,15 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
       { label: localize(language, "写入", "Write"), description: localize(language, "服务可能修改工作区或外部状态", "The server may modify workspace or external state"), value: "write" as const },
     ], language);
     if (!risk) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); return true; }
+    const sampling = await selectTerminalOption(localize(language, "是否允许该服务请求模型采样（用你当前的模型回答它拼好的提示）？", "May this server request model sampling (answers from your current model to prompts it composes)?"), [
+      { label: localize(language, "不允许（推荐）", "No (recommended)"), description: localize(language, "服务器的 sampling/createMessage 一律拒绝", "Every sampling/createMessage from the server is refused"), value: "off" as const },
+      { label: localize(language, "允许，每次仍需确认", "Yes, with a confirmation each time"), description: localize(language, "只在它的工具调用期间受理，每次请求都弹出危险级确认并计入你的额度", "Served only during its tool calls; each request is a dangerous-risk confirmation billed to your key"), value: "on" as const },
+    ], language);
+    if (!sampling) { console.log(chalk.dim(localize(language, "已取消添加 MCP。\n", "MCP add cancelled.\n"))); return true; }
     status.start(localize(language, `正在添加并连接 MCP ${name}`, `Adding and connecting MCP ${name}`));
     try {
-      if (oauth) await mcpManager.addUserOAuthServer(name, url, oauth, risk);
-      else await mcpManager.addUserHttpServer(name, url, bearerEnv, risk);
+      if (oauth) await mcpManager.addUserOAuthServer(name, url, oauth, risk, sampling === "on");
+      else await mcpManager.addUserHttpServer(name, url, bearerEnv, risk, sampling === "on");
       await mcpManager.start(projectMcpTrusted);
       attachMcpTools();
       status.stop();
@@ -394,6 +399,35 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
     } catch (error) {
       status.stop();
       console.error(chalk.red(`${describeFailure(localize(language, "MCP 添加失败", "MCP add failed"), error, language)}\n`));
+    }
+    return true;
+  }
+  if (task === "/mcp sampling" || task.startsWith("/mcp sampling ")) {
+    const parts = task.trim().split(/\s+/);
+    const requested = parts[2];
+    const switchTo = parts[3];
+    if (!requested || !switchTo) {
+      const entries = (await mcpManager.configurationEntries(projectMcpTrusted)).filter((entry) => !requested || entry.name === requested);
+      if (!entries.length) console.log(chalk.dim(localize(language, "没有匹配的 MCP 服务。\n", "No matching MCP server.\n")));
+      else console.log(`${entries.map((entry) => localize(language,
+        `${entry.name}：采样${entry.config.sampling ? "已开启（每次需确认）" : "关闭"}${entry.origin === "user" ? "" : `（${entry.origin === "plugin" ? "插件" : "项目"}配置，只能在其文件中修改）`}`,
+        `${entry.name}: sampling ${entry.config.sampling ? "on (confirmed per request)" : "off"}${entry.origin === "user" ? "" : ` (${entry.origin} configuration; change it in its own file)`}`)).join("\n")}\n${localize(language,
+        "用法：/mcp sampling <名称> on|off（仅用户级配置；改动后需 /mcp permissions approve <名称> 重新确认）", "Usage: /mcp sampling <name> on|off (user-level servers only; approve the changed manifest with /mcp permissions approve <name>)")}\n`);
+      return true;
+    }
+    if (switchTo !== "on" && switchTo !== "off") {
+      console.log(chalk.yellow(localize(language, "用法：/mcp sampling <名称> on|off\n", "Usage: /mcp sampling <name> on|off\n")));
+      return true;
+    }
+    try {
+      const config = await mcpManager.setUserServerSampling(requested, switchTo === "on");
+      await mcpManager.start(projectMcpTrusted);
+      attachMcpTools();
+      console.log(chalk.green(localize(language,
+        `MCP ${requested} 的模型采样已${config.sampling ? "开启：服务器只能在自己的工具调用期间请求，每次请求都需要你确认" : "关闭：服务器的采样请求一律拒绝"}。权限清单已变化，请运行 /mcp permissions approve ${requested} 重新确认后再连接。\n`,
+        `Model sampling for MCP ${requested} is now ${config.sampling ? "on: the server may ask only during its own tool calls and every request needs your confirmation" : "off: the server's sampling requests are refused"}. The permission manifest changed; run /mcp permissions approve ${requested} to confirm it before reconnecting.\n`)));
+    } catch (error) {
+      console.error(chalk.red(`${describeFailure(localize(language, "MCP 采样设置失败", "MCP sampling change failed"), error, language)}\n`));
     }
     return true;
   }

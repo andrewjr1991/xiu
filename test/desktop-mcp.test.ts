@@ -159,6 +159,21 @@ test("desktop MCP user editor saves without granting, preserves other entries an
   assert.equal(changed.servers.find((item) => item.name === draft.name)?.approved, false);
   assert.deepEqual(service.manager.connectedServerNames(), []);
   await assert.rejects(service.save(entry.editable!), /changed/);
+  // Sampling is a basic-editor field: turning it on adds model:sampling, revokes the grant and keeps the entry editable.
+  const current = changed.servers.find((item) => item.name === draft.name)!;
+  assert.equal(current.editable?.sampling, undefined);
+  await service.approve(current.name, current.fingerprint);
+  const sampling = (await service.save({ ...current.editable!, sampling: true })).servers.find((item) => item.name === draft.name)!;
+  assert.equal(sampling.editable?.sampling, true);
+  assert.equal(sampling.details.sampling, true);
+  assert.ok(sampling.permissions.includes("model:sampling"));
+  assert.deepEqual(sampling.added, ["model:sampling"]);
+  assert.equal(sampling.approved, false);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).mcpServers.editable.sampling, true);
+  const off = (await service.save({ ...sampling.editable!, sampling: false })).servers.find((item) => item.name === draft.name)!;
+  assert.equal(off.editable?.sampling, undefined);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).mcpServers.editable.sampling, undefined, "off removes the key instead of writing false");
+  await assert.rejects(service.save({ ...off.editable!, sampling: "yes" as never }), /sampling/);
   await assert.rejects(service.save({ ...draft, name: "test", fingerprint: first.servers[0]!.fingerprint }), /read-only/);
   await fs.mkdir(path.join(root, ".xiu"), { recursive: true });
   await fs.writeFile(path.join(root, ".xiu", "mcp.json"), JSON.stringify({ mcpServers: { project: { command: process.execPath, args: [fixture] } } }));

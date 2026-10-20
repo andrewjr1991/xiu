@@ -165,7 +165,7 @@ v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mc
 
 ### MCP Sampling（0.20.14）
 
-MCP 服务器可以反过来请求 Xiu 用当前渠道的模型回答一个它拼好的提示（`sampling/createMessage`），常见于“让客户端的模型帮我总结”一类工具。Xiu 默认不声明这项能力；在服务器配置里加上 `"sampling": true` 才会开启，这会给该服务加上 `model:sampling` 权限并要求用 `/mcp permissions approve` 重新确认清单。开启后：
+MCP 服务器可以反过来请求 Xiu 用当前渠道的模型回答一个它拼好的提示（`sampling/createMessage`），常见于“让客户端的模型帮我总结”一类工具。Xiu 默认不声明这项能力；在服务器配置里加上 `"sampling": true` 才会开启（`/mcp add` 会在最后一步询问，已有的用户级配置用 `/mcp sampling <名称> on|off` 开关，桌面“扩展”面板的 MCP 编辑表单有“允许模型采样”复选框；项目与插件配置只能改各自的文件），这会给该服务加上 `model:sampling` 权限并要求用 `/mcp permissions approve` 重新确认清单。开启后：
 
 - 只在该服务的某个工具调用正在进行时受理请求；其他时候服务器收到错误，不能在后台花费你的模型额度。单次工具调用最多 8 次请求，每次最多 4096 个输出 Token。
 - 每次请求都会像危险操作一样弹出确认，列出服务器名、渠道与模型、消息数、系统提示和最后一条消息的摘录；`-y` 和桌面“帮我批准”不会自动放行，只有桌面完全访问会按既有规则自动批准。

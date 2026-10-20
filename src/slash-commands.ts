@@ -86,6 +86,7 @@ export function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/mcp login", "登录需要 OAuth 的 MCP 服务", "Log in to an OAuth-protected MCP server"),
     item("/mcp logout", "撤销并清除 MCP OAuth 登录", "Revoke and clear an MCP OAuth login"),
     item("/mcp add", "添加用户级远程 MCP 服务", "Add a user-level remote MCP server"),
+    item("/mcp sampling", "查看或开关用户级 MCP 的模型采样", "Show or toggle model sampling for a user-level MCP server"),
     item("/mcp remove", "删除用户级 MCP 服务", "Remove a user-level MCP server"),
     item("/mcp test", "测试 MCP 服务连接", "Test an MCP server connection"),
     item("/mcp reload", "重新加载 MCP 配置", "Reload user and project MCP configuration"),
