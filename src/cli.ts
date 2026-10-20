@@ -46,7 +46,7 @@ import { formatLocalTime } from "./local-time.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
-import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
+import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
 import { renderTerminalMarkdown } from "./terminal-markdown.js";
 import { localizeToolDescription, localizeToolProgress } from "./tool-display.js";
@@ -68,6 +68,7 @@ import { XiuRuntime } from "./runtime/xiu-runtime.js";
 import { askQuestion, InputEndedError } from "./terminal-prompts.js";
 import { installBrokenPipeHandling } from "./broken-pipe.js";
 import { installTerminalSignals } from "./terminal-signals.js";
+import { runOneShotTask } from "./one-shot-run.js";
 import { createTerminalApprovals } from "./terminal-approvals.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
@@ -1052,61 +1053,19 @@ async function main(): Promise<void> {
     if (startupProviderError && await providerSession.configureStartupProvider(startupProviderError)) startupProviderError = undefined;
 
     if (initialTask) {
-      let taskStarted = false;
-      const taskStartedAt = Date.now();
-      jsonStream?.started({ version: packageJson.version, provider: config.providerId, model: config.model, workspace: config.cwd, language });
-      try {
-        await runWithTaskBaseline(initialTask, () => { taskStarted = true; });
-      } catch (error) {
-        const message = redactTerminalOutput(error instanceof Error ? error.message : String(error));
-        if (!jsonStream) {
-          // Before the task started this is a startup problem and main() explains it. Once it started (and was then
-          // cancelled, interrupted or stopped by a signal), the run already has a record and an outcome: say that the task
-          // stopped and exit with the one-shot code for the outcome, the same way --json does, instead of "could not start".
-          if (!taskStarted) throw error;
-          console.error(chalk.red(`${localize(language, "任务已停止", "Task stopped")}: ${message}\n`));
-          process.exitCode = oneShotExitCode(agent.status().outcome);
-          return;
-        }
-        process.exitCode = jsonStream.result({ outcome: taskStarted ? agent.status().outcome : "not_started", error: message, durationMs: Date.now() - taskStartedAt });
-        return;
-      } finally {
-        if (taskStarted) await agent.recordReplayTurn({
-          task: initialTask,
-          inputKind: "task",
-          supplements: [],
-          changes: oneShotChanges,
-          receipts: [],
-          completion: {
-            message: agent.status().outcome,
-            success: agent.status().outcome === "completed",
-          },
-          diagnostics: agent.status().diagnostics,
-          exact: true,
-        }).catch((error: unknown) => {
-          // Session history is a convenience, never a gate on the task result, but a
-          // one-shot run must still say when this turn will be missing from /resume.
-          emitLine(chalk.dim(redactTerminalOutput(localize(language,
-            `未能保存本轮会话记录：${error instanceof Error ? error.message : String(error)}。任务结果不受影响，但 /resume 不会看到这一轮。`,
-            `Could not save this turn to the session history: ${error instanceof Error ? error.message : String(error)}. The task result is unaffected, but /resume will not show this turn.`))));
-        });
-      }
-      if (jsonStream) {
-        const finished = agent.status();
-        const snapshot = xiuRuntime.snapshot();
-        const { modelCalls, toolCalls, inputTokens, outputTokens, estimatedTokens } = finished.stats;
-        process.exitCode = jsonStream.result({
-          outcome: finished.outcome,
-          failureReason: finished.failureReason,
-          completionIssues: finished.completionIssues?.length ? finished.completionIssues : undefined,
-          pendingQuestion: snapshot.task?.pendingQuestion?.question,
-          stats: { modelCalls, toolCalls, inputTokens, outputTokens, estimatedTokens },
-          durationMs: Date.now() - taskStartedAt,
-        });
-        return;
-      }
-      // Same contract as --json: 0 completed, 2 unverified, 3 waiting for an answer, 1 failed, cancelled or paused.
-      process.exitCode = oneShotExitCode(agent.status().outcome);
+      // The one-shot run and its exit code (0 completed, 2 unverified, 3 waiting, 1 failed); see one-shot-run.ts.
+      process.exitCode = await runOneShotTask({
+        task: initialTask,
+        language,
+        agent,
+        jsonStream,
+        started: { version: packageJson.version, provider: config.providerId, model: config.model, workspace: config.cwd, language },
+        run: (onStarted) => runWithTaskBaseline(initialTask, onStarted),
+        changes: () => oneShotChanges,
+        pendingQuestion: () => xiuRuntime.snapshot().task?.pendingQuestion?.question,
+        redact: redactTerminalOutput,
+        emitLine,
+      });
       return;
     }
 
