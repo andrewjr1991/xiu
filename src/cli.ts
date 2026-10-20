@@ -27,7 +27,7 @@ import { createSystemCredentialStore, probeSystemCredentialStore, type SystemCre
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
-import { collectDoctorReport, formatDoctorReport } from "./doctor.js";
+import { collectDoctorReport } from "./doctor.js";
 import { runDoctorCommand } from "./commands/doctor-command.js";
 import { nodeDeprecationNotice } from "./node-runtime.js";
 import { DraftStore } from "./draft.js";
@@ -46,7 +46,7 @@ import { PluginRegistry } from "./plugins.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "./session.js";
 import { formatLocalTime } from "./local-time.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
-import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, formatHelpEntries, helpEntriesFor, slashCommands } from "./slash-commands.js";
+import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
 import { createJsonEventStream, ONE_SHOT_EXIT_CODES, redirectHumanOutputToStderr, type JsonEventStream, oneShotExitCode } from "./json-event-stream.js";
 import { SettingsStore } from "./settings.js";
@@ -57,8 +57,7 @@ import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools, createBackgroundTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
-import { contextLimitModeLabel, contextWindowSourceLabel, formatCredentialBackendStatus, projectCheckReason, runOutcomeLabel } from "./status-labels.js";
-import { formatTaskDiagnosticSummary } from "./diagnostics.js";
+import { formatCredentialBackendStatus, projectCheckReason } from "./status-labels.js";
 import type { AgentTool, ApprovalRequest, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
@@ -72,6 +71,7 @@ import { askQuestion, askSecret, askYesNo, InputEndedError } from "./terminal-pr
 import { installBrokenPipeHandling, setBrokenPipeHandler } from "./broken-pipe.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
+import { handleInspectCommand } from "./commands/inspect-commands.js";
 import { handleSessionCommand } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
@@ -2142,91 +2142,13 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (task === "/model" || task.startsWith("/model ")) {
-        console.log(chalk.dim(localize(language, `使用 /models 选择模型。当前 Provider/模型：${config.providerId}/${agent.status().model}\n`, `Use /models to choose a model. Current provider/model: ${config.providerId}/${agent.status().model}\n`)));
-        continue;
-      }
-      if (task === "/details") {
-        const records = activities.list();
-        if (!records.length) {
-          console.log(chalk.dim(localize(language, "尚未记录工具或 Agent 活动。\n", "No tool or Agent activity has been recorded yet.\n")));
-          continue;
-        }
-        const selected = await selectTerminalOption(localize(language, "活动详情", "Activity details"), records.map((record) => ({
-          label: `${record.state} ${record.title}`,
-          description: `${formatLocalTime(record.startedAt)}  ${record.description}`,
-          value: record.id,
-        })), language);
-        if (selected) {
-          const record = activities.get(selected)!;
-          const kind = localize(language, ({ tool: "工具", agent: "Agent", system: "系统" } as Record<string, string>)[record.kind] ?? record.kind, record.kind);
-          const state = localize(language, ({ running: "运行中", completed: "已完成", failed: "失败", cancelled: "已取消" } as Record<string, string>)[record.state] ?? record.state, record.state);
-          console.log(`${chalk.cyan(`${kind} ${record.title}`)} ${chalk.dim(`[${state}]`)}\n${record.description}\n\n${record.detail ?? record.summary ?? localize(language, "暂无详情。", "No detail yet.")}\n`);
-        }
-        continue;
-      }
       if (await handleBackgroundCommand(task, { config, language, background })) continue;
       if (await handleReportCommand(task, { agent, config, language, securityAudit, taskRunJournal })) continue;
       if (await handleCredentialCommand(task, { auditCredential, config, ensureSystemCredentialStore, formatCredentialProbe, language, printCredentialStatus, providerRegistry, switchProviderProfile })) continue;
-      if (task === "/queue" || task.startsWith("/queue ") || task === "/clear-queue" || task === "/cancel") {
-        const word = task.split(/\s+/)[0]!;
-        console.log(chalk.dim(localize(language, `${word} 仅在任务运行时可用。\n`, `${word} is available while a task is running.\n`)));
-        continue;
-      }
-      if (task === "/status") {
-        const current = agent.status();
-        const zh = language === "zh-CN";
-        const index = current.index;
-        const indexModeZh = index?.mode === "full" ? "全量构建" : index?.mode === "incremental" ? "增量更新" : index?.mode === "cache" ? "缓存复用" : "未初始化";
-        const indexModeEn = index?.mode === "full" ? "full build" : index?.mode === "incremental" ? "incremental" : index?.mode === "cache" ? "cache reused" : "not initialized";
-        const indexStatusZh = `索引：${index?.files ?? 0} 个文件${index?.truncated ? "（已截断）" : ""} · ${index?.analyzedModules ?? 0} 个已分析模块 · ${index?.symbols ?? 0} 个符号 · ${index?.dependencies ?? 0} 条依赖 · ${indexModeZh} · ${index?.durationMs ?? 0} 毫秒${index?.dirty ? " · 等待刷新" : ""}`;
-        const indexStatusEn = `Index: ${index?.files ?? 0} files${index?.truncated ? " (truncated)" : ""} · ${index?.analyzedModules ?? 0} analyzed modules · ${index?.symbols ?? 0} symbols · ${index?.dependencies ?? 0} dependencies · ${indexModeEn} · ${index?.durationMs ?? 0}ms${index?.dirty ? " · refresh pending" : ""}`;
-        console.log(zh ? [
-          `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `能力探测：${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `语言：简体中文`,
-          `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${runOutcomeLabel(current.outcome, language)}`,
-          `轮次：${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : "（无限制）"}`, `待处理补充：${current.pendingSteering}`, `消息：${current.messages}`,
-          `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${contextLimitModeLabel(current.contextLimitMode, language)}）`,
-          `模型窗口：${current.contextWindow.toLocaleString()} tokens（${contextWindowSourceLabel(current.contextWindowSource, language)}）`, `API Token：输入 ${current.stats.inputTokens.toLocaleString()} / 输出 ${current.stats.outputTokens.toLocaleString()}`,
-          `调用：模型 ${current.stats.modelCalls} / 工具 ${current.stats.toolCalls}`, `压缩次数：${current.stats.compactions}`, `活跃时间：${(current.stats.activeMs / 1000).toFixed(1)} 秒`,
-          `最近任务诊断：${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "暂无"}`,
-          indexStatusZh, `MCP：${mcpManager.status().filter((server) => server.state === "connected").length} 个服务 / ${mcpManager.tools().length} 个工具`,
-          `Agents：${coordinator.list().filter((run) => run.status === "running").length} 个运行中 / ${coordinator.list().length} 个已保存`, `后台：${background.list().filter((item) => item.running).length} 个运行中`,
-          `活动：${activities.list().length} 条记录（/details）`,
-        ].join("\n") + "\n" : [
-          `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${runOutcomeLabel(current.outcome, language)}`,
-          `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`, `Pending steering: ${current.pendingSteering}`, `Messages: ${current.messages}`,
-          `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${contextLimitModeLabel(current.contextLimitMode, language)})`,
-          `Model window: ${current.contextWindow.toLocaleString()} tokens (${contextWindowSourceLabel(current.contextWindowSource, language)})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
-          `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`, `Compactions: ${current.stats.compactions}`, `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,
-          `Latest task diagnostics: ${current.diagnostics ? formatTaskDiagnosticSummary(current.diagnostics, language) : "none"}`,
-          indexStatusEn, `MCP: ${mcpManager.status().filter((server) => server.state === "connected").length} servers / ${mcpManager.tools().length} tools`,
-          `Agents: ${coordinator.list().filter((run) => run.status === "running").length} running / ${coordinator.list().length} saved runs`, `Background: ${background.list().filter((item) => item.running).length} running`,
-          `Activities: ${activities.list().length} recorded (/details)`,
-        ].join("\n") + "\n");
-        continue;
-      }
+      if (await handleInspectCommand(task, { activities, agent, background, capabilityProbeSummary, config, coordinator, featureNames, language, mcpManager, providerRegistry, settings, startupProfile, status, version: packageJson.version })) continue;
       const updateCommand = await updateCommands.execute(task);
       if (updateCommand.handled) {
         for (const message of updateCommand.messages) printUpdateMessage(message);
-        continue;
-      }
-      if (task === "/doctor") {
-        status.start(localize(language, "正在生成诊断报告", "Collecting diagnostics"));
-        try {
-          const report = await collectDoctorReport({ version: packageJson.version, settings, registry: providerRegistry, cwd: config.cwd, sensitive: config.apiKey ? [config.apiKey] : [] });
-          status.stop();
-          console.log(`${formatDoctorReport(report, language)}\n`);
-        } catch (error) {
-          status.stop();
-          console.error(chalk.red(`${formatUserFacingError(localize(language, "诊断报告生成失败", "Could not build the diagnostics report"), error, language)}\n`));
-        }
-        continue;
-      }
-      if (task === "/help" || task.startsWith("/help ")) {
-        const topic = task.slice("/help".length).trim();
-        const entries = helpEntriesFor(topic, language);
-        if (entries.length) console.log(`${formatHelpEntries(entries)}\n`);
-        else console.log(chalk.yellow(`${formatSlashInputProblem(explainUnhandledSlashInput(topic.startsWith("/") ? topic : `/${topic}`, { pathExists: () => false }) ?? { kind: "unknown-command", word: topic, suggestions: [] }, language)}\n`));
         continue;
       }
       const unhandledInput = explainUnhandledSlashInput(task);
