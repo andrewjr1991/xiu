@@ -11,7 +11,7 @@ Xiu 将工具分成四类：
 | read | 读取文件、搜索、Git 状态 | 自动执行 |
 | write | 写文件、替换代码 | 请求确认 |
 | execute | 运行命令、调用外部服务 | 请求确认 |
-| dangerous | 删除、硬重置等高风险操作 | 始终请求确认 |
+| dangerous | 删除、硬重置，以及丢弃工作成果的 Git 命令（`checkout -- …`、改写工作树的 `restore`、`stash drop`/`clear`、`push --force`/`--delete`、`branch -D`、`worktree remove --force`） | 始终请求确认 |
 
 看到审批提示时：
 
