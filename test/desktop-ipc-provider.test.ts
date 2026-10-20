@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { IpcMainInvokeEvent } from "electron";
 import { providerIpcChannels, registerProviderIpc, type ProviderIpcContext } from "../apps/desktop/main/ipc-provider.js";
+import type { IpcSenderLike } from "../apps/desktop/main/security-policy.js";
 import { desktopChannels } from "../apps/desktop/shared/protocol.js";
 
-type Listener = (event: IpcMainInvokeEvent, ...args: never[]) => unknown;
-const trusted = { sender: { id: 1 } } as unknown as IpcMainInvokeEvent;
-const stranger = { sender: { id: 2 } } as unknown as IpcMainInvokeEvent;
+type Listener = (event: IpcSenderLike, ...args: never[]) => unknown;
+const trusted: IpcSenderLike = { sender: { id: 1 } };
+const stranger: IpcSenderLike = { sender: { id: 2 } };
 
 function harness(options: { workspace?: string; visionModels?: string[] } = {}) {
   const calls: string[] = [];
@@ -47,7 +47,7 @@ function harness(options: { workspace?: string; visionModels?: string[] } = {}) 
   };
   registerProviderIpc(ctx);
   // ipcMain.handle turns a synchronous throw into a rejected invoke, so the harness does too.
-  const invoke = async (channel: string, event: IpcMainInvokeEvent, ...args: unknown[]) => handlers.get(channel)!(event, ...(args as never[]));
+  const invoke = async (channel: string, event: IpcSenderLike, ...args: unknown[]) => handlers.get(channel)!(event, ...(args as never[]));
   return { calls, handlers, invoke, settings, connection };
 }
 

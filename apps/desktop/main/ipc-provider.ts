@@ -1,7 +1,6 @@
-import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 import { readEnvironmentCredential } from "../../../src/credential-store.js";
-import type { confirmVisionProbe } from "./full-access-dialog.js";
 import type { DesktopProviderController } from "./provider-controller.js";
+import type { IpcSenderLike } from "./security-policy.js";
 import type { DesktopTaskController } from "./task-controller.js";
 import type { VisionProbeController } from "./vision-probe-controller.js";
 import { desktopChannels, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest } from "../shared/protocol.js";
@@ -13,18 +12,25 @@ import { desktopChannels, type DesktopProviderCredentialManageRequest, type Desk
  * workspace, and runs configuration writes through the main process's
  * single writer queue; `index.ts` supplies those as `ctx`.
  */
-export interface ProviderIpcContext {
-  handleIpc: (channel: string, listener: (event: IpcMainInvokeEvent, ...args: never[]) => unknown) => void;
-  assertTrustedSender: (event: IpcMainInvokeEvent) => void;
+/** The parts of a BrowserWindow the vision test uses; structural so the root typecheck and tests need no Electron. */
+export interface VisionProbeParentWindow {
+  once(event: "closed", listener: () => void): unknown;
+  removeListener(event: "closed", listener: () => void): unknown;
+  isDestroyed(): boolean;
+}
+
+export interface ProviderIpcContext<Event extends IpcSenderLike = IpcSenderLike, Window extends VisionProbeParentWindow = VisionProbeParentWindow> {
+  handleIpc: (channel: string, listener: (event: Event, ...args: never[]) => unknown) => void;
+  assertTrustedSender: (event: Event) => void;
   serializeWriterStart: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Throws when no workspace is open and trusted. */
   trustedWorkspacePath: () => string;
   providers: () => Promise<DesktopProviderController>;
   tasks: Pick<DesktopTaskController, "assertCanReconfigure" | "reload" | "connect">;
   visionProbe: Pick<VisionProbeController, "cancel" | "snapshot" | "run" | "runBatch">;
-  mainWindow: () => BrowserWindow | undefined;
-  /** The native confirmation dialog; injected so this module stays free of Electron at runtime. */
-  confirmVisionProbe: typeof confirmVisionProbe;
+  mainWindow: () => Window | undefined;
+  /** The native confirmation dialog, injected so this module never loads Electron itself. */
+  confirmVisionProbe: (parent: Window, route: string, signal: AbortSignal, batch?: boolean) => Promise<boolean>;
 }
 
 export const providerIpcChannels = [
@@ -33,7 +39,7 @@ export const providerIpcChannels = [
   desktopChannels.providerVisionTest, desktopChannels.providerUpsert, desktopChannels.providerDelete,
 ] as const;
 
-export function registerProviderIpc(ctx: ProviderIpcContext): void {
+export function registerProviderIpc<Event extends IpcSenderLike, Window extends VisionProbeParentWindow>(ctx: ProviderIpcContext<Event, Window>): void {
   ctx.handleIpc(desktopChannels.providerSnapshot, async (event) => {
     ctx.assertTrustedSender(event);
     ctx.trustedWorkspacePath();
