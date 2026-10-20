@@ -34,7 +34,6 @@ import { DraftStore } from "./draft.js";
 import { createProvider, probeProvider } from "./providers.js";
 import { ProviderRegistry, resolveStartupModel, resolveStartupProviderId, startupProviderProfile, UNCONFIGURED_PROVIDER_PROFILE, type ProviderProfile, formatUnknownProviderMessage } from "./provider-registry.js";
 import { createMediaTools } from "./media-tools.js";
-import { MediaOperationStore, type MediaOperationRecord } from "./media-operations.js";
 import { type McpAuthSecretRecord } from "./mcp-auth-store.js";
 import { McpManager } from "./mcp.js";
 import { createMcpManager } from "./runtime/mcp-service.js";
@@ -73,6 +72,8 @@ import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleAgentCommand } from "./commands/agent-commands.js";
 import { handleInspectCommand } from "./commands/inspect-commands.js";
+import { handleMediaCommand } from "./commands/media-command.js";
+import { handleRuntimeCommand } from "./commands/runtime-commands.js";
 import { handleSessionCommand } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
@@ -2006,41 +2007,7 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (task === "/media") {
-        const records = await new MediaOperationStore(config.cwd).list(30);
-        if (!records.length) {
-          console.log(chalk.dim(localize(language, "当前项目还没有媒体生成记录。\n", "This project has no media generation records yet.\n")));
-          continue;
-        }
-        const statusLabel = (record: MediaOperationRecord): string => {
-          const labels: Record<MediaOperationRecord["status"], [string, string]> = {
-            submitting: ["提交结果未知", "submission unknown"],
-            submitted: ["等待生成", "generation pending"],
-            asset_ready: ["等待下载", "download pending"],
-            completed: ["已完成", "completed"],
-            ambiguous: ["结果不明确", "ambiguous"],
-            failed: ["已失败", "failed"],
-          };
-          return localize(language, ...labels[record.status]);
-        };
-        console.log(chalk.cyan(localize(language, "媒体生成与恢复任务", "Media generation and recovery tasks")));
-        for (const record of records) {
-          const details = [
-            record.kind === "image" ? localize(language, "图片", "image") : record.kind === "video" ? localize(language, "视频", "video") : localize(language, "音频", "audio"),
-            statusLabel(record),
-            `${record.providerId}/${record.model}`,
-            record.taskId ? `task ${record.taskId}` : undefined,
-            record.savedPath ? localize(language, `已保存 ${record.savedPath}`, `saved ${record.savedPath}`) : undefined,
-          ].filter(Boolean).join(" · ");
-          const color = record.status === "completed" ? chalk.green : record.status === "failed" || record.status === "ambiguous" || record.status === "submitting" ? chalk.yellow : chalk.cyan;
-          console.log(`${color(`[${record.requestId.slice(0, 8)}]`)} ${details}`);
-        }
-        console.log(chalk.dim(localize(language,
-          "\n需要恢复时，请输入“恢复媒体请求 <ID> 到 <工作区路径>”。恢复只会复用缓存、继续轮询或重新下载，不会创建新的付费请求。\n",
-          "\nTo recover one, enter “resume media request <ID> to <workspace path>”. Recovery only reuses cache, continues polling, or retries a download; it never creates a new billable request.\n",
-        )));
-        continue;
-      }
+      if (await handleMediaCommand(task, { cwd: config.cwd, language })) continue;
       if (await handleProviderCommand(task, { agent, attachMcpTools, compactCapabilityProbeSummary, config, featureNames, language, profileConfig, providerRegistry, rebuildBaseTools, startupProfile, status, switchProviderProfile })) continue;
       if (task === "/clear") {
         agent.clearConversation();
@@ -2071,41 +2038,7 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (task === "/models") {
-        status.start(localize(language, "正在发现可用模型", "Discovering available models"));
-        const available = await agent.listModels();
-        status.stop();
-        if (available.discoveryError) console.log(chalk.yellow(localize(language, `无法在线发现模型：${available.discoveryError}\n改为显示内置模型。\n`, `Live model discovery unavailable: ${available.discoveryError}\nShowing built-in models instead.\n`)));
-        const current = agent.status().model;
-        const currentProfile = providerRegistry.get(config.providerId) ?? startupProfile;
-        const selected = await selectTerminalOption(localize(language, "选择模型", "Choose a model"), available.models.map((model) => ({
-          label: `${model.id}${model.id === current ? localize(language, "（当前）", " (current)") : ""}`,
-          description: [
-            model.name && model.name !== model.id ? model.name : "",
-            featureNames(currentProfile, model.id),
-            capabilityProbeSummary(currentProfile, model.id),
-            model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K ctx` : "",
-            model.providerId,
-            model.description ?? "",
-            model.source,
-          ].filter(Boolean).join("  ·  "),
-          value: model.id,
-        })), language);
-        if (!selected || selected === current) console.log(chalk.dim(selected ? localize(language, `模型保持为 ${current}。\n`, `Model remains ${current}.\n`) : localize(language, "已取消模型选择。\n", "Model selection cancelled.\n")));
-        else {
-          await switchProviderProfile(currentProfile, true, selected);
-        }
-        continue;
-      }
-      if (task === "/language" || task.startsWith("/language ")) {
-        const selected = await chooseRuntimeLanguage(task);
-        if (!selected) {
-          console.log(chalk.dim(localize(language, "已取消语言选择。\n", "Language selection cancelled.\n")));
-          continue;
-        }
-        await applyRuntimeLanguage(selected, true);
-        continue;
-      }
+      if (await handleRuntimeCommand(task, { agent, applyRuntimeLanguage, capabilityProbeSummary, chooseRuntimeLanguage, config, featureNames, language, providerRegistry, startupProfile, status, switchProviderProfile })) continue;
       if (await handleWebCommand(task, { auditCredential, language, managedWebSearchAuth: () => managedWebSearchAuth, refreshWebSearchRuntime, settings, settingsStore })) continue;
       if (await handlePluginCommand(task, { applyApprovedPlugins, config, language, pluginRegistry, status })) continue;
       if (await handleSkillCommand(task, { agent, language, skillRegistry, status })) continue;

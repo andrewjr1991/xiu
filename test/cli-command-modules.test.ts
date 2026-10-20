@@ -6,9 +6,11 @@ import { handleBackgroundCommand, type BackgroundCommandContext } from "../src/c
 import { handleCredentialCommand, type CredentialCommandContext } from "../src/commands/credential-commands.js";
 import { handleInspectCommand, type InspectCommandContext } from "../src/commands/inspect-commands.js";
 import { handleMcpCommand, type McpCommandContext } from "../src/commands/mcp-commands.js";
+import { handleMediaCommand, type MediaCommandContext } from "../src/commands/media-command.js";
 import { handlePluginCommand, type PluginCommandContext } from "../src/commands/plugin-commands.js";
 import { handleProviderCommand, type ProviderCommandContext } from "../src/commands/provider-commands.js";
 import { handleReportCommand, type ReportCommandContext } from "../src/commands/report-commands.js";
+import { handleRuntimeCommand, type RuntimeCommandContext } from "../src/commands/runtime-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage, type RunningTaskCommandContext } from "../src/commands/running-task-commands.js";
 import { handleSessionCommand, type SessionCommandContext } from "../src/commands/session-commands.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/commands/skill-commands.js";
@@ -29,9 +31,11 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
   ["background", (task) => handleBackgroundCommand(task, {} as BackgroundCommandContext)],
   ["credentials", (task) => handleCredentialCommand(task, {} as CredentialCommandContext)],
   ["mcp", (task) => handleMcpCommand(task, {} as McpCommandContext)],
+  ["media", (task) => handleMediaCommand(task, {} as MediaCommandContext)],
   ["plugins", (task) => handlePluginCommand(task, {} as PluginCommandContext)],
   ["providers", (task) => handleProviderCommand(task, {} as ProviderCommandContext)],
   ["reports", (task) => handleReportCommand(task, {} as ReportCommandContext)],
+  ["runtime", (task) => handleRuntimeCommand(task, {} as RuntimeCommandContext)],
   ["session", (task) => handleSessionCommand(task, {} as SessionCommandContext)],
   ["skills", (task) => handleSkillCommand(task, {} as SkillCommandContext)],
   ["web", (task) => handleWebCommand(task, {} as WebCommandContext)],
@@ -39,7 +43,7 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
 
 for (const [name, handle] of declining) {
   test(`${name} command handler declines ordinary tasks and other slash commands`, async () => {
-    for (const task of ["fix the failing test", "/help", "/status", "/agentsx", "/pluginsx", "/mcpx", "/webx"]) {
+    for (const task of ["fix the failing test", "/help", "/status", "/agentsx", "/mediax", "/model", "/modelsx", "/languagex", "/pluginsx", "/mcpx", "/webx"]) {
       assert.equal(await handle(task), false, task);
     }
   });
@@ -485,5 +489,82 @@ test("the agents command lists, cancels, retries and integrates only after the e
   } finally {
     console.log = originalLog;
     console.error = originalError;
+  }
+});
+
+test("the models and language commands keep their output and switch nothing without a selection", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  const calls: string[] = [];
+  const profile = { id: "office", model: "gpt-4.1" } as RuntimeCommandContext["startupProfile"];
+  let discoveryError: string | undefined;
+  let chosenLanguage: "zh-CN" | "en-US" | undefined;
+  const context: RuntimeCommandContext = {
+    agent: {
+      listModels: async () => { calls.push("list-models"); return { models: [{ id: "gpt-4.1", source: "current" as const }, { id: "gpt-4.1-mini", name: "Mini", source: "api" as const, contextWindow: 128000 }], discoveryError }; },
+      status: () => ({ model: "gpt-4.1" }) as unknown as ReturnType<RuntimeCommandContext["agent"]["status"]>,
+    },
+    applyRuntimeLanguage: async (selected, redraw) => { calls.push(`apply-language:${selected}:${redraw}`); },
+    capabilityProbeSummary: () => "probe",
+    chooseRuntimeLanguage: async (command) => { calls.push(`choose-language:${command}`); return chosenLanguage; },
+    config: { providerId: "office" },
+    featureNames: () => "features",
+    language: "en-US",
+    providerRegistry: { get: (id: string) => (id === "office" ? profile : undefined) },
+    startupProfile: profile,
+    status: { start: (label: string) => { calls.push(`status-start:${label}`); }, stop: () => { calls.push("status-stop"); } },
+    switchProviderProfile: async (candidate, persist, model) => { calls.push(`switch:${candidate.id}:${persist}:${model ?? "<none>"}`); return true; },
+  };
+  try {
+    // Without an interactive terminal the model selector counts as cancelled, so nothing is switched.
+    assert.equal(await handleRuntimeCommand("/models", context), true);
+    assert.match(logs.at(-1) ?? "", /Model selection cancelled\./);
+    assert.deepEqual(calls, ["status-start:Discovering available models", "list-models", "status-stop"]);
+    discoveryError = "HTTP 503";
+    assert.equal(await handleRuntimeCommand("/models", context), true);
+    assert.match(logs.at(-2) ?? "", /Live model discovery unavailable: HTTP 503\nShowing built-in models instead\./);
+    assert.equal(calls.some((call) => call.startsWith("switch:")), false);
+
+    assert.equal(await handleRuntimeCommand("/language", context), true);
+    assert.match(logs.at(-1) ?? "", /Language selection cancelled\./);
+    assert.equal(calls.at(-1), "choose-language:/language");
+    chosenLanguage = "zh-CN";
+    assert.equal(await handleRuntimeCommand("/language zh-CN", context), true);
+    assert.deepEqual(calls.slice(-2), ["choose-language:/language zh-CN", "apply-language:zh-CN:true"]);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test("the media command lists records with their status and the recovery hint", async () => {
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  const records: Array<{ key: string; requestId: string; kind: "image" | "video" | "audio"; providerId: string; model: string; status: "submitting" | "submitted" | "asset_ready" | "completed" | "ambiguous" | "failed"; createdAt: string; updatedAt: string; taskId?: string; savedPath?: string }> = [];
+  const limits: number[] = [];
+  const context: MediaCommandContext = {
+    cwd: "/work/demo",
+    language: "en-US",
+    listRecords: async (limit) => { limits.push(limit); return records.map((record) => ({ ...record })); },
+  };
+  try {
+    assert.equal(await handleMediaCommand("/media", context), true);
+    assert.match(logs.at(-1) ?? "", /This project has no media generation records yet\./);
+    records.push(
+      { key: "a", requestId: "11112222-3333", kind: "image", providerId: "office", model: "gpt-image-1", status: "completed", createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T08:00:05.000Z", savedPath: "out/cat.png" },
+      { key: "b", requestId: "44445555-6666", kind: "video", providerId: "lab", model: "veo", status: "submitted", createdAt: "2026-10-20T08:01:00.000Z", updatedAt: "2026-10-20T08:01:00.000Z", taskId: "task-9" },
+    );
+    assert.equal(await handleMediaCommand("/media", context), true);
+    const output = logs.slice(-4).join("\n");
+    assert.match(output, /Media generation and recovery tasks/);
+    assert.match(output, /\[11112222\] image · completed · office\/gpt-image-1 · saved out\/cat\.png/);
+    assert.match(output, /\[44445555\] video · generation pending · lab\/veo · task task-9/);
+    assert.match(output, /resume media request <ID> to <workspace path>/);
+    assert.equal(await handleMediaCommand("/media", { ...context, language: "zh-CN" }), true);
+    assert.match(logs.slice(-4).join("\n"), /\[44445555\] 视频 · 等待生成 · lab\/veo · task task-9/);
+    assert.deepEqual(limits, [30, 30, 30]);
+  } finally {
+    console.log = originalLog;
   }
 });
