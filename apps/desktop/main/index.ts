@@ -19,12 +19,13 @@ import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confir
 import { VisionProbeController } from "./vision-probe-controller.js";
 import { registerProviderIpc } from "./ipc-provider.js";
 import { registerManagementIpc } from "./ipc-management.js";
+import { registerWorkspaceIpc } from "./ipc-workspace.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type OpenRecentWorkspaceRequest, type RemoveRecentWorkspaceRequest, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest, type TrustWorkspaceRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopApprovalModeRequest, type DesktopPlanModeRequest, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskContinueRequest, type DesktopTaskDeleteRequest, type DesktopTaskHistoryRequest, type DesktopTerminalResizeRequest, type DesktopTerminalSessionRequest, type DesktopTerminalStartRequest, type DesktopTerminalWriteRequest, type DesktopWorkspaceSnapshot, type RuntimeApprovalDecisionRequest, type RuntimeConnectRequest, type RuntimeTaskRequest } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -226,52 +227,16 @@ function registerIpc(): void {
     return serializeWriterStart(() => providerRecoveryController.handle(request), true);
   });
   handleIpc(desktopChannels.browser, async (event, request) => { assertTrustedSender(event); if (!browserController) throw new Error("网页工作台尚未就绪。"); return browserController.control(request); });
-  handleIpc(desktopChannels.snapshot, async (event) => {
-    assertTrustedSender(event);
-    return controller.snapshot();
-  });
-  handleIpc(desktopChannels.chooseWorkspace, async (event) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    if (!taskController.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: "选择 Xiu 工作区",
-      properties: ["openDirectory", "dontAddToRecent"],
-    });
-    if (result.canceled || result.filePaths.length !== 1) return controller.snapshot();
-    terminalController.stopAll("工作区已切换，终端会话已关闭。");
-    taskController.detach();
-    return emitSnapshot(await controller.selectWorkspace(result.filePaths[0]!));
-  }));
-  handleIpc(desktopChannels.closeWorkspace, async (event) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    terminalController.stopAll("工作区已关闭，终端会话已结束。");
-    taskController.detach();
-    return emitSnapshot(await controller.clearSelection());
-  }));
-  handleIpc(desktopChannels.openRecentWorkspace, async (event, request: OpenRecentWorkspaceRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    terminalController.stopAll("工作区已切换，终端会话已关闭。");
-    taskController.detach();
-    return emitSnapshot(await controller.openRecent(request));
-  }));
-  handleIpc(desktopChannels.removeRecentWorkspace, async (event, request: RemoveRecentWorkspaceRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const snapshot = await controller.snapshot();
-    const selected = snapshot.recent.find((item) => item.id === request?.workspaceId);
-    if (!selected) throw new Error("最近项目不存在或已经移除。");
-    if (request?.confirmed !== true) throw new Error("移除最近项目需要明确确认。");
-    const removingCurrent = snapshot.workspace?.id === request.workspaceId;
-    if (removingCurrent) {
-      if (!taskController.canChangeWorkspace()) throw new Error("任务仍在运行，请先停止并等待任务结束。");
-      terminalController.stopAll("工作区已移除，终端会话已关闭。");
-      taskController.detach();
-    }
-    return emitSnapshot(await controller.removeRecent(request, request.confirmed));
-  }));
-  handleIpc(desktopChannels.trustWorkspace, async (event, request: TrustWorkspaceRequest) => {
-    assertTrustedSender(event);
-    providerRecoveryController.invalidateContext();
-    return emitSnapshot(await controller.trustCurrent(request));
+  registerWorkspaceIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart, emitSnapshot,
+    workspaces: controller, tasks: taskController, terminals: terminalController, providerRecovery: providerRecoveryController,
+    chooseWorkspaceDirectory: async () => {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        title: "选择 Xiu 工作区",
+        properties: ["openDirectory", "dontAddToRecent"],
+      });
+      return result.canceled || result.filePaths.length !== 1 ? undefined : result.filePaths[0]!;
+    },
   });
   handleIpc(desktopChannels.runtimeConnect, async (event, request?: RuntimeConnectRequest) => {
     assertTrustedSender(event);
