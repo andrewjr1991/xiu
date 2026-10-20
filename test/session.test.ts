@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
-import { estimateConversationTokens, formatRestoredConversation, formatSessionTimestamp, listSessions, listSessionsWithIssues, loadSession, sessionTitle, unreadableSessionsNote } from "../src/session.js";
+import { estimateConversationTokens, formatRestoredConversation, listSessions, listSessionsWithIssues, loadSession, sessionTitle, unreadableSessionsNote } from "../src/session.js";
 import { TaskDiagnostics } from "../src/diagnostics.js";
 import type { ModelProvider } from "../src/types.js";
 
@@ -307,12 +307,6 @@ test("a session whose task failed before its task event was logged is still list
   assert.equal(sessionTitle(sessions[0]!, "en-US"), "Untitled session");
   assert.equal(sessionTitle({ firstTask: "  fix\n the   build  " }, "zh-CN"), "fix the build");
   assert.equal(sessionTitle({ firstTask: "x".repeat(100) }, "en-US", 80), "x".repeat(80));
-});
-
-test("session list timestamps are local time to the second rather than raw ISO strings", () => {
-  const local = new Date(2026, 9, 19, 23, 46, 18, 223);
-  assert.equal(formatSessionTimestamp(local.toISOString()), "2026-10-19 23:46:18");
-  assert.equal(formatSessionTimestamp("not a date"), "not a date");
 });
 
 test("one unreadable session log no longer hides the others, and loading it names the reason", async () => {

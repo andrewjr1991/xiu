@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import { localize, type UiLanguage } from "./i18n.js";
+import { formatLocalTime } from "./local-time.js";
 
 export const XIU_NPM_PACKAGE = "@xiu-ai/cli";
 export const XIU_NPM_REGISTRY = "https://registry.npmjs.org";
@@ -469,8 +470,8 @@ export async function diagnoseUpdateInstallation(currentVersion: string, options
   items.push(!cached
     ? { id: "cache", level: "warning", summary: "no valid update cache", summaryZh: "没有有效的更新缓存" }
     : cached.fresh
-      ? { id: "cache", level: "pass", summary: `fresh cache: ${cached.result.latestVersion}`, summaryZh: `缓存新鲜：${cached.result.latestVersion}`, detail: cached.result.checkedAt }
-      : { id: "cache", level: "warning", summary: `stale cache: ${cached.result.latestVersion}`, summaryZh: `缓存已过期：${cached.result.latestVersion}`, detail: cached.result.checkedAt });
+      ? { id: "cache", level: "pass", summary: `fresh cache: ${cached.result.latestVersion}`, summaryZh: `缓存新鲜：${cached.result.latestVersion}`, detail: formatLocalTime(cached.result.checkedAt) }
+      : { id: "cache", level: "warning", summary: `stale cache: ${cached.result.latestVersion}`, summaryZh: `缓存已过期：${cached.result.latestVersion}`, detail: formatLocalTime(cached.result.checkedAt) });
 
   let update: UpdateCheckResult | undefined;
   let release: OfficialReleaseMetadata | undefined;
@@ -749,7 +750,7 @@ export function formatUpdateReminder(result: UpdateCheckResult, language: UiLang
 export function formatUpdateNotificationStatus(enabled: boolean, cached: CachedUpdateCheck | undefined, language: UiLanguage): string {
   const cacheStatus = !cached
     ? localize(language, "无缓存", "no cache")
-    : `${cached.result.latestVersion} · ${cached.fresh ? localize(language, "有效", "fresh") : localize(language, "已过期", "stale")} · ${cached.result.checkedAt}`;
+    : `${cached.result.latestVersion} · ${cached.fresh ? localize(language, "有效", "fresh") : localize(language, "已过期", "stale")} · ${formatLocalTime(cached.result.checkedAt)}`;
   return language === "zh-CN"
     ? ["Xiu 更新提醒", `状态：${enabled ? "已启用" : "已关闭（默认）"}`, "检查间隔：24 小时缓存", `缓存：${cacheStatus}`, "行为：仅在安全输入边界提示；不会自动安装、降级或修改全局 npm。"].join("\n")
     : ["Xiu update reminders", `Status: ${enabled ? "enabled" : "disabled (default)"}`, "Check interval: 24-hour cache", `Cache: ${cacheStatus}`, "Behavior: reminders appear only at safe input boundaries; Xiu never installs, downgrades, or changes global npm automatically."].join("\n");

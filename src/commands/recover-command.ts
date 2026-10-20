@@ -1,6 +1,7 @@
 import { localize, type UiLanguage } from "../i18n.js";
 import { type InterruptedTaskRun, TaskRunJournal } from "../task-run.js";
 import { isWorkspaceTrusted } from "../trust.js";
+import { formatLocalTime } from "../local-time.js";
 
 /**
  * `xiu recover [status]` and `xiu recover abandon <run id>`: the non-interactive half of crash
@@ -42,7 +43,7 @@ export function describeInterruptedRun(run: InterruptedTaskRun, language: UiLang
       `异常中断任务 ${id}（${run.status === "paused" ? "中断时已暂停" : "中断时正在运行"}）`,
       `Interrupted task ${id} (${run.status === "paused" ? "paused when interrupted" : "running when interrupted"})`),
     localize(language, `任务：${run.taskPreview || "（无摘要）"}`, `Task: ${run.taskPreview || "(no summary)"}`),
-    localize(language, `开始于：${run.startedAt}`, `Started: ${run.startedAt}`),
+    localize(language, `开始于：${formatLocalTime(run.startedAt)}`, `Started: ${formatLocalTime(run.startedAt)}`),
     localize(language, `最后恢复点：${point?.evidence ?? "尚无安全恢复点"}`, `Last recovery point: ${point?.evidence ?? "no safe recovery point"}`),
     localize(language,
       `中断时未完成的操作：${run.interruptedOperations.length} 项；待核验副作用：${run.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,

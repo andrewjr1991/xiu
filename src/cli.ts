@@ -43,7 +43,8 @@ import { persistentLiveOutput, readInteractiveInput, selectTerminalOption } from
 import { createProjectIndexTools, ProjectIndex } from "./project-index.js";
 import { createPlanTools, TaskPlanManager } from "./plan.js";
 import { PluginRegistry } from "./plugins.js";
-import { formatSessionTimestamp, listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "./session.js";
+import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "./session.js";
+import { formatLocalTime } from "./local-time.js";
 import { createSkillTools, SkillRegistry } from "./skills.js";
 import { explainOneShotSlashInput, explainScriptCommandTypo, explainUnhandledSlashInput, formatOneShotSlashProblem, formatScriptCommandTypo, formatSlashInputProblem, formatHelpEntries, helpEntriesFor, slashCommands } from "./slash-commands.js";
 import { StatusLine } from "./status.js";
@@ -218,7 +219,7 @@ async function chooseSession(workspace: string, language: UiLanguage) {
   if (!sessions.length) return undefined;
   const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
     label: sessionTitle(session, language),
-    description: `${formatSessionTimestamp(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
+    description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
     value: session.id,
   })), language);
   return selected ? await loadSession(workspace, selected) : undefined;
@@ -438,7 +439,7 @@ async function main(): Promise<void> {
     if (options.listSessions) {
       const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
       if (!sessions.length) console.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
-      else for (const session of sessions) console.log(`${session.id}  ${formatSessionTimestamp(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
+      else for (const session of sessions) console.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
       const note = unreadableSessionsNote(unreadable, language);
       if (note) console.log(note);
       return;
@@ -1246,8 +1247,8 @@ async function main(): Promise<void> {
       if (!probe) return localize(language, "能力未探测", "capabilities not tested");
       const context = probe.contextWindow ? localize(language, ` · 上下文 ${probe.contextWindow.toLocaleString()}（API）`, ` · context ${probe.contextWindow.toLocaleString()} (API)`) : "";
       return localize(language,
-        `探测：工具 ${capabilityStateName(probe.tools)} · 视觉 ${capabilityStateName(probe.vision)}${context} · ${new Date(probe.checkedAt).toLocaleString()}`,
-        `Probe: tools ${capabilityStateName(probe.tools)} · vision ${capabilityStateName(probe.vision)}${context} · ${new Date(probe.checkedAt).toLocaleString()}`);
+        `探测：工具 ${capabilityStateName(probe.tools)} · 视觉 ${capabilityStateName(probe.vision)}${context} · ${formatLocalTime(probe.checkedAt)}`,
+        `Probe: tools ${capabilityStateName(probe.tools)} · vision ${capabilityStateName(probe.vision)}${context} · ${formatLocalTime(probe.checkedAt)}`);
     };
     const compactCapabilityProbeSummary = (profile: ProviderProfile, model = profile.model): string => {
       const probe = providerRegistry.capabilityProbe(profile.id, model);
@@ -2056,7 +2057,7 @@ async function main(): Promise<void> {
         const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
         const note = unreadableSessionsNote(unreadable, language);
         console.log([
-          sessions.length ? sessions.map((session) => `${session.id}  ${formatSessionTimestamp(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
+          sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
           ...(note ? [chalk.yellow(note)] : []),
         ].join("\n") + "\n");
         continue;
@@ -2113,7 +2114,7 @@ async function main(): Promise<void> {
         }
         const selected = await selectTerminalOption(localize(language, "恢复哪个检查点？", "Restore which checkpoint?"), checkpoints.map((checkpoint) => ({
           label: checkpoint.description,
-          description: `${new Date(checkpoint.createdAt).toLocaleString()}  ${checkpoint.files.map((file) => file.path).join(", ")}`,
+          description: `${formatLocalTime(checkpoint.createdAt)}  ${checkpoint.files.map((file) => file.path).join(", ")}`,
           value: checkpoint.id,
         })), language);
         if (!selected) {
@@ -2213,7 +2214,7 @@ async function main(): Promise<void> {
         }
         const selected = await selectTerminalOption(localize(language, "活动详情", "Activity details"), records.map((record) => ({
           label: `${record.state} ${record.title}`,
-          description: `${new Date(record.startedAt).toLocaleTimeString()}  ${record.description}`,
+          description: `${formatLocalTime(record.startedAt)}  ${record.description}`,
           value: record.id,
         })), language);
         if (selected) {
