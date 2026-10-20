@@ -167,8 +167,10 @@ test("a command failure the catalog explains gets the next step and xiu doctor; 
   try {
     const context = { language: "en-US", mcpManager, projectMcpTrusted: false, status: { start() {}, stop() {} } } as unknown as McpCommandContext;
     assert.equal(await handleMcpCommand("/mcp permissions", context), true);
-    const pluginContext = { language: "zh-CN", pluginRegistry: { refresh: async () => [], setEnabled: async (id: string) => { throw new Error(`Plugin not found: ${id}`); } }, applyApprovedPlugins: async () => [] } as unknown as PluginCommandContext;
+    const pluginContext = { language: "zh-CN", pluginRegistry: { refresh: async () => [], list: () => [], get: () => undefined, setEnabled: async (id: string) => { throw new Error(`Plugin not found: ${id}`); } }, applyApprovedPlugins: async () => [] } as unknown as PluginCommandContext;
     assert.equal(await handlePluginCommand("/plugin enable nope", pluginContext), true);
+    assert.equal(await handlePluginCommand("/plugin revoke nope", pluginContext), true);
+    assert.match(logs.join("\n"), /未找到插件：nope/);
   } finally {
     console.error = originalError;
     console.log = originalLog;

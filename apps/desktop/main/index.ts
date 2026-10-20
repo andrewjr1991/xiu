@@ -489,6 +489,16 @@ function registerIpc(): void {
     if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改配置。");
     return taskController.changeManagement(workspace, request);
   }));
+  handleIpc(desktopChannels.pluginSnapshot, async (event) => {
+    assertTrustedSender(event);
+    return taskController.pluginSnapshot(controller.trustedWorkspacePath());
+  });
+  handleIpc(desktopChannels.pluginChange, async (event, request: import("../../../src/runtime/plugin-service.js").WorkspacePluginRequest) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改插件。");
+    return taskController.changePlugin(workspace, request);
+  }));
   handleIpc(desktopChannels.providerModels, async (event, request: DesktopProviderModelsRequest) => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();

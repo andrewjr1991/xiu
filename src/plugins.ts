@@ -518,6 +518,15 @@ export class PluginRegistry {
     plugin.active = true;
   }
 
+  /** Forgets the stored approval for a plugin; its contributions stop loading on the next refresh or reload. */
+  async revoke(id: string): Promise<boolean> {
+    const plugin = this.get(id);
+    if (!plugin) throw new Error(`Plugin not found: ${id}`);
+    const revoked = await this.permissionStore.revoke(this.permissionManifest(plugin));
+    plugin.active = false;
+    return revoked;
+  }
+
   async trustedPublishers(): Promise<TrustedPluginPublisher[]> {
     return this.publisherStore.list();
   }

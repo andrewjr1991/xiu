@@ -176,7 +176,7 @@ v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mc
 
 ## 插件（v0.14.3 阶段 D）
 
-0.20.14 起，桌面工作台在已信任的工作区里复用同一份插件授权：CLI 里 `/plugin approve` 过的插件，其渠道、MCP 工具和 Skills 贡献在桌面任务中同样可用；桌面不提供新的授权入口，未授权插件不会被加载，插件声明的 MCP 服务仍需在桌面“扩展”里确认权限清单。
+0.20.14 起，桌面工作台在已信任的工作区里与 CLI 共用同一份插件授权记录：管理面板的“插件”页列出已发现的插件（版本、范围、状态、权限、贡献数、签名、完整性、团队策略与清单指纹），可以“核对并授权”、“撤销授权”和“启用/禁用”；授权与 `/plugin approve` 绑定同一个清单指纹，插件内容变化后两端同时失效。安装、更新、卸载、恢复和发布者信任仍在 CLI 完成；未授权插件不会被加载，插件声明的 MCP 服务仍需在桌面“扩展”里确认权限清单。
 
 Xiu 会发现以下位置的插件清单：
 
@@ -193,6 +193,7 @@ Xiu 会发现以下位置的插件清单：
 /plugin inspect acme.example
 /plugin policy
 /plugin approve acme.example
+/plugin revoke acme.example
 /plugin install D:\trusted\xiu-plugin
 /plugin install https://github.com/example/xiu-plugin.git
 /plugin update acme.example
@@ -205,7 +206,7 @@ Xiu 会发现以下位置的插件清单：
 /plugin publisher revoke <完整 SHA-256 发布者指纹>
 ```
 
-`ready` 表示清单有效，`active` 才表示当前清单指纹已被用户授权。授权指纹包含插件版本、权限、全部贡献路径和内容摘要；任意一项变化都会自动回到 `inactive`，必须重新确认。
+`ready` 表示清单有效，`active` 才表示当前清单指纹已被用户授权。授权指纹包含插件版本、权限、全部贡献路径和内容摘要；任意一项变化都会自动回到 `inactive`，必须重新确认。`/plugin revoke` 删除该插件的授权记录并立即卸载其贡献，文件和用户数据保留，之后可再次授权；桌面“插件”页的撤销写同一条记录。
 
 阶段 B 只加载声明式数据：Provider 和 MCP Tool 使用有界 JSON，Skill 和工作流使用有界 Markdown。Xiu 不会执行插件 JavaScript、安装脚本或任意二进制入口。Provider JSON 不能包含明文 `apiKey`，只能用 `apiKeyEnv` 引用环境变量；MCP Tool 导入后仍受 MCP 权限清单和风险审批约束。`/plugins reload` 会重新扫描并刷新已授权贡献。
 

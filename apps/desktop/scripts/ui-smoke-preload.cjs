@@ -63,6 +63,7 @@ const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, 
   { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
+const plugins = [{ id: "acme.fixture", name: "Fixture Plugin", version: "1.2.0", scope: "project", state: "ready", active: false, fingerprint: "d".repeat(64), permissions: ["instructions:load", "workspace:read"], contributions: [{ kind: "skills", count: 1 }, { kind: "tools", count: 1 }], integrity: "verified", signature: "unsigned", policy: "not-evaluated", policyProblems: [], problems: [] }];
 const bridge = {
   computerUse: async request => {
     calls.push(`computer:${request.action}`);
@@ -87,6 +88,17 @@ const bridge = {
       managedWeb = request.mode === "managed";
       calls.push(`management:web:${request.mode}`);
     }
+    approvalMode = "ask"; return runtime();
+  },
+  pluginSnapshot: async () => ({ plugins: plugins.map((plugin) => ({ ...plugin })), shadowed: 0, policy: { state: "not-configured" }, loadErrors: [] }),
+  changePlugin: async (request) => {
+    const plugin = plugins.find((item) => item.id === request.id);
+    if (!plugin) throw new Error("unknown fixture plugin");
+    if (request.action === "approve") { if (request.confirmed !== true || request.fingerprint !== plugin.fingerprint) throw new Error("bad plugin confirmation"); plugin.active = true; }
+    if (request.action === "revoke") { if (request.confirmed !== true) throw new Error("bad plugin confirmation"); plugin.active = false; }
+    if (request.action === "disable") { plugin.state = "disabled"; plugin.active = false; }
+    if (request.action === "enable") plugin.state = "ready";
+    calls.push(`plugin:${request.action}:${request.id}`);
     approvalMode = "ask"; return runtime();
   },
   prepareSkillInstallation: async (kind) => { calls.push(`skill-prepare:${kind}`); return { revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", skills: [{ name: "new-fixture", permissions: ["instructions:load"] }] }; },

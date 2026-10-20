@@ -62,6 +62,7 @@ export function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/plugin inspect", "检查插件兼容性、权限与贡献项", "Inspect plugin compatibility, permissions, and contributions"),
     item("/plugin policy", "查看当前项目的团队插件策略", "Show the current project's team plugin policy"),
     item("/plugin approve", "授权并加载插件的当前声明式清单", "Approve and load a plugin's current declarative manifest"),
+    item("/plugin revoke", "撤销插件授权并卸载其贡献，保留文件", "Revoke a plugin's approval and unload its contributions, keeping its files"),
     item("/plugin install", "从可信本地路径或 HTTPS Git 安装插件", "Install a plugin from a trusted local path or HTTPS Git"),
     item("/plugin update", "预览权限变化并原子更新插件", "Preview permission changes and atomically update a plugin"),
     item("/plugin enable", "启用已安装插件", "Enable an installed plugin"),

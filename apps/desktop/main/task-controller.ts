@@ -6,6 +6,7 @@ import { buildExecutionReport, formatExecutionReport } from "../../../src/execut
 import { collectExecutionReportInputs, defaultExecutionReportSources } from "../../../src/execution-report-query.js";
 import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
 import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-management.js";
+import type { WorkspacePluginRequest } from "../../../src/runtime/plugin-service.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
 import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.js";
@@ -83,6 +84,29 @@ export class DesktopTaskController {
     this.mcpBusy = true;
     try { await host.management.change(request); }
     catch { throw new Error("配置保存失败或已变化，请刷新后重试。"); }
+    finally { this.mcpBusy = false; }
+    return this.reload(workspace);
+  }
+
+  async pluginSnapshot(workspace: string) {
+    const host = await this.ensure(workspace);
+    if (!host.pluginService) throw new Error("插件服务不可用。");
+    try { return await host.pluginService.snapshot(); }
+    catch { throw new Error("插件清单无法读取。请检查插件目录与 ~/.xiu/extension-permissions.json（错误详情不含凭据）。"); }
+  }
+
+  /** Same gates as other reconfiguration: trusted host, idle task, no external writer; approve/revoke also need the renderer's explicit confirmation. */
+  async changePlugin(workspace: string, request: WorkspacePluginRequest) {
+    const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
+    await this.assertCanReconfigure(workspace);
+    this.assertIdleContext(host, workspace, contextId);
+    if (!host.pluginService) throw new Error("插件服务不可用。");
+    if (!request || !["approve", "revoke", "enable", "disable"].includes(request.action)) throw new Error("无效的插件请求。");
+    if ((request.action === "approve" || request.action === "revoke") && request.confirmed !== true) throw new Error("confirmation required");
+    this.mcpBusy = true;
+    try { await host.pluginService.change(request); }
+    catch { throw new Error("插件操作未完成。请刷新后重新核对清单指纹、插件状态与团队策略；不会自动重试，已有授权没有变化。"); }
     finally { this.mcpBusy = false; }
     return this.reload(workspace);
   }

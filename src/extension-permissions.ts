@@ -130,6 +130,23 @@ export class PermissionGrantStore {
       permissions: [...manifest.permissions].sort(),
       approvedAt: new Date().toISOString(),
     };
+    await this.write(data);
+  }
+
+  /**
+   * Removes whatever grant is recorded for this extension (kind, name and origin), whether or not
+   * it still matches the current fingerprint. Returns false when nothing was recorded.
+   */
+  async revoke(manifest: ExtensionPermissionManifest): Promise<boolean> {
+    const data = await this.read();
+    const key = grantKey(manifest);
+    if (!data.grants[key]) return false;
+    delete data.grants[key];
+    await this.write(data);
+    return true;
+  }
+
+  private async write(data: PermissionGrantFile): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });

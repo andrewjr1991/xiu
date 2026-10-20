@@ -85,6 +85,11 @@ test("malformed requests are rejected with the channel and field, never the valu
   rejects(desktopChannels.mcpManage, [{ action: "delete", name: "n", fingerprint: "f" }], /argument 1\.confirmed must be one of true/);
   rejects(desktopChannels.mcpBrowse, [{ name: "n", action: "read", args: { key: 1 } }], /argument 1\.args\.key must be a string/);
   rejects(desktopChannels.managementChange, [{ action: "stage", revision: "r", phase: "deploy" }], /phase must be one of "planning", "implementation", "verification"/);
+  rejects(desktopChannels.pluginChange, [{ action: "approve", id: "acme.demo", fingerprint: "f".repeat(64), confirmed: false }], /confirmed must be one of true/);
+  rejects(desktopChannels.pluginChange, [{ action: "approve", id: "acme.demo", fingerprint: "f".repeat(65), confirmed: true }], /fingerprint must be a string of at most 64/);
+  rejects(desktopChannels.pluginChange, [{ action: "revoke", id: "acme.demo" }], /confirmed must be one of true/);
+  rejects(desktopChannels.pluginChange, [{ action: "uninstall", id: "acme.demo" }], /action must be one of/);
+  assert.deepEqual(validateIpcArguments(desktopChannels.pluginChange, [{ action: "disable", id: "acme.demo", confirmed: true }]), [{ action: "disable", id: "acme.demo" }]);
   rejects(desktopChannels.managementChange, [{ action: "web", revision: "r", enabled: true, provider: "google", endpoint: "" }], /provider must be one of/);
   rejects(desktopChannels.computerUse, [{ action: "select" }], /argument 1\.handle must be a string/);
   rejects(desktopChannels.computerUse, [{ action: "input", input: { kind: "launch", frameId: "f" } }], /input\.kind must be one of/);

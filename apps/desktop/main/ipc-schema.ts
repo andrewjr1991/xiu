@@ -221,6 +221,13 @@ const argumentSchemas: Record<string, Parser[]> = {
     fallback: { revision: id, providerId: id, chain: array(id, 32) },
     web: { revision: id, enabled: boolean, mode: optional(literal("local", "managed", "custom")), provider: literal("tavily", "brave", "searxng", "free-search"), endpoint: string(URL), apiKeyEnv: optional(string(ID)) },
   })],
+  [desktopChannels.pluginSnapshot]: NONE,
+  [desktopChannels.pluginChange]: [tagged("action", {
+    approve: { id, fingerprint: string(64), confirmed },
+    revoke: { id, confirmed },
+    enable: { id },
+    disable: { id },
+  })],
   [desktopChannels.providerModels]: [object({ providerId: id })],
   [desktopChannels.providerSelect]: [object(providerSelect)],
   [desktopChannels.providerCredentialSave]: [object({ providerId: id, apiKey: string(URL) })],
