@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { TaskInputQueue } from "../src/task-queue.js";
+import { handleAgentCommand, type AgentCommandContext } from "../src/commands/agent-commands.js";
 import { handleBackgroundCommand, type BackgroundCommandContext } from "../src/commands/background-commands.js";
 import { handleCredentialCommand, type CredentialCommandContext } from "../src/commands/credential-commands.js";
 import { handleInspectCommand, type InspectCommandContext } from "../src/commands/inspect-commands.js";
@@ -24,6 +25,7 @@ import { McpManager } from "../src/mcp.js";
 // The interactive loop tries each handler in turn, so a handler must decline input it does not own
 // without touching its context (an empty context would throw on any access).
 const declining: Array<[string, (task: string) => Promise<boolean>]> = [
+  ["agents", (task) => handleAgentCommand(task, {} as AgentCommandContext)],
   ["background", (task) => handleBackgroundCommand(task, {} as BackgroundCommandContext)],
   ["credentials", (task) => handleCredentialCommand(task, {} as CredentialCommandContext)],
   ["mcp", (task) => handleMcpCommand(task, {} as McpCommandContext)],
@@ -37,7 +39,7 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
 
 for (const [name, handle] of declining) {
   test(`${name} command handler declines ordinary tasks and other slash commands`, async () => {
-    for (const task of ["fix the failing test", "/help", "/status", "/pluginsx", "/mcpx", "/webx"]) {
+    for (const task of ["fix the failing test", "/help", "/status", "/agentsx", "/pluginsx", "/mcpx", "/webx"]) {
       assert.equal(await handle(task), false, task);
     }
   });
@@ -410,6 +412,76 @@ test("inspection commands keep their output, read live state and never alter it"
     assert.doesNotMatch(logs.at(-1) ?? "", /\/rewind/);
     assert.equal(await handleInspectCommand("/help nosuchcommand", context), true);
     assert.match(logs.at(-1) ?? "", /nosuchcommand/);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
+
+test("the agents command lists, cancels, retries and integrates only after the explicit write confirmation", async () => {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  const calls: string[] = [];
+  const task = { id: "t1", role: "implementer", mode: "worktree", title: "add tests", status: "completed", dependencies: [], createdAt: "2026-10-20T08:00:00.000Z", startedAt: "2026-10-20T08:00:00.000Z", completedAt: "2026-10-20T08:00:05.000Z", stats: { inputTokens: 100, outputTokens: 20, activeMs: 5000 } };
+  const run = { id: "run-1", goal: "cover the parser", status: "completed", createdAt: "2026-10-20T08:00:00.000Z", updatedAt: "2026-10-20T08:00:05.000Z", concurrency: 1, tasks: [task] };
+  const runs: Array<typeof run> = [];
+  let canIntegrate = false;
+  let confirmAnswer = false;
+  const plan = () => ({
+    runId: "run-1", taskId: "t1", blockers: canIntegrate ? [] : ["A completed reviewer is required"], canIntegrate,
+    analysis: { patch: "diff --git a/src/a.ts b/src/a.ts", changedFiles: ["src/a.ts"], mainChangesSinceBase: [], dirtyMainFiles: [], conflicts: [], canIntegrate: true },
+    evidence: { reviewers: canIntegrate ? ["t2"] : [], testers: canIntegrate ? ["t3"] : [], blockers: canIntegrate ? [] : ["A completed reviewer is required"] },
+  });
+  const context: AgentCommandContext = {
+    coordinator: {
+      list: () => runs as unknown as ReturnType<AgentCommandContext["coordinator"]["list"]>,
+      get: (id: string) => { const found = runs.find((item) => item.id === id); if (!found) throw new Error(`Unknown run ${id}`); return found as unknown as ReturnType<AgentCommandContext["coordinator"]["get"]>; },
+      cancel: async (runId: string, taskId: string) => { calls.push(`cancel:${runId}/${taskId}`); return { ...task, status: "cancelled" } as unknown as Awaited<ReturnType<AgentCommandContext["coordinator"]["cancel"]>>; },
+      retry: async (runId: string, taskId: string) => { calls.push(`retry:${runId}/${taskId}`); return run as unknown as Awaited<ReturnType<AgentCommandContext["coordinator"]["retry"]>>; },
+      analyzeIntegration: async (runId: string, taskId: string) => { calls.push(`analyze:${runId}/${taskId}`); return plan() as unknown as Awaited<ReturnType<AgentCommandContext["coordinator"]["analyzeIntegration"]>>; },
+      integrate: async (runId: string, taskId: string) => { calls.push(`integrate:${runId}/${taskId}`); return "Integrated 1 file."; },
+    },
+    cwd: "/work/demo",
+    language: "en-US",
+    onIntegrated: () => { calls.push("index-invalidated"); },
+    confirmIntegrate: async (prompt: string) => { calls.push(`confirm:${prompt.includes("/work/demo") ? "names-workspace" : "no-workspace"}`); return confirmAnswer; },
+  };
+  try {
+    assert.equal(await handleAgentCommand("/agents", context), true);
+    assert.match(logs.at(-1) ?? "", /No multi-agent runs\./);
+    runs.push(run);
+    assert.equal(await handleAgentCommand("/agents", context), true);
+    assert.match(logs.at(-1) ?? "", /Run run-1 - completed - cover the parser/);
+    assert.match(logs.at(-1) ?? "", /\[completed\] t1 \(implementer, worktree\) add tests - 5\.0s, 120 tokens/);
+    assert.equal(await handleAgentCommand("/agents run-1", context), true);
+    assert.match(logs.at(-1) ?? "", /Total: 120 tokens, 5\.0s agent time/);
+    assert.equal(await handleAgentCommand("/agents run-9", context), true);
+    assert.match(errors.at(-1) ?? "", /Agent command failed/);
+    assert.match(errors.at(-1) ?? "", /Unknown run run-9/);
+    assert.equal(await handleAgentCommand("/agents cancel run-1", context), true);
+    assert.match(logs.at(-1) ?? "", /Usage: \/agents \[run-id\]/);
+    assert.equal(await handleAgentCommand("/agents cancel run-1 t1", context), true);
+    assert.match(logs.at(-1) ?? "", /Agent t1 is cancelled\./);
+    assert.equal(await handleAgentCommand("/agents retry run-1 t1", context), true);
+    assert.match(logs.at(-1) ?? "", /Run run-1 - completed/);
+    // A blocked plan is reported and nothing is confirmed or written.
+    assert.equal(await handleAgentCommand("/agents integrate run-1 t1", context), true);
+    assert.match(logs.at(-2) ?? "", /Decision: blocked/);
+    assert.match(logs.at(-1) ?? "", /Integration is blocked by conflicts or evidence gates/);
+    canIntegrate = true;
+    assert.equal(await handleAgentCommand("/agents integrate run-1 t1", context), true);
+    assert.match(logs.at(-1) ?? "", /Agent integration cancelled\./);
+    assert.equal(calls.some((call) => call.startsWith("integrate:") || call === "index-invalidated"), false, "nothing is written before the confirmation");
+    confirmAnswer = true;
+    assert.equal(await handleAgentCommand("/agents integrate run-1 t1", context), true);
+    assert.match(logs.at(-1) ?? "", /Integrated 1 file\./);
+    assert.deepEqual(calls.filter((call) => !call.startsWith("analyze:")), [
+      "cancel:run-1/t1", "retry:run-1/t1", "confirm:names-workspace", "confirm:names-workspace", "integrate:run-1/t1", "index-invalidated",
+    ]);
   } finally {
     console.log = originalLog;
     console.error = originalError;
