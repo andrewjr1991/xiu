@@ -27,6 +27,7 @@ import { resolveNodeRuntime } from "../node-runtime.js";
 import { createWorkspaceWebSearchTools } from "./workspace-web-search.js";
 import { createProviderPolicy } from "./provider-policy.js";
 import { WorkspaceManagementService } from "./workspace-management.js";
+import { WorkspacePluginService } from "./plugin-service.js";
 
 export interface WorkspaceAgentHost {
   computerVisionRoute?: string;
@@ -41,8 +42,10 @@ export interface WorkspaceAgentHost {
   sanitize?: (value: string) => string;
   setApprovalMode?: (mode: WorkspaceApprovalMode) => void;
   mcp?: WorkspaceMcpService;
-  /** Plugins already approved with `/plugin approve`; the desktop adds no approval of its own. */
+  /** Plugins whose current manifest is approved (`/plugin approve` or the desktop plugin entry, same grant record). */
   plugins?: { active: number; errors: string[] };
+  /** Plugin management over the same registry and grant store the CLI uses; the caller reloads the host after a change. */
+  pluginService?: WorkspacePluginService;
   coordinator?: MultiAgentCoordinator;
   background?: () => BackgroundProcessSummary[];
   close?: () => Promise<void>;
@@ -281,6 +284,8 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     });
   }
   const management = new WorkspaceManagementService(registry, skillRegistry);
+  const pluginErrors = plugins.errors.map((item) => redactSecrets(`${item.pluginId}: ${item.message}`));
+  const pluginService = new WorkspacePluginService(pluginRegistry, () => pluginErrors);
   return {
     computerVisionRoute: options.computerUse ? computerVisionRoute(config) : undefined,
     providerConfigured: Boolean(requestedProfile || options.provider), runtime, provider: { id: profile.id, label: profile.name, model }, journal, agent, checkpointManager, projectIndex,
@@ -289,7 +294,8 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
       agent.setAccessMode(mode === "full" ? "full" : "workspace");
     },
     management, sanitize,
-    plugins: { active: pluginRegistry.list().filter((plugin) => plugin.active).length, errors: plugins.errors.map((item) => redactSecrets(`${item.pluginId}: ${item.message}`)) },
+    plugins: { active: pluginRegistry.list().filter((plugin) => plugin.active).length, errors: pluginErrors },
+    pluginService,
     coordinator, background: () => background.list().slice(0, 80), mcp, close: async () => { await management.close(); await coordinator.shutdown(); await mcp.close(); },
   };
 }

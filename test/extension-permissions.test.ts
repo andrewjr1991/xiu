@@ -26,5 +26,10 @@ test("permission grants are fingerprinted and detect expansion", async () => {
   assert.deepEqual(addedPermissions(await store.approvedManifest(expanded), expanded), ["external:write"]);
   const saved = await fs.readFile(path.join(directory, "grants.json"), "utf8");
   assert.doesNotMatch(saved, /user:docs/);
+  // Revocation forgets the grant for this extension even when the manifest it is asked with no longer matches the stored fingerprint.
+  assert.equal(await store.revoke(expanded), true);
+  assert.equal(await store.isApproved(base), false);
+  assert.equal(await store.approvedManifest(base), undefined);
+  assert.equal(await store.revoke(base), false);
   await fs.rm(directory, { recursive: true, force: true });
 });

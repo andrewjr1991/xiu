@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Select } from "./Select.js";
 import type { WorkspaceManagementSnapshot, WorkspaceManagementRequest } from "../../../../src/runtime/workspace-management.js";
+import type { WorkspacePluginRequest, WorkspacePluginSnapshot } from "../../../../src/runtime/plugin-service.js";
+import { PluginTab } from "./PluginTab.js";
 import type { DesktopRuntimeConnection } from "../../shared/protocol.js";
 
 export function ManagementPanel({ disabled, onClose, onConnection }: { disabled: boolean; onClose(): void; onConnection(value: DesktopRuntimeConnection): void }) {
@@ -19,8 +21,11 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
   const [chain, setChain] = useState<string[]>([]);
   const [fallback, setFallback] = useState("");
   const [skillPreview, setSkillPreview] = useState<Awaited<ReturnType<typeof window.xiuDesktop.prepareSkillInstallation>>>();
+  const [plugins, setPlugins] = useState<WorkspacePluginSnapshot>();
+  const loadPlugins = async () => { setPlugins(await window.xiuDesktop.pluginSnapshot()); };
   const refresh = async () => {
     const next = await window.xiuDesktop.managementSnapshot(); setData(next);
+    if (plugins) await loadPlugins();
     setEndpoint(next.web.endpoint ?? ""); setProvider(next.web.provider ?? "searxng"); setEnabled(next.web.enabled);
     setKeyEnv(next.web.apiKeyEnv ?? "");
     setWebMode(next.web.local ? "local" : next.web.managed ? "managed" : "custom");
@@ -34,6 +39,8 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
   useEffect(() => () => { void window.xiuDesktop.cancelSkillInstallation().catch(() => undefined); }, []);
   useEffect(() => { if (!busy) closeRef.current?.focus(); }, [busy]);
   const save = (request: WorkspaceManagementRequest) => void perform(async () => { onConnection(await window.xiuDesktop.changeManagement(request)); await refresh(); });
+  const changePlugin = (request: WorkspacePluginRequest) => void perform(async () => { onConnection(await window.xiuDesktop.changePlugin(request)); await loadPlugins(); },
+    "插件操作未完成。请刷新后重新核对清单指纹、插件状态与团队策略；任务和终端须空闲，已有授权没有变化。");
   const unavailable = disabled || busy || !data;
   const prepareSkill = (kind: "directory" | "file") => void perform(async () => {
     setSkillPreview(undefined);
@@ -49,7 +56,7 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
     }
   }}>
     <header><div><h2>工具与运行设置</h2><p>修改后撤销临时完全访问权限，保留 Plan 模式。</p></div><button ref={closeRef} aria-label="关闭管理面板" disabled={busy} onClick={onClose}>×</button></header>
-    <nav aria-label="管理分类">{[["web", "联网检索"], ["routing", "模型路由"], ["skills", "Skills"], ["report", "报告与诊断"]].map(([id, label]) => <button key={id} aria-pressed={tab === id} disabled={busy} onClick={() => { setTab(id!); if (id === "report") void perform(async () => setReport(await window.xiuDesktop.taskDiagnostics())); }}>{label}</button>)}<button disabled={busy} onClick={() => void perform(refresh)}>刷新</button></nav>
+    <nav aria-label="管理分类">{[["web", "联网检索"], ["routing", "模型路由"], ["skills", "Skills"], ["plugins", "插件"], ["report", "报告与诊断"]].map(([id, label]) => <button key={id} aria-pressed={tab === id} disabled={busy} onClick={() => { setTab(id!); if (id === "report") void perform(async () => setReport(await window.xiuDesktop.taskDiagnostics())); if (id === "plugins") void perform(loadPlugins, "插件清单无法读取。请检查插件目录与 ~/.xiu/extension-permissions.json。"); }}>{label}</button>)}<button disabled={busy} onClick={() => void perform(tab === "plugins" ? loadPlugins : refresh)}>刷新</button></nav>
     {error && <p role="alert" className="error-banner">{error}</p>}
     {tab === "web" && <><p>Agent 使用只读检索和来源证据门禁；网页标签仍与任务隔离。</p>
       <label><input type="checkbox" disabled={unavailable} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用只读联网工具</label>
@@ -71,6 +78,7 @@ export function ManagementPanel({ disabled, onClose, onConnection }: { disabled:
       <div><button disabled={unavailable} onClick={() => prepareSkill("directory")}>选择文件夹并预览</button>{" "}<button disabled={unavailable} onClick={() => prepareSkill("file")}>选择 SKILL.md / ZIP 并预览</button></div>
       {skillPreview && <article aria-label="技能安装预览"><h3>确认安装</h3><p>将添加以下全局 Skills；不会覆盖已有技能。声明权限不替代任务审批，Plan 仍只读。</p><ul>{skillPreview.skills.map((skill) => <li key={skill.name}>{skill.name}：{skill.permissions.join("、")}</li>)}</ul><p>包摘要：{skillPreview.digest}</p><p>预览有效期：{skillPreview.expiresAt}</p><button disabled={busy} onClick={() => void perform(async () => { await window.xiuDesktop.cancelSkillInstallation(); setSkillPreview(undefined); })}>取消预览</button><button disabled={unavailable} onClick={() => void perform(async () => { const preview = skillPreview; setSkillPreview(undefined); onConnection(await window.xiuDesktop.changeManagement({ action: "skill-install", token: preview.token, revision: preview.revision, confirmed: true })); await refresh(); })}>确认安装并接受所列声明权限</button></article>}
       {!data?.skills.length && <p>没有已发现的 Skills。</p>}{data?.skills.map((item) => <details key={item.name}><summary>{item.name} · {item.scope}</summary><p>{item.description}</p><p>声明权限：{item.permissions.join("、")}</p>{item.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>)}<p>远程 Git、替换及卸载继续使用 CLI；桌面不提供隐式覆盖。</p></>}
+    {tab === "plugins" && <PluginTab data={plugins} unavailable={disabled || busy || !plugins} onChange={changePlugin} />}
     {tab === "report" && (report ? <><h3>执行报告</h3><pre>{report.report}</pre><h3>运行诊断</h3><pre>{report.diagnostics}</pre><p>本机有界摘要，不上传、不包含源码 Diff。</p></> : <p>尚无报告。</p>)}
   </section></div>;
 }

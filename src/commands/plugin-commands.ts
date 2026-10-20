@@ -281,6 +281,43 @@ export async function handlePluginCommand(task: string, ctx: PluginCommandContex
     else console.log(chalk.green(localize(language, `插件 ${id} 已授权并加载。\n`, `Plugin ${id} was approved and loaded.\n`)));
     return true;
   }
+  if (task === "/plugin revoke" || task.startsWith("/plugin revoke ")) {
+    await pluginRegistry.refresh(true);
+    const requested = task.slice("/plugin revoke".length).trim();
+    const candidates = pluginRegistry.list().filter((plugin) => plugin.active);
+    const id = requested || await selectTerminalOption(localize(language, "选择要撤销授权的插件", "Choose a plugin whose approval should be revoked"), candidates.map((plugin) => ({
+      label: plugin.name,
+      description: `${plugin.id} · ${plugin.permissions.join(", ") || localize(language, "无权限", "no permissions")}`,
+      value: plugin.id,
+    })), language);
+    if (!id) {
+      console.log(chalk.dim(localize(language, "没有选择插件。\n", "No plugin selected.\n")));
+      return true;
+    }
+    const plugin = pluginRegistry.get(id);
+    if (!plugin) {
+      console.log(chalk.yellow(localize(language, `未找到插件：${id}\n`, `Plugin not found: ${id}\n`)));
+      return true;
+    }
+    const confirmed = await selectTerminalOption(localize(language,
+      `撤销插件 ${plugin.name} 的授权？其渠道、MCP 工具和 Skills 贡献会立即停止加载；插件文件和用户数据保留，之后可重新 /plugin approve。`,
+      `Revoke the approval of plugin ${plugin.name}? Its provider, MCP tool and skill contributions stop loading immediately; plugin files and user data are kept, and /plugin approve can authorize it again.`), [
+      { label: localize(language, "撤销授权", "Revoke approval"), value: true },
+      { label: localize(language, "取消", "Cancel"), value: false },
+    ], language);
+    if (!confirmed) {
+      console.log(chalk.dim(localize(language, "已取消撤销。\n", "Revocation cancelled.\n")));
+      return true;
+    }
+    try {
+      const revoked = await pluginRegistry.revoke(id);
+      const loadErrors = await applyApprovedPlugins(true);
+      if (!revoked) console.log(chalk.dim(localize(language, `插件 ${id} 没有已记录的授权。\n`, `Plugin ${id} had no recorded approval.\n`)));
+      else console.log(chalk.green(localize(language, `插件 ${id} 的授权已撤销，其贡献已卸载。\n`, `The approval of plugin ${id} was revoked and its contributions were unloaded.\n`)));
+      if (loadErrors.length) console.log(chalk.yellow(`${localize(language, "部分贡献重新加载失败", "Some contributions failed to reload")}:\n${loadErrors.map((error) => `  - ${error}`).join("\n")}\n`));
+    } catch (error) { console.log(chalk.red(`${describeFailure(localize(language, "插件授权撤销失败", "Could not revoke plugin approval"), error, language)}\n`)); }
+    return true;
+  }
   if (task === "/plugin inspect" || task.startsWith("/plugin inspect ")) {
     const id = task.slice("/plugin inspect".length).trim();
     if (!id) {
