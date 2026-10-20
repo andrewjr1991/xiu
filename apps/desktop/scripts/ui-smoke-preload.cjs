@@ -63,6 +63,7 @@ const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, 
   { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { source: "environment", configured: true, editable: false }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] } } });
 
+const skillList = [{ name: "fixture-skill", description: "Local fixture", scope: "global", permissions: ["instructions:load"], warnings: [], removable: true }, { name: "project-skill", description: "Project fixture", scope: "project", permissions: ["instructions:load"], warnings: [], removable: false }];
 const plugins = [{ id: "acme.fixture", name: "Fixture Plugin", version: "1.2.0", scope: "project", state: "ready", active: false, fingerprint: "d".repeat(64), permissions: ["instructions:load", "workspace:read"], contributions: [{ kind: "skills", count: 1 }, { kind: "tools", count: 1 }], integrity: "verified", signature: "unsigned", policy: "not-evaluated", policyProblems: [], problems: [] }];
 const bridge = {
   computerUse: async request => {
@@ -80,9 +81,11 @@ const bridge = {
   browser: async (request) => { calls.push(`browser:${request.action}`); if (request.action === "layout") calls.push(`browser:visible:${request.visible}`); return { url: request.action === "navigate" ? request.url : "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; },
   onBrowserState: (listener) => { browserListeners.add(listener); return () => browserListeners.delete(listener); },
   mcpSnapshot: async () => mcpView(),
-  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: managedWeb ? "https://search.jingran.vip" : "https://search.example.test", managed: managedWeb }, skills: [{ name: "fixture-skill", description: "Local fixture", scope: "global", permissions: ["instructions:load"], warnings: [] }] }),
+  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: managedWeb ? "https://search.jingran.vip" : "https://search.example.test", managed: managedWeb }, skills: skillList.map((skill) => ({ ...skill })) }),
   changeManagement: async (request) => {
     calls.push(`management:${request.action}`);
+    if (request.action === "skill-install" && request.replace === true) calls.push("management:skill-install:replace");
+    if (request.action === "skill-uninstall") { if (request.confirmed !== true) throw new Error("bad skill confirmation"); const index = skillList.findIndex((skill) => skill.name === request.name); if (index < 0) throw new Error("unknown fixture skill"); skillList.splice(index, 1); calls.push(`management:skill-uninstall:${request.name}`); }
     if (request.action === "web") {
       if (request.mode === "managed" && (request.endpoint !== "https://search.jingran.vip" || request.provider !== "searxng" || request.apiKeyEnv)) throw new Error("Invalid managed search request");
       managedWeb = request.mode === "managed";
@@ -101,7 +104,8 @@ const bridge = {
     calls.push(`plugin:${request.action}:${request.id}`);
     approvalMode = "ask"; return runtime();
   },
-  prepareSkillInstallation: async (kind) => { calls.push(`skill-prepare:${kind}`); return { revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", skills: [{ name: "new-fixture", permissions: ["instructions:load"] }] }; },
+  prepareSkillInstallation: async (kind) => { calls.push(`skill-prepare:${kind}`); return { revision: "fixture-revision", token: "fixture-preview", digest: "a".repeat(64), expiresAt: "2099-01-01T00:00:00Z", remote: false, skills: [{ name: "new-fixture", permissions: ["instructions:load"], warnings: [], replacing: false, added: [] }] }; },
+  prepareRemoteSkillInstallation: async (url) => { if (!/^https:\/\//.test(url)) throw new Error("bad skill url"); calls.push("skill-prepare:remote"); return { revision: "fixture-revision", token: "fixture-remote-preview", digest: "b".repeat(64), expiresAt: "2099-01-01T00:00:00Z", remote: true, skills: [{ name: "fixture-skill", permissions: ["instructions:load", "workspace:read"], warnings: [], replacing: true, added: ["workspace:read"] }] }; },
   cancelSkillInstallation: async () => { calls.push("skill:cancel"); },
   taskDiagnostics: async () => ({ report: "本机执行报告 fixture", diagnostics: "本机诊断 fixture" }),
   approveMcp: async ({ name, fingerprint, confirmed }) => { const server=mcp.servers.find(s=>s.name===name); if (!confirmed || fingerprint !== server?.fingerprint) throw new Error("bad confirmation"); calls.push(`mcp:approve:${name}`); server.approved=true; server.added=[]; server.state="disconnected"; return mcpView(); },

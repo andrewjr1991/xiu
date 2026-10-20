@@ -212,10 +212,12 @@ const argumentSchemas: Record<string, Parser[]> = {
   [desktopChannels.providerSnapshot]: NONE,
   [desktopChannels.managementSnapshot]: NONE,
   [desktopChannels.skillPrepare]: [optional(literal("directory", "file"))],
+  [desktopChannels.skillPrepareRemote]: [object({ url: string(URL) })],
   [desktopChannels.skillCancel]: NONE,
   [desktopChannels.taskDiagnostics]: NONE,
   [desktopChannels.managementChange]: [tagged("action", {
-    "skill-install": { revision: id, token: string(SHORT), confirmed },
+    "skill-install": { revision: id, token: string(SHORT), confirmed, replace: optional(confirmed) },
+    "skill-uninstall": { revision: id, name: string(ID), confirmed },
     routing: { revision: id, enabled: boolean },
     stage: { revision: id, phase: literal(...PROVIDER_ROUTING_PHASES), providerId: optional(id) },
     fallback: { revision: id, providerId: id, chain: array(id, 32) },

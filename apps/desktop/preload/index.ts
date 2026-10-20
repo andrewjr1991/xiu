@@ -54,6 +54,7 @@ const bridge: XiuDesktopBridge = Object.freeze({
   mcpSnapshot: () => ipcRenderer.invoke(desktopChannels.mcpSnapshot),
   managementSnapshot: () => ipcRenderer.invoke(desktopChannels.managementSnapshot),
   prepareSkillInstallation: (sourceKind?: "directory" | "file") => ipcRenderer.invoke(desktopChannels.skillPrepare, sourceKind),
+  prepareRemoteSkillInstallation: (url: string) => ipcRenderer.invoke(desktopChannels.skillPrepareRemote, { url }),
   cancelSkillInstallation: () => ipcRenderer.invoke(desktopChannels.skillCancel),
   changeManagement: (request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest) => ipcRenderer.invoke(desktopChannels.managementChange, request),
   pluginSnapshot: () => ipcRenderer.invoke(desktopChannels.pluginSnapshot),

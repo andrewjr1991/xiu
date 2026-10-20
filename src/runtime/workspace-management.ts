@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { stageLocalSkillPackage } from "../skills.js";
+import { cloneSkillRepository, stageLocalSkillPackage } from "../skills.js";
 import type { ProviderRegistry } from "../provider-registry.js";
 import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "../provider-routing.js";
 import { SettingsStore, XIU_BETA_SEARCH_AUTH_ENDPOINT, XIU_BETA_SEARXNG_ENDPOINT } from "../settings.js";
@@ -15,10 +15,12 @@ export interface WorkspaceManagementSnapshot {
   providers: Array<{ id: string; name: string; fallback: string[] }>;
   routing: ProviderRoutingPolicy;
   web: { enabled: boolean; provider?: string; endpoint?: string; apiKeyEnv?: string; managed: boolean; local: boolean };
-  skills: Array<{ name: string; description: string; scope: string; permissions: string[]; warnings: string[] }>;
+  /** `removable` marks global skills Xiu installed under ~/.xiu/skills; other scopes are not managed here. */
+  skills: Array<{ name: string; description: string; scope: string; permissions: string[]; warnings: string[]; removable: boolean }>;
 }
 export type WorkspaceManagementRequest =
-  | { action: "skill-install"; revision: string; token: string; confirmed: true }
+  | { action: "skill-install"; revision: string; token: string; confirmed: true; replace?: true }
+  | { action: "skill-uninstall"; revision: string; name: string; confirmed: true }
   | { action: "routing"; revision: string; enabled: boolean }
   | { action: "stage"; revision: string; phase: ProviderRoutingPhase; providerId?: string }
   | { action: "fallback"; revision: string; providerId: string; chain: string[] }
@@ -26,7 +28,7 @@ export type WorkspaceManagementRequest =
 
 /** Only explicit non-secret configuration and bounded summaries cross the bridge. */
 export class WorkspaceManagementService {
-  private pending?: { root: string; packageRoot: string; digest: string; token: string; expiresAt: number; revision: string };
+  private pending?: { root: string; packageRoot: string; digest: string; token: string; expiresAt: number; revision: string; replacing: string[] };
   private closed = false;
   private previewGeneration = 0;
   constructor(private readonly registry: ProviderRegistry, private readonly skills: SkillRegistry,
@@ -68,6 +70,12 @@ export class WorkspaceManagementService {
 
   async close(): Promise<void> { this.closed = true; await this.cancelSkillPreview(); }
 
+  /**
+   * Stages a local package (directory, SKILL.md or ZIP) or a shallow clone of an HTTPS Git repository
+   * into a private temporary copy and reports what installing it would do. Nothing is executed and
+   * nothing is installed; a preview that would replace an installed skill says so per skill, and the
+   * confirmation must then carry `replace: true`.
+   */
   async prepareSkill(source: string) {
     if (this.closed) throw new Error("Management service closed.");
     await this.cancelSkillPreview();
@@ -76,17 +84,22 @@ export class WorkspaceManagementService {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-preview-"));
     const packageRoot = path.join(root, "package");
     try {
-      const skills = await stageLocalSkillPackage(source, packageRoot);
-      for (const skill of skills) {
-        try { await fs.lstat(path.join(this.skills.globalDirectory(), skill.name)); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-        throw new Error("A skill already exists. Replacement requires a separate workflow.");
-      }
+      let stageSource = source;
+      if (/^https:\/\//i.test(source.trim())) {
+        const checkout = path.join(root, "checkout");
+        await cloneSkillRepository(source, checkout);
+        if (this.closed || generation !== this.previewGeneration) throw new Error("Skill preview cancelled.");
+        stageSource = checkout;
+      } else if (/^[a-z]+:\/\//i.test(source.trim())) throw new Error("Remote skill sources must use HTTPS Git URLs");
+      const staged = await stageLocalSkillPackage(stageSource, packageRoot);
+      if (stageSource !== source) await fs.rm(stageSource, { recursive: true, force: true });
+      const details = await this.skills.describeInstall(staged);
+      const skills = staged.map((skill, index) => ({ ...skill, replacing: details[index]!.replacing, added: details[index]!.added }));
       const digest = await this.digest(packageRoot);
       if (this.closed || generation !== this.previewGeneration) throw new Error("Skill preview cancelled.");
       const token = randomUUID(); const expiresAt = Date.now() + 5 * 60_000;
-      this.pending = { root, packageRoot, digest, token, expiresAt, revision };
-      return { revision, token, digest, expiresAt: new Date(expiresAt).toISOString(),
+      this.pending = { root, packageRoot, digest, token, expiresAt, revision, replacing: skills.filter((skill) => skill.replacing).map((skill) => skill.name) };
+      return { revision, token, digest, expiresAt: new Date(expiresAt).toISOString(), remote: stageSource !== source,
         skills: skills.map((skill) => ({ ...skill, name: this.metadata(skill.name, 160) })) };
     } catch (error) { await fs.rm(root, { recursive: true, force: true }); throw error; }
   }
@@ -106,7 +119,7 @@ export class WorkspaceManagementService {
         local: config.webSearch?.provider === "free-search" },
       skills: this.skills.list().slice(0, 300).map((item) => ({ name: clean(item.name, 160),
         description: clean(item.description, 500), scope: item.scope,
-        permissions: item.permissions, warnings: item.permissionWarnings.map((value) => clean(value, 160)) })),
+        permissions: item.permissions, warnings: item.permissionWarnings.map((value) => clean(value, 160)), removable: item.scope === "global" })),
     };
   }
 
@@ -124,9 +137,19 @@ export class WorkspaceManagementService {
         try {
           if (request.confirmed !== true || request.token !== pending.token || request.revision !== pending.revision || Date.now() >= pending.expiresAt
             || await this.digest(pending.packageRoot) !== pending.digest) throw new Error("Skill preview changed or expired.");
-          await this.skills.install(pending.packageRoot, false, async () => true);
+          if (pending.replacing.length && request.replace !== true) throw new Error("Replacing an installed skill requires explicit confirmation.");
+          if (request.replace !== undefined && request.replace !== true) throw new Error("Invalid replacement flag.");
+          // `replace` only unlocks the skills the preview named; a skill installed since the preview still fails closed.
+          await this.skills.install(pending.packageRoot, pending.replacing.length > 0 && request.replace === true, async ({ manifest, replacing }) => replacing ? pending.replacing.includes(manifest.name) : true);
           return;
         } finally { await fs.rm(pending.root, { recursive: true, force: true }); }
+      }
+      case "skill-uninstall": {
+        if (request.confirmed !== true || typeof request.name !== "string" || !request.name) throw new Error("Skill removal requires confirmation.");
+        const skill = this.skills.list().find((item) => item.name === request.name);
+        if (!skill || skill.scope !== "global") throw new Error("Only global skills installed by Xiu can be removed here.");
+        await this.skills.uninstall(request.name);
+        return;
       }
       case "routing":
         if (typeof request.enabled !== "boolean") throw new Error("Invalid routing selection.");

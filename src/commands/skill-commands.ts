@@ -40,6 +40,34 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
     }
     return true;
   }
+  if (task === "/skills uninstall" || task.startsWith("/skills uninstall ")) {
+    const name = task.slice("/skills uninstall".length).trim();
+    if (!name) {
+      console.log(chalk.yellow(localize(language, "用法：/skills uninstall <全局技能名>\n", "Usage: /skills uninstall <global-skill-name>\n")));
+      return true;
+    }
+    const skills = await skillRegistry.refresh(true);
+    const skill = skills.find((item) => item.name === name && item.scope === "global");
+    if (!skill) {
+      console.log(chalk.yellow(localize(language, `没有名为 ${name} 的已安装全局技能；项目、兼容目录和插件提供的技能不能在此卸载。\n`, `No installed global skill named ${name}; project, compatible-directory and plugin skills cannot be uninstalled here.\n`)));
+      return true;
+    }
+    const confirmed = await selectTerminalOption(localize(language,
+      `卸载技能 ${skill.name}？技能目录会移入可恢复备份（~/.xiu/skill-backups），其权限记录同时撤销。`,
+      `Uninstall skill ${skill.name}? Its directory moves to a recoverable backup (~/.xiu/skill-backups) and its permission grant is revoked.`), [
+      { label: localize(language, "卸载并保留备份", "Uninstall and keep backup"), value: true },
+      { label: localize(language, "取消", "Cancel"), value: false },
+    ], language);
+    if (!confirmed) { console.log(chalk.dim(localize(language, "已取消技能卸载。\n", "Skill uninstall cancelled.\n"))); return true; }
+    try {
+      const result = await skillRegistry.uninstall(skill.name);
+      agent.reloadInstructions();
+      console.log(chalk.green(localize(language, `已卸载技能 ${result.name}，备份于 ${result.backup}。\n`, `Uninstalled skill ${result.name}; backup at ${result.backup}.\n`)));
+    } catch (error) {
+      console.error(chalk.red(`${describeFailure(localize(language, "技能卸载失败", "Skill uninstall failed"), error, language)}\n`));
+    }
+    return true;
+  }
   if (task === "/skills install" || task.startsWith("/skills install ")) {
     const source = task.slice("/skills install ".length).trim();
     if (!source) {

@@ -212,6 +212,19 @@ app.whenReady().then(async () => {
       await settleLayout(window);
       await fs.promises.writeFile(path.join(smokeRoot, `skill-import-${label}.png`), (await window.webContents.capturePage()).toPNG());
       await clickText(window, "取消预览", '.management-panel button');
+      await evaluate(window, `(() => { const input = document.querySelector('.management-panel [aria-label="技能仓库地址"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'https://example.test/skills.git'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+      await clickText(window, "从 HTTPS Git 预览", '.management-panel button');
+      await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能安装预览\"]')) && document.querySelector('[aria-label=\"技能安装预览\"]').textContent.includes('替换已安装版本') && document.querySelector('[aria-label=\"技能安装预览\"]').textContent.includes('新增权限：workspace:read')", "remote skill preview shows replacement and added permissions");
+      await clickText(window, "确认替换并接受所列声明权限", '.management-panel button');
+      await waitFor(window, "window.xiuSmoke.calls().includes('management:skill-install:replace') && !document.querySelector('[aria-label=\"技能安装预览\"]')", "replacement sent with explicit replace flag");
+      if (await evaluate(window, "[...document.querySelectorAll('.skill-entry summary')].some(el => el.textContent.includes('fixture-skill'))")) {
+        await clickText(window, "fixture-skill", '.skill-entry summary');
+        await clickText(window, "卸载", '.skill-entry button');
+        await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能卸载确认\"]'))", "skill uninstall confirmation");
+        await clickText(window, "确认卸载并保留备份", '.management-panel button');
+        await waitFor(window, "window.xiuSmoke.calls().includes('management:skill-uninstall:fixture-skill') && ![...document.querySelectorAll('.skill-entry summary')].some(el => el.textContent.includes('fixture-skill'))", "global skill uninstalled through confirmation");
+        assert(await evaluate(window, "[...document.querySelectorAll('.skill-entry')].some(el => el.textContent.includes('project-skill') && !el.textContent.includes('卸载'))"), "Project skills must not offer uninstall.");
+      }
       await clickText(window, "插件", '.management-panel nav button');
       await waitFor(window, "[...document.querySelectorAll('.plugin-entry summary')].some(el => el.textContent.includes('Fixture Plugin') && el.textContent.includes('未授权'))", "plugin inventory listed");
       await clickText(window, "Fixture Plugin", '.plugin-entry summary');

@@ -475,6 +475,12 @@ function registerIpc(): void {
       return result.canceled ? undefined : result.filePaths[0];
     });
   }));
+  handleIpc(desktopChannels.skillPrepareRemote, async (event, request: { url: string }) => serializeWriterStart(async () => {
+    assertTrustedSender(event);
+    const workspace = controller.trustedWorkspacePath();
+    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端。");
+    return taskController.prepareSkillInstallation(workspace, async () => request.url, "remote");
+  }));
   handleIpc(desktopChannels.skillCancel, async (event) => {
     assertTrustedSender(event);
     return taskController.cancelSkillInstallation(controller.trustedWorkspacePath());
