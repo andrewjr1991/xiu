@@ -19,6 +19,13 @@ const commandCases: Array<[string, "read" | "execute" | "dangerous"]> = [
  ["Get-Content a.txt | node evil.js","execute"],["Get-Content $(node evil.js)","execute"],["(Get-ChildItem x).Delete()","execute"],
  ["Get-ChildItem | Where-Object { $_.Delete() }","execute"],["Get-Content a.txt | Measure-Object","read"],["Get-Content a.txt\nnode evil","execute"],
  ["echo \\'; rm x","dangerous"],
+ // Quoting and naming tricks that only hide the program from inspection; auto-approval modes skip everything but "dangerous".
+ ["$'rm' -rf build","dangerous"],["$'\\x72m' -rf build","dangerous"],["rm${IFS}-rf${IFS}build","dangerous"],["rm$IFS-rf$IFS build","dangerous"],
+ ["r\\m -rf build","dangerous"],['"r"m -rf build',"dangerous"],["/bin/r? -rf build","dangerous"],["r[m] -rf build","dangerous"],["sudo r\\m -rf x","dangerous"],
+ ["busybox rm -rf build","dangerous"],["echo x | busybox sh","dangerous"],["eval 'rm -rf x'","dangerous"],["eval rm -rf x","dangerous"],
+ // Inspectable commands keep their class: a script file, a sourced file, a variable assignment and globbed arguments are not obfuscation.
+ ["sh build.sh","execute"],["source ~/.nvm/nvm.sh && nvm use 20","execute"],["$files = Get-ChildItem","execute"],["x=rm; $x -rf y","execute"],
+ ["timeout 5 ls *.txt","execute"],["Get-ChildItem *.txt","read"],[`git commit -m "it''s $IFS"`,"execute"],["$'r''m' -rf build","dangerous"],
 ];
 
 for (const [command, expected] of commandCases) {
@@ -36,6 +43,18 @@ test("direct processes inspect wrappers, inline shell scripts and git output opt
   assert.equal(classifyProcess("git", ["-c", "core.fsmonitor=x", "status"]), "execute");
   assert.equal(classifyProcess("git", ["status"]), "read");
   assert.equal(classifyProcess("node", ["--version"]), "read");
+  assert.equal(classifyProcess("busybox", ["rm", "-rf", "x"]), "dangerous");
+  assert.equal(classifyProcess("eval", ["rm", "-rf", "x"]), "dangerous");
+  assert.equal(classifyProcess("r\\m", ["-rf", "x"]), "dangerous");
+  assert.equal(classifyProcess("/bin/r?", ["-rf", "x"]), "dangerous");
+});
+
+test("command words join adjacent quoted and unquoted parts the way a shell does", async () => {
+  const { commandTokens } = await import("../src/command-risk.js");
+  assert.deepEqual(commandTokens('"r"m -rf "a b"c'), ["rm", "-rf", "a bc"]);
+  assert.deepEqual(commandTokens("powershell -Command \"(Get-Content 'x' | Measure-Object).Count\""), ["powershell", "-Command", "(Get-Content 'x' | Measure-Object).Count"]);
+  assert.deepEqual(commandTokens("echo 'it''s' \"a`\"b\""), ["echo", "it''s", "a`\"b"]);
+  assert.deepEqual(commandTokens('echo "unterminated x'), ["echo", '"unterminated x']);
 });
 
 test("deeply nested wrappers fail closed without exponential work", () => {
