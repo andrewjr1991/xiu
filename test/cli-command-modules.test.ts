@@ -3,6 +3,7 @@ import test, { mock } from "node:test";
 import { TaskInputQueue } from "../src/task-queue.js";
 import { handleBackgroundCommand, type BackgroundCommandContext } from "../src/commands/background-commands.js";
 import { handleCredentialCommand, type CredentialCommandContext } from "../src/commands/credential-commands.js";
+import { handleInspectCommand, type InspectCommandContext } from "../src/commands/inspect-commands.js";
 import { handleMcpCommand, type McpCommandContext } from "../src/commands/mcp-commands.js";
 import { handlePluginCommand, type PluginCommandContext } from "../src/commands/plugin-commands.js";
 import { handleProviderCommand, type ProviderCommandContext } from "../src/commands/provider-commands.js";
@@ -41,6 +42,13 @@ for (const [name, handle] of declining) {
     }
   });
 }
+
+test("inspect command handler declines ordinary tasks and other slash commands", async () => {
+  // `/help` and `/status` belong to this handler, so the shared list above cannot be reused as is.
+  for (const task of ["fix the failing test", "/helpme", "/statusx", "/models", "/modelx", "/detailsx", "/queuex", "/doctorx", "/pluginsx", "/mcpx", "/webx"]) {
+    assert.equal(await handleInspectCommand(task, {} as InspectCommandContext), false, task);
+  }
+});
 
 test("a handled command reports that it consumed the input", async () => {
   const lines: string[] = [];
@@ -297,6 +305,111 @@ test("session, plan and checkpoint commands keep their output and never restore 
     assert.equal(await handleSessionCommand("/rewind", context), true);
     assert.match(logs.at(-1) ?? "", /Restore cancelled\./);
     assert.equal(calls.some((call) => call.startsWith("restore:") || call === "confirm" || call === "index-invalidated"), false);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
+
+test("inspection commands keep their output, read live state and never alter it", async () => {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  const calls: string[] = [];
+  const config = { apiKey: "sk-test", cwd: "/work/demo", provider: "openai", providerId: "office" } as InspectCommandContext["config"];
+  const profile = { id: "office", model: "gpt-4.1" } as InspectCommandContext["startupProfile"];
+  const activityRecords: Array<{ id: string; kind: string; state: string; title: string; description: string; startedAt: string; detail?: string; summary?: string }> = [];
+  let doctorFailure: Error | undefined;
+  const context: InspectCommandContext = {
+    activities: {
+      list: () => activityRecords.map((record) => ({ ...record })) as unknown as ReturnType<InspectCommandContext["activities"]["list"]>,
+      get: (id: string) => { calls.push(`activity:${id}`); return activityRecords.find((record) => record.id === id) as unknown as ReturnType<InspectCommandContext["activities"]["get"]>; },
+    },
+    agent: {
+      status: () => ({
+        sessionId: "ses-1", model: "gpt-4.1-mini", messages: 7,
+        stats: { modelCalls: 3, toolCalls: 5, inputTokens: 1200, outputTokens: 340, estimatedTokens: 2048, compactions: 1, activeMs: 4567 },
+        contextLimit: 100000, contextWindow: 128000, contextWindowSource: "official", contextLimitMode: "auto",
+        index: { mode: "cache", files: 42, truncated: false, analyzedModules: 10, symbols: 300, dependencies: 55, durationMs: 12, dirty: true },
+        planMode: true, outcome: "completed", turn: 2, maxTurns: 40, pendingSteering: 0,
+      }) as unknown as ReturnType<InspectCommandContext["agent"]["status"]>,
+    },
+    background: { list: () => [{ running: true }, { running: false }] as unknown as ReturnType<InspectCommandContext["background"]["list"]> },
+    capabilityProbeSummary: (candidate, model) => `probe ${candidate.id}/${model ?? candidate.model}`,
+    config,
+    coordinator: { list: () => [{ status: "running" }, { status: "completed" }, { status: "failed" }] as unknown as ReturnType<InspectCommandContext["coordinator"]["list"]> },
+    featureNames: (candidate, model) => `features ${candidate.id}/${model ?? candidate.model}`,
+    language: "en-US",
+    mcpManager: {
+      status: () => [{ state: "connected" }, { state: "failed" }] as unknown as ReturnType<InspectCommandContext["mcpManager"]["status"]>,
+      tools: () => [{}, {}, {}] as unknown as ReturnType<InspectCommandContext["mcpManager"]["tools"]>,
+    },
+    providerRegistry: { get: (id: string) => (id === "office" ? profile : undefined) } as unknown as InspectCommandContext["providerRegistry"],
+    settings: {},
+    startupProfile: profile,
+    status: { start: (label: string) => { calls.push(`status-start:${label}`); }, stop: () => { calls.push("status-stop"); } },
+    version: "0.20.14",
+    collectDoctor: async () => {
+      calls.push("doctor");
+      if (doctorFailure) throw doctorFailure;
+      return { version: "0.20.14", generatedAt: "2026-10-20T09:00:00.000Z", status: "pass", sections: [{ id: "installation", titleZh: "安装", titleEn: "Installation", items: [{ id: "version", level: "pass", labelZh: "版本", labelEn: "Version", summaryZh: "0.20.14", summaryEn: "0.20.14" }] }] };
+    },
+  };
+  try {
+    assert.equal(await handleInspectCommand("/model", context), true);
+    assert.match(logs.at(-1) ?? "", /Use \/models to choose a model\. Current provider\/model: office\/gpt-4\.1-mini/);
+    assert.equal(await handleInspectCommand("/model gpt-5", context), true);
+    config.providerId = "lab";
+    assert.equal(await handleInspectCommand("/model", context), true);
+    assert.match(logs.at(-1) ?? "", /lab\/gpt-4\.1-mini/, "/model reads the provider that is current when it runs");
+    config.providerId = "office";
+
+    assert.equal(await handleInspectCommand("/details", context), true);
+    assert.match(logs.at(-1) ?? "", /No tool or Agent activity has been recorded yet\./);
+    activityRecords.push({ id: "act-1", kind: "tool", state: "completed", title: "read_file", description: "src/a.ts", startedAt: "2026-10-20T08:00:00.000Z", detail: "12 lines" });
+    // Without an interactive terminal the activity selector counts as cancelled, so no record is opened.
+    assert.equal(await handleInspectCommand("/details", context), true);
+    assert.equal(calls.some((call) => call.startsWith("activity:")), false);
+
+    for (const word of ["/queue", "/queue add tests", "/clear-queue", "/cancel"]) {
+      assert.equal(await handleInspectCommand(word, context), true, word);
+      assert.ok((logs.at(-1) ?? "").startsWith(`${word.split(" ")[0]} is available while a task is running.`), logs.at(-1));
+    }
+
+    assert.equal(await handleInspectCommand("/status", context), true);
+    const status = logs.at(-1) ?? "";
+    for (const line of [
+      "Session: ses-1", "Provider: office (openai)", "Model: gpt-4.1-mini", "Capabilities: features office/gpt-4.1-mini", "Capability probe: probe office/gpt-4.1-mini",
+      "Language: English", "Plan mode: ON (read-only)", "Last outcome: completed", "Turn: 2/40", "Pending steering: 0", "Messages: 7",
+      "Context estimate: ~2,048 tokens", "Auto compact: 100,000 tokens (automatic)", "Model window: 128,000 tokens (official)", "API tokens: 1,200 in / 340 out",
+      "Calls: 3 model / 5 tool", "Compactions: 1", "Active time: 4.6s", "Latest task diagnostics: none",
+      "Index: 42 files · 10 analyzed modules · 300 symbols · 55 dependencies · cache reused · 12ms · refresh pending",
+      "MCP: 1 servers / 3 tools", "Agents: 1 running / 3 saved runs", "Background: 1 running", "Activities: 1 recorded (/details)",
+    ]) assert.ok(status.includes(line), `status line missing: ${line}\n${status}`);
+    assert.equal(await handleInspectCommand("/status", { ...context, language: "zh-CN" }), true);
+    assert.match(logs.at(-1) ?? "", /规划模式：开启（只读）/);
+    assert.match(logs.at(-1) ?? "", /索引：42 个文件 · 10 个已分析模块 · 300 个符号 · 55 条依赖 · 缓存复用 · 12 毫秒 · 等待刷新/);
+
+    assert.equal(await handleInspectCommand("/doctor", context), true);
+    assert.deepEqual(calls.filter((call) => call.startsWith("status") || call === "doctor"), ["status-start:Collecting diagnostics", "doctor", "status-stop"]);
+    assert.match(logs.at(-1) ?? "", /Installation/);
+    doctorFailure = new Error("registry unreadable");
+    assert.equal(await handleInspectCommand("/doctor", context), true);
+    assert.match(errors.at(-1) ?? "", /Could not build the diagnostics report/);
+    assert.match(errors.at(-1) ?? "", /registry unreadable/);
+    assert.equal(calls.at(-1), "status-stop", "the status line stops after a doctor failure");
+    doctorFailure = undefined;
+
+    assert.equal(await handleInspectCommand("/help", context), true);
+    assert.match(logs.at(-1) ?? "", /\/status/);
+    assert.equal(await handleInspectCommand("/help doctor", context), true);
+    assert.match(logs.at(-1) ?? "", /\/doctor/);
+    assert.doesNotMatch(logs.at(-1) ?? "", /\/rewind/);
+    assert.equal(await handleInspectCommand("/help nosuchcommand", context), true);
+    assert.match(logs.at(-1) ?? "", /nosuchcommand/);
   } finally {
     console.log = originalLog;
     console.error = originalError;
