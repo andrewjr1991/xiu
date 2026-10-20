@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import chalk from "chalk";
 import { Command } from "commander";
-import { Agent, BackgroundApprovalRequiredError } from "./agent.js";
+import { Agent } from "./agent.js";
 import { createProviderPolicy } from "./runtime/provider-policy.js";
 import { BackgroundManager } from "./background.js";
 import { ActivityLog } from "./activity.js";
@@ -56,7 +56,7 @@ import { builtinTools, createBackgroundTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
 import { formatCredentialBackendStatus } from "./status-labels.js";
-import type { AgentTool, ApprovalRequest, ModelProvider } from "./types.js";
+import type { AgentTool, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
 import { recoveryContinuation, TaskRunJournal, type InterruptedTaskRun } from "./task-run.js";
@@ -68,6 +68,7 @@ import { XiuRuntime } from "./runtime/xiu-runtime.js";
 import { askQuestion, InputEndedError } from "./terminal-prompts.js";
 import { installBrokenPipeHandling } from "./broken-pipe.js";
 import { installTerminalSignals } from "./terminal-signals.js";
+import { createTerminalApprovals } from "./terminal-approvals.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
 import { handleAgentCommand } from "./commands/agent-commands.js";
@@ -675,66 +676,19 @@ async function main(): Promise<void> {
       if (runningTaskView) runningTaskView.setPhase(localize(language, "正在处理回复", "Processing response"));
       else status.stop();
     };
-    let approvalQueue = Promise.resolve();
-    let activeApproval = Promise.resolve();
-    const sessionApprovalScopes = new Set<string>();
-    const approveRequest = async (request: ApprovalRequest): Promise<boolean> => {
-      let release!: () => void;
-      const previous = approvalQueue;
-      approvalQueue = new Promise<void>((resolve) => { release = resolve; });
-      await previous;
-      let finishActiveApproval!: () => void;
-      let approvalDecision: boolean | undefined;
-      try {
-        if (config.autoApprove && request.risk !== "dangerous") {
-          request.decisionSource = "automatic";
-          approvalDecision = true;
-          return approvalDecision;
-        }
-        if (request.sessionScope && sessionApprovalScopes.has(request.sessionScope)) {
-          request.decisionSource = "remembered";
-          approvalDecision = true;
-          return approvalDecision;
-        }
-        request.decisionSource = "prompted";
-        if (!process.stdin.isTTY) {
-          // Nothing can answer a prompt here, so deny without tearing down the live task view: the
-          // denial and the tool's start line stay visible in the piped output.
-          if (config.backgroundMode) throw new BackgroundApprovalRequiredError(request.description);
-          approvalDecision = false;
-          return approvalDecision;
-        }
-        activeApproval = new Promise<void>((resolve) => { finishActiveApproval = resolve; });
-        status.stop();
+    // Tool approvals: -y, remembered session scopes, one prompt at a time, every decision in the local audit ledger;
+    // see terminal-approvals.ts.
+    const approvals = createTerminalApprovals({
+      config,
+      language: () => language,
+      securityAudit,
+      status,
+      beforePrompt: () => {
         activeQueuedInputController?.abort();
         runningTaskView?.discard();
-        if (request.preview) console.log(`${chalk.dim(localize(language, "拟议修改：", "Proposed change:"))}\n${request.preview}\n`);
-        const options = [
-          { label: localize(language, "否，拒绝", "No, deny"), description: localize(language, "不执行此操作", "Do not run this operation"), value: "deny" as const },
-          { label: localize(language, "是，仅允许一次", "Yes, allow once"), description: request.description, value: "once" as const },
-          ...(request.sessionScope ? [{
-            label: localize(language, "是，本次会话始终允许", "Yes, always allow this session"),
-            description: localize(language, "仅记住这一类操作；重新启动 Xiu 后失效", "Remember only this operation family until Xiu exits"),
-            value: "session" as const,
-          }] : []),
-        ];
-        const selected = await selectTerminalOption(localize(language, `${request.risk.toUpperCase()} 审批：允许 Xiu ${request.description}？`, `${request.risk.toUpperCase()} approval: allow Xiu to ${request.description}?`), options, language);
-        if (selected === "session" && request.sessionScope) sessionApprovalScopes.add(request.sessionScope);
-        approvalDecision = selected === "once" || selected === "session";
-        return approvalDecision;
-      } finally {
-        await securityAudit.record({
-          category: "approval",
-          action: "tool-approval",
-          outcome: approvalDecision ? "allowed" : "denied",
-          risk: request.risk,
-          source: request.decisionSource ?? "prompted",
-          scope: request.sessionScope ?? "unscoped",
-        });
-        finishActiveApproval?.();
-        release();
-      }
-    };
+      },
+    });
+    const approveRequest = approvals.approve;
 
     const resolveProviderFailover = async (
       request: ProviderFailoverRequest,
@@ -1319,7 +1273,7 @@ async function main(): Promise<void> {
           const liveChanges = view.drainWorkspaceChanges();
           replayChanges.push(...liveChanges);
           await draftStore.flush();
-          await activeApproval;
+          await approvals.activePrompt();
           if (cancelledFromKeyboard) {
             console.log(chalk.yellow(localize(language, "正在取消当前任务，排队任务会保留。\n", "Cancelling current task. Queued follow-ups are preserved.\n")));
             break;
