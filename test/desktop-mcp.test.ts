@@ -225,7 +225,7 @@ class FakeCredentialEntry {
   deleteCredential(): boolean { return FakeCredentialEntry.values.delete(this.key); }
 }
 
-async function oauthSetup(t: import("node:test").TestContext, options: { systemAvailable?: boolean; expiresAt?: number } = {}) {
+async function migrationFixture(t: import("node:test").TestContext, options: { systemAvailable?: boolean; expiresAt?: number } = {}) {
   FakeCredentialEntry.values.clear();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-mcp-credentials-"));
   const file = path.join(root, "user-mcp.json");
@@ -250,7 +250,7 @@ async function oauthSetup(t: import("node:test").TestContext, options: { systemA
 }
 
 test("desktop MCP shows token-free OAuth and credential state and runs migrate, cleanup and rollback with the CLI's confirmations", async (t) => {
-  const { root, service, audits, server } = await oauthSetup(t);
+  const { root, service, audits, server } = await migrationFixture(t);
   const first = await server();
   assert.equal(first.oauth, true);
   assert.deepEqual({ ...first.auth, expiresAt: undefined }, { authenticated: true, expired: false, issuer: "https://login.example.com/", scopes: ["read", "write"], expiresAt: undefined });
@@ -292,7 +292,7 @@ test("desktop MCP shows token-free OAuth and credential state and runs migrate, 
 });
 
 test("desktop MCP credential migration fails closed without a system backend and reports expiry without tokens", async (t) => {
-  const unavailable = await oauthSetup(t, { systemAvailable: false, expiresAt: Date.now() - 1_000 });
+  const unavailable = await migrationFixture(t, { systemAvailable: false, expiresAt: Date.now() - 1_000 });
   const entry = await unavailable.server();
   assert.deepEqual([entry.auth?.authenticated, entry.auth?.expired], [true, true]);
   assert.equal(entry.credentials?.migratable, true);
