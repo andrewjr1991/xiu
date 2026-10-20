@@ -28,9 +28,9 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
   try {
     await manager.approvePermissions("test");
     const statuses = await manager.start();
-    assert.deepEqual(statuses, [{ name: "test", transport: "stdio", state: "connected", tools: 2 }]);
+    assert.deepEqual(statuses, [{ name: "test", transport: "stdio", state: "connected", tools: 3 }]);
     const tools = manager.tools();
-    assert.deepEqual(tools.map((tool) => tool.name), ["mcp__test__echo", "mcp__test__change"]);
+    assert.deepEqual(tools.map((tool) => tool.name), ["mcp__test__echo", "mcp__test__change", "mcp__test__sample"]);
     assert.equal(tools[0]?.risk, "read");
     assert.equal(tools[0]?.replaySafety, "safe");
     assert.equal(tools[0]?.maxAttempts, 3);
@@ -44,8 +44,8 @@ test("MCP manager discovers namespaced tools and calls a stdio server", async ()
     const pending = tools[0]!.execute({ message: "slow" }, { cwd: workspace, approve: async () => true, signal: controller.signal });
     controller.abort();
     await assert.rejects(pending, /cancelled/);
-    assert.match(manager.summary(), /test: connected \(2 tools\)/);
-    assert.match(manager.summary("zh-CN"), /test：已连接（2 个工具）/);
+    assert.match(manager.summary(), /test: connected \(3 tools\)/);
+    assert.match(manager.summary("zh-CN"), /test：已连接（3 个工具）/);
     const resources = await manager.listResources("test");
     assert.deepEqual(resources.resources.map((resource) => resource.uri), ["test://greeting", "test://second"]);
     assert.deepEqual(resources.templates.map((template) => template.uriTemplate), ["test://docs/{id}"]);
@@ -88,7 +88,7 @@ test("project MCP configuration overrides a global server and can disable it", a
     assert.deepEqual(await manager.start(), []);
     assert.equal(manager.tools().length, 0);
     await manager.approvePermissions("shared", false);
-    assert.deepEqual(await manager.start(false), [{ name: "shared", transport: "stdio", state: "connected", tools: 2 }]);
+    assert.deepEqual(await manager.start(false), [{ name: "shared", transport: "stdio", state: "connected", tools: 3 }]);
   } finally {
     await manager.close();
     await fs.rm(workspace, { recursive: true, force: true });

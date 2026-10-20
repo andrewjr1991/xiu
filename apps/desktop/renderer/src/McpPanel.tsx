@@ -67,7 +67,7 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
     Object.keys(details.toolRisks).length ? `工具风险 ${Object.entries(details.toolRisks).map(([tool, risk]) => `${tool}=${risk}`).join("、")}` : undefined,
     details.changesWorkspace !== undefined ? `改动工作区 ${details.changesWorkspace ? "是" : "否"}` : undefined,
     Object.keys(details.toolChangesWorkspace).length ? `工具改动工作区 ${Object.entries(details.toolChangesWorkspace).map(([tool, flag]) => `${tool}=${flag ? "是" : "否"}`).join("、")}` : undefined,
-    details.permissionsDeclared ? "显式权限声明" : "权限按配置推导",
+    details.permissionsDeclared ? "显式权限声明" : "权限按配置推导", details.sampling ? "允许模型采样（每次请求仍需确认）" : undefined,
     details.oauth ? `OAuth ${details.oauth.registration ?? "auto"}${details.oauth.scopes.length ? ` · scopes ${details.oauth.scopes.join(" ")}` : ""}${details.oauth.clientMetadataUrl ? " · CIMD" : ""}${details.oauth.callbackPort ? " · 固定回调端口" : ""}` : undefined,
   ].filter(Boolean).join(" · ");
   return <div className="dialog-backdrop"><section className="mcp-panel" role="dialog" aria-modal="true" aria-label="MCP 连接与权限">

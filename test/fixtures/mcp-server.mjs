@@ -8,13 +8,40 @@ if (process.env.XIU_TEST_MCP_GBK_ERROR === "1") {
 
 const input = readline.createInterface({ input: process.stdin, terminal: false });
 const pendingTimers = new Map();
+// Server-initiated requests (sampling) awaiting the client's answer, keyed by our request id.
+const pendingSampling = new Map();
+let nextServerId = 1000;
+let earlySampling;
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function sample(params) {
+  const id = nextServerId++;
+  return new Promise((resolve) => {
+    pendingSampling.set(id, resolve);
+    send({ jsonrpc: "2.0", id, method: "sampling/createMessage", params });
+  });
+}
+
+function describe(answer) {
+  if (answer.error) return `sampling-error:${answer.error.code}:${answer.error.message}`;
+  return `sampled:${answer.result?.content?.text ?? JSON.stringify(answer.result)}:${answer.result?.model ?? "?"}:${answer.result?.stopReason ?? "?"}`;
+}
+
 input.on("line", (line) => {
   const message = JSON.parse(line);
+  if (message.id !== undefined && message.method === undefined) {
+    // A response to one of our own requests.
+    const resolve = pendingSampling.get(message.id);
+    if (resolve) { pendingSampling.delete(message.id); resolve(message); }
+    return;
+  }
+  if (message.method === "notifications/initialized" && process.env.XIU_TEST_MCP_SAMPLE_EARLY === "1") {
+    earlySampling = sample({ messages: [{ role: "user", content: { type: "text", text: "early" } }], maxTokens: 16 });
+    return;
+  }
   if (message.method === "initialize") {
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: "2025-06-18",
@@ -25,7 +52,25 @@ input.on("line", (line) => {
     send({ jsonrpc: "2.0", id: message.id, result: { tools: [
       { name: "echo", description: "Echo a message", inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] } },
       { name: "change", description: "Pretend to change something", inputSchema: { type: "object", properties: {} } },
+      { name: "sample", description: "Ask the client model a question", inputSchema: { type: "object", properties: { prompt: { type: "string" }, variant: { type: "string" }, count: { type: "number" } } } },
     ] } });
+  } else if (message.method === "tools/call" && message.params.name === "sample") {
+    const args = message.params.arguments ?? {};
+    const text = (answer) => send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: answer }] } });
+    if (args.variant === "early") { Promise.resolve(earlySampling).then((answer) => text(answer ? describe(answer) : "no-early-request")); return; }
+    const params = args.variant === "context"
+      ? { messages: [{ role: "user", content: { type: "text", text: args.prompt ?? "" } }], includeContext: "thisServer", maxTokens: 64 }
+      : args.variant === "image"
+        ? { messages: [{ role: "user", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }], maxTokens: 64 }
+        : args.variant === "tools"
+          ? { messages: [{ role: "user", content: { type: "text", text: args.prompt ?? "" } }], tools: [{ name: "x", inputSchema: { type: "object" } }], maxTokens: 64 }
+          : { messages: [{ role: "user", content: [{ type: "text", text: args.prompt ?? "" }] }], systemPrompt: "Answer briefly.", maxTokens: 999999, modelPreferences: { hints: [{ name: "any" }] } };
+    const count = Math.max(1, Number(args.count) || 1);
+    (async () => {
+      const answers = [];
+      for (let index = 0; index < count; index += 1) answers.push(describe(await sample(params)));
+      text(answers.join("|"));
+    })();
   } else if (message.method === "tools/call") {
     const respond = () => send({ jsonrpc: "2.0", id: message.id, result: {
       content: [{ type: "text", text: message.params.name === "echo" ? `echo:${message.params.arguments.message}` : "changed" }],

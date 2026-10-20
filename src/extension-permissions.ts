@@ -13,6 +13,7 @@ export const EXTENSION_PERMISSIONS = [
   "external:read",
   "external:write",
   "credentials:access",
+  "model:sampling",
 ] as const;
 
 export type ExtensionPermission = typeof EXTENSION_PERMISSIONS[number];

@@ -39,7 +39,7 @@ test("desktop MCP reads without spawning, explicitly grants exact configuration,
   assert.equal((await service.snapshot()).servers[0]?.state, "disconnected");
   assert.equal(tools().length, 0, "grant is not a connection or tool execution");
   assert.equal((await service.reload()).servers[0]?.state, "connected");
-  assert.equal(tools().length, 2);
+  assert.equal(tools().length, 3);
   assert.equal(await tools()[0]!.execute({ message: "desktop" }, { cwd: root, approve: async () => false }), "echo:desktop");
   await service.close();
   assert.equal(tools().length, 0);
@@ -77,7 +77,7 @@ test("MCP snapshot never exposes config or credentials and failed reload removes
   assert.ok(!JSON.stringify(snapshot).includes(process.execPath));
   await service.approve("test", snapshot.servers[0]!.fingerprint);
   await service.reload();
-  assert.equal(tools().length, 2);
+  assert.equal(tools().length, 3);
   await fs.writeFile(file, "{invalid");
   await assert.rejects(service.reload());
   assert.equal(tools().length, 0);
@@ -178,8 +178,8 @@ test("desktop MCP editor rejects inline credentials and does not export secret-b
   assert.equal(snapshot.servers[0]?.editable, undefined);
   assert.doesNotMatch(JSON.stringify(snapshot), /opaque-canary-value|opaque-env-canary|service.example/);
   // The read-only summary names fields, never values.
-  assert.deepEqual(snapshot.servers[0]?.details, { enabled: true, risk: "execute", env: [], headers: ["Authorization"], cwd: false, toolRisks: { wipe: "dangerous" }, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: true });
-  assert.deepEqual(snapshot.servers[1]?.details, { enabled: true, risk: "execute", args: 1, env: ["PRIVATE_TOKEN"], headers: [], cwd: true, toolRisks: {}, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: false });
+  assert.deepEqual(snapshot.servers[0]?.details, { enabled: true, risk: "execute", env: [], headers: ["Authorization"], cwd: false, toolRisks: { wipe: "dangerous" }, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: true, sampling: false });
+  assert.deepEqual(snapshot.servers[1]?.details, { enabled: true, risk: "execute", args: 1, env: ["PRIVATE_TOKEN"], headers: [], cwd: true, toolRisks: {}, changesWorkspace: undefined, toolChangesWorkspace: {}, permissionsDeclared: false, sampling: false });
   assert.equal(snapshot.servers[1]?.editable, undefined, "env and cwd are advanced fields the basic editor does not expose");
   assert.equal(snapshot.servers[0]?.origin, "user");
   const saved = await service.save({ ...draft, url: "https://safe.example/mcp", bearerTokenEnvironment: "XIU_TEST_BEARER" });

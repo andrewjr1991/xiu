@@ -65,6 +65,8 @@ export interface WorkspaceMcpConfigDetails {
   toolChangesWorkspace: Record<string, boolean>;
   /** The entry declares its own permission list instead of the compatibility derivation. */
   permissionsDeclared: boolean;
+  /** The entry opts into MCP sampling; each request is still confirmed inside a tool call. */
+  sampling: boolean;
   oauth?: { registration?: string; scopes: string[]; clientMetadataUrl: boolean; callbackPort: boolean };
 }
 
@@ -107,7 +109,7 @@ export class WorkspaceMcpService {
         ...(config.url ? {} : { args: config.args?.length ?? 0 }),
         env: Object.keys(config.env ?? {}).slice(0, 64).sort(), headers: Object.keys(config.headers ?? {}).slice(0, 64).sort(), cwd: Boolean(config.cwd),
         toolRisks: Object.fromEntries(Object.entries(config.toolRisks ?? {}).slice(0, 128)), changesWorkspace: config.changesWorkspace,
-        toolChangesWorkspace: Object.fromEntries(Object.entries(config.toolChangesWorkspace ?? {}).slice(0, 128)), permissionsDeclared: config.permissions !== undefined,
+        toolChangesWorkspace: Object.fromEntries(Object.entries(config.toolChangesWorkspace ?? {}).slice(0, 128)), permissionsDeclared: config.permissions !== undefined, sampling: config.sampling === true,
         ...(config.auth ? { oauth: { registration: config.auth.registration, scopes: [...(config.auth.scopes ?? [])].slice(0, 32), clientMetadataUrl: Boolean(config.auth.clientMetadataUrl), callbackPort: config.auth.callbackPort !== undefined } } : {}),
       };
       return {

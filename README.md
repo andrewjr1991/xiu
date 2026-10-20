@@ -161,7 +161,7 @@ CI runs the CLI and desktop jobs on Windows, Ubuntu and macOS, plus Node 22/24 c
 
 - Not a container sandbox: commands run with the current account's permissions, constrained by the approval policy.
 - Checkpoints cover only Xiu's file tools. Arbitrary commands and remote side effects need Git or system-level recovery.
-- MCP Sampling is not implemented. The macOS Keychain and Linux Secret Service backends have only been verified in CI with a fake backend and await real-machine acceptance.
+- MCP Sampling is served only while a tool call of that server is running, only for text, and only after a per-request confirmation; it is off unless a server is configured with `"sampling": true`. The macOS Keychain and Linux Secret Service backends have only been verified in CI with a fake backend and await real-machine acceptance.
 - Multi-agent conflicts are detected and preserved, not resolved automatically.
 - The desktop app is a Windows x64 preview with an unsigned installer. Computer Use does not support high-risk flows such as passwords, payments, deletion or publishing.
 - There is no public evaluation baseline on real models yet.
