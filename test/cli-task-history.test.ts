@@ -119,7 +119,7 @@ test("a finished CLI task leaves a change record that /diff run: and xiu report 
 
   const runs = await app.command("/diff runs");
   assert.match(runs, /#\s+run id\s+started\s+status\s+changed\s+task/);
-  const row = /^1\s+([0-9a-f]{8})\s+\S+\s+(\S+)\s+1\s+write notes$/m.exec(runs);
+  const row = /^1\s+([0-9a-f]{8})\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+(\S+)\s+1\s+write notes$/m.exec(runs);
   assert.ok(row, `run list row missing:\n${runs}`);
   const runPrefix = row[1]!;
   assert.notEqual(row[2], "running");
@@ -139,7 +139,7 @@ test("a finished CLI task leaves a change record that /diff run: and xiu report 
   assert.match(missing, /has no "missing\.txt"; it covers 1 file\(s\)/);
 
   const reports = await app.command("/report runs");
-  assert.match(reports, new RegExp(`^1\\s+${runPrefix}\\s+\\S+\\s+\\S+\\s+write notes$`, "m"));
+  assert.match(reports, new RegExp(`^1\\s+${runPrefix}\\s+\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\s+\\S+\\s+write notes$`, "m"));
   await app.close();
 
   // The record is the same file the desktop reads, under the run id the journal assigned.

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { formatRunChangeList, parseDiffCommand, replayRunChanges } from "../src/commands/diff-commands.js";
+import { terminalDisplayWidth } from "../src/interactive-ui.js";
+import { formatLocalTime } from "../src/local-time.js";
 import { saveTaskChangeHistory } from "../src/task-change-history.js";
 import type { TaskChangeReport } from "../src/task-changes.js";
 import { TASK_RUN_SCHEMA_VERSION, TaskRunJournal, type TaskRunRecord } from "../src/task-run.js";
@@ -50,14 +52,29 @@ test("parseDiffCommand recognizes views, the run list, run selectors with an opt
   assert.deepEqual(parseDiffCommand("/diff all"), { kind: "usage" });
 });
 
+/** The fixture's start time as the list prints it (local time), escaped for a RegExp. */
+function localTime(iso: string): string {
+  return formatLocalTime(iso).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 test("/diff runs lists recent runs newest first with the saved change count or a dash", async () => {
   const f = await fixture();
   const text = await formatRunChangeList(f, "en-US");
   const lines = text.split("\n");
   assert.match(lines[0]!, /^#\s+run id\s+started\s+status\s+changed\s+task/);
-  assert.match(lines[1]!, /^1\s+3f2a9c1e\s+2026-10-19T01:00:00\s+completed\s+2\s+rename the helper/);
-  assert.match(lines[2]!, /^2\s+3f2a0000\s+2026-10-18T01:00:00\s+completed\s+0\s+older task 2/);
-  assert.match(lines[3]!, /^3\s+7b00c0de\s+2026-10-17T01:00:00\s+cancelled\s+-\s+older task 3/);
+  assert.match(lines[1]!, new RegExp(`^1\\s+3f2a9c1e\\s+${localTime("2026-10-19T01:00:00.000Z")}\\s+completed\\s+2\\s+rename the helper`));
+  assert.match(lines[2]!, new RegExp(`^2\\s+3f2a0000\\s+${localTime("2026-10-18T01:00:00.000Z")}\\s+completed\\s+0\\s+older task 2`));
+  assert.match(lines[3]!, new RegExp(`^3\\s+7b00c0de\\s+${localTime("2026-10-17T01:00:00.000Z")}\\s+cancelled\\s+-\\s+older task 3`));
+  assert.doesNotMatch(text, /T01:00:00/, "the start time is local time, not the stored ISO string");
+  // Chinese: the status is a label, and the task column still starts at one display column on every row.
+  const zh = (await formatRunChangeList(f, "zh-CN")).split("\n");
+  assert.match(zh[0]!, /^序号\s+运行 ID\s+开始时间\s+状态\s+改动文件\s+任务/);
+  assert.match(zh[1]!, new RegExp(`^1\\s+3f2a9c1e\\s+${localTime("2026-10-19T01:00:00.000Z")}\\s+已完成\\s+2\\s+rename the helper`));
+  assert.match(zh[3]!, new RegExp(`^3\\s+7b00c0de\\s+${localTime("2026-10-17T01:00:00.000Z")}\\s+已取消\\s+-\\s+older task 3`));
+  const taskColumn = (line: string, task: string) => terminalDisplayWidth(line.slice(0, line.indexOf(task)));
+  assert.equal(taskColumn(zh[1]!, "rename the helper"), taskColumn(zh[3]!, "older task 3"));
+  assert.equal(taskColumn(zh[1]!, "rename the helper"), taskColumn(lines[1]!, "rename the helper"), "both languages use the same columns");
+  assert.equal(taskColumn(zh[0]!, "任务"), taskColumn(zh[1]!, "rename the helper"), "the header lines up with the rows");
   assert.doesNotMatch(text, /sk-diff-secret/);
   assert.match(text, /\/diff run:3f2a9c1e src\/index\.ts/);
 });
@@ -101,7 +118,7 @@ test("a saved change record that cannot be read is told apart from a missing one
   await fs.writeFile(file, JSON.stringify({ schemaVersion: 99, runId: RUN_IDS[2], savedAt: "2026-10-17T01:00:10.000Z", report: {} }));
 
   const list = await formatRunChangeList(f, "en-US");
-  assert.match(list.split("\n")[3]!, /^3\s+7b00c0de\s+2026-10-17T01:00:00\s+cancelled\s+!\s+older task 3/, "an unreadable record shows ! where a missing one shows -");
+  assert.match(list.split("\n")[3]!, new RegExp(`^3\\s+7b00c0de\\s+${localTime("2026-10-17T01:00:00.000Z")}\\s+cancelled\\s+!\\s+older task 3`), "an unreadable record shows ! where a missing one shows -");
   assert.match(list, /"!" a record that exists but cannot be read/);
   assert.match(await formatRunChangeList(f, "zh-CN"), /“!”表示记录存在但无法读取/);
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runReportCommand } from "../src/commands/report-commands.js";
+import { formatLocalTime } from "../src/local-time.js";
 import { SecurityAuditLog } from "../src/security-audit.js";
 import { TASK_RUN_SCHEMA_VERSION, TaskRunJournal, type TaskRunRecord } from "../src/task-run.js";
 
@@ -105,9 +106,13 @@ test("xiu report runs lists recent runs and run:<selector> picks one by index or
   assert.equal(await run(f, ["runs"]), 0);
   const listing = f.out.at(-1)!;
   const rows = listing.split("\n");
-  assert.match(rows[1]!, /^1\s+3f2a9c1e\s+2026-10-19T01:00:00\s+completed\s+update the README/);
-  assert.match(rows[2]!, /^2\s+3f2a0000\s+2026-10-18T01:00:00\s+completed\s+older task 2/);
-  assert.match(rows[3]!, /^3\s+7b00c0de\s+2026-10-17/);
+  const localTime = (iso: string) => formatLocalTime(iso).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(rows[1]!, new RegExp(`^1\\s+3f2a9c1e\\s+${localTime("2026-10-19T01:00:00.000Z")}\\s+completed\\s+update the README`));
+  assert.match(rows[2]!, new RegExp(`^2\\s+3f2a0000\\s+${localTime("2026-10-18T01:00:00.000Z")}\\s+completed\\s+older task 2`));
+  assert.doesNotMatch(listing, /T01:00:00/, "the start time is local time, not the stored ISO string");
+  assert.match(rows[3]!, /^3\s+7b00c0de\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+completed/);
+  assert.equal(await run(f, ["runs"], { language: "zh-CN" }), 0);
+  assert.match(f.out.at(-1)!.split("\n")[1]!, new RegExp(`^1\\s+3f2a9c1e\\s+${localTime("2026-10-19T01:00:00.000Z")}\\s+已完成\\s+update the README`), "the Chinese list labels the status");
   assert.ok(!listing.includes("sk-report-secret"), "the listing shows the stored preview, which is already redacted at write time");
 
   f.out.length = 0;

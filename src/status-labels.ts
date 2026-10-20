@@ -3,6 +3,7 @@ import type { ProjectCheck } from "./commands/check.js";
 import type { ContextWindowSource } from "./context.js";
 import type { CredentialBackendStatus } from "./credential-store.js";
 import { localize, type UiLanguage } from "./i18n.js";
+import type { TaskRunStatus } from "./task-run.js";
 
 /** The values `/status` shows next to its localized labels, in the user's language rather than as the raw enum. */
 export function runOutcomeLabel(outcome: AgentRunOutcome, language: UiLanguage): string {
@@ -17,6 +18,22 @@ export function runOutcomeLabel(outcome: AgentRunOutcome, language: UiLanguage):
     waiting_user: ["等待用户", "waiting for user"],
   };
   return localize(language, ...labels[outcome]);
+}
+
+/** The status column of the run lists (`/report runs`, `xiu report runs`, `/diff runs`), short enough for a 13-column table cell. */
+export function taskRunStatusLabel(status: TaskRunStatus, language: UiLanguage): string {
+  const labels: Record<TaskRunStatus, [string, string]> = {
+    running: ["运行中", "running"],
+    paused: ["已暂停", "paused"],
+    completed: ["已完成", "completed"],
+    failed: ["失败", "failed"],
+    cancelled: ["已取消", "cancelled"],
+    unverified: ["未验证", "unverified"],
+    abandoned: ["已放弃", "abandoned"],
+    waiting_user: ["等待用户", "waiting user"],
+  };
+  const entry = labels[status];
+  return entry ? localize(language, ...entry) : status;
 }
 
 export function contextLimitModeLabel(mode: string, language: UiLanguage): string {
