@@ -1281,7 +1281,7 @@ export class McpManager {
     return result;
   }
 
-  async addUserHttpServer(name: string, url: string, bearerTokenEnvironment?: string, risk: ToolRisk = "execute"): Promise<void> {
+  async addUserHttpServer(name: string, url: string, bearerTokenEnvironment?: string, risk: ToolRisk = "execute", sampling = false): Promise<void> {
     const servers = await readConfig(this.globalConfig);
     if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
     if (bearerTokenEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(bearerTokenEnvironment)) throw new Error("MCP bearer token environment variable name is invalid");
@@ -1290,6 +1290,7 @@ export class McpManager {
       url,
       ...(bearerTokenEnvironment ? { headers: { Authorization: `Bearer \${${bearerTokenEnvironment}}` } } : {}),
       risk,
+      ...(sampling ? { sampling: true } : {}),
     } as McpServerConfig;
     const config = validateServer(name, { ...draft, permissions: inferredMcpPermissions(draft) });
     servers[name] = config;
@@ -1297,13 +1298,31 @@ export class McpManager {
     await this.permissionStore.approve(mcpManifest(name, `user:${name}`, config));
   }
 
-  async addUserOAuthServer(name: string, url: string, auth: McpOAuthConfig, risk: ToolRisk = "execute"): Promise<void> {
+  async addUserOAuthServer(name: string, url: string, auth: McpOAuthConfig, risk: ToolRisk = "execute", sampling = false): Promise<void> {
     const servers = await readConfig(this.globalConfig);
     if (servers[name]) throw new Error(`MCP server ${name} already exists in user configuration`);
-    const draft = { transport: "streamable-http", url, auth, risk } as McpServerConfig;
+    const draft = { transport: "streamable-http", url, auth, risk, ...(sampling ? { sampling: true } : {}) } as McpServerConfig;
     servers[name] = validateServer(name, { ...draft, permissions: inferredMcpPermissions(draft) });
     await this.writeUserConfig(servers);
     await this.permissionStore.approve(mcpManifest(name, `user:${name}`, servers[name]!));
+  }
+
+  /**
+   * Turns `sampling` on or off for a user-level server. The manifest changes either way, so the server stays
+   * disconnected until `/mcp permissions approve` confirms the new fingerprint; nothing is granted here.
+   */
+  async setUserServerSampling(name: string, enabled: boolean): Promise<McpServerConfig> {
+    if (this.pluginServers.has(name)) throw new Error("Plugin MCP configuration is read-only here.");
+    const servers = await readConfig(this.globalConfig);
+    const revision = JSON.stringify(servers);
+    const previous = servers[name];
+    if (!previous) throw new Error(`MCP server ${name} is not in the user configuration`);
+    if (previous.permissions !== undefined) throw new Error(`MCP server ${name} declares its permissions explicitly; edit sampling and model:sampling together in ~/.xiu/mcp.json`);
+    const { sampling: _previousSampling, ...rest } = previous;
+    const next = validateServer(name, { ...rest, ...(enabled ? { sampling: true } : {}) } as McpServerConfig);
+    servers[name] = next;
+    await this.writeUserConfig(servers, revision);
+    return next;
   }
 
   async removeUserServer(name: string): Promise<boolean> {

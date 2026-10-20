@@ -122,6 +122,7 @@ const mcpDraft = object({
   })),
   risk: literal("read", "write", "execute", "dangerous"),
   enabled: optional(boolean),
+  sampling: optional(boolean),
 });
 const mcpTarget = { name: id, fingerprint: string(ID) };
 const computerInput = object({

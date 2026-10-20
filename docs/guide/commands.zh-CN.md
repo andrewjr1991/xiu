@@ -35,7 +35,8 @@
 | `/skills` | 浏览 Skills；找到但未列出的 Skill（无法读取、同名被更高优先级范围覆盖、超过大小或数量限制）会在列表前用一行说明 |
 | `/skills install ...` | 安装本地或 HTTPS Git Skill |
 | `/mcp` | 查看 MCP 连接与工具数 |
-| `/mcp add [name] [url] [TOKEN_ENV]` | 添加用户级 Streamable HTTP MCP |
+| `/mcp add [name] [url] [TOKEN_ENV]` | 添加用户级 Streamable HTTP MCP（会询问认证方式、默认风险和是否允许模型采样） |
+| `/mcp sampling [name] [on\|off]` | 查看各 MCP 的模型采样开关；对用户级配置开启或关闭，之后需 `/mcp permissions approve` 重新确认 |
 | `/mcp remove [name]` | 删除用户级 MCP 配置 |
 | `/mcp test [name]` | 重连并测试一个或全部 MCP |
 | `/mcp reload` | 重载 MCP 配置 |

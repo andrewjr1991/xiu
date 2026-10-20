@@ -47,7 +47,7 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
     try {
       const args: unknown = JSON.parse(argsText);
       if (!Array.isArray(args) || args.some((item) => typeof item !== "string")) throw new Error("参数应为字符串 JSON 数组。");
-      const value: WorkspaceMcpDraft = { name: draft.name, fingerprint: draft.fingerprint, transport: draft.transport, risk: draft.risk, enabled: draft.enabled,
+      const value: WorkspaceMcpDraft = { name: draft.name, fingerprint: draft.fingerprint, transport: draft.transport, risk: draft.risk, enabled: draft.enabled, ...(draft.sampling ? { sampling: true } : {}),
         ...(draft.transport === "stdio" ? { command: draft.command, args } : { url: draft.url, ...(auth === "oauth" ? { oauth: draft.oauth ?? { type: "oauth" } } : {}), ...(auth === "bearer" ? { bearerTokenEnvironment: draft.bearerTokenEnvironment } : {}) }) };
       if (await onManage({ action: "save", draft: value })) setDraft(undefined);
     } catch (reason) { setLocalError(reason instanceof Error ? reason.message : "配置格式无效。"); }
@@ -109,6 +109,7 @@ export function McpPanel({ snapshot, busy, disabled, error, onRefresh, onReload,
         </>}
       <label>工具风险<Select value={draft.risk} onChange={(event) => setDraft({ ...draft, risk: event.target.value as WorkspaceMcpDraft["risk"] })}>{["read", "write", "execute", "dangerous"].map((risk) => <option key={risk}>{risk}</option>)}</Select></label>
       <label><input type="checkbox" checked={draft.enabled !== false} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用配置</label>
+      <label><input type="checkbox" checked={draft.sampling === true} onChange={(event) => setDraft({ ...draft, sampling: event.target.checked || undefined })} />允许模型采样（服务器可请求用当前模型作答；会新增权限需重新核对，每次请求仍需确认）</label>
       <button type="submit" disabled={blocked}>保存配置</button><button type="button" onClick={() => setDraft(undefined)}>取消编辑</button>
     </form>}
     {!snapshot ? <p>{error ? "配置未加载，请检查后刷新。" : "正在读取配置…"}</p> : !snapshot.servers.length ? <p>尚未配置 MCP，可点击新增 MCP。</p> : snapshot.servers.map((server) => <article key={server.name}>

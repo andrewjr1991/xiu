@@ -187,3 +187,45 @@ test("a command failure the catalog explains gets the next step and xiu doctor; 
   assert.match(plain, /^插件状态修改失败：Plugin not found: nope$/m, plain);
   assert.doesNotMatch(plain, /下一步/, "an unexplained failure gets no generic next step");
 });
+
+test("/mcp sampling shows the per-server state and toggles a user-level server without granting the changed manifest", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-mcp-sampling-command-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "workspace");
+  await fs.mkdir(path.join(cwd, ".xiu"), { recursive: true });
+  const userConfig = path.join(root, "mcp.json");
+  await fs.writeFile(userConfig, JSON.stringify({ mcpServers: { docs: { command: "node", args: ["docs-mcp.js"] }, strict: { command: "node", permissions: ["process:execute", "external:write"] } } }));
+  await fs.writeFile(path.join(cwd, ".xiu", "mcp.json"), JSON.stringify({ mcpServers: { team: { command: "node", sampling: true } } }));
+  const mcpManager = new McpManager(cwd, userConfig, new McpAuthStore(path.join(root, "mcp-auth.json")), {}, new PermissionGrantStore(path.join(root, "extension-permissions.json")));
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  let attached = 0;
+  try {
+    const context = { language: "en-US", mcpManager, projectMcpTrusted: true, attachMcpTools: () => { attached += 1; }, status: { start() {}, stop() {} } } as unknown as McpCommandContext;
+    assert.equal(await handleMcpCommand("/mcp sampling", context), true);
+    assert.match(logs.join("\n"), /docs: sampling off\n.*strict: sampling off\n.*team: sampling on \(confirmed per request\) \(project configuration; change it in its own file\)/s);
+    assert.equal(await handleMcpCommand("/mcp sampling docs maybe", context), true);
+    assert.match(logs.at(-1) ?? "", /Usage: \/mcp sampling <name> on\|off/);
+    assert.equal(await handleMcpCommand("/mcp sampling docs on", context), true);
+    assert.match(logs.at(-1) ?? "", /Model sampling for MCP docs is now on: .*run \/mcp permissions approve docs/);
+    assert.equal(JSON.parse(await fs.readFile(userConfig, "utf8")).mcpServers.docs.sampling, true);
+    assert.equal(attached, 1);
+    const manifests = await mcpManager.permissionManifests(true);
+    assert.ok(manifests.find((item) => item.name === "docs")?.permissions.includes("model:sampling"));
+    assert.equal(manifests.find((item) => item.name === "docs")?.approved, false, "the toggle never approves the changed manifest");
+    assert.equal(await handleMcpCommand("/mcp sampling docs off", context), true);
+    assert.equal(JSON.parse(await fs.readFile(userConfig, "utf8")).mcpServers.docs.sampling, undefined);
+    assert.equal(await handleMcpCommand("/mcp sampling team on", context), true);
+    assert.match(errors.at(-1) ?? "", /MCP sampling change failed: MCP server team is not in the user configuration/);
+    assert.equal(await handleMcpCommand("/mcp sampling strict on", context), true);
+    assert.match(errors.at(-1) ?? "", /declares its permissions explicitly/);
+    assert.equal(JSON.parse(await fs.readFile(userConfig, "utf8")).mcpServers.strict.sampling, undefined);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
