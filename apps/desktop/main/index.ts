@@ -2,7 +2,6 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeI
 import { PreferencesStore } from "./preferences-store.js";
 import { spawn as spawnPty } from "node-pty";
 import fs from "node:fs/promises";
-import { restoreHistoryAttachments } from "./history-attachments.js";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,12 +21,13 @@ import { registerManagementIpc } from "./ipc-management.js";
 import { registerWorkspaceIpc } from "./ipc-workspace.js";
 import { registerTerminalIpc } from "./ipc-terminal.js";
 import { registerTaskIpc } from "./ipc-task.js";
+import { registerReviewIpc } from "./ipc-review.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
 const visionProbe = new VisionProbeController();
 import { ClipboardAttachmentManager } from "../../../src/clipboard.js";
-import { desktopChannels, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopCheckpointRestoreRequest, type DesktopFilePreviewRequest, type DesktopMediaPreviewRequest, type DesktopRecoveryAbandonRequest, type DesktopRecoveryRequest, type DesktopReviewRequest, type DesktopTaskHistoryRequest, type DesktopWorkspaceSnapshot } from "../shared/protocol.js";
+import { desktopChannels, type DesktopAttachmentResult, type DesktopAttachmentUploadRequest, type DesktopWorkspaceSnapshot } from "../shared/protocol.js";
 import { assertTrustedIpcSender, resolveRendererAsset, secureWebPreferences } from "./security-policy.js";
 import { IpcArgumentError, hasIpcArgumentSchema, validateIpcArguments } from "./ipc-schema.js";
 import { verifiedComponentPath } from "./unpacked-integrity.js";
@@ -265,21 +265,6 @@ function registerIpc(): void {
       return confirmSubagentCancel(mainWindow);
     },
   });
-  handleIpc(desktopChannels.taskHistoryOpen, async (event, request: DesktopTaskHistoryRequest) => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    const history = await taskController.openTaskHistory(workspace, request);
-    const attachments = await restoreHistoryAttachments(workspace, history.attachmentReferences ?? {}, data => {
-      const image = nativeImage.createFromBuffer(data);
-      if (image.isEmpty()) return undefined;
-      const size = image.getSize();
-      const scale = Math.min(1, 180 / Math.max(1, size.width), 120 / Math.max(1, size.height));
-      return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
-    });
-    // Do not send results from a workspace closed/switched while files loaded.
-    if (controller.trustedWorkspacePath() !== workspace) throw new Error("Workspace changed while loading history.");
-    return { ...history, attachments };
-  });
   handleIpc(desktopChannels.attachmentsChoose, async (event) => {
     assertTrustedSender(event);
     const workspace = controller.trustedWorkspacePath();
@@ -307,50 +292,41 @@ function registerIpc(): void {
     const workspace = controller.trustedWorkspacePath();
     return presentAttachments(workspace, await new ClipboardAttachmentManager(workspace, undefined, "zh-CN").attachBytes(request.files));
   });
-  handleIpc(desktopChannels.reviewSnapshot, async (event, request?: DesktopReviewRequest) => {
-    assertTrustedSender(event);
-    return taskController.reviewSnapshot(controller.trustedWorkspacePath(), request?.changeView);
-  });
-  handleIpc(desktopChannels.filePreview, async (event, request: DesktopFilePreviewRequest) => {
-    assertTrustedSender(event);
-    return taskController.previewFile(controller.trustedWorkspacePath(), request);
-  });
-  handleIpc(desktopChannels.mediaPreview, async (event, request: DesktopMediaPreviewRequest) => {
-    assertTrustedSender(event);
-    return taskController.previewMedia(controller.trustedWorkspacePath(), request, boundedImageThumbnail);
-  });
-  handleIpc(desktopChannels.checkpointRestore, async (event, request: DesktopCheckpointRestoreRequest) => {
-    assertTrustedSender(event);
-    const confirmation = await dialog.showMessageBox(mainWindow!, {
-      type: "warning", title: "恢复检查点", message: "恢复会覆盖当前文件内容。是否继续？",
-      detail: `检查点：${request?.checkpointId ?? "未知"}\nXiu 会先为涉及文件创建新的安全检查点。`,
-      buttons: ["取消", "确认恢复"], defaultId: 0, cancelId: 0, noLink: true,
-    });
-    return taskController.restoreCheckpoint(controller.trustedWorkspacePath(), request, confirmation.response === 1);
-  });
-  handleIpc(desktopChannels.recoveryResume, async (event, request: DesktopRecoveryRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("交互终端仍在运行。请先关闭终端，再恢复 Agent 任务。");
-      const review = await taskController.reviewSnapshot(workspace, "workspace");
-      if (!review.recovery || review.recovery.runId !== request?.runId) throw new Error("恢复记录不存在或已经变化。");
+  registerReviewIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    tasks: taskController, terminalRunning: (workspace) => terminalController.isRunning(workspace),
+    historyThumbnail: data => {
+      const image = nativeImage.createFromBuffer(data);
+      if (image.isEmpty()) return undefined;
+      const size = image.getSize();
+      const scale = Math.min(1, 180 / Math.max(1, size.width), 120 / Math.max(1, size.height));
+      return image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: "good" }).toDataURL();
+    },
+    previewThumbnail: boundedImageThumbnail,
+    confirmCheckpointRestore: async (request) => {
       const confirmation = await dialog.showMessageBox(mainWindow!, {
-        type: "warning", title: "恢复中断任务", message: "确认先核验未知副作用，再继续任务？",
-        detail: `待核验操作：${review.recovery.unknownOperations.length} 项。Xiu 不会自动重放这些操作。`,
+        type: "warning", title: "恢复检查点", message: "恢复会覆盖当前文件内容。是否继续？",
+        detail: `检查点：${request?.checkpointId ?? "未知"}\nXiu 会先为涉及文件创建新的安全检查点。`,
         buttons: ["取消", "确认恢复"], defaultId: 0, cancelId: 0, noLink: true,
       });
-      if (confirmation.response !== 1) throw new Error("已取消恢复。");
-      return taskController.recoverTask(workspace, request, true);
-    });
-  });
-  handleIpc(desktopChannels.recoveryAbandon, async (event, request: DesktopRecoveryAbandonRequest) => {
-    assertTrustedSender(event);
-    const confirmation = await dialog.showMessageBox(mainWindow!, {
-      type: "warning", title: "放弃中断任务", message: "确认将旧任务标记为已放弃？",
-      detail: "不会重放旧操作，也不会删除工作区文件或检查点。", buttons: ["取消", "确认放弃"], defaultId: 0, cancelId: 0, noLink: true,
-    });
-    return taskController.abandonRecovery(controller.trustedWorkspacePath(), request, confirmation.response === 1);
+      return confirmation.response === 1;
+    },
+    confirmRecoveryResume: async (unknownOperations) => {
+      const confirmation = await dialog.showMessageBox(mainWindow!, {
+        type: "warning", title: "恢复中断任务", message: "确认先核验未知副作用，再继续任务？",
+        detail: `待核验操作：${unknownOperations} 项。Xiu 不会自动重放这些操作。`,
+        buttons: ["取消", "确认恢复"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return confirmation.response === 1;
+    },
+    confirmRecoveryAbandon: async () => {
+      const confirmation = await dialog.showMessageBox(mainWindow!, {
+        type: "warning", title: "放弃中断任务", message: "确认将旧任务标记为已放弃？",
+        detail: "不会重放旧操作，也不会删除工作区文件或检查点。", buttons: ["取消", "确认放弃"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return confirmation.response === 1;
+    },
   });
   registerManagementIpc({
     handleIpc, assertTrustedSender, serializeWriterStart,
