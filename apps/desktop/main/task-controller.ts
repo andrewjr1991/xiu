@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { parseAssistantInteraction, continueTaskAfterAnswer } from "../../../src/assistant-interaction.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { buildExecutionReport, formatExecutionReport } from "../../../src/execution-report.js";
 import { collectExecutionReportInputs, defaultExecutionReportSources } from "../../../src/execution-report-query.js";
 import { formatTaskDiagnostics } from "../../../src/diagnostics.js";
@@ -9,11 +7,12 @@ import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-
 import type { WorkspacePluginRequest } from "../../../src/runtime/plugin-service.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
-import { listReviewFiles, previewGeneratedMedia, previewReviewFile } from "../../../src/runtime/review.js";
-import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
-import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
+import { previewGeneratedMedia, previewReviewFile } from "../../../src/runtime/review.js";
+import { captureTaskBaseline, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
+import { deleteTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
-import { assertTaskHistoryRequest, buildTaskHistorySnapshot, reviewOperation } from "./task-history.js";
+import { assertTaskHistoryRequest, buildTaskHistorySnapshot } from "./task-history.js";
+import { assertChangeView, buildReviewSnapshot } from "./review-snapshot.js";
 import { recoveryContinuation, TaskRunJournal } from "../../../src/task-run.js";
 import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopMediaPreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
@@ -415,54 +414,14 @@ export class DesktopTaskController {
   }
 
   async reviewSnapshot(workspace: string, changeView: DesktopChangeView = "task"): Promise<DesktopReviewSnapshot> {
-    if (!(["task", "workspace", "staged"] as string[]).includes(changeView)) throw new Error("Invalid change view.");
+    assertChangeView(changeView);
     const host = await this.ensure(workspace);
     await this.eventPersistence;
-    const currentTaskId = host.runtime.snapshot().task?.id;
-    const completed = this.completedTaskChanges;
-    const completedReport = completed && completed.taskId === currentTaskId ? completed.report : undefined;
-    const [changes, files, latest, interrupted, checkpoints] = await Promise.all([
-      changeView === "task" && this.baseline
-        ? inspectTaskChanges(workspace, this.baseline)
-        : changeView === "task" && completedReport
-          ? Promise.resolve(structuredClone(completedReport))
-          : getWorkspaceDiff(workspace, changeView === "staged" ? "staged" : "workspace"),
-      listReviewFiles(workspace),
-      Promise.resolve(host.journal.currentRun()).then((run) => run ?? host.journal.latest()),
-      this.active(host) ? Promise.resolve(undefined) : host.journal.interrupted(),
-      host.checkpointManager?.list() ?? Promise.resolve([]),
-    ]);
-    if (changeView === "task" && !this.baseline && this.completedTaskChanges?.taskId !== currentTaskId) changes.warnings = ["no-task-baseline: no in-memory baseline is available; showing current workspace changes.", ...changes.warnings];
-    const operations = latest?.operations ?? [];
-    const taskReport = changeView === "task" && (this.baseline || completedReport) ? changes : this.baseline ? await inspectTaskChanges(workspace, this.baseline) : completedReport;
-    const commands = operations.filter((operation) => operation.kind === "tool" && ["run_command", "run_process"].includes(operation.name)).map((operation) => reviewOperation(operation, "command"));
-    const validations = operations.filter((operation) => operation.kind === "verification").map((operation) => reviewOperation(operation, "verification"));
-    const related = latest ? (await host.journal.recent(500)).filter((run) => run.sessionId === latest.sessionId).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).slice(-80) : [];
-    const changeRounds = await Promise.all(related.map(async (run) => ({ id: run.runId, startedAt: run.startedAt, report: await loadTaskChangeHistory(workspace, run.runId) })));
-    return {
-      changeRounds,
-      manualAcceptance: latest?.manualAcceptance ? { eligible: true, ...latest.manualAcceptance } : undefined,
-      overview: { workspace, taskId: currentTaskId, taskChanges: taskReport, branch: await promisify(execFile)("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: workspace, windowsHide: true, timeout: 2000, maxBuffer: 4096 }).then(({ stdout }) => redactSecrets(stdout.trim()).slice(0, 160)).catch(() => undefined) },
-      generatedAt: new Date().toISOString(), changeView, changes, files,
-      artifacts: (taskReport?.changes ?? []).filter((entry) => ["created", "modified"].includes(entry.kind)).map(({ path, kind }) => ({ path, kind })),
-      background: host.background?.().map((item) => ({ ...item, command: redactSecrets(item.command).slice(0, 240) })) ?? [],
-      tools: operations.filter((operation) => operation.kind === "tool").slice(-80).reverse().map((operation) => reviewOperation(operation, "command")),
-      commands: commands.slice(-80).reverse(), validations: validations.slice(-80).reverse(),
-      checkpoints: checkpoints.slice(0, 80).map((checkpoint) => structuredClone(checkpoint)),
-      ...(latest ? { run: { id: latest.runId, status: latest.status, startedAt: latest.startedAt, updatedAt: latest.updatedAt, ...(latest.finishedAt ? { finishedAt: latest.finishedAt } : {}) } } : {}),
-      ...(interrupted ? { recovery: {
-        runId: interrupted.runId,
-        taskPreview: interrupted.taskPreview,
-        status: interrupted.status === "paused" ? "paused" : "recoverable",
-        recommendation: interrupted.recommendation,
-        unknownOperations: interrupted.interruptedOperations.map((operation) => reviewOperation(operation, operation.kind === "verification" ? "verification" : "command")),
-        ...(interrupted.recoveryPoints.at(-1) ? { lastRecoveryPoint: {
-          at: interrupted.recoveryPoints.at(-1)!.at,
-          kind: interrupted.recoveryPoints.at(-1)!.kind,
-          evidence: interrupted.recoveryPoints.at(-1)!.evidence,
-        } } : {}),
-      } } : {}),
-    };
+    return buildReviewSnapshot(workspace, changeView, host, {
+      baseline: () => this.baseline,
+      completedTaskChanges: () => this.completedTaskChanges,
+      active: () => this.active(host),
+    });
   }
 
   async previewFile(workspace: string, request: DesktopFilePreviewRequest) {
