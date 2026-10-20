@@ -75,7 +75,7 @@ The full command list and CLI flags are in the [command reference](./docs/guide/
 - **Autonomous coding loop**: reads the project, locates the problem, edits files, runs tests / typecheck / lint / build, and iterates on the results. It detects the stack and project scripts automatically (`/check`).
 - **Reviewable**: each turn shows the model summary, tool activity, file changes and verification progress. `/report` produces a redacted execution report; `/diff` shows changes for the task, the workspace or the staging area.
 - **Recoverable**: sessions, checkpoints, crash recovery, task budgets and stall diagnostics. Side effects with unknown outcomes are reported, never silently replayed.
-- **Multiple providers**: capability probing, failover and staged routing; provider-neutral vision, image, video and audio model configuration; credentials can optionally live in Windows Credential Manager.
+- **Multiple providers**: capability probing, failover and staged routing; provider-neutral vision, image, video and audio model configuration; credentials can optionally live in the system credential store (Windows Credential Manager, macOS Keychain or Linux Secret Service).
 - **Keyless web search**: by default Xiu runs a pinned version of the open-source [free-search-mcp](https://github.com/sweetcornna/free-search-mcp) locally to aggregate several engines (uv is bundled in the desktop installer and downloaded and verified on first use by the CLI). When the local engine is unavailable it falls back to Xiu's managed search; where company policy forbids local subprocesses, `/web configure managed` selects managed search directly. Citations must come from pages that were actually opened; with insufficient evidence the search fails instead of guessing from memory.
 - **Extensible**: Skills, MCP (stdio / Streamable HTTP, Resources, Prompts, OAuth, exact permission manifests) and declarative plugins with digests and optional signature verification.
 - **Multi-agent**: Explorer / Implementer / Reviewer / Tester run in parallel in isolated Git worktrees; integration happens only after conflict detection, review evidence and explicit confirmation.
@@ -101,7 +101,7 @@ The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Ch
 | --- | --- | --- | --- |
 | CLI and agent loop | Primary platform, verified on real machines | CI passes, external acceptance pending | CI passes, external acceptance pending |
 | MCP, Skills, plugins | Primary platform, verified on real machines | CI passes | CI passes |
-| System credential backend | Credential Manager (optional) | Not implemented | Not implemented |
+| System credential backend | Credential Manager (optional) | Keychain (optional, external acceptance pending) | Secret Service (optional, external acceptance pending) |
 | Desktop workbench | x64 preview, unsigned | Not available | Not available |
 | Computer Use | Preview, per-window authorization | Not supported | Not supported |
 | Clipboard image attachments | Supported | Use `@path` | Use `@path` |
@@ -109,7 +109,7 @@ The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Ch
 ## Configuration and storage
 
 - User settings, sessions and local records live in `~/.xiu/`; project-level state lives in the workspace's `.xiu/`.
-- Provider keys can come from environment variables, the local configuration file or Windows Credential Manager. Xiu stores only the references it needs and never writes keys to logs.
+- Provider keys can come from environment variables, the local configuration file or the system credential store (Windows Credential Manager, macOS Keychain or Linux Secret Service). Xiu stores only the references it needs and never writes keys to logs.
 - `AGENTS.md` or `XIU.md` in the project root is used as project instructions, read only after the workspace is trusted.
 - CLI flags (`--provider`, `--model`, `--proxy`, budget and context limits, and so on) are listed by `xiu --help` and in the [command reference](./docs/guide/commands.zh-CN.md).
 
@@ -161,7 +161,7 @@ CI runs the CLI and desktop jobs on Windows, Ubuntu and macOS, plus Node 22/24 c
 
 - Not a container sandbox: commands run with the current account's permissions, constrained by the approval policy.
 - Checkpoints cover only Xiu's file tools. Arbitrary commands and remote side effects need Git or system-level recovery.
-- macOS Keychain, Linux Secret Service and MCP Sampling are not implemented.
+- MCP Sampling is not implemented. The macOS Keychain and Linux Secret Service backends have only been verified in CI with a fake backend and await real-machine acceptance.
 - Multi-agent conflicts are detected and preserved, not resolved automatically.
 - The desktop app is a Windows x64 preview with an unsigned installer. Computer Use does not support high-risk flows such as passwords, payments, deletion or publishing.
 - There is no public evaluation baseline on real models yet.

@@ -48,7 +48,7 @@
 | `/mcp credentials cleanup [name]` | 再次校验系统副本并输入完整 MCP 名称后删除旧明文 |
 | `/mcp credentials rollback [name]` | 显式切回兼容文件；必要时从系统凭证恢复已清理副本 |
 | `/credentials` / `/credentials status` | 查看凭证后端状态与条目数，不显示 Key 或 Token |
-| `/credentials probe` | 经确认后使用随机临时 Canary 验证 Windows Credential Manager 写入、回读与清理 |
+| `/credentials probe` | 经确认后使用随机临时 Canary 验证系统凭证库（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）写入、回读与清理 |
 | `/credentials migrate [ID\|--all]` | 复制、回读验证并切换一个或显式批量 Provider Key；默认保留旧明文 |
 | `/credentials cleanup [ID]` | 再次验证系统副本并输入完整 Provider ID 后，单独删除一个旧明文 Key |
 | `/credentials rollback [ID]` | 切回 Legacy File；旧副本已清理时先从系统凭据显式恢复，再尝试删除系统副本 |

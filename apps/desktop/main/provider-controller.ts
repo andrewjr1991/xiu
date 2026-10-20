@@ -9,7 +9,7 @@ import { ProviderConfigurationError } from "../../../src/provider-config-migrati
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { summarizeUserFacingError } from "../../../src/user-facing-errors.js";
-import { createWindowsSystemCredentialStore } from "../../../src/system-credential-store.js";
+import { createSystemCredentialStore, systemCredentialBackendName } from "../../../src/system-credential-store.js";
 import { createWorkspaceProviderConfig } from "../../../src/runtime/workspace-agent-host.js";
 import type { AvailableModel } from "../../../src/types.js";
 import type {
@@ -52,7 +52,7 @@ export class DesktopProviderController {
   static async create(dependencies: ProviderControllerDependencies = {}): Promise<DesktopProviderController> {
     let systemCredentialStore = dependencies.systemCredentialStore;
     if (!dependencies.registry && !systemCredentialStore) {
-      try { systemCredentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
+      try { systemCredentialStore = await createSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
       catch { /* Saving new desktop credentials will fail closed; environment and existing legacy credentials remain readable. */ }
     }
     const registry = dependencies.registry ?? new ProviderRegistry(undefined, systemCredentialStore);
@@ -188,7 +188,7 @@ export class DesktopProviderController {
     if (typeof apiKey !== "string" || !apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey)) throw new Error("API Key 必须为 1–4096 个不含换行的字符。");
     const info = this.registry.credentialInfo().find((item) => item.providerId === profile.id);
     if (info?.source === "environment") throw new Error(`当前凭据来自环境变量 ${profile.apiKeyEnv ?? ""}，请在系统环境中修改。`);
-    if (!this.systemCredentialStore && info?.source !== "system") throw new Error("Windows Credential Manager 不可用，桌面端拒绝把新凭据降级保存为明文文件。可改用环境变量或 CLI 的显式凭据流程。");
+    if (!this.systemCredentialStore && info?.source !== "system") throw new Error(`${systemCredentialBackendName()}不可用，桌面端拒绝把新凭据降级保存为明文文件。可改用环境变量或 CLI 的显式凭据流程。`);
     const previous = profile.apiKey;
     try {
       await this.registry.setApiKey(profile.id, apiKey);

@@ -417,7 +417,7 @@ export class McpAuthStore {
       const previous = document.entries[key];
       const { publicEntry, secrets } = splitRecord(sanitized);
       if (previous?.credentialRef) {
-        if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; OAuth credentials were not updated");
+        if (!this.systemCredentials) throw new Error("The system credential store is unavailable; OAuth credentials were not updated");
         const nextRef = this.systemCredentials.set(previous.credentialRef, secrets);
         document.entries[key] = {
           ...publicEntry,
@@ -457,7 +457,7 @@ export class McpAuthStore {
     entry.updatedAt = new Date().toISOString();
     entry.legacySecrets = hasSecrets(legacy) ? legacy : undefined;
     if (entry.credentialRef) {
-      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; OAuth credentials were not cleared");
+      if (!this.systemCredentials) throw new Error("The system credential store is unavailable; OAuth credentials were not cleared");
       if (hasSecrets(active)) {
         const nextRef = this.systemCredentials.set(entry.credentialRef, active);
         entry.credentialRef = nextRef;
@@ -541,7 +541,7 @@ export class McpAuthStore {
         for (const [key, entry] of selected) {
           const ref = store.set(credentialRef("system", "mcp-oauth-record", systemId(key)), entry.legacySecrets!);
           const restored = store.get(ref);
-          if (!restored || !equalSecrets(entry.legacySecrets!, restored)) throw new Error("Windows Credential Manager OAuth round-trip verification failed");
+          if (!restored || !equalSecrets(entry.legacySecrets!, restored)) throw new Error("System credential store OAuth round-trip verification failed");
           written.push([key, ref]);
         }
         const switchedDocument = structuredClone(preparedDocument);
@@ -568,7 +568,7 @@ export class McpAuthStore {
       const document = await this.read();
       const selected = Object.values(document.entries).filter((entry) => entry.resource === normalized && entry.credentialRef && entry.migration && hasSecrets(entry.legacySecrets));
       if (!selected.length) throw new Error("No migrated OAuth plaintext copy is available to clean up for this MCP server");
-      if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; cleanup was refused");
+      if (!this.systemCredentials) throw new Error("The system credential store is unavailable; cleanup was refused");
       for (const entry of selected) {
         const restored = this.systemCredentials.get(entry.credentialRef!);
         if (!restored || !equalSecrets(entry.legacySecrets!, restored)) throw new Error("The active system OAuth credential could not be verified; cleanup was refused");
@@ -591,7 +591,7 @@ export class McpAuthStore {
       const deletes: CredentialRef<"mcp-oauth-record">[] = [];
       for (const entry of selected) {
         if (!hasSecrets(entry.legacySecrets)) {
-          if (!this.systemCredentials) throw new Error("Windows Credential Manager is unavailable; rollback could not restore OAuth credentials");
+          if (!this.systemCredentials) throw new Error("The system credential store is unavailable; rollback could not restore OAuth credentials");
           const restored = this.systemCredentials.get(entry.credentialRef!);
           if (!restored) throw new Error("The active system OAuth credential could not be read for rollback");
           entry.legacySecrets = restored;

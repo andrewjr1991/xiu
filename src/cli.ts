@@ -23,7 +23,7 @@ import { EnvironmentCredentialStore, type CredentialBackendStatus } from "./cred
 import { ConfigFileError } from "./config-file-error.js";
 import { assertWorkspaceDirectory } from "./workspace-directory.js";
 import { UsageError } from "./usage-error.js";
-import { createWindowsSystemCredentialStore, probeWindowsSystemCredentialStore, type WindowsCredentialProbeResult, type WindowsSystemCredentialStore } from "./system-credential-store.js";
+import { createSystemCredentialStore, probeSystemCredentialStore, type SystemCredentialProbeResult, type SystemCredentialStore } from "./system-credential-store.js";
 import { languageName, localize, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import { describeFailure, explainError, formatUserFacingError } from "./user-facing-errors.js";
 import { runFirstRunWizard } from "./first-run-wizard.js";
@@ -261,8 +261,8 @@ async function main(): Promise<void> {
     process.exitCode = await runDoctorCommand(options.doctor ? (program.args as string[]) : (program.args as string[]).slice(1), {
       language,
       collect: async () => {
-        let doctorCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
-        try { doctorCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+        let doctorCredentialStore: SystemCredentialStore<string, "provider-api-key"> | undefined;
+        try { doctorCredentialStore = await createSystemCredentialStore("provider-api-key"); }
         catch { /* The report then describes environment and legacy credentials only. */ }
         return collectDoctorReport({
           version: packageJson.version, settings: inspectedSettings.settings, registry: new ProviderRegistry(undefined, doctorCredentialStore), cwd: path.resolve(options.cwd ?? process.cwd()),
@@ -318,14 +318,14 @@ async function main(): Promise<void> {
     process.exitCode = result.exitCode;
     return;
   }
-  let systemCredentialStore: WindowsSystemCredentialStore<string, "provider-api-key"> | undefined;
-  try { systemCredentialStore = await createWindowsSystemCredentialStore("provider-api-key"); }
+  let systemCredentialStore: SystemCredentialStore<string, "provider-api-key"> | undefined;
+  try { systemCredentialStore = await createSystemCredentialStore("provider-api-key"); }
   catch { /* The CLI remains usable with environment and legacy credentials. */ }
-  let mcpSystemCredentialStore: WindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> | undefined;
-  try { mcpSystemCredentialStore = await createWindowsSystemCredentialStore("mcp-oauth-record"); }
+  let mcpSystemCredentialStore: SystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record"> | undefined;
+  try { mcpSystemCredentialStore = await createSystemCredentialStore("mcp-oauth-record"); }
   catch { /* OAuth remains usable through the compatibility store until explicitly migrated. */ }
   const providerRegistry = new ProviderRegistry(undefined, systemCredentialStore);
-  const ensureSystemCredentialStore = async () => systemCredentialStore ??= await createWindowsSystemCredentialStore("provider-api-key");
+  const ensureSystemCredentialStore = async () => systemCredentialStore ??= await createSystemCredentialStore("provider-api-key");
   await providerRegistry.load(); // a ProviderConfigurationError is explained once, by the startup failure handler below
   const pluginRegistry = new PluginRegistry(workspaceDirectory, undefined, packageJson.version);
   await pluginRegistry.refresh(false);
@@ -391,7 +391,7 @@ async function main(): Promise<void> {
   const status = new StatusLine();
   const activities = new ActivityLog();
   const mcpManager = createMcpManager(config.cwd, mcpSystemCredentialStore);
-  const ensureMcpSystemCredentialStore = async () => mcpSystemCredentialStore ??= await createWindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record");
+  const ensureMcpSystemCredentialStore = async () => mcpSystemCredentialStore ??= await createSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record");
   let mcpStartup: Promise<ReturnType<McpManager["status"]>> | undefined;
   const formatCredentialBackend = (label: string, backend: CredentialBackendStatus): string => formatCredentialBackendStatus(label, backend, language);
   const printCredentialStatus = async (): Promise<void> => {
@@ -401,14 +401,14 @@ async function main(): Promise<void> {
     });
     const providerCredentials = providerRegistry.credentialStatus();
     const mcpCredentials = await mcpManager.credentialStatus();
-    const systemCredentials = await probeWindowsSystemCredentialStore(false);
+    const systemCredentials = await probeSystemCredentialStore(false);
     const providerDetails = providerRegistry.credentialInfo().filter((item) => item.source !== "missing" || item.legacyCopyPresent || item.systemCopyPresent);
     console.log([
       chalk.cyan(localize(language, "凭证状态（不会显示 Key 或 Token）", "Credential status (keys and tokens are never shown)")),
       formatCredentialBackend("Provider env", environmentCredentials.status()),
       formatCredentialBackend("Provider", providerCredentials),
       formatCredentialBackend("MCP OAuth", mcpCredentials),
-      formatCredentialBackend("Windows", systemCredentials.status),
+      formatCredentialBackend(localize(language, "系统", "System"), systemCredentials.status),
       ...(providerDetails.length ? [
         chalk.cyan(localize(language, "Provider 凭证引用", "Provider credential references")),
         ...providerDetails.map((item) => `  ${item.providerName} (${item.providerId}) · ${item.source}${item.systemCopyPresent ? localize(language, " · 有系统副本", " · system copy present") : ""}${item.legacyCopyPresent ? localize(language, " · 有旧明文副本", " · legacy plaintext copy present") : ""}${item.interruptedMigration ? localize(language, " · 有可恢复的中断迁移", " · interrupted migration recoverable") : ""}`),
@@ -418,11 +418,11 @@ async function main(): Promise<void> {
         "Migration and cleanup are explicit; Xiu never moves or deletes credentials automatically. Use /credentials migrate to begin.")),
     ].join("\n") + "\n");
   };
-  const formatCredentialProbe = (probe: WindowsCredentialProbeResult): string => {
+  const formatCredentialProbe = (probe: SystemCredentialProbeResult): string => {
     const check = (value: boolean | undefined) => value === undefined ? "-" : value ? "✓" : "!";
     return [
-      formatCredentialBackend("Windows", probe.status),
-      `${localize(language, "探测", "Probe")}: module ${check(probe.checks.module)} · write ${check(probe.checks.write)} · read ${check(probe.checks.read)} · delete ${check(probe.checks.delete)}`,
+      formatCredentialBackend(localize(language, "系统", "System"), probe.status),
+      `${localize(language, "探测", "Probe")}: module ${check(probe.checks.module)} · lookup ${check(probe.checks.lookup)} · write ${check(probe.checks.write)} · read ${check(probe.checks.read)} · delete ${check(probe.checks.delete)}`,
       `${localize(language, "时间", "Time")}: ${probe.testedAt}`,
     ].join("\n");
   };

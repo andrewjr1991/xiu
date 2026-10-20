@@ -46,7 +46,7 @@
 
 ## 下一步
 
-2026-10-20：维护者推送 0.20.14 本地优化并在真机验证现有功能后，按其完善清单依次推进，每项一个 PR：①桌面插件管理入口（查看、授权、撤销、启用/禁用，已做）与本节能力盘点校正（已做）；②桌面 Skills 远程 HTTPS Git 安装、替换（保留备份）、卸载（已做）；③桌面 MCP Resource Template 变量表单与项目/高级配置只读摘要（已做）；④macOS Keychain 与 Linux Secret Service；⑤MCP Sampling。0.22 仍等维护者明示。
+2026-10-20：维护者推送 0.20.14 本地优化并在真机验证现有功能后，按其完善清单依次推进，每项一个 PR：①桌面插件管理入口（查看、授权、撤销、启用/禁用，已做）与本节能力盘点校正（已做）；②桌面 Skills 远程 HTTPS Git 安装、替换（保留备份）、卸载（已做）；③桌面 MCP Resource Template 变量表单与项目/高级配置只读摘要（已做）；④macOS Keychain 与 Linux Secret Service（已做，待真机验收）；⑤MCP Sampling。0.22 仍等维护者明示。
 
 2026-10-19 下午：CLI 质量与工程债线（PR #88–#94）已合并到 main，见"当前状态"第一条；统一报告查询已做（桌面“报告与诊断”与 CLI `/report`、`xiu report` 共用 `src/execution-report-query.ts`，同一次运行两端内容一致）；桌面审批审计已做（共享 host 的工具审批写入 CLI 同一份 `security-audit.jsonl`）；`xiu audit` 已做（脚本版 `/audit`）；报告的会话日志来源说明已做；`/diff` 区分无法读取的改动记录、运行记录与会话日志列表容忍单条坏文件、`xiu doctor` 工作区记录段与 `xiu doctor json`、`/skills` 未列出 Skill 的说明、设置文件与其他配置文件损坏时的 doctor 诊断、配置文件损坏导致的启动失败与各命令失败统一按错误码格式提示、未知斜杠命令、未识别用法与一次性运行里的斜杠命令不再发给模型、`/help <命令>`、`xiu --help` 列出脚本命令与退出码、无终端时信任询问失败关闭、拼错的脚本命令不发给模型、不存在的 `--provider` ID 立刻报错、输出管道关闭时安静结束、管道交互会话在输入结束时退出、SIGTERM/SIGHUP 与关闭终端窗口的收尾、`--cwd` 指向文件或不存在路径的统一报错、无效参数值只报一行用法错误、会话日志只在信任后读取、重依赖按需加载的启动提速、欢迎屏对齐、提示符状态行宽度与 `/help` 对齐、/credentials /check /status 的输出打磨、80 列状态行与运行提示换行、非 Windows 的 `/paste` 提示、会话列表标题与时间、中文运行页脚措辞与 doctor e2e 密闭、各列表时间统一本地时间、运行列表状态本地化与 /web devices 未注册提示已做（PR #99–#132）；共享运行时中英文资源抽取（1028 处、36 个文件）规模大、用户价值低，暂不做，0.22（`engines >=22.12` 与依赖大版本）等维护者明示后开始。
 
@@ -83,7 +83,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 - OpenAI、Anthropic、Agnes、本地模型及 OpenAI-compatible Provider；能力探测、故障转移和分阶段路由。
 - Skills、MCP stdio/Streamable HTTP、Resource、Prompt、OAuth 和权限清单。
 - 声明式插件发现、精确授权、安装/更新/禁用/恢复、完整包摘要、可选签名和团队策略。
-- Provider/MCP 凭证的兼容存储、可选 Windows Credential Manager、显式迁移/回退/清理和统一脱敏。
+- Provider/MCP 凭证的兼容存储、可选系统凭证库（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）、显式迁移/回退/清理和统一脱敏。
 - 只读联网搜索、来源打开门禁、托管设备认证、设备可观测性和安全数据库迁移。
 - 多 Agent 角色、独立 Worktree、冲突检测、Reviewer/Tester 证据和显式集成确认。
 - 独立 `/update` 命令模块、显式更新检查、可选提醒、安装路径诊断和官方发布元数据核验。
@@ -95,7 +95,7 @@ Xiu 是由静然开发的自主编码助手，面向需要看见执行过程、�
 - 真实 Cloudflare OAuth 凭证迁移、重启读取与注销闭环。
 - macOS/Linux 的完整用户安装、终端、后台任务和 Provider/MCP 路径。
 
-Windows 系统凭证后端在既有外部矩阵完成前继续显式选择，不设为默认。macOS Keychain 与 Linux Secret Service 尚未实现。
+系统凭证后端在既有外部矩阵完成前继续显式选择，不设为默认；macOS Keychain 与 Linux Secret Service 自 0.20.14 起经同一可选模块接入，CI 只用假后端验证，真机验收待做。
 
 ## 3. 桌面工作台基线：v0.20.0
 
@@ -131,7 +131,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 | --- | --- | --- | --- | --- | --- | --- |
 | 编码、索引、验证、审批、检查点 | 已接入 | 复用同一 Agent、文件/命令/索引工具、审批与恢复检查器 | 两端 | CI + UI 冒烟 | Windows 真机 | 保持同一安全和完成门禁 |
 | Provider 与能力模型 | 多类型添加模板、渠道增删改、模型、凭证管理 | 渠道表单与模板、连接测试、模型分组、系统凭据 | 两端 | CI + UI 冒烟 | Windows 真机 | 能力配置向导继续补齐 |
-| 凭证后端 | Windows 凭据管理器；其他平台明确报告不可用并失败关闭 | 同一后端 | 仅 Windows | CI（假后端）| Windows 真机 | macOS Keychain、Linux Secret Service 待实现，选定后端后仍失败关闭 |
+| 凭证后端 | Windows 凭据管理器、macOS 钥匙串、Linux Secret Service（0.20.14 起经同一可选模块按平台选择）；其他平台明确报告不可用并失败关闭；Linux 无 Secret Service 时拒绝内核 keyring 回退 | 同一后端 | 两端 | CI（假后端）+ Linux 容器上用真实模块验证：无 D-Bus 时拒绝回退，`dbus-run-session` + GNOME Keyring 下探测与往返成功 | Windows 真机；macOS/Linux 待验收 | macOS/Linux 真机验收（钥匙串访问弹窗、GNOME Keyring/KWallet 下的迁移闭环）；选定后端后仍失败关闭 |
 | 故障转移、分阶段路由 | 控制器与配置命令 | 管理面板“模型路由”经 `WorkspaceManagementService` 修改路由、分阶段渠道与回退链 | 两端 | CI + UI 冒烟 | Windows 真机 | 保持两端共用一份策略 |
 | Skills | 加载、调用、浏览、本地/HTTPS Git 安装、替换（备份移入 skill-backups）、卸载（0.20.14 新增 `/skills uninstall`） | 0.20.14：管理面板“Skills”页本地/HTTPS Git 预览安装、带单独确认的替换、全局技能卸载 | 两端 | CI + UI 冒烟 | 桌面远程/替换/卸载尚未真机验收 | 启用/禁用技能两端均无，按需求再定 |
 | MCP、OAuth、Resource/Prompt | stdio/HTTP、精确权限清单、OAuth、`/mcp read <模板名> 变量=值`、项目/高级/显式权限配置、`/credentials migrate` | 连接、精确权限确认、基本用户配置增删改、OAuth 确认/取消/退出、有界脱敏只读浏览；0.20.14 加 Resource Template 变量表单（主进程同规则展开）、每条配置的只读字段摘要、插件贡献服务标为只读 | 两端（项目/高级字段桌面只读不可编辑，按设计） | CI（真实 stdio fixture）+ UI 冒烟 | 桌面模板与摘要尚未真机验收 | MCP Sampling 两端均未实现；`/credentials migrate`、`/mcp auth status` 仍只在 CLI |
@@ -153,7 +153,7 @@ G5A 已扩展为 Provider 中立的能力模型配置：内置与自定义渠道
 - `Agent` 构造函数已是 options 对象（`AgentOptions`）；`run` 等长方法按阶段拆分仍未做，随功能改动渐进进行。
 - 随迁移逐步抽取中英文资源，不做一次性千处重写（2026-10-19：共享运行时的审批影响说明、恢复提示与失败原因改为跟随调用方语言，CLI 传入 `--language`，桌面保持中文默认）。
 - 将关键静默降级统一送入有界诊断通道（2026-10-19 盘点：`src/` 中 66 处吞掉错误的 `.catch` 几乎都是存在性检查、临时文件清理或已注明的尽力而为持久化，不构成降级；唯一面向用户的静默项——一次性任务结束时会话记录保存失败——已改为在标准错误打印一行说明。后续新增的尽力而为路径沿用“失败即提示一行”的做法，不单独建诊断通道）。
-- 根据真实平台验收设计 macOS Keychain 与 Linux Secret Service；已选择系统后端后仍必须失败关闭，不能静默回退明文。
+- macOS Keychain 与 Linux Secret Service 已接入（0.20.14）；真机验收后再决定是否作为默认；已选择系统后端后仍必须失败关闭，不能静默回退明文。
 
 ## 5. v1.0 稳定产品化门槛
 

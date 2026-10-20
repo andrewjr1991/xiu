@@ -9,14 +9,14 @@ import type { McpManager, McpOAuthConfig } from "../mcp.js";
 import { expandResourceTemplate, isResourceTemplate, resourceTemplateVariables } from "../mcp-resource-template.js";
 import type { SecurityAuditOutcome } from "../security-audit.js";
 import type { StatusLine } from "../status.js";
-import type { WindowsSystemCredentialStore } from "../system-credential-store.js";
+import { systemCredentialBackendName, type SystemCredentialStore } from "../system-credential-store.js";
 import { askQuestion } from "../terminal-prompts.js";
 import { formatLocalTime } from "../local-time.js";
 
 export interface McpCommandContext {
   attachMcpTools: () => void;
   auditCredential: (action: string, subject: string | undefined, outcome: SecurityAuditOutcome) => Promise<void>;
-  ensureMcpSystemCredentialStore: () => Promise<WindowsSystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">>;
+  ensureMcpSystemCredentialStore: () => Promise<SystemCredentialStore<McpAuthSecretRecord, "mcp-oauth-record">>;
   language: UiLanguage;
   mcpManager: McpManager;
   projectMcpTrusted: boolean;
@@ -204,9 +204,10 @@ export async function handleMcpCommand(task: string, ctx: McpCommandContext): Pr
         return true;
       }
       if (action === "migrate") {
+        const backendName = systemCredentialBackendName();
         const confirmed = await selectTerminalOption(localize(language,
-          `将 ${name} 的 OAuth Token 与 Client Secret 复制到 Windows Credential Manager，校验后切换引用；Scope 等非秘密元数据仍保留在配置文件。继续？`,
-          `Copy OAuth tokens and the client secret for ${name} to Windows Credential Manager, verify them, and switch the reference? Non-secret metadata such as scopes remains in the config file.`), [
+          `将 ${name} 的 OAuth Token 与 Client Secret 复制到 ${backendName}，校验后切换引用；Scope 等非秘密元数据仍保留在配置文件。继续？`,
+          `Copy OAuth tokens and the client secret for ${name} to ${backendName}, verify them, and switch the reference? Non-secret metadata such as scopes remains in the config file.`), [
           { label: localize(language, "继续迁移（保留旧明文）", "Migrate and retain legacy plaintext"), value: "yes" },
           { label: localize(language, "取消", "Cancel"), value: "no" },
         ], language);

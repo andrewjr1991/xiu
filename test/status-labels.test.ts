@@ -9,8 +9,8 @@ test("/credentials does not repeat the storage description as the reason", () =>
   assert.equal(formatCredentialBackendStatus("MCP OAuth", { backend: "legacy-file", available: true, secure: false, entries: 0, reason: "local plaintext compatibility storage" }, "zh-CN"),
     "MCP OAuth: legacy-file · 可用 · 0 项 · 本机明文兼容存储");
   // A reason that says something the storage column does not is kept.
-  assert.equal(formatCredentialBackendStatus("Windows", { backend: "system", available: false, secure: true, entries: 0, reason: "Windows Credential Manager is available only on Windows" }, "en-US"),
-    "Windows: system · unavailable · 0 item(s) · system secure storage · Windows Credential Manager is available only on Windows");
+  assert.equal(formatCredentialBackendStatus("System", { backend: "system", available: false, secure: true, entries: 0, reason: "No system credential backend is available on freebsd" }, "en-US"),
+    "System: system · unavailable · 0 item(s) · system secure storage · No system credential backend is available on freebsd");
   assert.equal(formatCredentialBackendStatus("MCP OAuth", { backend: "system", available: true, secure: true, entries: 2, reason: "explicitly migrated OAuth references" }, "zh-CN"),
     "MCP OAuth: system · 可用 · 2 项 · 系统安全存储 · explicitly migrated OAuth references");
   assert.equal(formatCredentialBackendStatus("Provider", { backend: "legacy-file", available: true, secure: false, entries: 1 }, "en-US"),

@@ -31,15 +31,15 @@ v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录
 
 新添加的 MCP 在第一次连接前必须确认当前权限清单，即使它没有手写 `permissions` 字段也不会自动批准。使用 `/mcp permissions` 查看待确认项，再执行 `/mcp permissions approve <名称>` 并确认；后续权限扩张仍会再次阻断。此确认只批准清单，不会跳过具体工具的风险审批、Plan 只读边界或危险操作确认。
 
-阶段 B 加入了可选的 Windows Credential Manager 后端。普通 `/credentials` 只检查原生模块能否加载，不会写入系统凭证库；`/credentials probe` 会先要求明确确认，再写入一个名称和内容均随机的临时 Canary，完成回读校验后立即删除，用来验证当前 Windows、Node.js、架构和企业策略是否真正允许使用该后端。探测不会迁移、覆盖或删除现有 Provider/MCP 凭证。若可选原生模块没有安装或被企业策略拦截，Xiu 会报告后端不可用，但现有 Legacy File 路径和普通启动不受影响。
+阶段 B 加入了可选的系统凭证后端：Windows 上是凭据管理器（Credential Manager），0.20.14 起 macOS 使用钥匙串（Keychain）、Linux 使用 Secret Service（经 D-Bus 访问 GNOME Keyring、KWallet 等提供者），三者经同一可选原生模块访问，其他平台明确报告不可用。普通 `/credentials` 只加载原生模块并读取一个随机、不存在的条目来确认服务可达（macOS 钥匙串锁定时在这一步报不可用），不会写入系统凭证库。Linux 上原生模块在没有 Secret Service 时会静默退回内核 keyring，那里的条目重启即丢失，因此 Xiu 先用只走 Secret Service 的搜索确认 D-Bus 会话与提供者（GNOME Keyring、KWallet 等）可达，不可达时报告“Linux Secret Service is not reachable”并且不创建系统后端，无头服务器上 `/credentials migrate` 因此会被拒绝而不是把 Key 写进重启即丢的地方；`/credentials probe` 会先要求明确确认，再写入一个名称和内容均随机的临时 Canary，完成回读校验后立即删除，用来验证当前系统、Node.js、架构和企业策略是否真正允许使用该后端。探测不会迁移、覆盖或删除现有 Provider/MCP 凭证。若可选原生模块没有安装或被企业策略拦截，Xiu 会报告后端不可用，但现有 Legacy File 路径和普通启动不受影响。macOS 上 CLI（node）与桌面（Electron）是两个不同的程序，共用同一条钥匙串条目时系统可能弹窗要求允许访问，选择“始终允许”后不再询问。macOS 与 Linux 后端尚未真机验收，因此和 Windows 一样只在显式迁移后使用，不设为默认。
 
 阶段 E 起，Xiu 会把当前运行时实际使用的 Provider Key、MCP Access/Refresh/ID Token 和 Client Secret 作为脱敏词表，仅在内存中用于清理错误文本；它们不会被写入诊断、会话、故障转移回执或 MCP Resource/Prompt 错误。系统凭证损坏、缺失或无法读取时，`cleanup` 会拒绝删除旧副本；迁移中断后可重新执行相同迁移继续，不需要手工编辑配置。
 
 阶段 C 只为 Provider API Key 提供显式迁移。输入 `/credentials migrate` 可选择一个 Key；`/credentials migrate --all` 会批量复制，但只有所有 Key 均写入并回读一致后才切换全部引用。迁移流程永远保留旧明文，不再连带提供删除选项；请先重启并确认系统凭证可用，再单独使用 `/credentials cleanup [Provider ID]` 删除。`cleanup` 和 `forget` 都要求再次输入完整 Provider ID，且不会被 `-y` 自动确认。`/credentials rollback [Provider ID]` 可显式切回；旧明文已经清理时，它会从仍然有效的系统凭据重新生成兼容文件副本后再切换。`/credentials forget [Provider ID]` 会在影响确认后删除系统与兼容文件中的所有本地副本，环境变量不受影响。
 
-解析顺序保持为：Profile 明确配置的环境变量、已迁移的系统引用、尚未迁移的 Legacy File、Provider 默认环境变量。系统引用一旦生效，即使旧明文仍在，系统后端缺失、记录丢失或损坏时也不会静默退回明文。可重新启用系统后端、执行显式回退，或重新保存 Key。`providers.json` 现在只为已迁移项保存非秘密引用、revision 和迁移回执；Key 本身位于 Windows Credential Manager。迁移失败会保留原引用和旧 Key，错误与回执不包含秘密或秘密哈希。
+解析顺序保持为：Profile 明确配置的环境变量、已迁移的系统引用、尚未迁移的 Legacy File、Provider 默认环境变量。系统引用一旦生效，即使旧明文仍在，系统后端缺失、记录丢失或损坏时也不会静默退回明文。可重新启用系统后端、执行显式回退，或重新保存 Key。`providers.json` 现在只为已迁移项保存非秘密引用、revision 和迁移回执；Key 本身位于系统凭证库。迁移失败会保留原引用和旧 Key，错误与回执不包含秘密或秘密哈希。
 
-阶段 D 将 MCP OAuth 拆成“秘密”和“公开元数据”两层：Access Token、Refresh Token、ID Token 与 Client Secret 作为一个原子记录进入 Windows Credential Manager；Scope、Token 类型、到期时间和 Client 注册元数据继续保存在 `mcp-auth.json`。这样 Cloudflare 一类超长 Scope 不会占用系统凭证单条 `2400` 字节安全上限，也不会被截断。`/mcp credentials migrate [名称]` 复制并回读校验后切换引用，默认保留旧明文；重启验证后使用 `cleanup` 并输入完整 MCP 名称删除旧副本；`rollback` 即使旧副本已清理，也能从有效系统凭证恢复兼容文件。刷新轮换始终整体替换秘密记录，退出登录同时清除系统和保留的旧 Token，避免以后回退时复活已注销凭证。
+阶段 D 将 MCP OAuth 拆成“秘密”和“公开元数据”两层：Access Token、Refresh Token、ID Token 与 Client Secret 作为一个原子记录进入系统凭证库；Scope、Token 类型、到期时间和 Client 注册元数据继续保存在 `mcp-auth.json`。这样 Cloudflare 一类超长 Scope 不会占用系统凭证单条 `2400` 字节安全上限，也不会被截断。`/mcp credentials migrate [名称]` 复制并回读校验后切换引用，默认保留旧明文；重启验证后使用 `cleanup` 并输入完整 MCP 名称删除旧副本；`rollback` 即使旧副本已清理，也能从有效系统凭证恢复兼容文件。刷新轮换始终整体替换秘密记录，退出登录同时清除系统和保留的旧 Token，避免以后回退时复活已注销凭证。
 
 当前 Windows x64 已在 Node 22 和 Node 20.20.2 下完成真实读写删除探针；Windows ARM64 与另一台企业策略机器仍需外部验收。系统后端不是默认来源，只有成功的显式迁移引用才会选择它。
 

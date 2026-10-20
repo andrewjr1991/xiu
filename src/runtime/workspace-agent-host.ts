@@ -14,7 +14,7 @@ import { redactSecrets } from "../secret-redaction.js";
 import { SecurityAuditLog } from "../security-audit.js";
 import { SettingsStore } from "../settings.js";
 import { SkillRegistry, createSkillTools } from "../skills.js";
-import { createWindowsSystemCredentialStore } from "../system-credential-store.js";
+import { createSystemCredentialStore } from "../system-credential-store.js";
 import { TaskRunJournal } from "../task-run.js";
 import { builtinTools, createBackgroundTools } from "../tools.js";
 import type { ApprovalRequest, ModelProvider } from "../types.js";
@@ -90,7 +90,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
 export async function createWorkspaceAgentHost(workspace: string, options: { provider?: ModelProvider; profile?: ProviderProfile; backgroundRoot?: string; backgroundWorkerSource?: string | (() => string); journalRoot?: string; securityAuditFile?: string; computerUse?: ComputerUseHost; pluginRegistry?: PluginRegistry } = {}): Promise<WorkspaceAgentHost> {
   const settings = await new SettingsStore().load();
   let credentialStore;
-  try { credentialStore = await createWindowsSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
+  try { credentialStore = await createSystemCredentialStore<string, "provider-api-key">("provider-api-key"); }
   catch { /* Environment and legacy credentials remain available; never copy a system secret to disk. */ }
 
   const registry = new ProviderRegistry(undefined, credentialStore);
@@ -254,7 +254,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
     setPlanMode: (enabled) => adapter.setPlanMode(enabled),
   });
   let mcpCredentials;
-  try { mcpCredentials = await createWindowsSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
+  try { mcpCredentials = await createSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
   mcpManager.setPluginServers(plugins.mcpServers);
