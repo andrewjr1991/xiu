@@ -673,6 +673,30 @@ app.whenReady().then(async () => {
     await waitFor(window, `[...document.querySelectorAll('.segmented button')].every(button => !button.disabled)`, "Git views remain available");
     assert(await evaluate(window, `document.querySelector('.changes-panel > header .added')?.textContent === '+1059' && document.querySelector('.changes-panel > header .removed')?.textContent === '-1042'`), "Diff totals must use independent statistics, not count the two displayed preview lines.");
     console.log("UI smoke: round-scoped attachment, authoritative acceptance, and non-Git views ready");
+    // Provider key migration, cleanup after a typed-id confirmation: same flow as /credentials migrate|cleanup.
+    await clickText(window, "设置", ".sidebar-footer");
+    await clickText(window, "模型与渠道", ".settings-nav button");
+    await waitFor(window, `document.querySelector('.provider-manager')`, "management provider picker");
+    await clickText(window, "Legacy Gateway", ".provider-nav-row > button");
+    await waitFor(window, `document.querySelector('.provider-credentials')?.textContent.includes('凭据来源：兼容文件') && document.querySelector('.provider-credentials').textContent.includes('旧明文 有')`, "legacy provider credential details");
+    assert(await evaluate(window, `!document.querySelector('.provider-credentials').textContent.includes('清理旧明文')`), "Cleanup must not be offered before a migration.");
+    await clickText(window, "迁移到系统凭据管理器", ".provider-credentials button");
+    await waitFor(window, `document.querySelector('.provider-credentials .credential-form')?.textContent.includes('旧明文暂时保留')`, "migration confirmation text");
+    await clickText(window, "确认迁移", ".provider-credentials .credential-form button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('provider:credential:migrate:legacy-gateway') && document.querySelector('.provider-credentials').textContent.includes('凭据来源：系统凭据库') && document.body.innerText.includes('fixture migrate done')`, "provider credential migration through explicit confirmation");
+    await clickText(window, "清理旧明文", ".provider-credentials button");
+    await waitFor(window, `document.querySelector('.provider-credentials [aria-label="输入 Provider 标识确认"]')`, "typed-id cleanup confirmation");
+    assert(await evaluate(window, `[...document.querySelectorAll('.provider-credentials .credential-form button')].find(el => el.textContent === '确认清理').disabled`), "Cleanup must stay disabled until the Provider ID is typed.");
+    await evaluate(window, `(() => { const input = document.querySelector('.provider-credentials [aria-label="输入 Provider 标识确认"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'legacy-gatewa'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    assert(await evaluate(window, `[...document.querySelectorAll('.provider-credentials .credential-form button')].find(el => el.textContent === '确认清理').disabled`), "A partial Provider ID must not enable cleanup.");
+    await evaluate(window, `(() => { const input = document.querySelector('.provider-credentials [aria-label="输入 Provider 标识确认"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'legacy-gateway'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await clickText(window, "确认清理", ".provider-credentials .credential-form button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('provider:credential:cleanup:legacy-gateway') && document.querySelector('.provider-credentials').textContent.includes('旧明文 无')`, "provider plaintext cleanup after typed-id confirmation");
+    assert(await evaluate(window, `!window.xiuSmoke.calls().includes('provider:credential:forget:legacy-gateway')`), "Forget must never run without its own confirmation.");
+    await evaluate(window, `document.querySelector('[aria-label="关闭设置"]').click()`);
+    await waitFor(window, `!document.querySelector('.provider-popover')`, "provider picker closed after credential flow");
+    console.log("UI smoke: provider credential migration and cleanup ready");
+
     await evaluate(window, `window.xiuSmoke.freshProviders()`);
     await clickText(window, "设置", ".sidebar-footer");
     await clickText(window, "模型与渠道", ".settings-nav button");
@@ -733,7 +757,7 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.querySelector('.send-button')?.disabled && document.querySelector('.composer textarea')?.disabled`, "restart latch disables new tasks");
 
     const calls = await evaluate(window, `window.xiuSmoke.calls()`);
-    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["custom-select-keyboard-focus", "custom-select-viewport", "empty-state-font", "closable-tool-tabs", "split-full-view", "browser-modal-isolation", "compact-data-expand", "independent-diff", "file-tree-search", "saved-round-selection", "missing-snapshot", "subagent-cards-status-result", "categorized-data", "synthetic-ime-idle-active", "ime-end-before-enter", "ime-blur-keyup-cleanup", "shift-enter-newline", "keyboard-submit-steer", "same-tick-duplicate-submit-steer", "plan-toggle-context", "plan-full-access-independent", "plan-active-lock", "provider-model", "provider-media-model", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle", "zero-provider-onboarding", "add-agnes-template", "delete-last-provider", "provider-recovery-before-startup", "provider-recovery-preview-cancel", "provider-recovery-native-cancel", "provider-recovery-restart-latch"], calls }, null, 2));
+    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["custom-select-keyboard-focus", "custom-select-viewport", "empty-state-font", "closable-tool-tabs", "split-full-view", "browser-modal-isolation", "compact-data-expand", "independent-diff", "file-tree-search", "saved-round-selection", "missing-snapshot", "subagent-cards-status-result", "categorized-data", "synthetic-ime-idle-active", "ime-end-before-enter", "ime-blur-keyup-cleanup", "shift-enter-newline", "keyboard-submit-steer", "same-tick-duplicate-submit-steer", "plan-toggle-context", "plan-full-access-independent", "plan-active-lock", "provider-model", "provider-media-model", "provider-credential-migrate-cleanup", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle", "zero-provider-onboarding", "add-agnes-template", "delete-last-provider", "provider-recovery-before-startup", "provider-recovery-preview-cancel", "provider-recovery-native-cancel", "provider-recovery-restart-latch"], calls }, null, 2));
     app.exit(0);
   } catch (error) {
     console.error(error?.stack ?? String(error));

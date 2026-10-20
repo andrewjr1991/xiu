@@ -235,6 +235,7 @@ const argumentSchemas: Record<string, Parser[]> = {
   [desktopChannels.providerModels]: [object({ providerId: id })],
   [desktopChannels.providerSelect]: [object(providerSelect)],
   [desktopChannels.providerCredentialSave]: [object({ providerId: id, apiKey: string(URL) })],
+  [desktopChannels.providerCredentialManage]: [object({ providerId: id, operation: literal("migrate", "cleanup", "rollback", "forget"), confirmed, typedId: optional(id) })],
   [desktopChannels.providerTest]: [object({ providerId: id, model: optional(string(SHORT)) })],
   [desktopChannels.providerVisionTest]: [object({ ...providerSelect, allCandidates: optional(boolean) })],
   [desktopChannels.providerVisionCancel]: NONE,
