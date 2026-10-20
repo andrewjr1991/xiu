@@ -2,6 +2,7 @@
 
 ## Unreleased (0.20.14)
 
+- Internal: `/recover` and `/resume` moved out of the interactive loop in `src/cli.ts` into `src/commands/session-commands.ts` next to the other session commands, with the session picker they share with `--resume`; output and prompts are unchanged, and without a terminal both still count as cancelled, so no interrupted task is abandoned, restored or replayed.
 - Internal: `/models` and `/language` moved out of the interactive loop in `src/cli.ts` into `src/commands/runtime-commands.ts`, and `/media` into `src/commands/media-command.ts`, each with a contract test; output and prompts are unchanged, and without a terminal the model selector still counts as cancelled and switches nothing.
 - Internal: the multi-agent slash command (`/agents`, `/agents <run-id>`, `/agents cancel|retry|integrate <run-id> <task-id>`) moved out of the interactive loop in `src/cli.ts` into `src/commands/agent-commands.ts` with its own contract test; output is unchanged, and integration still refuses blocked plans and writes the main workspace only after the explicit `[write]` confirmation.
 - Internal: the read-only inspection slash commands (`/model`, `/details`, the idle notice for `/queue`, `/clear-queue` and `/cancel`, `/status`, `/doctor`, `/help`) moved out of the interactive loop in `src/cli.ts` into `src/commands/inspect-commands.ts` with their own contract test; output is unchanged and the commands still read the live provider, index, MCP, Agent, background and activity state.

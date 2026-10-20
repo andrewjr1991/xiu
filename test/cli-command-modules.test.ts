@@ -258,6 +258,8 @@ test("session, plan and checkpoint commands keep their output and never restore 
   const calls: string[] = [];
   let planMode = false;
   let compactFailure: Error | undefined;
+  let journalFailure: Error | undefined;
+  let interrupted: { runId: string; sessionId: string; taskPreview: string } | undefined;
   const checkpoints: Array<{ id: string; createdAt: string; tool: string; description: string; files: Array<{ path: string; existed: boolean }> }> = [];
   const context: SessionCommandContext = {
     agent: {
@@ -265,16 +267,26 @@ test("session, plan and checkpoint commands keep their output and never restore 
       compact: async (focus?: string) => { calls.push(`compact:${focus ?? "<none>"}`); if (compactFailure) throw compactFailure; return "Compacted 3 turns."; },
       plan: () => "1. [ ] write tests",
       setPlanMode: async (enabled: boolean) => { planMode = enabled; calls.push(`plan:${enabled}`); },
+      restoreSession: () => { calls.push("restore-session"); },
+      setRecoverySource: () => { calls.push("recovery-source"); },
     },
     checkpointManager: {
       list: async () => checkpoints.map((checkpoint) => ({ ...checkpoint })),
       restore: async (id: string) => { calls.push(`restore:${id}`); return checkpoints[0]!; },
     },
-    cwd: root,
+    config: { cwd: root, providerId: "office" },
     language: "en-US",
     onCheckpointRestored: () => { calls.push("index-invalidated"); },
+    onSessionRestored: (source) => { calls.push(`session-restored:${source}`); },
+    providerRegistry: { get: () => undefined },
     renderReplay: () => { calls.push("replay"); },
+    runTaskSequence: async () => { calls.push("run-task"); return false; },
     status: { stop: () => { calls.push("status-stop"); } },
+    switchProviderProfile: async () => { calls.push("switch-provider"); return true; },
+    taskRunJournal: {
+      interrupted: async () => { calls.push("journal-read"); if (journalFailure) throw journalFailure; return interrupted as unknown as Awaited<ReturnType<SessionCommandContext["taskRunJournal"]["interrupted"]>>; },
+      abandon: async (runId: string) => { calls.push(`abandon:${runId}`); },
+    },
     confirmRestore: async () => { calls.push("confirm"); return true; },
   };
   try {
@@ -311,6 +323,24 @@ test("session, plan and checkpoint commands keep their output and never restore 
     assert.equal(await handleSessionCommand("/rewind", context), true);
     assert.match(logs.at(-1) ?? "", /Restore cancelled\./);
     assert.equal(calls.some((call) => call.startsWith("restore:") || call === "confirm" || call === "index-invalidated"), false);
+
+    // /resume: an empty workspace has no sessions to pick from.
+    assert.equal(await handleSessionCommand("/resume", context), true);
+    assert.match(logs.at(-1) ?? "", /No session selected\./);
+    // /recover: an unreadable journal is reported; no interrupted task is a plain note.
+    journalFailure = new Error("journal locked");
+    assert.equal(await handleSessionCommand("/recover", context), true);
+    assert.match(errors.at(-1) ?? "", /Could not read the task recovery journal/);
+    assert.match(errors.at(-1) ?? "", /journal locked/);
+    journalFailure = undefined;
+    assert.equal(await handleSessionCommand("/recover", context), true);
+    assert.match(logs.at(-1) ?? "", /There is no interrupted task in this workspace\./);
+    // With an interrupted task but no terminal the action selector counts as cancelled: nothing is abandoned, restored or replayed.
+    interrupted = { runId: "run-7", sessionId: "ses-7", taskPreview: "refactor parser" };
+    const before = calls.length;
+    assert.equal(await handleSessionCommand("/recover", context), true);
+    assert.deepEqual(calls.slice(before), ["journal-read"]);
+    assert.equal(calls.some((call) => call.startsWith("abandon:") || call === "restore-session" || call === "recovery-source" || call === "run-task" || call.startsWith("session-restored:")), false);
   } finally {
     console.log = originalLog;
     console.error = originalError;
