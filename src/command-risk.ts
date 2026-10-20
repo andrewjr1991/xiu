@@ -17,10 +17,12 @@ const DANGEROUS_PROGRAMS = new Set([
 // Programs that run (part of) their remaining arguments as another command.
 const COMMAND_WRAPPERS = new Set([
   "sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "ionice", "timeout", "xargs", "stdbuf", "chroot", "runas", "watch", "parallel", "start-process",
+  "busybox", "toybox",
 ]);
 // Programs that run a script string. POSIX shells without -c read a script from stdin.
 const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
-const SCRIPT_EVALUATORS = new Set(["invoke-expression", "iex"]);
+// `eval` concatenates its arguments into a script the way Invoke-Expression evaluates its string.
+const SCRIPT_EVALUATORS = new Set(["invoke-expression", "iex", "eval"]);
 const MAX_NESTING = 4;
 const INSPECTED_LAUNCHERS = new Set(["git", "find", "cmd", "powershell", "pwsh", ...POSIX_SHELLS, ...COMMAND_WRAPPERS, ...SCRIPT_EVALUATORS]);
 
@@ -46,11 +48,68 @@ export function unquotedText(value: string): string {
   return result;
 }
 
+/**
+ * Splits a command into words the way a shell does: quotes delimit nothing on
+ * their own, so `"r"m` and `r""m` are the single word `rm`. Quote contents are
+ * kept as written (PowerShell's doubled `''` and backtick escapes included); an
+ * unterminated quote keeps the rest of the command verbatim. Linear time.
+ */
 export function commandTokens(command: string): string[] {
-  return command.match(/"(?:`[\s\S]|[^"`])*"|'(?:''|[^'])*'|[^\s]+/g)?.map((token) => {
-    if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) return token.slice(1, -1);
-    return token;
-  }) ?? [];
+  const tokens: string[] = [];
+  let current = "";
+  let inWord = false;
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index]!;
+    if (character === '"' || character === "'") {
+      const end = closingQuote(command, index);
+      if (end < 0) { current += command.slice(index); inWord = true; break; }
+      current += command.slice(index + 1, end);
+      index = end;
+      inWord = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (inWord) { tokens.push(current); current = ""; inWord = false; }
+      continue;
+    }
+    current += character;
+    inWord = true;
+  }
+  if (inWord) tokens.push(current);
+  return tokens;
+}
+
+function closingQuote(text: string, open: number): number {
+  const quote = text[open];
+  for (let index = open + 1; index < text.length; index++) {
+    const character = text[index];
+    if (quote === '"' && character === "`") { index++; continue; }
+    if (quote === "'" && character === "'" && text[index + 1] === "'") { index++; continue; }
+    if (character === quote) return index;
+  }
+  return -1;
+}
+
+/**
+ * True when `token` names a destructive program, also after POSIX backslash
+ * removal (`r\m` is rm) and with quote characters dropped (`'r''m'` is rm in
+ * a POSIX shell even though PowerShell reads it as r'm): a program name never
+ * legitimately contains either, so the check can only raise.
+ */
+function namesDangerousProgram(token: string): boolean {
+  if (DANGEROUS_PROGRAMS.has(programName(token))) return true;
+  const plain = token.replace(/\\(.)/g, "$1").replace(/["']/g, "");
+  return plain !== token && DANGEROUS_PROGRAMS.has(programName(plain));
+}
+
+/**
+ * Rewrites quoting that only hides a word from inspection: `$'rm'` is the word
+ * rm, and `$IFS` splits a word at run time. An ANSI-C quote with escapes can
+ * spell any program name, so such a script is not inspectable (undefined).
+ */
+function inspectableScript(script: string): string | undefined {
+  if (/\$'[^']*\\/.test(script)) return undefined;
+  return script.replace(/\$'/g, "'").replace(/\$\{IFS\}|\$IFS\b/g, " ");
 }
 
 function closingParenthesis(text: string, open: number): number {
@@ -139,9 +198,11 @@ function dangerousInvocation(tokens: string[], depth: number): boolean {
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]!)) index++;
   const program = tokens[index];
   if (!program) return false;
+  // A program named by a glob (`/bin/r?`) is resolved by the shell at run time and cannot be inspected.
+  if (/[*?[]/.test(program)) return true;
   const name = programName(program);
   const rest = tokens.slice(index + 1);
-  if (DANGEROUS_PROGRAMS.has(name)) return true;
+  if (namesDangerousProgram(program)) return true;
   if (name === "git") return gitRisk(rest) === "dangerous";
   if (name === "find") {
     return rest.some((token, position) => /^-delete$/i.test(token)
@@ -150,7 +211,7 @@ function dangerousInvocation(tokens: string[], depth: number): boolean {
   if (COMMAND_WRAPPERS.has(name)) {
     // Wrapper options take values (`timeout 5`, `sudo -u user`), so any later
     // destructive program name counts; only the first nested launcher recurses.
-    if (rest.some((token) => DANGEROUS_PROGRAMS.has(programName(token)))) return true;
+    if (rest.some((token) => namesDangerousProgram(token))) return true;
     const inner = rest.findIndex((token) => INSPECTED_LAUNCHERS.has(programName(token)));
     return inner >= 0 && dangerousInvocation(rest.slice(inner), depth + 1);
   }
@@ -168,8 +229,10 @@ function dangerousInvocation(tokens: string[], depth: number): boolean {
 
 function dangerousScript(script: string, depth: number): boolean {
   if (depth > MAX_NESTING) return true;
-  if (LEGACY_DANGEROUS.test(unquotedText(script))) return true;
-  return commandStructure(script).segments.some((segment) => dangerousInvocation(commandTokens(segment), depth));
+  const inspectable = inspectableScript(script);
+  if (inspectable === undefined) return true;
+  if (LEGACY_DANGEROUS.test(unquotedText(inspectable))) return true;
+  return commandStructure(inspectable).segments.some((segment) => dangerousInvocation(commandTokens(segment), depth));
 }
 
 const LEGACY_DANGEROUS = /(^|[;|]\s*)(remove-item\b|del\s+|erase\s+|rd\s+|rmdir\s+|rm\s+)|git\s+(reset\s+--hard|clean\s+-[^\r\n]*f)|\b(format|shutdown|restart-computer|stop-computer)\b/i;
