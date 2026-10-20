@@ -34,6 +34,100 @@ export interface SessionCommandContext {
   confirmRestore?: (prompt: string) => Promise<boolean>;
 }
 
+export interface StartupRecoveryContext {
+  config: Pick<AgentConfig, "cwd">;
+  language: UiLanguage;
+  /** True when a one-shot task is waiting to start: an interrupted run then refuses it instead of asking. */
+  oneShot: boolean;
+  /** Prints the refusal and records the one-shot / `--json` failure exit state. */
+  refuseToStart: (message: string) => void;
+  taskRunJournal: Pick<TaskRunJournal, "interrupted" | "abandon">;
+  /** The terminal and the session store; the real ones unless a test injects its own. */
+  io?: StartupRecoveryIo;
+}
+
+export interface StartupRecoveryIo {
+  log: (line: string) => void;
+  select: (title: string, options: Array<{ label: string; description: string; value: StartupRecoveryChoice }>, language: UiLanguage) => Promise<StartupRecoveryChoice | undefined>;
+  loadSession: (cwd: string, sessionId: string) => Promise<RestoredSession>;
+}
+
+export type StartupRecoveryChoice = "resume" | "abandon" | "exit";
+
+export type StartupRecoveryOutcome =
+  /** No interrupted task: start normally. */
+  | { action: "none" }
+  /** The journal could not be read, or a one-shot task met an interrupted run: `refuseToStart` was called, leave. */
+  | { action: "refused" }
+  /** The user confirmed recovery on the terminal: restore `restored`, then run `continuation` before the first prompt. */
+  | { action: "resume"; run: InterruptedTaskRun; restored: RestoredSession; continuation: string }
+  /** The user abandoned the old task; nothing was replayed. */
+  | { action: "abandoned" }
+  /** Leave without starting: the user chose Exit, the linked session could not be loaded, or (`failed`) the menu was cancelled because there is no terminal. */
+  | { action: "exit"; failed: boolean };
+
+const realStartupRecoveryIo: StartupRecoveryIo = {
+  log: (line) => console.log(line),
+  select: (title, options, language) => selectTerminalOption(title, options, language),
+  loadSession,
+};
+
+/**
+ * The interrupted-task check every start runs before anything else: an unreadable journal or an interrupted run in
+ * front of a one-shot task refuses to start (no new side effects before replay safety is established); an interactive
+ * start shows the run and asks whether to resume after confirmation, abandon it, or exit. Only a choice made on a
+ * terminal resumes or abandons: a cancelled menu (no terminal) leaves the record alone and counts as a failed start.
+ */
+export async function resolveStartupRecovery(ctx: StartupRecoveryContext): Promise<StartupRecoveryOutcome> {
+  const { config, language, refuseToStart, taskRunJournal } = ctx;
+  const io = ctx.io ?? realStartupRecoveryIo;
+  let recoverySource: InterruptedTaskRun | undefined;
+  try {
+    recoverySource = await taskRunJournal.interrupted();
+  } catch (error) {
+    refuseToStart(localize(language,
+      `任务恢复日志无法读取：${error instanceof Error ? error.message : String(error)}。为避免错误重放，Xiu 不会开始新任务。`,
+      `The task recovery journal could not be read: ${error instanceof Error ? error.message : String(error)}. Xiu will not start a new task because replay safety cannot be established.`));
+    return { action: "refused" };
+  }
+  if (!recoverySource) return { action: "none" };
+  if (ctx.oneShot) {
+    refuseToStart(localize(language,
+      `检测到异常中断任务 ${recoverySource.runId.slice(0, 8)}。请先在可交互终端里不带任务参数启动 xiu 确认恢复或放弃，或运行 xiu recover abandon ${recoverySource.runId.slice(0, 8)} 明确放弃，然后再运行新任务。`,
+      `Interrupted task ${recoverySource.runId.slice(0, 8)} was detected. Start xiu without a task in an interactive terminal to resume or abandon it, or run xiu recover abandon ${recoverySource.runId.slice(0, 8)} to abandon it explicitly, before running a new task.`));
+    return { action: "refused" };
+  }
+  const point = recoverySource.recoveryPoints.at(-1);
+  io.log(chalk.yellow(localize(language,
+    `检测到异常中断任务：${recoverySource.taskPreview || "（无摘要）"}\n最后恢复点：${point?.evidence ?? "尚无安全恢复点"}\n待核验副作用：${recoverySource.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,
+    `Interrupted task detected: ${recoverySource.taskPreview || "(no summary)"}\nLast recovery point: ${point?.evidence ?? "no safe recovery point"}\nSide effects awaiting verification: ${recoverySource.pendingSideEffects.length}. Xiu will not replay them automatically.`)));
+  const action = await io.select(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
+    { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "恢复会话，先核验未知副作用，再继续剩余任务", "Restore the session, verify unknown side effects, then continue"), value: "resume" as const },
+    { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "将旧任务标记为已放弃，不执行任何旧操作", "Mark it abandoned without executing any old operation"), value: "abandon" as const },
+    { label: localize(language, "退出", "Exit"), description: localize(language, "保持恢复记录，暂不继续", "Keep the recovery record and do nothing"), value: "exit" as const },
+  ], language);
+  if (action === "resume") {
+    let restored: RestoredSession;
+    try {
+      restored = await io.loadSession(config.cwd, recoverySource.sessionId);
+    } catch (error) {
+      io.log(chalk.red(localize(language,
+        `无法加载关联会话：${error instanceof Error ? error.message : String(error)}。恢复记录已保留。`,
+        `The linked session could not be loaded: ${error instanceof Error ? error.message : String(error)}. The recovery record was preserved.`)));
+      return { action: "exit", failed: false };
+    }
+    return { action: "resume", run: recoverySource, restored, continuation: recoveryContinuation(recoverySource, language) };
+  }
+  if (action === "abandon") {
+    await taskRunJournal.abandon(recoverySource.runId);
+    io.log(chalk.green(localize(language, "旧任务已标记为放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
+    return { action: "abandoned" };
+  }
+  // "Exit" is the user's own choice (exit code 0); a menu cancelled because there is no terminal means a
+  // scripted session ran none of its input, which is a failure.
+  return { action: "exit", failed: action === undefined };
+}
+
 /** Lists the workspace's sessions and lets the user pick one; undefined when there is none or the choice was cancelled. */
 export async function chooseSession(workspace: string, language: UiLanguage): Promise<RestoredSession | undefined> {
   const { sessions, unreadable } = await listSessionsWithIssues(workspace);
