@@ -1,8 +1,11 @@
+import chalk from "chalk";
+import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { redactSecrets } from "../secret-redaction.js";
 import { loadTaskChangeHistory } from "../task-change-history.js";
-import { formatTaskChanges, type TaskChangeEntry, type TaskChangeReport } from "../task-changes.js";
+import { formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeEntry, type TaskChangeReport, type TaskChangeSnapshot } from "../task-changes.js";
 import type { TaskRunJournal, TaskRunRecord } from "../task-run.js";
+import { describeFailure } from "../user-facing-errors.js";
 import { formatRunListColumns, listRecentRunsWithIssues, RUN_SELECTOR, type RunListJournal, selectRun, unreadableRunsNote } from "./run-selection.js";
 
 export type DiffCommand =
@@ -135,4 +138,57 @@ export async function replayRunChanges(sources: DiffReplaySources, selector: str
       `The change record of run ${run.runId.slice(0, 8)} has no ${JSON.stringify(file)}; it covers ${report.changes.length} file(s), listed by /diff run:${selector}.`));
   }
   return [heading, replayed, formatFileChange(entry, language)].join("\n");
+}
+
+export interface DiffCommandContext {
+  /** `cwd` is the workspace inspected; `apiKey` is redacted from every diff and error line. */
+  config: Pick<AgentConfig, "cwd" | "apiKey">;
+  language: UiLanguage;
+  /** The file state recorded when this session's latest task started; undefined before the first task (a restored session never rebuilds it). */
+  latestTaskBaseline: () => TaskChangeSnapshot | undefined;
+  /** Redacts a line the way the CLI redacts everything it prints. */
+  redact: (value: string) => string;
+  taskRunJournal: DiffReplaySources["taskRunJournal"];
+}
+
+/**
+ * The `/diff` command moved out of the interactive loop in cli.ts (`/diff`, `/diff task|workspace|staged`, `/diff runs`,
+ * `/diff run:<selector> [file]`); returns false when `task` is not it. Output is unchanged: the task view needs this
+ * session's baseline, the run views read only saved change records, and a usage error prints the usage line.
+ */
+export async function handleDiffCommand(task: string, ctx: DiffCommandContext): Promise<boolean> {
+  if (task !== "/diff" && !task.startsWith("/diff ")) return false;
+  const { config, language, redact, taskRunJournal } = ctx;
+  const parsed = parseDiffCommand(task);
+  if (parsed.kind === "usage") {
+    console.log(chalk.yellow(`${diffUsage(language)}\n`));
+    return true;
+  }
+  if (parsed.kind === "runs" || parsed.kind === "run") {
+    try {
+      const sources = { cwd: config.cwd, taskRunJournal };
+      const output = parsed.kind === "runs" ? await formatRunChangeList(sources, language) : await replayRunChanges(sources, parsed.selector, parsed.file, language);
+      console.log(`${redact(output)}\n`);
+    } catch (error) {
+      console.error(chalk.red(redact(`${describeFailure(localize(language, "读取改动记录失败", "Could not read the change record"), error, language)}\n`)));
+    }
+    return true;
+  }
+  const baseline = ctx.latestTaskBaseline();
+  if (parsed.view === "task" && !baseline) {
+    console.log(chalk.dim(localize(language,
+      "本次会话还没有任务起点快照。恢复的历史会话不会重建旧快照；使用 /diff runs 回放以前运行保存的改动，或用 /diff workspace、/diff staged 查看当前状态。\n",
+      "No task baseline is available in this session. Historical baselines are not reconstructed on resume; use /diff runs to replay the changes saved for earlier runs, or /diff workspace and /diff staged for the current state.\n")));
+    return true;
+  }
+  try {
+    const diffOptions = { sensitiveValues: config.apiKey ? [config.apiKey] : [] };
+    const report = parsed.view === "task"
+      ? await inspectTaskChanges(config.cwd, baseline!, diffOptions)
+      : await getWorkspaceDiff(config.cwd, parsed.view, diffOptions);
+    console.log(`${redact(formatTaskChanges(report, language))}\n`);
+  } catch (error) {
+    console.error(chalk.red(redact(`${describeFailure(localize(language, "读取改动失败", "Could not inspect changes"), error, language)}\n`)));
+  }
+  return true;
 }

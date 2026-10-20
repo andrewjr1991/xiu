@@ -11,10 +11,10 @@ import { BackgroundManager } from "./background.js";
 import { ActivityLog } from "./activity.js";
 import { continueTaskAfterAnswer, parseAssistantInteraction } from "./assistant-interaction.js";
 import { CheckpointManager } from "./checkpoint.js";
-import { discoverProjectChecks, projectCheckPreview, PROJECT_CHECK_NAMES, runProjectChecks, type ProjectCheckSelection, type ProjectCheckRun, type ProjectCheckStatus } from "./commands/check.js";
+import type { ProjectCheckRun } from "./commands/check.js";
 import { runUpdateCheckOnce, runUpdateDoctorOnce, UpdateCommandController, type UpdateMessage } from "./commands/update.js";
 import { runProviderRecoveryCommand, type ProviderRecoveryCommand } from "./commands/provider-recovery.js";
-import { captureTaskBaseline, formatTaskChanges, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
+import { captureTaskBaseline, inspectTaskChanges, type TaskChangeSnapshot } from "./task-changes.js";
 import { saveTaskChangeHistory } from "./task-change-history.js";
 import { applyCapabilityProbe, probeIsFresh, probeModelCapabilities, type CapabilityProbeState } from "./capability-probe.js";
 import { ClipboardAttachmentManager } from "./clipboard.js";
@@ -56,7 +56,7 @@ import type { WorkspaceChangeNotice } from "./change-summary.js";
 import { builtinTools, createBackgroundTools } from "./tools.js";
 import { isWorkspaceTrusted, trustWorkspace } from "./trust.js";
 import { formatPromptDashboard, renderWelcome } from "./welcome.js";
-import { formatCredentialBackendStatus, projectCheckReason } from "./status-labels.js";
+import { formatCredentialBackendStatus } from "./status-labels.js";
 import type { AgentTool, ApprovalRequest, ModelProvider } from "./types.js";
 import type { ProviderFailoverRequest, ProviderFailoverResolution } from "./provider-failover.js";
 import { SecurityAuditLog, type SecurityAuditOutcome } from "./security-audit.js";
@@ -78,7 +78,8 @@ import { chooseSession, handleSessionCommand } from "./commands/session-commands
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
-import { diffUsage, formatRunChangeList, parseDiffCommand, replayRunChanges } from "./commands/diff-commands.js";
+import { type DiffCommandContext, handleDiffCommand } from "./commands/diff-commands.js";
+import { handleProjectCheckCommand } from "./commands/project-check-commands.js";
 import { handleReportCommand, runReportCommand } from "./commands/report-commands.js";
 import { runAuditCommand } from "./commands/audit-command.js";
 import { runRecoverCommand } from "./commands/recover-command.js";
@@ -1429,110 +1430,9 @@ async function main(): Promise<void> {
       }
     };
 
-    const printDiff = async (command: string): Promise<void> => {
-      const parsed = parseDiffCommand(command);
-      if (parsed.kind === "usage") {
-        console.log(chalk.yellow(`${diffUsage(language)}\n`));
-        return;
-      }
-      if (parsed.kind === "runs" || parsed.kind === "run") {
-        try {
-          const sources = { cwd: config.cwd, taskRunJournal };
-          const output = parsed.kind === "runs" ? await formatRunChangeList(sources, language) : await replayRunChanges(sources, parsed.selector, parsed.file, language);
-          console.log(`${redactTerminalOutput(output)}\n`);
-        } catch (error) {
-          console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "读取改动记录失败", "Could not read the change record"), error, language)}\n`)));
-        }
-        return;
-      }
-      const requested = parsed.view;
-      if (requested === "task" && !latestTaskBaseline) {
-        console.log(chalk.dim(localize(language,
-          "本次会话还没有任务起点快照。恢复的历史会话不会重建旧快照；使用 /diff runs 回放以前运行保存的改动，或用 /diff workspace、/diff staged 查看当前状态。\n",
-          "No task baseline is available in this session. Historical baselines are not reconstructed on resume; use /diff runs to replay the changes saved for earlier runs, or /diff workspace and /diff staged for the current state.\n")));
-        return;
-      }
-      try {
-        const diffOptions = { sensitiveValues: config.apiKey ? [config.apiKey] : [] };
-        const report = requested === "task"
-          ? await inspectTaskChanges(config.cwd, latestTaskBaseline!, diffOptions)
-          : await getWorkspaceDiff(config.cwd, requested, diffOptions);
-        console.log(`${redactTerminalOutput(formatTaskChanges(report, language))}\n`);
-      } catch (error) {
-        console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "读取改动失败", "Could not inspect changes"), error, language)}\n`)));
-      }
-    };
-
-    const checkStatusLabel = (value: ProjectCheckStatus): string => ({
-      passed: localize(language, "脚本通过（退出码 0）", "script passed (exit 0)"),
-      failed: localize(language, "失败", "failed"),
-      cancelled: localize(language, "已取消", "cancelled"),
-      denied: localize(language, "已拒绝", "denied"),
-      skipped: localize(language, "已跳过", "skipped"),
-    })[value];
-    const printCheckSummary = (result: ProjectCheckRun): void => {
-      console.log(localize(language,
-        `检查结果：${result.counts.passed} 通过 / ${result.counts.failed} 失败 / ${result.counts.cancelled} 取消 / ${result.counts.denied} 拒绝 / ${result.counts.skipped} 跳过 · ${(result.elapsedMs / 1000).toFixed(1)} 秒`,
-        `Checks: ${result.counts.passed} passed / ${result.counts.failed} failed / ${result.counts.cancelled} cancelled / ${result.counts.denied} denied / ${result.counts.skipped} skipped · ${(result.elapsedMs / 1000).toFixed(1)}s`));
-      console.log(chalk.dim(localize(language, "通过仅表示脚本退出码为 0，不保证功能正确；后续改动需要重新检查。\n", "Passed means the script exited with code 0, not a guarantee of functional correctness; rerun after changes.\n")));
-    };
-    const handleCheckCommand = async (command: string): Promise<void> => {
-      const selection = command.slice("/check".length).trim();
-      if (selection && selection !== "all" && !(PROJECT_CHECK_NAMES as readonly string[]).includes(selection)) {
-        console.log(chalk.yellow(localize(language, "用法：/check [typecheck|lint|test|build|all]\n", "Usage: /check [typecheck|lint|test|build|all]\n")));
-        return;
-      }
-      const controller = new AbortController();
-      activeCheckController = controller;
-      const checkContext = { cwd: config.cwd, signal: controller.signal, approve: approveRequest };
-      const sensitiveValues = config.apiKey ? [config.apiKey] : [];
-      try {
-        if (!selection) {
-          const discovery = await discoverProjectChecks(checkContext, { sensitiveValues });
-          if (discovery.error) console.log(chalk.yellow(redactTerminalOutput(discovery.error)));
-          for (const check of discovery.checks) {
-            console.log(check.available
-              ? `${chalk.cyan(check.name)}\n${redactTerminalOutput(projectCheckPreview(check))}\n`
-              : chalk.dim(`${check.name}: ${redactTerminalOutput(projectCheckReason(check, language))}`));
-          }
-          if (latestProjectCheck) {
-            console.log(chalk.dim(localize(language, "上次检查记录（未重新运行）：", "Previous check record (not rerun):")));
-            for (const check of latestProjectCheck.checks) console.log(`${check.name}: ${checkStatusLabel(check.status)}`);
-            printCheckSummary(latestProjectCheck);
-          }
-          console.log(chalk.dim(localize(language, "使用 /check <检查名> 或 /check all 执行。\n", "Run /check <name> or /check all to execute.\n")));
-          return;
-        }
-        const checkActivities = new Map<string, string>();
-        latestProjectCheck = await runProjectChecks(selection as ProjectCheckSelection, checkContext, {
-          planMode: agent.status().planMode,
-          sensitiveValues,
-          onCheckStart: (check) => {
-            console.log(`${chalk.cyan(localize(language, "准备运行项目检查", "Preparing project check"))}\n${redactTerminalOutput(projectCheckPreview(check))}`);
-            checkActivities.set(check.name, activities.start("tool", "validate_project", check.command));
-            status.start(localize(language, `正在检查 ${check.name} · Ctrl+C 取消`, `Checking ${check.name} · Ctrl+C to cancel`));
-          },
-          onCheckResult: (check) => {
-            status.stop();
-            const activity = checkActivities.get(check.name);
-            if (activity) activities.finish(activity, check.output, check.status !== "passed");
-            const label = `${check.name}: ${checkStatusLabel(check.status)} · ${(check.elapsedMs / 1000).toFixed(1)}s`;
-            console.log(check.status === "passed" ? chalk.green(label) : check.status === "failed" ? chalk.red(label) : chalk.yellow(label));
-            if (check.status !== "passed" && check.output) {
-              const output = redactTerminalOutput(check.output);
-              console.log(chalk.dim(output.length > 2_000 ? `${output.slice(0, 2_000)}\n${localize(language, "（使用 /details 查看完整输出）", "(/details for full output)")}` : output));
-            }
-          },
-        });
-        printCheckSummary(latestProjectCheck);
-        projectIndex.invalidate();
-      } catch (error) {
-        console.error(chalk.red(redactTerminalOutput(`${describeFailure(localize(language, "项目检查失败", "Project check failed"), error, language)}\n`)));
-      } finally {
-        status.stop();
-        if (activeCheckController === controller) activeCheckController = undefined;
-      }
-    };
+    const diffCommandContext = (): DiffCommandContext => ({ config, language, latestTaskBaseline: () => latestTaskBaseline, redact: redactTerminalOutput, taskRunJournal });
+    /** `/diff` while a task runs goes through the same handler as the idle prompt's. */
+    const printDiff = async (command: string): Promise<void> => { await handleDiffCommand(command, diffCommandContext()); };
 
     /** Stops whatever is running the way Ctrl+C does; false when nothing was running. */
     const cancelActiveWork = (): boolean => {
@@ -1950,14 +1850,15 @@ async function main(): Promise<void> {
         },
         providerRegistry, renderReplay, runTaskSequence, status, switchProviderProfile, taskRunJournal,
       })) continue;
-      if (task === "/diff" || task.startsWith("/diff ")) {
-        await printDiff(task);
-        continue;
-      }
-      if (task === "/check" || task.startsWith("/check ")) {
-        await handleCheckCommand(task);
-        continue;
-      }
+      if (await handleDiffCommand(task, diffCommandContext())) continue;
+      if (await handleProjectCheckCommand(task, {
+        activities, agent, approve: approveRequest, config, language,
+        latestProjectCheck: () => latestProjectCheck,
+        setLatestProjectCheck: (run) => { latestProjectCheck = run; },
+        setActiveCheck: (controller) => { activeCheckController = controller; },
+        onChecksExecuted: () => projectIndex.invalidate(),
+        redact: redactTerminalOutput, status,
+      })) continue;
       if (task === "/paste") {
         try {
           const pasted = await clipboard.paste();
