@@ -161,7 +161,7 @@ CI 在 Windows、Ubuntu、macOS 上运行 CLI 与桌面作业，另有 Node 22/2
 
 - 不是容器沙箱：命令以当前账号权限执行，受审批策略约束。
 - 检查点只覆盖 Xiu 的文件工具；任意命令和远端副作用需要 Git 或系统手段恢复。
-- MCP Sampling 未实现；macOS 钥匙串与 Linux Secret Service 后端只经 CI 假后端验证，待真机验收。
+- MCP Sampling 只在该服务的工具调用进行中、仅限纯文本、且逐次确认后才受理，服务器配置 `"sampling": true` 才开启；macOS 钥匙串与 Linux Secret Service 后端只经 CI 假后端验证，待真机验收。
 - 多 Agent 冲突会被检测并保留，不自动解决。
 - 桌面端仅 Windows x64 预览，安装器未签名；电脑操作不支持密码、支付、删除、发布等高风险流程。
 - 尚无公开的真实模型评测基线。

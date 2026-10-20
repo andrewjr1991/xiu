@@ -67,7 +67,7 @@ test("a piped session whose input ends at the prompt leaves like /exit, even wit
   // Before, the connected server's process kept the event loop alive and the session waited forever at `xiu> `.
   const run = await runPipedSession(cwd, home, "/mcp\n");
   assert.equal(run.exitCode, 0, run.output);
-  assert.match(run.output, /fixture: connected \(2 tools\)/);
+  assert.match(run.output, /fixture: connected \(3 tools\)/);
   assert.match(run.output, /xiu> \nInput ended; leaving Xiu\./);
 });
 
@@ -92,7 +92,7 @@ test("input that ends while a task runs lets the task finish, then leaves at the
 test("SIGTERM at an idle piped prompt leaves like /exit, with the MCP server shut down", { timeout: 90_000, skip: process.platform === "win32" ? "POSIX signal" : false }, async (t) => {
   const { cwd, home } = await fixture(t, { mcp: true });
   // The input stays open (a container or CI job that is stopped), so only the signal can end the session.
-  const run = await runPipedSession(cwd, home, "/mcp\n", /fixture: connected \(2 tools\)[\s\S]*xiu> /);
+  const run = await runPipedSession(cwd, home, "/mcp\n", /fixture: connected \(3 tools\)[\s\S]*xiu> /);
   assert.equal(run.exitCode, 0, run.output);
   assert.match(run.output, /Received SIGTERM; leaving Xiu\./);
 });

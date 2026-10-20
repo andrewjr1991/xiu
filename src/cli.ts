@@ -1180,6 +1180,7 @@ async function main(): Promise<void> {
       skillRegistry,
       taskRunJournal,
     });
+    mcpManager.setSamplingModel(() => agent.currentModel());
     xiuRuntime.attachDriver(new AgentRuntimeAdapter(agent));
     const attachMcpTools = (): void => agent.replaceTools([...baseTools, ...mcpManager.tools()]);
     const rebuildBaseTools = (): void => { baseTools = buildBaseTools(); };

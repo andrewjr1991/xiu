@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { AuthProvider, Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import type { AuthProvider, Client, HandlerResultTypeMap, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -12,6 +12,7 @@ import type { CredentialBackendStatus, CredentialStore } from "./credential-stor
 import { loginMcpOAuth, logoutMcpOAuth, sanitizeOAuthError, XiuMcpOAuthProvider, type McpOAuthInteraction, type McpOAuthStatus } from "./mcp-oauth.js";
 import { createSafeOAuthFetch } from "./oauth-url-policy.js";
 import { addedPermissions, parseExtensionPermissions, permissionFingerprint, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
+import { McpSamplingBroker, McpSamplingError, type McpSamplingModelSource } from "./mcp-sampling.js";
 import type { AgentTool, JsonSchema, ToolRisk } from "./types.js";
 import { redactSecrets } from "./secret-redaction.js";
 import { resolveNodeRuntime } from "./node-runtime.js";
@@ -45,6 +46,8 @@ export interface McpServerConfig {
   changesWorkspace?: boolean;
   toolChangesWorkspace?: Record<string, boolean>;
   permissions?: ExtensionPermission[];
+  /** Serve `sampling/createMessage` for this server (each request still needs the user's confirmation inside a tool call). */
+  sampling?: boolean;
 }
 
 export interface McpOAuthConfig {
@@ -127,6 +130,8 @@ export interface McpServerStatus {
   tools: number;
   error?: string;
   permissionChanges?: ExtensionPermission[];
+  /** The configuration opts into MCP sampling; requests are still confirmed one by one. */
+  sampling?: boolean;
 }
 
 function safeName(value: string): string {
@@ -250,6 +255,7 @@ export function validateMcpServerConfig(name: string, value: unknown): McpServer
     throw new Error(`MCP server ${name} toolRisks contains an invalid risk`);
   }
   if (config.changesWorkspace !== undefined && typeof config.changesWorkspace !== "boolean") throw new Error(`MCP server ${name} changesWorkspace must be boolean`);
+  if (config.sampling !== undefined && typeof config.sampling !== "boolean") throw new Error(`MCP server ${name} sampling must be boolean`);
   if (config.toolChangesWorkspace !== undefined && (!config.toolChangesWorkspace || typeof config.toolChangesWorkspace !== "object"
     || Array.isArray(config.toolChangesWorkspace) || Object.values(config.toolChangesWorkspace).some((item) => typeof item !== "boolean"))) {
     throw new Error(`MCP server ${name} toolChangesWorkspace must contain boolean values`);
@@ -274,6 +280,7 @@ function inferredMcpPermissions(config: McpServerConfig): ExtensionPermission[] 
   for (const risk of risks) permissions.add(risk === "read" ? "external:read" : "external:write");
   if (config.changesWorkspace || Object.values(config.toolChangesWorkspace ?? {}).some(Boolean)) permissions.add("workspace:write");
   if (config.auth || Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization") || Object.keys(config.env ?? {}).length) permissions.add("credentials:access");
+  if (config.sampling) permissions.add("model:sampling");
   return [...permissions].sort();
 }
 
@@ -314,6 +321,7 @@ function mcpManifest(name: string, origin: string, config: McpServerConfig): Ext
       ...((config.auth?.scopes ?? []).map((scope) => `oauth-scope:${scope}`)),
       ...(config.changesWorkspace ? ["workspace-changes:all"] : []),
       ...Object.entries(config.toolChangesWorkspace ?? {}).filter(([, changes]) => changes).map(([tool]) => `workspace-changes:${tool}`),
+      ...(config.sampling ? ["sampling:enabled"] : []),
     ],
   };
 }
@@ -368,7 +376,12 @@ async function readConfig(file: string): Promise<Record<string, McpServerConfig>
   }
 }
 
+/** Answers one `sampling/createMessage`; throws `McpSamplingError` to refuse with a JSON-RPC code. */
+type McpSamplingHandler = (params: unknown) => Promise<unknown>;
+
 interface McpConnectionLike {
+  /** Installed before `start()`; without it the server's sampling requests are answered with "method not found". */
+  setSamplingHandler(handler: McpSamplingHandler | undefined): void;
   start(): Promise<McpToolDefinition[]>;
   callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
   listResources(signal?: AbortSignal): Promise<{ resources: McpResource[]; templates: McpResourceTemplate[]; truncated: boolean }>;
@@ -504,8 +517,11 @@ class StdioMcpConnection implements McpConnectionLike {
   private stdoutBuffer = "";
   private stderr = Buffer.alloc(0);
   private closed = false;
+  private samplingHandler?: McpSamplingHandler;
 
   constructor(private name: string, private config: McpServerConfig, private workspace: string) {}
+
+  setSamplingHandler(handler: McpSamplingHandler | undefined): void { this.samplingHandler = handler; }
 
   async start(): Promise<McpToolDefinition[]> {
     const configuredCwd = this.config.cwd
@@ -537,7 +553,7 @@ class StdioMcpConnection implements McpConnectionLike {
 
     await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
-      capabilities: {},
+      capabilities: this.config.sampling ? { sampling: {} } : {},
       clientInfo: { name: "xiu", version: clientVersion },
     });
     this.notify("notifications/initialized", {});
@@ -563,11 +579,26 @@ class StdioMcpConnection implements McpConnectionLike {
         this.pending.delete(message.id);
         if (message.error) pending.reject(new Error(this.errorMessage(message.error)));
         else pending.resolve(message.result);
-      } else if (typeof message.id === "number" && typeof message.method === "string") {
+      } else if ((typeof message.id === "number" || typeof message.id === "string") && typeof message.method === "string") {
         if (message.method === "ping") this.send({ jsonrpc: "2.0", id: message.id, result: {} });
+        else if (message.method === "sampling/createMessage") void this.serveSampling(message.id, message.params);
         else this.send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported" } });
       }
     }
+  }
+
+  private async serveSampling(id: number | string, params: unknown): Promise<void> {
+    const handler = this.samplingHandler;
+    let response: Record<string, unknown>;
+    if (!handler) response = { jsonrpc: "2.0", id, error: { code: -32601, message: "Sampling is not enabled for this server in Xiu" } };
+    else {
+      try { response = { jsonrpc: "2.0", id, result: await handler(params) }; }
+      catch (error) {
+        response = { jsonrpc: "2.0", id, error: error instanceof McpSamplingError ? { code: error.code, message: error.message } : { code: -32000, message: "Sampling request failed" } };
+      }
+    }
+    try { this.send(response); }
+    catch { /* The server went away while the answer was being produced; nothing to deliver. */ }
   }
 
   private errorMessage(value: unknown): string {
@@ -720,8 +751,11 @@ class StdioMcpConnection implements McpConnectionLike {
 class HttpMcpConnection implements McpConnectionLike {
   private client?: Client;
   private transport?: StreamableHTTPClientTransport;
+  private samplingHandler?: McpSamplingHandler;
 
   constructor(private name: string, private config: McpServerConfig, private authProvider?: XiuMcpOAuthProvider) {}
+
+  setSamplingHandler(handler: McpSamplingHandler | undefined): void { this.samplingHandler = handler; }
 
   async start(): Promise<McpToolDefinition[]> {
     await this.authProvider?.ensureFresh();
@@ -738,7 +772,20 @@ class HttpMcpConnection implements McpConnectionLike {
     });
     const client = new sdk.Client({ name: "xiu", version: clientVersion }, {
       versionNegotiation: { mode: "auto", probe: { timeoutMs: 5_000, maxRetries: 0 } },
+      ...(this.config.sampling ? { capabilities: { sampling: {} } } : {}),
     });
+    if (this.config.sampling) {
+      // Registered before connect so the capability and the handler travel together; the broker decides whether to serve.
+      client.setRequestHandler("sampling/createMessage", async (request) => {
+        const handler = this.samplingHandler;
+        if (!handler) throw new sdk.ProtocolError(sdk.ProtocolErrorCode.MethodNotFound, "Sampling is not enabled for this server in Xiu");
+        try { return await handler(request.params) as HandlerResultTypeMap["sampling/createMessage"]; }
+        catch (error) {
+          if (error instanceof McpSamplingError) throw new sdk.ProtocolError(error.code as number, error.message);
+          throw new sdk.ProtocolError(sdk.ProtocolErrorCode.InternalError, "Sampling request failed");
+        }
+      });
+    }
     this.client = client;
     this.transport = transport;
     try {
@@ -868,6 +915,11 @@ export class McpManager {
   private serverOrigins = new Map<string, "user" | "project">();
   private activeConfigs = new Map<string, McpServerConfig>();
   private pluginServers = new Map<string, McpServerConfig>();
+  private samplingModel: McpSamplingModelSource = () => undefined;
+  private brokers = new Map<string, McpSamplingBroker>();
+
+  /** The model that answers `sampling/createMessage`, read per request; without it every request is refused. */
+  setSamplingModel(source: McpSamplingModelSource): void { this.samplingModel = source; }
 
   constructor(
     private workspace: string,
@@ -923,10 +975,16 @@ export class McpManager {
     type ConnectionResult =
       | { name: string; config: McpServerConfig; transport: "stdio" | "streamable-http"; connection: McpConnectionLike; definitions: McpToolDefinition[] }
       | { name: string; config: McpServerConfig; transport: "stdio" | "streamable-http"; error: string; authRequired: boolean };
+    this.brokers.clear();
     const results: ConnectionResult[] = await Promise.all(ready.map(async ({ name, config, transport }): Promise<ConnectionResult> => {
       const connection: McpConnectionLike = transport === "streamable-http"
         ? new HttpMcpConnection(name, config, config.auth ? new XiuMcpOAuthProvider(config.url!, config.auth, this.authStore) : undefined)
         : new StdioMcpConnection(name, config, this.workspace);
+      if (config.sampling) {
+        const broker = new McpSamplingBroker(name, () => this.samplingModel());
+        this.brokers.set(name, broker);
+        connection.setSamplingHandler((params) => broker.handle(params));
+      }
       try { return { name, config, transport, connection, definitions: await connection.start() }; }
       catch (error) {
         await connection.close();
@@ -951,7 +1009,7 @@ export class McpManager {
           return tool;
         });
         this.activeTools.push(...tools);
-        this.serverStatuses.push({ name: result.name, transport: result.transport, state: "connected", tools: tools.length });
+        this.serverStatuses.push({ name: result.name, transport: result.transport, state: "connected", tools: tools.length, ...(result.config.sampling ? { sampling: true } : {}) });
       } else this.serverStatuses.push({ name: result.name, transport: result.transport, state: result.authRequired ? "auth-required" : "failed", tools: 0, error: result.error });
     }
     return this.status();
@@ -975,6 +1033,9 @@ export class McpManager {
       describe: (input) => `call MCP tool ${name}/${definition.name} with ${truncate(JSON.stringify(input)).slice(0, 500)}`,
       preview: async (input) => truncate(JSON.stringify(input, null, 2)).slice(0, 4_000),
       execute: async (input, context) => {
+        // While this call runs, the server may ask for sampling; the broker lends it this call's approval channel.
+        const release = this.brokers.get(name)?.begin(context);
+        try {
         try { return await connection.callTool(definition.name, input, context.signal); }
         catch (error) {
           const { InsufficientScopeError } = await import("@modelcontextprotocol/client");
@@ -1007,6 +1068,7 @@ export class McpManager {
           await loginMcpOAuth(new XiuMcpOAuthProvider(config.url, config.auth, this.authStore, interaction), interaction, scopes);
           return await connection.callTool(definition.name, input, context.signal);
         }
+        } finally { release?.(); }
       },
     };
   }
@@ -1269,7 +1331,10 @@ export class McpManager {
   summary(language: UiLanguage = "en-US"): string {
     if (!this.serverStatuses.length) return localize(language, "未配置 MCP 服务器。", "No MCP servers configured.");
     return this.serverStatuses.map((server) => {
-      if (server.state === "connected") return localize(language, `${server.name}：已连接（${server.tools} 个工具）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"})`);
+      if (server.state === "connected") {
+        const sampling = server.sampling ? localize(language, "，可采样（每次需确认）", ", sampling on request") : "";
+        return localize(language, `${server.name}：已连接（${server.tools} 个工具${sampling}）`, `${server.name}: connected (${server.tools} tool${server.tools === 1 ? "" : "s"}${sampling})`);
+      }
       if (server.state === "permission-required") {
         const changes = server.permissionChanges?.join(", ");
         return localize(language,

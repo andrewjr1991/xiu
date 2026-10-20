@@ -257,6 +257,7 @@ export async function createWorkspaceAgentHost(workspace: string, options: { pro
   try { mcpCredentials = await createSystemCredentialStore<import("../mcp-auth-store.js").McpAuthSecretRecord, "mcp-oauth-record">("mcp-oauth-record"); }
   catch { /* Keep legacy/environment auth available, never downgrade system references. */ }
   const mcpManager = createMcpManager(workspace, mcpCredentials);
+  mcpManager.setSamplingModel(() => agent.currentModel());
   mcpManager.setPluginServers(plugins.mcpServers);
   const computerNames = new Set(initialComputerTools.map(tool => tool.name));
   const currentTools = (next: typeof config) => [...tools.filter((tool) => !mediaNames.has(tool.name) && !computerNames.has(tool.name)), ...createMediaTools(next), ...(options.computerUse ? createComputerUseTools(next, options.computerUse) : []), ...mcpManager.tools()];

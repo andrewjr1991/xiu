@@ -459,6 +459,11 @@ export class Agent {
     this.routingController = controller;
   }
 
+  /** The provider and model the next turn would use; MCP sampling answers with exactly this, read at request time. */
+  currentModel(): { provider: ModelProvider; providerId: string; providerLabel?: string; model: string } {
+    return { provider: this.provider, providerId: this.config.providerId, providerLabel: this.config.providerLabel, model: this.config.model };
+  }
+
   async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
     if (this.activeController) throw new Error("Cannot switch providers while a task is running.");
     Object.assign(this.config, config);
