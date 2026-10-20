@@ -8,6 +8,7 @@ import { handlePluginCommand, type PluginCommandContext } from "../src/commands/
 import { handleProviderCommand, type ProviderCommandContext } from "../src/commands/provider-commands.js";
 import { handleReportCommand, type ReportCommandContext } from "../src/commands/report-commands.js";
 import { handleRunningTaskCommand, incompleteTaskMessage, type RunningTaskCommandContext } from "../src/commands/running-task-commands.js";
+import { handleSessionCommand, type SessionCommandContext } from "../src/commands/session-commands.js";
 import { handleSkillCommand, type SkillCommandContext } from "../src/commands/skill-commands.js";
 import { handleWebCommand, type WebCommandContext } from "../src/commands/web-commands.js";
 import fs from "node:fs/promises";
@@ -28,6 +29,7 @@ const declining: Array<[string, (task: string) => Promise<boolean>]> = [
   ["plugins", (task) => handlePluginCommand(task, {} as PluginCommandContext)],
   ["providers", (task) => handleProviderCommand(task, {} as ProviderCommandContext)],
   ["reports", (task) => handleReportCommand(task, {} as ReportCommandContext)],
+  ["session", (task) => handleSessionCommand(task, {} as SessionCommandContext)],
   ["skills", (task) => handleSkillCommand(task, {} as SkillCommandContext)],
   ["web", (task) => handleWebCommand(task, {} as WebCommandContext)],
 ];
@@ -224,6 +226,77 @@ test("/mcp sampling shows the per-server state and toggles a user-level server w
     assert.equal(await handleMcpCommand("/mcp sampling strict on", context), true);
     assert.match(errors.at(-1) ?? "", /declares its permissions explicitly/);
     assert.equal(JSON.parse(await fs.readFile(userConfig, "utf8")).mcpServers.strict.sampling, undefined);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
+
+test("session, plan and checkpoint commands keep their output and never restore without a selection", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-commands-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  const calls: string[] = [];
+  let planMode = false;
+  let compactFailure: Error | undefined;
+  const checkpoints: Array<{ id: string; createdAt: string; tool: string; description: string; files: Array<{ path: string; existed: boolean }> }> = [];
+  const context: SessionCommandContext = {
+    agent: {
+      status: () => ({ sessionId: undefined }) as unknown as ReturnType<SessionCommandContext["agent"]["status"]>,
+      compact: async (focus?: string) => { calls.push(`compact:${focus ?? "<none>"}`); if (compactFailure) throw compactFailure; return "Compacted 3 turns."; },
+      plan: () => "1. [ ] write tests",
+      setPlanMode: async (enabled: boolean) => { planMode = enabled; calls.push(`plan:${enabled}`); },
+    },
+    checkpointManager: {
+      list: async () => checkpoints.map((checkpoint) => ({ ...checkpoint })),
+      restore: async (id: string) => { calls.push(`restore:${id}`); return checkpoints[0]!; },
+    },
+    cwd: root,
+    language: "en-US",
+    onCheckpointRestored: () => { calls.push("index-invalidated"); },
+    renderReplay: () => { calls.push("replay"); },
+    status: { stop: () => { calls.push("status-stop"); } },
+    confirmRestore: async () => { calls.push("confirm"); return true; },
+  };
+  try {
+    assert.equal(await handleSessionCommand("/historyx", context), false);
+    assert.equal(await handleSessionCommand("/history", context), true);
+    assert.match(logs.at(-1) ?? "", /No conversation history\./);
+    assert.equal(await handleSessionCommand("/history sessions", context), true);
+    assert.match(logs.at(-1) ?? "", /No saved sessions\./);
+    assert.equal(await handleSessionCommand("/compact", context), true);
+    assert.match(logs.at(-1) ?? "", /Compacted 3 turns\./);
+    assert.equal(await handleSessionCommand("/compact tests and failures", context), true);
+    assert.deepEqual(calls.filter((call) => call.startsWith("compact:")), ["compact:<none>", "compact:tests and failures"]);
+    compactFailure = new Error("context too small");
+    assert.equal(await handleSessionCommand("/compact", context), true);
+    assert.match(errors.at(-1) ?? "", /Error: context too small/);
+    assert.ok(calls.includes("status-stop"), "the status line stops after a compaction failure");
+    compactFailure = undefined;
+    assert.equal(await handleSessionCommand("/plan", context), true);
+    assert.match(logs.at(-1) ?? "", /write tests/);
+    assert.equal(await handleSessionCommand("/plan on", context), true);
+    assert.equal(planMode, true);
+    assert.match(logs.at(-1) ?? "", /Plan mode enabled \(read-only\)\./);
+    assert.equal(await handleSessionCommand("/plan off", context), true);
+    assert.equal(planMode, false);
+    assert.match(logs.at(-1) ?? "", /Plan mode disabled\./);
+    assert.equal(await handleSessionCommand("/checkpoints", context), true);
+    assert.match(logs.at(-1) ?? "", /No checkpoints in the current session\./);
+    assert.equal(await handleSessionCommand("/rewind", context), true);
+    assert.match(logs.at(-1) ?? "", /No checkpoints in the current session\./);
+    checkpoints.push({ id: "cp-1", createdAt: "2026-10-20T08:00:00.000Z", tool: "write_file", description: "before edit", files: [{ path: "src/a.ts", existed: true }] });
+    assert.equal(await handleSessionCommand("/checkpoints", context), true);
+    assert.match(logs.at(-1) ?? "", /cp-1 {2}write_file {2}src\/a\.ts/);
+    // Without an interactive terminal the checkpoint selector counts as cancelled, so nothing is restored or confirmed.
+    assert.equal(await handleSessionCommand("/rewind", context), true);
+    assert.match(logs.at(-1) ?? "", /Restore cancelled\./);
+    assert.equal(calls.some((call) => call.startsWith("restore:") || call === "confirm" || call === "index-invalidated"), false);
   } finally {
     console.log = originalLog;
     console.error = originalError;

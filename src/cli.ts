@@ -72,6 +72,7 @@ import { askQuestion, askSecret, askYesNo, InputEndedError } from "./terminal-pr
 import { installBrokenPipeHandling, setBrokenPipeHandler } from "./broken-pipe.js";
 import { handleBackgroundCommand } from "./commands/background-commands.js";
 import { handleCredentialCommand } from "./commands/credential-commands.js";
+import { handleSessionCommand } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
@@ -2048,38 +2049,7 @@ async function main(): Promise<void> {
         console.log(chalk.dim(localize(language, "对话上下文已清空。\n", "Conversation context cleared.\n")));
         continue;
       }
-      if (task === "/history" || task === "/history current") {
-        const currentSessionId = agent.status().sessionId;
-        if (!currentSessionId) console.log(chalk.dim(localize(language, "没有对话历史。\n", "No conversation history.\n")));
-        else renderReplay(await loadSession(config.cwd, currentSessionId));
-        continue;
-      }
-      if (task === "/history sessions") {
-        const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
-        const note = unreadableSessionsNote(unreadable, language);
-        console.log([
-          sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
-          ...(note ? [chalk.yellow(note)] : []),
-        ].join("\n") + "\n");
-        continue;
-      }
-      if (task === "/compact" || task.startsWith("/compact ")) {
-        const focus = task.slice("/compact".length).trim();
-        try { console.log(chalk.green(`${await agent.compact(focus || undefined)}\n`)); }
-        catch (error) { status.stop(); console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}\n`)); }
-        finally { status.stop(); }
-        continue;
-      }
-      if (task === "/plan" || task === "/tasks") {
-        console.log(`${agent.plan()}\n`);
-        continue;
-      }
-      if (task === "/plan on" || task === "/plan off") {
-        const enabled = task.endsWith("on");
-        await agent.setPlanMode(enabled);
-        console.log(chalk.green(localize(language, `规划模式已${enabled ? "启用（只读）" : "关闭"}。\n`, `Plan mode ${enabled ? "enabled (read-only)" : "disabled"}.\n`)));
-        continue;
-      }
+      if (await handleSessionCommand(task, { agent, checkpointManager, cwd: config.cwd, language, onCheckpointRestored: () => projectIndex.invalidate(), renderReplay, status })) continue;
       if (task === "/diff" || task.startsWith("/diff ")) {
         await printDiff(task);
         continue;
@@ -2098,37 +2068,6 @@ async function main(): Promise<void> {
         } catch (error) {
           console.error(chalk.red(`${describeFailure(localize(language, "剪贴板粘贴失败", "Clipboard paste failed"), error, language)}\n`));
         }
-        continue;
-      }
-      if (task === "/checkpoints") {
-        const checkpoints = await checkpointManager.list();
-        console.log(checkpoints.length
-          ? `${checkpoints.map((checkpoint) => `${checkpoint.id}  ${checkpoint.tool}  ${checkpoint.files.map((file) => file.path).join(", ")}`).join("\n")}\n`
-          : localize(language, "当前会话没有恢复点。\n", "No checkpoints in the current session.\n"));
-        continue;
-      }
-      if (task === "/rewind") {
-        const checkpoints = await checkpointManager.list();
-        if (!checkpoints.length) {
-          console.log(chalk.dim(localize(language, "当前会话没有恢复点。\n", "No checkpoints in the current session.\n")));
-          continue;
-        }
-        const selected = await selectTerminalOption(localize(language, "恢复哪个检查点？", "Restore which checkpoint?"), checkpoints.map((checkpoint) => ({
-          label: checkpoint.description,
-          description: `${formatLocalTime(checkpoint.createdAt)}  ${checkpoint.files.map((file) => file.path).join(", ")}`,
-          value: checkpoint.id,
-        })), language);
-        if (!selected) {
-          console.log(chalk.dim(localize(language, "已取消恢复。\n", "Restore cancelled.\n")));
-          continue;
-        }
-        if (!(await askYesNo(chalk.bgRed.white.bold(" RESTORE ") + ` Restore files from checkpoint ${selected}? [y/N] `))) {
-          console.log(chalk.dim(localize(language, "已取消恢复。\n", "Restore cancelled.\n")));
-          continue;
-        }
-        const restoredCheckpoint = await checkpointManager.restore(selected);
-        projectIndex.invalidate();
-        console.log(chalk.green(localize(language, `已从 ${restoredCheckpoint.id} 恢复：${restoredCheckpoint.files.map((file) => file.path).join(", ")}。\n`, `Restored ${restoredCheckpoint.files.map((file) => file.path).join(", ")} from ${restoredCheckpoint.id}.\n`)));
         continue;
       }
       if (task === "/models") {
