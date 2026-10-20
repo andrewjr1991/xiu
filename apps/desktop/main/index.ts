@@ -18,6 +18,7 @@ import { createWorkspaceAgentHost } from "../../../src/runtime/workspace-agent-h
 import { confirmFullAccess, confirmSubagentCancel, confirmComputerAction, confirmVisionProbe } from "./full-access-dialog.js";
 import { VisionProbeController } from "./vision-probe-controller.js";
 import { registerProviderIpc } from "./ipc-provider.js";
+import { registerManagementIpc } from "./ipc-management.js";
 import { SecurityAuditLog } from "../../../src/security-audit.js";
 import { useBundledUv } from "../../../src/free-search.js";
 
@@ -225,38 +226,6 @@ function registerIpc(): void {
     return serializeWriterStart(() => providerRecoveryController.handle(request), true);
   });
   handleIpc(desktopChannels.browser, async (event, request) => { assertTrustedSender(event); if (!browserController) throw new Error("网页工作台尚未就绪。"); return browserController.control(request); });
-  handleIpc(desktopChannels.mcpManage, async (event, request: import("../shared/protocol.js").DesktopMcpManageRequest) => {
-    assertTrustedSender(event);
-    // Confirmation/cancel must not wait behind a long connection operation.
-    if (request?.action === "oauth-decision" || request?.action === "oauth-cancel") return taskController.manageMcp(controller.trustedWorkspacePath(), request);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("请先关闭终端，再管理 MCP。");
-      return taskController.manageMcp(workspace, request);
-    });
-  });
-  handleIpc(desktopChannels.mcpBrowse, async (event, request: import("../shared/protocol.js").DesktopMcpBrowseRequest) => {
-    assertTrustedSender(event);
-    return serializeWriterStart(async () => {
-      const workspace = controller.trustedWorkspacePath();
-      if (terminalController.isRunning(workspace)) throw new Error("请先关闭终端，再读取 MCP 内容。");
-      return taskController.browseMcp(workspace, request);
-    });
-  });
-  handleIpc(desktopChannels.mcpSnapshot, async (event) => {
-    assertTrustedSender(event);
-    return taskController.mcpSnapshot(controller.trustedWorkspacePath());
-  });
-  for (const [channel, action] of [[desktopChannels.mcpReload, "reload"], [desktopChannels.mcpDisconnect, "disconnect"], [desktopChannels.mcpApprove, "approve"]] as const) {
-    handleIpc(channel, async (event, request?: import("../shared/protocol.js").DesktopMcpApproveRequest) => {
-      assertTrustedSender(event);
-      return serializeWriterStart(async () => {
-        const workspace = controller.trustedWorkspacePath();
-        if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改 MCP 连接。");
-        return taskController.changeMcp(workspace, action, request);
-      });
-    });
-  }
   handleIpc(desktopChannels.snapshot, async (event) => {
     assertTrustedSender(event);
     return controller.snapshot();
@@ -474,53 +443,18 @@ function registerIpc(): void {
     });
     return taskController.abandonRecovery(controller.trustedWorkspacePath(), request, confirmation.response === 1);
   });
-  handleIpc(desktopChannels.managementSnapshot, async (event) => {
-    assertTrustedSender(event);
-    return taskController.managementSnapshot(controller.trustedWorkspacePath());
-  });
-  handleIpc(desktopChannels.skillPrepare, async (event, sourceKind: unknown = "directory") => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    if (sourceKind !== "directory" && sourceKind !== "file") throw new Error("无效的技能导入方式。");
-    const workspace = controller.trustedWorkspacePath();
-    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端。");
-    return taskController.prepareSkillInstallation(workspace, async () => {
+  registerManagementIpc({
+    handleIpc, assertTrustedSender, serializeWriterStart,
+    trustedWorkspacePath: () => controller.trustedWorkspacePath(),
+    tasks: taskController, terminalRunning: (workspace) => terminalController.isRunning(workspace),
+    chooseSkillSource: async (sourceKind) => {
       if (!mainWindow || mainWindow.isDestroyed()) return undefined;
       const result = await dialog.showOpenDialog(mainWindow, sourceKind === "directory"
         ? { title: "选择本地 Skill 包目录", properties: ["openDirectory"] }
         : { title: "选择 SKILL.md 或 ZIP 技能包", properties: ["openFile"], filters: [{ name: "Skill 文件与压缩包", extensions: ["md", "zip"] }] });
       return result.canceled ? undefined : result.filePaths[0];
-    });
-  }));
-  handleIpc(desktopChannels.skillPrepareRemote, async (event, request: { url: string }) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端。");
-    return taskController.prepareSkillInstallation(workspace, async () => request.url, "remote");
-  }));
-  handleIpc(desktopChannels.skillCancel, async (event) => {
-    assertTrustedSender(event);
-    return taskController.cancelSkillInstallation(controller.trustedWorkspacePath());
+    },
   });
-  handleIpc(desktopChannels.taskDiagnostics, async (event) => {
-    assertTrustedSender(event);
-    return taskController.taskDiagnostics(controller.trustedWorkspacePath());
-  });
-  handleIpc(desktopChannels.managementChange, async (event, request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改配置。");
-    return taskController.changeManagement(workspace, request);
-  }));
-  handleIpc(desktopChannels.pluginSnapshot, async (event) => {
-    assertTrustedSender(event);
-    return taskController.pluginSnapshot(controller.trustedWorkspacePath());
-  });
-  handleIpc(desktopChannels.pluginChange, async (event, request: import("../../../src/runtime/plugin-service.js").WorkspacePluginRequest) => serializeWriterStart(async () => {
-    assertTrustedSender(event);
-    const workspace = controller.trustedWorkspacePath();
-    if (terminalController.isRunning(workspace)) throw new Error("请先关闭交互终端，再更改插件。");
-    return taskController.changePlugin(workspace, request);
-  }));
   registerProviderIpc({
     handleIpc, assertTrustedSender, serializeWriterStart,
     trustedWorkspacePath: () => controller.trustedWorkspacePath(),
