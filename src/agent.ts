@@ -517,6 +517,9 @@ export class Agent {
     }
 
     let workspaceChanged = false;
+    // Workspace changes that still need a check. Self-verifying tools (media
+    // generation) prove their own artifact and leave this flag untouched.
+    let unverifiedChange = false;
     let verifiedAfterChange = false;
     const verification = new VerificationLedger();
     const verificationPaths = new Set<string>();
@@ -750,7 +753,7 @@ export class Agent {
           verifiedAfterChange = false;
           verificationStamp = undefined;
         }
-        if ((workspaceChanged || verificationAttempted) && !verifiedAfterChange && !completionReminderSent) {
+        if ((unverifiedChange || verificationAttempted) && !verifiedAfterChange && !completionReminderSent) {
           const pending = JSON.stringify(verification.pendingChecks()).slice(0, 12_000);
           const gate = `Completion gate: required checks are missing, failed, or stale after workspace changes${verificationAttempted ? "; the attempted check failed or was unavailable" : ""}. Outstanding check inputs (rerun these exact checks or strictly stronger checks for the same artifact): ${pending}. Run a relevant test, typecheck, lint, build, or use verify_output with explicit expectations for a generated artifact. A check must fail deterministically when an expectation is unmet; printing booleans or search counts is not sufficient. Do not silently drop an older max_bytes, forbidden_substrings, or required_substrings constraint. If verification remains impossible, report the limitation; Xiu will not mark unproven completion successful.`;
           this.messages.push({ role: "user", content: gate });
@@ -761,7 +764,7 @@ export class Agent {
         }
         const outcome = webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0)
           ? "failed"
-          : verification.failed || (lastToolFailed && !webAnswerVerified) || unfinishedPlan ? "failed" : (workspaceChanged || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
+          : verification.failed || (lastToolFailed && !webAnswerVerified) || unfinishedPlan ? "failed" : (unverifiedChange || verificationAttempted) && !verifiedAfterChange ? "unverified" : "completed";
         const failureReason: AgentFailureReason | undefined = outcome !== "failed" ? undefined
           : webEvidenceFailure || (webSearchAttempts > 0 && webSearchSuccesses === 0) ? "web_evidence"
           : verification.failed ? "verification_failed"
@@ -841,7 +844,7 @@ export class Agent {
             result = "Tool execution blocked by crash recovery: this exact side-effecting operation was in-flight when Xiu stopped. Verify its effect first; do not replay it automatically.";
           } else {
             taskOperationKind = this.isVerificationAttempt(call.name, call.input) ? "verification" : "tool";
-            if (taskOperationKind === "verification" || tool.isVerification) {
+            if (taskOperationKind === "verification" || tool.isVerification || tool.verifiesOwnOutput) {
               beforeVerificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
               if (verificationStamp && verificationStamp !== beforeVerificationStamp) verification.invalidate();
               if (call.name === "verify_output" && typeof call.input.path === "string" && !verificationPaths.has(call.input.path)) {
@@ -913,10 +916,29 @@ export class Agent {
             if (plan) this.taskDiagnostics?.recordProgress();
           }
           const verificationCandidate = this.isVerificationAttempt(call.name, call.input);
+          // A successful self-verifying write (a media tool saving the asset it
+          // downloaded) is its own evidence: it needs no further check and does
+          // not stale earlier ones. The saved path joins the explicit stamp so
+          // a later change to it is still detected.
+          const selfVerified = changesWorkspace && tool.verifiesOwnOutput === true && structured.status === "success";
           if (changesWorkspace && structured.sideEffectState !== "none") {
             workspaceChanged = true;
+            if (!selfVerified) unverifiedChange = true;
             if (structured.status === "success") this.taskDiagnostics?.recordProgress();
-            if (!verificationCandidate) {
+            if (selfVerified) {
+              for (const workspacePath of workspacePaths) if (verificationPaths.size < 64) verificationPaths.add(workspacePath);
+              if (verificationStamp) {
+                try {
+                  verificationStamp = await captureVerificationStamp(this.config.cwd, [...verificationPaths], this.accessMode);
+                  verifiedAfterChange = verification.passed;
+                } catch {
+                  verification.invalidate();
+                  verifiedAfterChange = false;
+                  verificationStamp = undefined;
+                  unverifiedChange = true;
+                }
+              }
+            } else if (!verificationCandidate) {
               // Execute tools are conservatively classified as possible writers,
               // even when an inline script only inspects files. Preserve existing
               // evidence only when the bounded workspace + explicit artifact stamp

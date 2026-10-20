@@ -156,6 +156,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       risk: () => "dangerous",
       approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:image",
       changesWorkspace: true,
+      verifiesOwnOutput: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -251,6 +252,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       risk: () => "dangerous",
       approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:audio",
       changesWorkspace: true,
+      verifiesOwnOutput: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -312,6 +314,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
       risk: () => "dangerous",
       approvalScope: (input) => input.force_new_generation === true ? undefined : "billable-media:video",
       changesWorkspace: true,
+      verifiesOwnOutput: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -485,6 +488,7 @@ export function createMediaTools(config: AgentConfig, suppliedBackend?: MediaBac
     description: "Resume an existing media request by stable request ID. This may reuse a cached asset, continue a video status poll, or retry an asset download, but it never submits a new paid generation request.",
     risk: "execute",
     changesWorkspace: true,
+    verifiesOwnOutput: true,
     inputSchema: {
       type: "object",
       properties: {

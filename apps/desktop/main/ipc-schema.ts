@@ -208,6 +208,7 @@ const argumentSchemas: Record<string, Parser[]> = {
   [desktopChannels.attachmentsImport]: [object({ files: array(object({ name: string(PATH), data: bytes(ATTACHMENT_BYTES) }), 64) })],
   [desktopChannels.reviewSnapshot]: [optional(object({ changeView: optional(literal("task", "workspace", "staged")) }))],
   [desktopChannels.filePreview]: [object({ path: string(PATH) })],
+  [desktopChannels.mediaPreview]: [object({ path: string(PATH) })],
   [desktopChannels.checkpointRestore]: [object({ checkpointId: id })],
   [desktopChannels.recoveryResume]: [object({ runId: id })],
   [desktopChannels.recoveryAbandon]: [object({ runId: id })],

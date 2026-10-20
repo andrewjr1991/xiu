@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listReviewFiles, previewReviewFile, sanitizeHtmlPreview } from "../src/runtime/review.js";
+import { listReviewFiles, previewGeneratedMedia, previewReviewFile, sanitizeHtmlPreview } from "../src/runtime/review.js";
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-review-"));
@@ -104,4 +104,26 @@ test("HTML sanitizer strips remote and executable surfaces from direct input", a
   const safe = await sanitizeHtmlPreview('<iframe src="file:///secret"></iframe><object data="https://evil"></object><table style="background:url(https://evil)"><tr><td onmouseover="x()">ok</td></tr></table>');
   assert.doesNotMatch(safe, /<iframe|<object|file:\/\/|https:\/\/evil|onmouseover|background:url/i);
   assert.match(safe, /<table><tbody><tr><td>ok<\/td><\/tr><\/tbody><\/table>/);
+});
+
+test("generated media preview returns small images inline, scales large ones through the host and keeps the file rules", async (t) => {
+  const root = await fixture();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, "assets"));
+  await fs.writeFile(path.join(root, "assets", "small.png"), Buffer.from("png-bytes"));
+  await fs.writeFile(path.join(root, "assets", "large.png"), Buffer.alloc(3 * 1024 * 1024, 1));
+  await fs.writeFile(path.join(root, "assets", "clip.mp3"), Buffer.from("mp3-bytes"));
+  await fs.writeFile(path.join(root, "assets", "notes.txt"), "text");
+  const small = await previewGeneratedMedia(root, "assets/small.png");
+  assert.deepEqual(small, { path: "assets/small.png", kind: "image", bytes: 9, dataUrl: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}` });
+  assert.equal((await previewGeneratedMedia(root, "assets/large.png")).warning, "图片超过 2 MiB，未载入预览。");
+  const scaled: number[] = [];
+  const large = await previewGeneratedMedia(root, "assets/large.png", (data, type) => { scaled.push(data.length); return `data:${type};base64,scaled`; });
+  assert.deepEqual(large, { path: "assets/large.png", kind: "image", bytes: 3 * 1024 * 1024, dataUrl: "data:image/png;base64,scaled" });
+  assert.deepEqual(scaled, [3 * 1024 * 1024]);
+  assert.equal((await previewGeneratedMedia(root, "assets/large.png", () => undefined)).warning, "图片无法解码，未载入预览。");
+  assert.equal((await previewGeneratedMedia(root, "assets/clip.mp3")).dataUrl, `data:audio/mpeg;base64,${Buffer.from("mp3-bytes").toString("base64")}`);
+  await assert.rejects(() => previewGeneratedMedia(root, "assets/notes.txt"), /只能内嵌预览/);
+  await assert.rejects(() => previewGeneratedMedia(root, "../outside.png"), /不能/);
+  await assert.rejects(() => previewGeneratedMedia(root, ".xiu/private.png"), /不能/);
 });

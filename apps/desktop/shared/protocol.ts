@@ -4,7 +4,7 @@ export type { RuntimeApprovalSnapshot, RuntimeConnection, RuntimeEvent, RuntimeT
 export type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
 import type { RuntimeConnection, RuntimeEvent } from "../../../src/runtime/protocol.js";
 import type { TaskChangeReport } from "../../../src/task-changes.js";
-import type { ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
+import type { MediaPreview, ReviewFileEntry, ReviewFilePreview } from "../../../src/runtime/review.js";
 export type { WorkspaceMcpSnapshot, WorkspaceMcpDraft, WorkspaceMcpOAuthFlow } from "../../../src/runtime/mcp-service.js";
 import type { WorkspaceMcpSnapshot } from "../../../src/runtime/mcp-service.js";
 import type { WorkspaceMcpDraft } from "../../../src/runtime/mcp-service.js";
@@ -271,6 +271,9 @@ export interface DesktopReviewSnapshot {
 
 export interface DesktopReviewRequest { changeView?: DesktopChangeView }
 export interface DesktopFilePreviewRequest { path: string }
+/** Inline preview of a media file a task saved; the path is the workspace-relative `Saved:` line of the media tool. */
+export interface DesktopMediaPreviewRequest { path: string }
+export type DesktopMediaPreview = MediaPreview;
 export interface DesktopCheckpointRestoreRequest { checkpointId: string }
 export interface DesktopRecoveryRequest { runId: string }
 export interface DesktopRecoveryAbandonRequest { runId: string }
@@ -352,6 +355,7 @@ export interface XiuDesktopBridge {
   importAttachments(request: DesktopAttachmentUploadRequest): Promise<DesktopAttachmentResult>;
   reviewSnapshot(request?: DesktopReviewRequest): Promise<DesktopReviewSnapshot>;
   previewFile(request: DesktopFilePreviewRequest): Promise<ReviewFilePreview>;
+  previewMedia(request: DesktopMediaPreviewRequest): Promise<DesktopMediaPreview>;
   restoreCheckpoint(request: DesktopCheckpointRestoreRequest): Promise<DesktopReviewSnapshot>;
   recoverTask(request: DesktopRecoveryRequest): Promise<DesktopRuntimeConnection>;
   abandonRecovery(request: DesktopRecoveryAbandonRequest): Promise<DesktopReviewSnapshot>;
@@ -425,6 +429,7 @@ export const desktopChannels = {
   runtimeEvent: "runtime:event",
   reviewSnapshot: "review:snapshot",
   filePreview: "review:file-preview",
+  mediaPreview: "review:media-preview",
   checkpointRestore: "review:checkpoint-restore",
   recoveryResume: "recovery:resume",
   recoveryAbandon: "recovery:abandon",

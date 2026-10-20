@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { conversationRounds, roundPresentation, turnElapsed } from "../apps/desktop/renderer/src/turn-presentation.js";
+import { conversationRounds, generatedMedia, roundPresentation, turnElapsed } from "../apps/desktop/renderer/src/turn-presentation.js";
 import type { RuntimeEvent } from "../src/runtime/protocol.js";
 const event = (id: string, type: string, payload: unknown, taskId = "one") => ({ schemaVersion: 1, eventId: id, taskId, sequence: 1, timestamp: "2026-10-03T00:00:00Z", type, payload }) as RuntimeEvent;
 test("tool failure notice and multiline result produce one alert with full evidence", () => {
@@ -51,4 +51,26 @@ test("patch failures and terminal answer are not displayed twice", () => {
   assert.deepEqual(result.alerts.map((e) => e.eventId), ["t"]);
   assert.equal(result.answer?.eventId, "a");
   assert.equal(events.length, 4);
+});
+
+test("generated media comes from successful media tools' Saved lines, once per path, with a kind the conversation can show", () => {
+  const image = "Generated image with image-model\nRequest: req-1\nSaved: assets/cat.png\nSource URL: https://assets.example/cat.png";
+  const events = [
+    event("i", "tool.finished", { name: "generate_image", summary: image, result: { status: "success" }, verification: false }),
+    event("again", "tool.finished", { name: "generate_image", summary: "Reused completed image request req-1; no new generation charge.\nSaved: assets/cat.png", verification: false }),
+    event("v", "tool.finished", { name: "generate_video", summary: "Generated video with v\nRequest: req-2\nTask: t\nSaved: clips\\intro.mp4\nSource URL: https://x", result: { status: "success" } }),
+    event("a", "tool.finished", { name: "resume_media_operation", summary: "Resumed audio request req-3; no new generation charge.\nSaved: voice.mp3" }),
+    event("pcm", "tool.finished", { name: "generate_audio", summary: "Generated audio with a\nRequest: req-4\nSaved: raw.pcm" }),
+    event("failed", "tool.finished", { name: "generate_image", summary: "Tool error: generate_image: Image request req-5 was rejected", result: { status: "failure" } }),
+    event("denied", "tool.finished", { name: "generate_image", summary: "Tool execution denied\nSaved: nope.png", result: { status: "denied" } }),
+    event("other", "tool.finished", { name: "write_file", summary: "Wrote x\nSaved: x.png", result: { status: "success" } }),
+    event("list", "tool.finished", { name: "list_media_operations", summary: "Saved: listed.png", result: { status: "success" } }),
+  ];
+  assert.deepEqual(generatedMedia(events), [
+    { eventId: "again", tool: "generate_image", path: "assets/cat.png", kind: "image" },
+    { eventId: "v", tool: "generate_video", path: "clips\\intro.mp4", kind: "video" },
+    { eventId: "a", tool: "resume_media_operation", path: "voice.mp3", kind: "audio" },
+  ]);
+  assert.deepEqual(roundPresentation(events).media.map((item) => item.path), ["assets/cat.png", "clips\\intro.mp4", "voice.mp3"]);
+  assert.deepEqual(roundPresentation([event("s", "task.started", { taskPreview: "hi" })]).media, []);
 });

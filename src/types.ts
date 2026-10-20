@@ -155,6 +155,12 @@ export interface AgentTool extends ToolDefinition {
   preview?(input: Record<string, unknown>, context: ToolContext): Promise<string>;
   changesWorkspace?: boolean | ((input: Record<string, unknown>) => boolean);
   isVerification?(input: Record<string, unknown>, result: string): boolean;
+  /**
+   * A successful call validates the artifact it writes itself (for example a media tool that saves the asset it
+   * downloaded or decoded). The write then needs no further check and does not stale earlier ones; the saved path
+   * joins the verification stamp so a later change to it is still detected. Other workspace changes keep needing checks.
+   */
+  verifiesOwnOutput?: boolean;
   /** Host-observed, active timed wait; repeated waits are not a tool-call loop. */
   isPendingWait?(input: Record<string, unknown>): boolean;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<string>;

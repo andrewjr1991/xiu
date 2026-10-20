@@ -217,6 +217,7 @@ const bridge = {
   importAttachments: async () => ({ insertText: "", attachments: [] }),
   reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], fullDiff: undefined, preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
+  previewMedia: async ({ path }) => { calls.push(`media-preview:${path}`); return { path, kind: "image", bytes: 2048, dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwyBNAMDAC/IBft7Y/jOAAAAAElFTkSuQmCC" }; },
   restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
   recoverTask: async () => runtime(),
   abandonRecovery: async () => review(),
@@ -317,6 +318,10 @@ contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...cal
     emit('runtime.notice', { kind: 'failure', message: 'run_process: Exit code: 1' });
     emit('tool.finished', { name: 'run_process', summary: output, result: { status: 'failure', output, retryable: false, sideEffectState: 'none' } });
     emit('model.progress', { chunks: 8, textCharacters: 0, argumentCharacters: 3783 });
+  },
+  emitMediaFixture: () => {
+    emit("tool.started", { name: "generate_image", description: "generate assets/media-preview-canary.png with image-model", changesWorkspace: true, verification: false, risk: "dangerous" });
+    emit("tool.finished", { name: "generate_image", summary: "Generated image with image-model\nRequest: req-media-1\nSaved: assets/media-preview-canary.png\nSource URL: https://assets.example/canary.png", result: { status: "success", output: "Generated image", retryable: false, sideEffectState: "possible" }, verification: false });
   },
   emitWebFixture: () => {
     emit("plan.updated", { plan: { goal: "紧凑计划验收", updatedAt: now(), steps: Array.from({ length: 15 }, (_, index) => ({ id: `step-${index}`, title: `测试步骤 ${index + 1}：验证交互和状态`, status: index < 2 ? "completed" : index === 2 ? "in_progress" : "pending" })) } });

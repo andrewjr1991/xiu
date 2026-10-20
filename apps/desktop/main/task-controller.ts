@@ -9,13 +9,13 @@ import type { WorkspaceManagementRequest } from "../../../src/runtime/workspace-
 import type { WorkspacePluginRequest } from "../../../src/runtime/plugin-service.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { createWorkspaceAgentHost, type WorkspaceAgentHost } from "../../../src/runtime/workspace-agent-host.js";
-import { listReviewFiles, previewReviewFile } from "../../../src/runtime/review.js";
+import { listReviewFiles, previewGeneratedMedia, previewReviewFile } from "../../../src/runtime/review.js";
 import { captureTaskBaseline, getWorkspaceDiff, inspectTaskChanges, type TaskChangeSnapshot } from "../../../src/task-changes.js";
 import { deleteTaskChangeHistory, loadTaskChangeHistory, saveTaskChangeHistory } from "../../../src/task-change-history.js";
 import { deleteSession, loadSession } from "../../../src/session.js";
 import { historyAttachmentReferences } from "./history-attachments.js";
 import { recoveryContinuation, safeTaskPreview, TaskRunJournal, type TaskRunOperation } from "../../../src/task-run.js";
-import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
+import type { DesktopApprovalMode, DesktopApprovalModeRequest, DesktopPlanModeRequest, DesktopChangeView, DesktopCheckpointRestoreRequest, DesktopFilePreviewRequest, DesktopMediaPreviewRequest, DesktopRecoveryAbandonRequest, DesktopRecoveryRequest, DesktopReviewOperation, DesktopReviewSnapshot, DesktopTaskDeleteRequest, DesktopTaskHistoryRequest, DesktopTaskHistorySnapshot, RuntimeApprovalDecisionRequest, DesktopRuntimeConnection } from "../shared/protocol.js";
 import type { RuntimeEvent } from "../../../src/runtime/protocol.js";
 
 export type WorkspaceAgentHostFactory = (workspace: string) => Promise<WorkspaceAgentHost>;
@@ -543,6 +543,12 @@ export class DesktopTaskController {
   async previewFile(workspace: string, request: DesktopFilePreviewRequest) {
     if (!request || typeof request.path !== "string") throw new Error("Invalid file preview request.");
     return previewReviewFile(workspace, request.path);
+  }
+
+  /** Inline preview of a media file a task saved; `thumbnail` is the host's bounded scaler for large images. */
+  async previewMedia(workspace: string, request: DesktopMediaPreviewRequest, thumbnail?: (data: Buffer, mediaType: string) => string | undefined) {
+    if (!request || typeof request.path !== "string") throw new Error("Invalid media preview request.");
+    return previewGeneratedMedia(workspace, request.path, thumbnail);
   }
 
   async cancelSubagent(workspace: string, request: import("../shared/protocol.js").DesktopSubagentCancelRequest, confirm: () => Promise<boolean>): Promise<DesktopRuntimeConnection> {
