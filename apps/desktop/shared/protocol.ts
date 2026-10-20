@@ -296,6 +296,7 @@ export interface XiuDesktopBridge {
   desktopAbout(): Promise<{ version: string; packaged: boolean; notificationsSupported: boolean }>;
   managementSnapshot(): Promise<import("../../../src/runtime/workspace-management.js").WorkspaceManagementSnapshot>;
   prepareSkillInstallation(sourceKind?: "directory" | "file"): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>> | undefined>;
+  prepareRemoteSkillInstallation(url: string): Promise<Awaited<ReturnType<import("../../../src/runtime/workspace-management.js").WorkspaceManagementService["prepareSkill"]>>>;
   cancelSkillInstallation(): Promise<void>;
   changeManagement(request: import("../../../src/runtime/workspace-management.js").WorkspaceManagementRequest): Promise<DesktopRuntimeConnection>;
   pluginSnapshot(): Promise<import("../../../src/runtime/plugin-service.js").WorkspacePluginSnapshot>;
@@ -365,6 +366,7 @@ export const desktopChannels = {
   about: "desktop:about",
   managementSnapshot: "management:snapshot",
   skillPrepare: "skill:prepare",
+  skillPrepareRemote: "skill:prepare-remote",
   skillCancel: "skill:cancel",
   managementChange: "management:change",
   pluginSnapshot: "plugin:snapshot",

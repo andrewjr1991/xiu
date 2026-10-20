@@ -50,8 +50,40 @@ test("local skill preview copies immutable bytes, requires confirmation and neve
   assert.match(await fs.readFile(path.join(installed, "fixture-install", "SKILL.md"), "utf8"), /First staged content/);
   await assert.rejects(fs.stat(marker));
   await assert.rejects(service.change({ action: "skill-install", revision: preview.revision, token: preview.token, confirmed: true }));
-  await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: fixture-install\n---\nSecond content");
-  await assert.rejects(service.prepareSkill(source), /already exists/);
+  await fs.writeFile(path.join(source, "SKILL.md"), "---\nname: fixture-install\ndescription: second\npermissions: workspace:read\n---\nSecond content");
+  // Replacing an installed skill is previewed per skill and needs its own flag; the old version stays as a backup.
+  const replacement = await service.prepareSkill(source);
+  assert.deepEqual(replacement.skills.map((item) => ({ name: item.name, replacing: item.replacing, added: item.added })), [{ name: "fixture-install", replacing: true, added: ["workspace:read"] }]);
+  assert.equal(replacement.remote, false);
+  await assert.rejects(service.change({ action: "skill-install", revision: replacement.revision, token: replacement.token, confirmed: true }), /explicit confirmation/);
+  assert.match(await fs.readFile(path.join(installed, "fixture-install", "SKILL.md"), "utf8"), /First staged content/);
+  const again = await service.prepareSkill(source);
+  await service.change({ action: "skill-install", revision: again.revision, token: again.token, confirmed: true, replace: true });
+  assert.match(await fs.readFile(path.join(installed, "fixture-install", "SKILL.md"), "utf8"), /Second content/);
+  const backups = (await fs.readdir(path.join(root, "skill-backups", "fixture-install"))).filter((name) => name.endsWith("-replaced"));
+  assert.equal(backups.length, 1);
+  assert.match(await fs.readFile(path.join(root, "skill-backups", "fixture-install", backups[0]!, "SKILL.md"), "utf8"), /First staged content/);
+  assert.deepEqual((await fs.readdir(installed)).filter((name) => name.startsWith("fixture-install")), ["fixture-install"], "the backup is not left inside the skills directory");
+  // Uninstall needs confirmation and only touches global skills; the grant is revoked with it.
+  const snapshot = await service.snapshot();
+  assert.equal(snapshot.skills.find((item) => item.name === "fixture-install")?.removable, true);
+  await assert.rejects(service.change({ action: "skill-uninstall", revision: snapshot.revision, name: "fixture-install", confirmed: false as never }), /confirmation/);
+  await assert.rejects(service.change({ action: "skill-uninstall", revision: snapshot.revision, name: "missing", confirmed: true }), /Only global skills/);
+  await service.change({ action: "skill-uninstall", revision: snapshot.revision, name: "fixture-install", confirmed: true });
+  await assert.rejects(fs.stat(path.join(installed, "fixture-install")));
+  assert.equal((await service.snapshot()).skills.some((item) => item.name === "fixture-install"), false);
+  assert.ok((await fs.readdir(path.join(root, "skill-backups", "fixture-install"))).some((name) => name.endsWith("-uninstalled")));
+});
+
+test("remote skill previews accept only credential-free HTTPS Git URLs and never touch the network otherwise", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-remote-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { service } = fixture(new SkillRegistry(root, path.join(root, "installed")));
+  t.after(() => service.close());
+  for (const bad of ["http://example.test/skills.git", "https://user:secret@example.test/skills.git", "ssh://git@example.test/skills.git"]) {
+    await assert.rejects(service.prepareSkill(bad), /HTTPS Git URLs/, bad);
+  }
+  await assert.rejects(fs.stat(path.join(root, "installed")));
 });
 
 test("skill preview cancellation and wrong token leave installed directory untouched", async (t) => {
@@ -106,7 +138,10 @@ test("ZIP and standalone skill previews install only staged bytes after explicit
   assert.match(await fs.readFile(path.join(installed, "zipped/SKILL.md"), "utf8"), /Original bytes/);
   assert.equal(await fs.readFile(path.join(installed, "zipped/references/help.md"), "utf8"), "Original resource");
   await fs.writeFile(source, zipFixture([{ name: "SKILL.md", data: "---\nname: zipped\n---\nReplacement" }]));
-  await assert.rejects(service.prepareSkill(source), /already exists/);
+  const replacing = await service.prepareSkill(source);
+  assert.deepEqual(replacing.skills.map((item) => [item.name, item.replacing]), [["zipped", true]]);
+  await assert.rejects(service.change({ action: "skill-install", token: replacing.token, revision: replacing.revision, confirmed: true }), /explicit confirmation/);
+  assert.match(await fs.readFile(path.join(installed, "zipped/SKILL.md"), "utf8"), /Original bytes/);
 });
 
 test("invalid ZIP leaves no staged preview or installed files and permits retry", async (t) => {

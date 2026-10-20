@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createSkillTools, SkillRegistry } from "../src/skills.js";
+import { createSkillTools, SkillRegistry, validateRemoteSkillSource } from "../src/skills.js";
+import { PermissionGrantStore } from "../src/extension-permissions.js";
 
 const skillMarkdown = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nFollow these instructions carefully.\n`;
 
@@ -157,4 +158,43 @@ test("skills the registry finds but does not list are named with a reason, and /
   assert.equal(registry.list().length, 300);
   assert.deepEqual(registry.issues().filter((issue) => issue.reason === "truncated"), [{ name: "~/.xiu/skills", scope: "global", reason: "truncated", detail: "2" }]);
   assert.match(skillIssuesNote(registry.issues(), "zh-CN")!, /~\/\.xiu\/skills（global，超过 300 个 SKILL\.md，后 2 个未读取）/);
+});
+
+test("uninstalling a global skill moves it to a recoverable backup and revokes its grant; other scopes are refused", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-uninstall-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "fixture-home"));
+  const globalRoot = path.join(cwd, "home", "skills");
+  const grants = new PermissionGrantStore(path.join(cwd, "home", "extension-permissions.json"));
+  const source = path.join(cwd, "source-skill");
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, "SKILL.md"), `---\nname: removable\ndescription: d\npermissions: workspace:read\n---\nBody`);
+  await fs.mkdir(path.join(cwd, ".xiu", "skills", "project-only"), { recursive: true });
+  await fs.writeFile(path.join(cwd, ".xiu", "skills", "project-only", "SKILL.md"), skillMarkdown("project-only", "project"));
+  const registry = new SkillRegistry(cwd, globalRoot, grants);
+  await registry.install(source, false, async () => true);
+  const installed = registry.list().find((skill) => skill.name === "removable")!;
+  assert.equal(installed.scope, "global");
+  const manifest = { kind: "skill" as const, name: "removable", origin: path.resolve(path.join(globalRoot, "removable")), permissions: ["workspace:read" as const], declared: true };
+  assert.equal(await grants.isApproved(manifest), true);
+  assert.deepEqual(await registry.describeInstall([{ name: "removable", permissions: ["workspace:read", "network:access"] }]), [{ name: "removable", replacing: true, added: ["network:access"] }]);
+  assert.deepEqual(await registry.describeInstall([{ name: "fresh", permissions: ["instructions:load"] }]), [{ name: "fresh", replacing: false, added: ["instructions:load"] }]);
+
+  const result = await registry.uninstall("removable");
+  assert.match(result.backup, /skill-backups[\\/]removable[\\/].*-uninstalled$/);
+  assert.match(await fs.readFile(path.join(result.backup, "SKILL.md"), "utf8"), /Body/);
+  await assert.rejects(fs.stat(path.join(globalRoot, "removable")));
+  assert.equal(await grants.isApproved(manifest), false);
+  assert.equal(registry.list().some((skill) => skill.name === "removable"), false);
+  await assert.rejects(registry.uninstall("removable"), /not found/);
+  await assert.rejects(registry.uninstall("project-only"), /not found/, "project skills live outside the global root and are never moved");
+  await assert.rejects(registry.uninstall("../escape"), /Invalid skill name/);
+  assert.ok(await fs.stat(path.join(cwd, ".xiu", "skills", "project-only", "SKILL.md")));
+});
+
+test("remote skill sources must be credential-free HTTPS URLs", () => {
+  assert.equal(validateRemoteSkillSource(" https://github.com/example/skills.git "), "https://github.com/example/skills.git");
+  for (const bad of ["http://github.com/example/skills.git", "https://user:token@github.com/example/skills.git", "git@github.com:example/skills.git", "ssh://git@github.com/example/skills.git", "https://", "not a url"]) {
+    assert.throws(() => validateRemoteSkillSource(bad), /HTTPS Git URLs/, bad);
+  }
 });

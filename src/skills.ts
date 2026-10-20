@@ -122,6 +122,21 @@ async function copyTree(source: string, destination: string): Promise<void> {
   await copy(source, destination);
 }
 
+/** HTTPS Git only, without embedded credentials: Git reads the repository, never runs hooks or package scripts. */
+export function validateRemoteSkillSource(value: string): string {
+  const trimmed = value.trim().replace(/^['"]|['"]$/g, "");
+  let url: URL;
+  try { url = new URL(trimmed); } catch { throw new Error("Remote skill sources must use HTTPS Git URLs"); }
+  if (url.protocol !== "https:" || url.username || url.password || !url.hostname) throw new Error("Remote skill sources must use HTTPS Git URLs without embedded credentials");
+  return trimmed;
+}
+
+/** Shallow-clones a validated HTTPS Git URL into `destination`; the caller stages and removes the checkout. */
+export async function cloneSkillRepository(url: string, destination: string): Promise<void> {
+  const source = validateRemoteSkillSource(url);
+  await execFileAsync("git", ["clone", "--depth", "1", "--", source, destination], { timeout: 120_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+}
+
 /** Prepare local packages without executing scripts or writing installed skills. */
 export async function stageLocalSkillPackage(source: string, destination: string): Promise<Array<{ name: string; permissions: ExtensionPermission[]; warnings: string[] }>> {
   const root = await fs.lstat(source);
@@ -285,6 +300,47 @@ export class SkillRegistry {
     return `Skill: ${skill.name}\nScope: ${skill.scope}\nPermissions: ${skill.permissions.join(", ")}\n${skill.permissionWarnings.length ? `Unknown permission declarations: ${skill.permissionWarnings.join(", ")}\n` : ""}Source: ${skill.file}\n\n${content}`;
   }
 
+  /**
+   * For a staged package, says which skills would replace an installed global skill and which permissions
+   * are new compared with the installed version (or the stored grant). Read-only; no files or grants change.
+   */
+  async describeInstall(skills: Array<{ name: string; permissions: ExtensionPermission[] }>): Promise<Array<{ name: string; replacing: boolean; added: ExtensionPermission[] }>> {
+    const results: Array<{ name: string; replacing: boolean; added: ExtensionPermission[] }> = [];
+    for (const skill of skills) {
+      const destination = path.join(this.globalDirectory(), skill.name);
+      const manifest: ExtensionPermissionManifest = { kind: "skill", name: skill.name, origin: path.resolve(destination), permissions: [...skill.permissions], declared: true };
+      const exists = await fs.lstat(destination).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error; });
+      let previous: ExtensionPermissionManifest | undefined;
+      if (exists) {
+        const content = await fs.readFile(path.join(destination, "SKILL.md"), "utf8").catch(() => "");
+        previous = skillManifest(skill.name, destination, frontmatter(content));
+      }
+      results.push({ name: skill.name, replacing: exists, added: addedPermissions(previous ?? await this.permissionStore.approvedManifest(manifest), manifest) });
+    }
+    return results;
+  }
+
+  /**
+   * Moves an installed global skill into a recoverable backup and forgets its permission grant.
+   * Project, compatible and plugin skills are not installed by Xiu and cannot be removed here.
+   */
+  async uninstall(name: string): Promise<{ name: string; backup: string }> {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed !== safeName(trimmed)) throw new Error(`Invalid skill name: ${name}`);
+    const destination = path.join(this.globalDirectory(), trimmed);
+    const stat = await fs.lstat(destination).catch(() => undefined);
+    if (!stat || !stat.isDirectory()) throw new Error(`Installed global skill not found: ${trimmed}`);
+    const content = await fs.readFile(path.join(destination, "SKILL.md"), "utf8").catch(() => "");
+    const manifest = skillManifest(trimmed, destination, frontmatter(content));
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backup = path.join(path.dirname(this.globalDirectory()), "skill-backups", trimmed, `${stamp}-uninstalled`);
+    await fs.mkdir(path.dirname(backup), { recursive: true });
+    await fs.rename(destination, backup);
+    await this.permissionStore.revoke(manifest);
+    await this.refresh();
+    return { name: trimmed, backup };
+  }
+
   async install(source: string, overwrite = false, confirmPermissions?: SkillPermissionConfirmation): Promise<InstalledSkill[]> {
     const trimmed = source.trim().replace(/^['"]|['"]$/g, "");
     if (!trimmed) throw new Error("Skill source cannot be empty");
@@ -292,7 +348,7 @@ export class SkillRegistry {
     let temporary: string | undefined;
     if (/^https:\/\//i.test(trimmed)) {
       temporary = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-"));
-      await execFileAsync("git", ["clone", "--depth", "1", "--", trimmed, temporary], { timeout: 120_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+      await cloneSkillRepository(trimmed, temporary);
       packageRoot = temporary;
     } else if (/^[a-z]+:\/\//i.test(trimmed)) {
       throw new Error("Remote skill sources must use HTTPS Git URLs");
@@ -333,7 +389,9 @@ export class SkillRegistry {
           throw new Error(`Skill permission acknowledgement was declined: ${name}`);
         }
         if (exists) {
-          backup = `${destination}.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+          // Backups live outside the skills directory so a replaced or uninstalled version is never rediscovered as a skill.
+          backup = path.join(path.dirname(this.globalDirectory()), "skill-backups", name, `${new Date().toISOString().replace(/[:.]/g, "-")}-replaced`);
+          await fs.mkdir(path.dirname(backup), { recursive: true });
           await fs.rename(destination, backup);
         }
         try { await copyTree(sourceDirectory, destination); }

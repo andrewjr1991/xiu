@@ -111,7 +111,7 @@ export class DesktopTaskController {
     return this.reload(workspace);
   }
 
-  async prepareSkillInstallation(workspace: string, choose: () => Promise<string | undefined>) {
+  async prepareSkillInstallation(workspace: string, choose: () => Promise<string | undefined>, kind: "local" | "remote" = "local") {
     const host = await this.ensure(workspace);
     const contextId = this.modeContextId;
     await this.assertCanReconfigure(workspace);
@@ -123,7 +123,11 @@ export class DesktopTaskController {
       const source = await choose();
       if (this.host !== host || this.workspace !== workspace || this.modeContextId !== contextId) throw new Error("上下文已变化。");
       return source ? await host.management.prepareSkill(source) : undefined;
-    } catch { throw new Error("无法预览此技能包。请选择文件夹、SKILL.md 或 ZIP；包须未安装、无链接、无重复技能且权限声明有效，大小不超过 20 MB、条目不超过 1000。"); }
+    } catch {
+      throw new Error(kind === "remote"
+        ? "无法从该地址预览技能包。请使用无内嵌凭据的 HTTPS Git 仓库地址；仓库须含 1–100 个 SKILL.md、无链接、无重复技能且权限声明有效，大小不超过 20 MB、条目不超过 1000，克隆最多等待 120 秒。"
+        : "无法预览此技能包。请选择文件夹、SKILL.md 或 ZIP；包须无链接、无重复技能且权限声明有效，大小不超过 20 MB、条目不超过 1000。");
+    }
     finally { this.mcpBusy = false; }
   }
 

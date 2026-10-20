@@ -74,6 +74,7 @@ export function slashCommands(language: UiLanguage): SlashCommand[] {
     item("/plugin publisher revoke", "撤销插件发布者信任", "Revoke trust in a plugin publisher"),
     item("/skills", "浏览或安装 Xiu 技能", "Browse or install Xiu skills"),
     item("/skills install", "安装本地或 HTTPS Git 技能包", "Install a local or HTTPS Git skill package"),
+    item("/skills uninstall", "卸载 Xiu 安装的全局技能并保留备份", "Uninstall a Xiu-installed global skill, keeping a backup"),
     item("/mcp", "查看 MCP 服务和工具", "Show connected MCP servers and tools"),
     item("/mcp permissions", "查看或确认 MCP 权限清单", "Show or approve MCP permission manifests"),
     item("/mcp resources", "浏览 MCP 资源与模板", "Browse MCP resources and templates"),

@@ -170,6 +170,9 @@ test("a command failure the catalog explains gets the next step and xiu doctor; 
     const pluginContext = { language: "zh-CN", pluginRegistry: { refresh: async () => [], list: () => [], get: () => undefined, setEnabled: async (id: string) => { throw new Error(`Plugin not found: ${id}`); } }, applyApprovedPlugins: async () => [] } as unknown as PluginCommandContext;
     assert.equal(await handlePluginCommand("/plugin enable nope", pluginContext), true);
     assert.equal(await handlePluginCommand("/plugin revoke nope", pluginContext), true);
+    const skillContext = { language: "zh-CN", skillRegistry: { refresh: async () => [{ name: "nope", scope: "project" }] }, agent: { reloadInstructions() {} } } as unknown as SkillCommandContext;
+    assert.equal(await handleSkillCommand("/skills uninstall nope", skillContext), true);
+    assert.match(logs.join("\n"), /没有名为 nope 的已安装全局技能/);
     assert.match(logs.join("\n"), /未找到插件：nope/);
   } finally {
     console.error = originalError;
