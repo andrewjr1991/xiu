@@ -74,7 +74,7 @@ import { handleAgentCommand } from "./commands/agent-commands.js";
 import { handleInspectCommand } from "./commands/inspect-commands.js";
 import { handleMediaCommand } from "./commands/media-command.js";
 import { handleRuntimeCommand } from "./commands/runtime-commands.js";
-import { handleSessionCommand } from "./commands/session-commands.js";
+import { chooseSession, handleSessionCommand } from "./commands/session-commands.js";
 import { handleMcpCommand } from "./commands/mcp-commands.js";
 import { handlePluginCommand } from "./commands/plugin-commands.js";
 import { handleProviderCommand } from "./commands/provider-commands.js";
@@ -213,19 +213,6 @@ function untrustedWorkspaceJsonMessage(language: UiLanguage): string {
   return localize(language,
     "工作区尚未信任。请先在该目录交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace，再使用 --json。",
     "This workspace is not trusted yet. Run xiu interactively in it once and confirm trust, or pass --trust-workspace explicitly on a checkout you control, before using --json.");
-}
-
-async function chooseSession(workspace: string, language: UiLanguage) {
-  const { sessions, unreadable } = await listSessionsWithIssues(workspace);
-  const note = unreadableSessionsNote(unreadable, language);
-  if (note) console.log(chalk.yellow(note));
-  if (!sessions.length) return undefined;
-  const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
-    label: sessionTitle(session, language),
-    description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
-    value: session.id,
-  })), language);
-  return selected ? await loadSession(workspace, selected) : undefined;
 }
 
 let jsonStream: JsonEventStream | undefined;
@@ -1943,70 +1930,6 @@ async function main(): Promise<void> {
         if (mcpConfigError) console.log(chalk.yellow(`${formatUserFacingError(localize(language, "未加载 MCP 配置", "MCP configuration was not loaded"), mcpConfigError, language)}\n`));
       }
       if (task === "/exit" || task === "/quit") break;
-      if (task === "/recover") {
-        let interrupted: InterruptedTaskRun | undefined;
-        try { interrupted = await taskRunJournal.interrupted(); }
-        catch (error) {
-          console.error(chalk.red(`${describeFailure(localize(language, "任务恢复日志无法读取", "Could not read the task recovery journal"), error, language)}\n`));
-          continue;
-        }
-        if (!interrupted) {
-          console.log(chalk.dim(localize(language, "当前工作区没有异常中断任务。\n", "There is no interrupted task in this workspace.\n")));
-          continue;
-        }
-        const action = await selectTerminalOption(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
-          { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "先核验未知副作用，再继续", "Verify unknown side effects before continuing"), value: "resume" as const },
-          { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "不重放任何操作", "Do not replay any operation"), value: "abandon" as const },
-        ], language);
-        if (action === "abandon") {
-          await taskRunJournal.abandon(interrupted.runId);
-          console.log(chalk.green(localize(language, "旧任务已放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
-          continue;
-        }
-        if (action !== "resume") continue;
-        let selected: RestoredSession;
-        try { selected = await loadSession(config.cwd, interrupted.sessionId); }
-        catch (error) {
-          console.error(chalk.red(`${describeFailure(localize(language, "无法加载关联会话", "Could not load the linked session"), error, language)}\n`));
-          continue;
-        }
-        if (selected.providerId && selected.providerId !== config.providerId) {
-          const selectedProfile = providerRegistry.get(selected.providerId);
-          if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
-            console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，恢复记录保持不变。\n", "Could not restore the session provider; the recovery record was preserved.\n")));
-            continue;
-          }
-        }
-        agent.restoreSession(selected);
-        latestTaskBaseline = undefined;
-        latestProjectCheck = undefined;
-        agent.setRecoverySource(interrupted);
-        renderReplay(selected);
-        await runTaskSequence(recoveryContinuation(interrupted, language), {
-          task: localize(language, `恢复中断任务：${interrupted.taskPreview}`, `Recover interrupted task: ${interrupted.taskPreview}`),
-          inputKind: "system",
-        });
-        continue;
-      }
-      if (task === "/resume") {
-        const selected = await chooseSession(config.cwd, language);
-        if (!selected) console.log(chalk.dim(localize(language, "未选择会话。\n", "No session selected.\n")));
-        else {
-          if (selected.providerId && selected.providerId !== config.providerId) {
-            const selectedProfile = providerRegistry.get(selected.providerId);
-            if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
-              console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，会话未切换。\n", "Could not restore the session provider; the session was not changed.\n")));
-              continue;
-            }
-          }
-          agent.restoreSession(selected);
-          latestTaskBaseline = undefined;
-          latestProjectCheck = undefined;
-          awaitingReply = undefined;
-          renderReplay(selected);
-        }
-        continue;
-      }
       if (await handleMediaCommand(task, { cwd: config.cwd, language })) continue;
       if (await handleProviderCommand(task, { agent, attachMcpTools, compactCapabilityProbeSummary, config, featureNames, language, profileConfig, providerRegistry, rebuildBaseTools, startupProfile, status, switchProviderProfile })) continue;
       if (task === "/clear") {
@@ -2017,7 +1940,16 @@ async function main(): Promise<void> {
         console.log(chalk.dim(localize(language, "对话上下文已清空。\n", "Conversation context cleared.\n")));
         continue;
       }
-      if (await handleSessionCommand(task, { agent, checkpointManager, cwd: config.cwd, language, onCheckpointRestored: () => projectIndex.invalidate(), renderReplay, status })) continue;
+      if (await handleSessionCommand(task, {
+        agent, checkpointManager, config, language,
+        onCheckpointRestored: () => projectIndex.invalidate(),
+        onSessionRestored: (source) => {
+          latestTaskBaseline = undefined;
+          latestProjectCheck = undefined;
+          if (source === "resume") awaitingReply = undefined;
+        },
+        providerRegistry, renderReplay, runTaskSequence, status, switchProviderProfile, taskRunJournal,
+      })) continue;
       if (task === "/diff" || task.startsWith("/diff ")) {
         await printDiff(task);
         continue;

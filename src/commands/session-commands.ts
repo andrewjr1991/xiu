@@ -1,43 +1,131 @@
 import chalk from "chalk";
 import type { Agent } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
+import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
 import { selectTerminalOption } from "../interactive-ui.js";
 import { formatLocalTime } from "../local-time.js";
-import { listSessionsWithIssues, loadSession, type RestoredSession, sessionTitle, unreadableSessionsNote } from "../session.js";
+import type { ProviderProfile, ProviderRegistry } from "../provider-registry.js";
+import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "../session.js";
 import type { StatusLine } from "../status.js";
+import { type InterruptedTaskRun, recoveryContinuation, type TaskRunJournal } from "../task-run.js";
 import { askYesNo } from "../terminal-prompts.js";
+import { describeFailure } from "../user-facing-errors.js";
 
 export interface SessionCommandContext {
-  agent: Pick<Agent, "status" | "compact" | "plan" | "setPlanMode">;
+  agent: Pick<Agent, "status" | "compact" | "plan" | "setPlanMode" | "restoreSession" | "setRecoverySource">;
   checkpointManager: Pick<CheckpointManager, "list" | "restore">;
-  /** Workspace whose `.xiu/sessions` the history commands read. */
-  cwd: string;
+  /** The live runtime config: `cwd` is the workspace whose `.xiu` records are read, `providerId` the provider current when a session is restored. */
+  config: Pick<AgentConfig, "cwd" | "providerId">;
   language: UiLanguage;
   /** Runs after a checkpoint restore rewrote files (the CLI invalidates its project index). */
   onCheckpointRestored: () => void;
+  /** Runs after `/recover` or `/resume` replaced the agent's session (the CLI drops its per-task baselines). */
+  onSessionRestored: (source: "recover" | "resume") => void;
+  providerRegistry: Pick<ProviderRegistry, "get">;
   renderReplay: (session: RestoredSession) => void;
+  /** Runs the recovery continuation of an interrupted task as a system input. */
+  runTaskSequence: (task: string, display: Pick<SessionReplayTurn, "task" | "inputKind">) => Promise<boolean>;
   status: Pick<StatusLine, "stop">;
+  /** Switches to the provider a restored session used, without persisting it; false means the switch failed. */
+  switchProviderProfile: (profile: ProviderProfile, persist: boolean, preferredModel?: string) => Promise<boolean>;
+  taskRunJournal: Pick<TaskRunJournal, "interrupted" | "abandon">;
   /** The final yes/no before files are overwritten; defaults to the terminal prompt and is injectable for tests. */
   confirmRestore?: (prompt: string) => Promise<boolean>;
 }
 
+/** Lists the workspace's sessions and lets the user pick one; undefined when there is none or the choice was cancelled. */
+export async function chooseSession(workspace: string, language: UiLanguage): Promise<RestoredSession | undefined> {
+  const { sessions, unreadable } = await listSessionsWithIssues(workspace);
+  const note = unreadableSessionsNote(unreadable, language);
+  if (note) console.log(chalk.yellow(note));
+  if (!sessions.length) return undefined;
+  const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
+    label: sessionTitle(session, language),
+    description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
+    value: session.id,
+  })), language);
+  return selected ? await loadSession(workspace, selected) : undefined;
+}
+
 /**
- * Conversation, plan and checkpoint slash commands moved out of the interactive loop in cli.ts
- * (`/history`, `/history sessions`, `/compact`, `/plan`, `/tasks`, `/plan on|off`, `/checkpoints`, `/rewind`);
- * returns false when `task` is not one of them. Output and prompts are unchanged.
+ * Conversation, plan, checkpoint and recovery slash commands moved out of the interactive loop in cli.ts
+ * (`/history`, `/history sessions`, `/compact`, `/plan`, `/tasks`, `/plan on|off`, `/checkpoints`, `/rewind`,
+ * `/recover`, `/resume`); returns false when `task` is not one of them. Output and prompts are unchanged: without
+ * a terminal every selector counts as cancelled, so nothing is restored, abandoned or replayed.
  */
 export async function handleSessionCommand(task: string, ctx: SessionCommandContext): Promise<boolean> {
-  const { agent, checkpointManager, cwd, language, onCheckpointRestored, renderReplay, status } = ctx;
+  const { agent, checkpointManager, config, language, onCheckpointRestored, onSessionRestored, providerRegistry, renderReplay, runTaskSequence, status, switchProviderProfile, taskRunJournal } = ctx;
   const confirmRestore = ctx.confirmRestore ?? askYesNo;
+  if (task === "/recover") {
+    let interrupted: InterruptedTaskRun | undefined;
+    try { interrupted = await taskRunJournal.interrupted(); }
+    catch (error) {
+      console.error(chalk.red(`${describeFailure(localize(language, "任务恢复日志无法读取", "Could not read the task recovery journal"), error, language)}\n`));
+      return true;
+    }
+    if (!interrupted) {
+      console.log(chalk.dim(localize(language, "当前工作区没有异常中断任务。\n", "There is no interrupted task in this workspace.\n")));
+      return true;
+    }
+    const action = await selectTerminalOption(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
+      { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "先核验未知副作用，再继续", "Verify unknown side effects before continuing"), value: "resume" as const },
+      { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "不重放任何操作", "Do not replay any operation"), value: "abandon" as const },
+    ], language);
+    if (action === "abandon") {
+      await taskRunJournal.abandon(interrupted.runId);
+      console.log(chalk.green(localize(language, "旧任务已放弃；没有重放任何操作。\n", "The old task was abandoned; no operation was replayed.\n")));
+      return true;
+    }
+    if (action !== "resume") return true;
+    let selected: RestoredSession;
+    try { selected = await loadSession(config.cwd, interrupted.sessionId); }
+    catch (error) {
+      console.error(chalk.red(`${describeFailure(localize(language, "无法加载关联会话", "Could not load the linked session"), error, language)}\n`));
+      return true;
+    }
+    if (selected.providerId && selected.providerId !== config.providerId) {
+      const selectedProfile = providerRegistry.get(selected.providerId);
+      if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
+        console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，恢复记录保持不变。\n", "Could not restore the session provider; the recovery record was preserved.\n")));
+        return true;
+      }
+    }
+    agent.restoreSession(selected);
+    onSessionRestored("recover");
+    agent.setRecoverySource(interrupted);
+    renderReplay(selected);
+    await runTaskSequence(recoveryContinuation(interrupted, language), {
+      task: localize(language, `恢复中断任务：${interrupted.taskPreview}`, `Recover interrupted task: ${interrupted.taskPreview}`),
+      inputKind: "system",
+    });
+    return true;
+  }
+  if (task === "/resume") {
+    const selected = await chooseSession(config.cwd, language);
+    if (!selected) console.log(chalk.dim(localize(language, "未选择会话。\n", "No session selected.\n")));
+    else {
+      if (selected.providerId && selected.providerId !== config.providerId) {
+        const selectedProfile = providerRegistry.get(selected.providerId);
+        if (!selectedProfile || !(await switchProviderProfile(selectedProfile, false, selected.model))) {
+          console.log(chalk.yellow(localize(language, "无法恢复该会话使用的 Provider，会话未切换。\n", "Could not restore the session provider; the session was not changed.\n")));
+          return true;
+        }
+      }
+      agent.restoreSession(selected);
+      onSessionRestored("resume");
+      renderReplay(selected);
+    }
+    return true;
+  }
   if (task === "/history" || task === "/history current") {
     const currentSessionId = agent.status().sessionId;
     if (!currentSessionId) console.log(chalk.dim(localize(language, "没有对话历史。\n", "No conversation history.\n")));
-    else renderReplay(await loadSession(cwd, currentSessionId));
+    else renderReplay(await loadSession(config.cwd, currentSessionId));
     return true;
   }
   if (task === "/history sessions") {
-    const { sessions, unreadable } = await listSessionsWithIssues(cwd);
+    const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
     const note = unreadableSessionsNote(unreadable, language);
     console.log([
       sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
