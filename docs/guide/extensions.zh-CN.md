@@ -159,7 +159,7 @@ OAuth 登录后可使用 `/mcp credentials [status] [名称]` 查看来源，但
 
 Windows stdio MCP 启动失败时，Xiu 会对 UTF-8、UTF-16LE 和常见 GB18030/GBK stderr 做有界解码，避免把本地中文错误显示为乱码；错误内容仍会截断并脱敏。
 
-v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mcp resources [名称]` 与 `/mcp prompts [名称]` 显示服务提供的目录；`/mcp read [名称] [URI]` 通过原 MCP 服务读取 Resource，Xiu 不会自行访问 URI；0.20.14 起 Resource Template 也能读：交互选择时模板和资源列在一起，或直接写模板名（或模板串）并用 `变量=值` 给参数，缺的变量逐项询问，展开后先打印要读的 URI 再请求。支持 RFC 6570 的 `{var}`、`{+var}`、`{#var}`、`{.var}`、`{/var}`、`{;var}`、`{?var}`、`{&var}`，不支持 `*` 与 `:n` 修饰符，每个变量都必须由你提供，Xiu 不代填；`/mcp prompt [名称] [Prompt] [JSON参数]` 获取并预览 Prompt，缺少必填参数时会逐项询问。
+v0.12.1 起可以显式浏览 MCP Resource、Resource Template 和 Prompt。`/mcp resources [名称]` 与 `/mcp prompts [名称]` 显示服务提供的目录；`/mcp read [名称] [URI]` 通过原 MCP 服务读取 Resource，Xiu 不会自行访问 URI；0.20.14 起 Resource Template 也能读：交互选择时模板和资源列在一起，或直接写模板名（或模板串）并用 `变量=值` 给参数，缺的变量逐项询问，展开后先打印要读的 URI 再请求。支持 RFC 6570 的 `{var}`、`{+var}`、`{#var}`、`{.var}`、`{/var}`、`{;var}`、`{?var}`、`{&var}`，不支持 `*` 与 `:n` 修饰符，每个变量都必须由你提供，Xiu 不代填；`/mcp prompt [名称] [Prompt] [JSON参数]` 获取并预览 Prompt，缺少必填参数时会逐项询问。桌面「扩展」面板从 0.20.14 起同样支持模板：点“资源列表”后，每个 Resource Template 显示为一个变量表单，填好后“读取模板资源”，主进程用你填的值按同一套 RFC 6570 规则展开再请求，缺变量或给普通 URI 传变量都会拒绝。每个服务条目还有一行只读“配置摘要”（启用状态、默认风险、参数个数、环境变量与请求头的名称、工作目录是否指定、工具风险、工作区改动标记、是否显式声明权限、OAuth 注册方式与 scopes），项目、插件与高级字段的值不在桌面显示也不能在桌面修改；插件贡献的服务标为“插件贡献”，不再误显示编辑和删除按钮。
 
 这些远端内容一律按“不可信内容”展示，不会自动注入当前任务或变成模型指令。列表最多读取 20 页、500 项；文本单块最多 32K 字符、单次最多 64K 字符；Blob、图片和音频只显示 MIME 与估算大小，不输出 Base64。要让模型使用其中信息，应由用户检查后明确转述或引用，避免第三方内容静默扩大权限。
 

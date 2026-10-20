@@ -343,8 +343,13 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().includes('mcp:approve:smoke')`, "MCP exact manifest approval");
     await clickText(window, "连接 / 重载", ".mcp-panel button");
     await waitFor(window, `document.querySelector('.mcp-panel').innerText.includes('2 个工具')`, "MCP tool connection");
+    assert(await evaluate(window, `(() => { const entry = [...document.querySelectorAll('.mcp-panel article')].find(el => el.textContent.includes('plugin_acme_search')); return Boolean(entry) && entry.textContent.includes('插件贡献') && entry.textContent.includes('环境变量 SEARCH_API_KEY（仅名称）') && ![...entry.querySelectorAll('button')].some(b => /^(编辑|删除)/.test(b.textContent)); })()`), "Plugin MCP entries must show as read-only plugin contributions with a names-only config summary.");
     await clickText(window, "资源列表", ".mcp-panel button");
     await waitFor(window, `document.querySelector('[aria-label="MCP 外部内容"]').innerText.includes('external-resource-canary')`, "MCP untrusted resource display");
+    await waitFor(window, `Boolean(document.querySelector('.mcp-panel [aria-label="模板变量 id"]'))`, "MCP resource template form");
+    await evaluate(window, `(() => { const input = document.querySelector('.mcp-panel [aria-label="模板变量 id"]'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, '42'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await clickText(window, "读取模板资源", ".mcp-panel button");
+    await waitFor(window, `window.xiuSmoke.calls().includes('mcp:browse:read-template:42') && document.querySelector('[aria-label="MCP 外部内容"]').innerText.includes('template-resource-canary')`, "MCP template expanded from typed variables");
     await clickText(window, "提示词列表", ".mcp-panel button");
     await waitFor(window, `window.xiuSmoke.calls().includes('mcp:browse:prompts')`, "MCP prompt browser");
     await clickText(window, "OAuth 登录", ".mcp-panel button");

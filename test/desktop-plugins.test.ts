@@ -68,6 +68,14 @@ test("the desktop host reuses plugins approved in the CLI and ignores unapproved
     assert.ok(!servers.some((name) => name.includes("acme.pending")), servers.join(","));
     const approved = (await host.mcp!.snapshot()).servers.find((server) => server.name === "plugin_acme_approved_search");
     assert.equal(approved?.approved, false, "plugin approval does not pre-approve the MCP permission manifest");
+    // Plugin-contributed servers are shown as such and are neither editable nor removable from the desktop; the grant origin stays `user:` so older approvals remain valid.
+    assert.equal(approved?.origin, "plugin");
+    assert.equal(approved?.editable, undefined);
+    assert.equal(approved?.removable, false);
+    assert.equal(approved?.details.permissionsDeclared, false);
+    const entry = (await host.mcp!.manager.configurationEntries(true)).find((item) => item.name === "plugin_acme_approved_search");
+    assert.equal(entry?.manifest.origin, "user:plugin_acme_approved_search");
+    await assert.rejects(host.mcp!.save({ name: "plugin_acme_approved_search", fingerprint: approved!.fingerprint, transport: "streamable-http", url: "https://mcp.example.com/mcp", risk: "read" }), /read-only/);
   } finally {
     await host.close!();
   }

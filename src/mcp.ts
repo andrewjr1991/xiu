@@ -1113,10 +1113,14 @@ export class McpManager {
     return Object.keys(await readConfig(this.globalConfig)).sort((left, right) => left.localeCompare(right));
   }
 
-  /** Node-side configuration access; frontends must use a non-secret projection. */
-  async configurationEntries(includeProject = true) {
+  /**
+   * Node-side configuration access; frontends must use a non-secret projection. `origin` tells a
+   * frontend who owns the entry (`user`, `project` or `plugin`); the permission manifest keeps the
+   * grant origin plugin servers always had, so approvals recorded before 0.20.14 stay valid.
+   */
+  async configurationEntries(includeProject = true): Promise<Array<{ name: string; origin: "user" | "project" | "plugin"; config: McpServerConfig; manifest: ExtensionPermissionManifest }>> {
     const servers = await this.configuredServers(includeProject);
-    return Object.entries(servers).map(([name, config]) => ({ name, origin: this.serverOrigins.get(name) ?? "user", config: structuredClone(config), manifest: mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config) }));
+    return Object.entries(servers).map(([name, config]) => ({ name, origin: this.pluginServers.has(name) ? "plugin" : this.serverOrigins.get(name) ?? "user", config: structuredClone(config), manifest: mcpManifest(name, `${this.serverOrigins.get(name) ?? "user"}:${name}`, config) }));
   }
 
   async saveUserServer(name: string, config: McpServerConfig, expectedFingerprint?: string): Promise<void> {
@@ -1124,7 +1128,7 @@ export class McpManager {
     const servers = await readConfig(this.globalConfig);
     const revision = JSON.stringify(servers);
     const effective = (await this.configurationEntries(true)).find((entry) => entry.name === name);
-    if (effective && effective.origin !== "user") throw new Error("Project MCP configuration is read-only here.");
+    if (effective && effective.origin !== "user") throw new Error(`${effective.origin === "plugin" ? "Plugin" : "Project"} MCP configuration is read-only here.`);
     const previous = servers[name];
     if (expectedFingerprint === undefined ? Boolean(previous) : !previous || permissionFingerprint(mcpManifest(name, `user:${name}`, previous)) !== expectedFingerprint) {
       throw new Error("MCP configuration changed; refresh before saving.");

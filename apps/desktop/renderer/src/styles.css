@@ -545,6 +545,8 @@ button, input, textarea { font: inherit; }
 .mcp-panel button:disabled { opacity: .5; cursor: default; }
 .mcp-fingerprint { display: block; margin-top: 8px; font-family: monospace; }
 .mcp-editor, .mcp-browser { margin-top: 16px; }
+.mcp-config-details { font-size: calc(12px * var(--ui-scale, 1)); color: var(--tone-65758b, #65758b); line-height: 1.5; }
+.mcp-templates { margin-top: 12px; }.mcp-template { border-top: 1px solid var(--tone-dce5f0, #dce5f0); padding-top: 10px; margin-top: 10px; }.mcp-template small { display: block; font-family: monospace; color: var(--tone-65758b, #65758b); }
 .mcp-panel label { display: block; margin: 10px 0; color: var(--tone-526078, #526078); }
 .mcp-panel input:not([type="checkbox"]), .mcp-panel select, .mcp-panel textarea { display: block; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--tone-dce5f2, #dce5f2); border-radius: 8px; background: var(--surface, white); color: var(--tone-18263c, #18263c); }
 .mcp-panel textarea { min-height: 64px; resize: vertical; }
