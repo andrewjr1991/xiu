@@ -20,8 +20,8 @@
 | `/plan off` | 关闭 Plan 模式 |
 | `/tasks` | 查看实时任务步骤 |
 | `/diff [task\|workspace\|staged]` | 0.18.0 起：本任务期间、工作区或暂存区差异；默认 task，来源不确定会标注 |
-| `/diff runs` | 0.20.13 起：列出最近 50 次运行及各自保存的改动文件数 |
-| `/diff run:<序号\|运行 ID 前缀> [文件]` | 0.20.13 起：回放某次运行结束时保存的改动记录；带文件路径时显示该文件的完整差异 |
+| `/diff runs` | 0.20.14 起：列出最近 50 次运行及各自保存的改动文件数 |
+| `/diff run:<序号\|运行 ID 前缀> [文件]` | 0.20.14 起：回放某次运行结束时保存的改动记录；带文件路径时显示该文件的完整差异 |
 | `/check [typecheck\|lint\|test\|build\|all]` | 0.18.0 起：不带参数只发现标准 npm 脚本，带参数经审批执行；Plan 只允许发现 |
 | `/media` | 查看媒体生成记录、稳定请求 ID 和可恢复状态 |
 | `/checkpoints` | 列出文件恢复点 |
@@ -39,7 +39,7 @@
 | `/mcp remove [name]` | 删除用户级 MCP 配置 |
 | `/mcp test [name]` | 重连并测试一个或全部 MCP |
 | `/mcp reload` | 重载 MCP 配置 |
-| `/mcp resources` / `/mcp read` | 浏览和读取不可信的远端 Resource；0.20.13 起 `/mcp read <名称> <模板名> 变量=值` 可填参数读取 Resource Template |
+| `/mcp resources` / `/mcp read` | 浏览和读取不可信的远端 Resource；0.20.14 起 `/mcp read <名称> <模板名> 变量=值` 可填参数读取 Resource Template |
 | `/mcp prompts` / `/mcp prompt` | 浏览和预览不可信的远端 Prompt |
 | `/mcp permissions` | 查看 MCP 权限清单、来源和待批准差异 |
 | `/mcp permissions approve [name]` | 批准一个 MCP 当前精确权限指纹 |

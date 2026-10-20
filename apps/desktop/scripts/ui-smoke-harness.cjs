@@ -396,6 +396,12 @@ app.whenReady().then(async () => {
     await clickText(window, "仅本次允许");
     await waitFor(window, `document.querySelector('.stop-button')`, "running stop control");
     await waitFor(window, `window.xiuSmoke.calls().includes('long-task:30-turns')`, "30-turn task timeline");
+    await waitFor(window, `document.querySelectorAll('.event-assistant-message .rich-table').length === 2`, "Markdown tables render in model replies");
+    assert(await evaluate(window, `(() => {
+      const tables = [...document.querySelectorAll('.event-assistant-message .rich-table')];
+      const text = tables[0].closest('.rich-text');
+      return tables[0].querySelectorAll('th').length === 3 && tables[0].querySelector('td strong')?.textContent === '评估维度' && tables[0].querySelector('td code')?.textContent === '命名|清晰' && tables[0].querySelector('a')?.getAttribute('href') === 'https://example.com/rubric' && tables[0].querySelector('.align-right') && tables[1].querySelectorAll('th').length === 5 && tables[1].querySelector('tbody td')?.textContent === '功能正确性' && text.querySelector('hr') && text.querySelector('p')?.textContent.includes('这不是表格') && text.querySelector('pre')?.textContent.includes('| code | fence |');
+    })()`), "Tables support headings, inline formatting, alignment, ordinary pipe text, and fenced code without interpreting HTML.");
     await waitFor(window, `document.querySelectorAll('.timeline-jump-rail button').length > 2`, "conversation navigation markers");
     await evaluate(window, `document.querySelector('.event-assistant-message .message-copy').click()`);
     await waitFor(window, `window.xiuSmoke.copiedMessage()?.includes('第 1 轮公开进展')`, "assistant message copy uses its own response");
@@ -478,9 +484,9 @@ app.whenReady().then(async () => {
     await settleLayout(window);
     const conversationLayout = await evaluate(window, `(() => {
       const rect = selector => { const r = document.querySelector(selector)?.getBoundingClientRect(); return r && { left: r.left, right: r.right, width: r.width }; };
-      return { scroll: rect('.task-scroll'), content: rect('.task-scroll-content'), bubble: rect('.event-task-started, .event-task-steered'), composer: rect('.composer'), rail: rect('.timeline-jump-rail') };
+      return { scroll: rect('.task-scroll'), content: rect('.task-scroll-content'), bubble: rect('.event-task-started, .event-task-steered'), composer: rect('.composer'), console: rect('.task-console'), rail: rect('.timeline-jump-rail') };
     })()`);
-    assert(conversationLayout.scroll && conversationLayout.content && conversationLayout.bubble && conversationLayout.composer && conversationLayout.rail && conversationLayout.content.width <= 1081 && conversationLayout.scroll.right - conversationLayout.content.right >= 90 && conversationLayout.content.left - conversationLayout.scroll.left >= 90 && conversationLayout.composer.width <= 1081 && Math.abs((conversationLayout.composer.left + conversationLayout.composer.right) - (conversationLayout.content.left + conversationLayout.content.right)) <= 16 && conversationLayout.bubble.width <= 781 && conversationLayout.bubble.right <= conversationLayout.content.right + 1 && conversationLayout.rail.right <= conversationLayout.content.left - 4, `Wide conversation needs centered reading space, bounded user message, and nearby navigation rail: ${JSON.stringify(conversationLayout)}`);
+    assert(conversationLayout.scroll && conversationLayout.content && conversationLayout.bubble && conversationLayout.composer && conversationLayout.console && conversationLayout.rail && conversationLayout.content.width <= 1081 && conversationLayout.scroll.right - conversationLayout.content.right >= 90 && conversationLayout.content.left - conversationLayout.scroll.left >= 90 && conversationLayout.composer.width >= conversationLayout.content.width && conversationLayout.composer.left - conversationLayout.console.left >= 0 && conversationLayout.composer.left - conversationLayout.console.left <= 6 && conversationLayout.console.right - conversationLayout.composer.right >= 0 && conversationLayout.console.right - conversationLayout.composer.right <= 6 && conversationLayout.bubble.width <= 781 && conversationLayout.bubble.right <= conversationLayout.content.right + 1 && conversationLayout.rail.right <= conversationLayout.content.left - 4, `Wide conversation needs centered reading space, panel-aligned composer, bounded user message, and nearby navigation rail: ${JSON.stringify(conversationLayout)}`);
     const longMessageLayout = await evaluate(window, `(() => {
       const bubble = document.querySelector('.event-task-steered');
       const text = bubble.querySelector('.event-text');

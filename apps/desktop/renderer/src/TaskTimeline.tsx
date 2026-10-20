@@ -79,6 +79,40 @@ export function SyntaxCode({ code, language = "text" }: { code: string; language
   return <code className={`syntax-code language-${language}`}>{tokens.map((token, index) => <span className={tokenClass(token)} key={index}>{token}</span>)}</code>;
 }
 
+function tableCells(line: string): string[] | undefined {
+  const source = line.trim();
+  if (!source.includes("|")) return undefined;
+  const leading = source.startsWith("|");
+  const trailing = source.endsWith("|") && !source.endsWith("\\|");
+  const row = source.slice(leading ? 1 : 0, trailing ? -1 : undefined);
+  const cells: string[] = [];
+  let cell = "";
+  let codeTicks = 0;
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index]!;
+    if (char === "\\" && row[index + 1] === "|") { cell += "|"; index += 1; continue; }
+    if (char === "`") {
+      let end = index + 1;
+      while (row[end] === "`") end += 1;
+      const count = end - index;
+      codeTicks = codeTicks === count ? 0 : codeTicks || count;
+      cell += row.slice(index, end);
+      index = end - 1;
+      continue;
+    }
+    if (char === "|" && !codeTicks) { cells.push(cell.trim()); cell = ""; continue; }
+    cell += char;
+  }
+  cells.push(cell.trim());
+  return cells.length > 1 || leading || trailing ? cells : undefined;
+}
+
+function tableAlignments(line: string, columns: number): Array<"left" | "center" | "right"> | undefined {
+  const cells = tableCells(line);
+  if (!cells || cells.length !== columns || !cells.every((cell) => /^:?-{3,}:?$/.test(cell))) return undefined;
+  return cells.map((cell) => cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : "left");
+}
+
 function FormattedText({ text }: { text: string }) {
   const blocks: ReactNode[] = [];
   const lines = text.replace(/\r/g, "").split("\n");
@@ -86,7 +120,8 @@ function FormattedText({ text }: { text: string }) {
   let codeLanguage = "text";
   let list: string[] = [];
   const flushList = () => { if (list.length) { blocks.push(<ul key={`list-${blocks.length}`}>{list.map((item, index) => <li key={index}><InlineText text={item} /></li>)}</ul>); list = []; } };
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (line.startsWith("```")) {
       flushList();
       if (code) { blocks.push(<pre key={`code-${blocks.length}`}><SyntaxCode code={code.join("\n")} language={codeLanguage} /></pre>); code = undefined; }
@@ -94,10 +129,27 @@ function FormattedText({ text }: { text: string }) {
       continue;
     }
     if (code) { code.push(line); continue; }
+    const headers = tableCells(line);
+    const alignments = headers && tableAlignments(lines[index + 1] ?? "", headers.length);
+    if (headers && alignments) {
+      flushList();
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length) {
+        const cells = tableCells(lines[index]!);
+        if (!cells) break;
+        rows.push(headers.map((_, column) => cells[column] ?? ""));
+        index += 1;
+      }
+      blocks.push(<div className="rich-table-scroll" key={`table-${blocks.length}`}><table className="rich-table"><thead><tr>{headers.map((header, column) => <th className={`align-${alignments[column]}`} scope="col" key={column}><InlineText text={header} /></th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, column) => <td className={`align-${alignments[column]}`} key={column}><InlineText text={cell} /></td>)}</tr>)}</tbody></table></div>);
+      index -= 1;
+      continue;
+    }
     const item = line.match(/^\s*[-*]\s+(.+)$/);
     if (item) { list.push(item[1]!); continue; }
     flushList();
     if (!line.trim()) continue;
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { blocks.push(<hr key={`rule-${blocks.length}`} />); continue; }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) blocks.push(<h3 key={`heading-${blocks.length}`}><InlineText text={heading[2]!} /></h3>);
     else blocks.push(<p key={`line-${blocks.length}`}><InlineText text={line} /></p>);

@@ -152,9 +152,24 @@ const bridge = {
     calls.push(`approval:${allowed}`);
     task = { ...task, state: "running", pendingApproval: undefined, updatedAt: now() };
     emit("approval.decided", { approvalId, allowed, source: "handler" });
+    const rubric = [
+      "---",
+      "## Rubric 结构",
+      "| 组成部分 | 说明 | 举例 |",
+      "| :--- | ---: | :---: |",
+      "| **评估维度** | 代码可读性 | `命名|清晰` |",
+      "| 等级 | 优秀 \\| 良好 | [说明](https://example.com/rubric) |",
+      "",
+      "| 维度 | 优秀 | 良好 | 合格 | 不合格 |",
+      "| --- | --- | --- | --- | --- |",
+      "| 功能正确性 | 全部通过 | 大部分通过 | 部分通过 | 未通过 |",
+      "",
+      "这不是表格：| 普通文字 |",
+      "```md", "| code | fence |", "| --- | --- |", "```",
+    ].join("\n");
     for (let turn = 1; turn <= 30; turn += 1) {
       emit("model.started", { turn });
-      emit("assistant.message", { text: `第 ${turn} 轮公开进展`, hasToolCalls: turn < 30 });
+      emit("assistant.message", { text: turn === 30 ? rubric : `第 ${turn} 轮公开进展`, hasToolCalls: turn < 30 });
     }
     calls.push("long-task:30-turns"); emit("tool.started", { name: "read_file", operationId: "source-1", description: "source-detail-canary\n" + "saved source\n".repeat(50) });
     emit("subagent.updated", { agent: { id: "run:child", runId: "run", title: "调查任务验收", role: "explorer", status: "completed", startedAt: now(), completedAt: now(), durationMs: 1200, activity: [{ id: "tool-1", name: "read_file", status: "completed", startedAt: now(), completedAt: now(), durationMs: 1200 }, { id: "tool-2", name: "verify_output", status: "failed", startedAt: now(), completedAt: now(), durationMs: 500 }], result: "child-result-canary" } });

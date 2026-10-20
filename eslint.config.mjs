@@ -5,7 +5,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "**/node_modules/**", "apps/desktop/release/**", "apps/desktop/dist/**", "apps/desktop/out/**"] },
+  { ignores: ["dist/**", "**/node_modules/**", "apps/desktop/release/**", "apps/desktop/dist/**", "apps/desktop/out/**", "apps/desktop/bundled/**", ".desktop-build-temp/**", ".desktop-build-cache/**", ".xiu/**", "evals/results/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
