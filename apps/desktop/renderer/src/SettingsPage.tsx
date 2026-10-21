@@ -65,7 +65,7 @@ export function SettingsPage({ value, onSave, onClose, onModels, onModelsClose, 
       {section === "通知" && <><p className="settings-lead">仅在 Xiu 不在前台时发送。通知不包含需求、路径、代码或模型回复，系统通知权限仍由操作系统控制。</p><div className="settings-group">
         {toggle("notifyComplete", "任务完成", "任务完成后提醒。")}{toggle("notifyFailure", "任务失败", "失败或未通过验证时提醒。")}{toggle("notifyApproval", "需要批准", "需要你返回软件作出决定时提醒。")}{toggle("sound", "通知提示音", "随系统通知播放，不独立播放音频。")}
       </div>{about && !about.notificationsSupported && <p>当前系统不支持桌面通知。</p>}</>}
-      {section === "模型与渠道" && <><p className="settings-lead">在这里管理渠道、凭据与模型能力。聊天窗口只用于选择已有模型。</p>{models}{!models && <p role="status">{modelDisabled ? "请先打开可信工作区，并结束正在运行的任务或配置操作。" : "正在读取渠道配置…"}</p>}<p className="settings-models-note">完全访问仍只在本次工作区打开期间有效，不作为永久设置保存。</p></>}
+      {section === "模型与渠道" && <><p className="settings-lead">在这里管理渠道、凭据与模型能力。生图、视频、音频能力按渠道分别开启：在渠道页对应分组填写模型 ID 并启用，Xiu 才会为该渠道注册生成工具。聊天窗口只用于选择已有模型。</p>{models}{!models && <p role="status">{modelDisabled ? "请先打开可信工作区，并结束正在运行的任务或配置操作。" : "正在读取渠道配置…"}</p>}<p className="settings-models-note">完全访问仍只在本次工作区打开期间有效，不作为永久设置保存。</p></>}
       {section === "关于" && <><div className="settings-group">{row("Xiu", "本地优先的编码工作台", <span>{about?.version ?? "正在读取…"}</span>)}{row("构建类型", "Windows 本地安装器目前未签名。", <span>{about ? about.packaged ? "打包版本" : "开发版本" : "—"}</span>)}</div><p>发布说明：github.com/andrewjr1991/xiu/releases</p><p>本批尚未接入桌面自动更新检查，不会后台下载或安装。</p></>}
       {resetKeys.length > 0 && <button className="settings-reset" disabled={saving} onClick={() => { const next = { ...value }; for (const key of resetKeys) Object.assign(next, { [key]: defaultPreferences[key] }); void save(next); }}>恢复本页默认设置</button>}
       <p role="status" className="settings-save-status">{saving ? "正在保存…" : notice}</p>

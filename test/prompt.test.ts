@@ -22,6 +22,8 @@ test("system prompt identifies 静然 as Xiu's developer and rejects provider at
   assert.match(prompt, /Follow next_offset for additional pages/);
   assert.match(prompt, /meaningful phase changes.*user-facing progress sentence/);
   assert.match(prompt, /use verify_output with explicit required and forbidden content/);
+  assert.match(prompt, /generate_image, generate_video, or generate_audio tool is not in your tool list[^.]*\. Never substitute: do not draw, render, or synthesize the media with code/);
+  assert.match(prompt, /设置 → 模型与渠道 → the channel → fill in the model for 生图\/视频\/音频 and click 启用/);
   assert.match(prompt, /Treat @\.xiu\/attachments references as user-provided attachments/);
   if (process.platform === "win32") {
     assert.match(prompt, /use validate_project first for a package\.json typecheck, lint, test, or build script/);
