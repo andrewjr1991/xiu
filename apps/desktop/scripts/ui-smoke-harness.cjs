@@ -687,7 +687,18 @@ app.whenReady().then(async () => {
     await clickText(window, "设置", ".sidebar-footer");
     await clickText(window, "模型与渠道", ".settings-nav button");
     await waitFor(window, `document.querySelector('.provider-manager')`, "management provider picker");
+    assert(await evaluate(window, `!document.querySelector('.provider-manager > header')`), "The settings channel page must not repeat its own heading inside a nested card.");
     await clickText(window, "Legacy Gateway", ".provider-nav-row > button");
+    // Every capability is listed on the channel page; a disabled one can be enabled with a typed model ID without opening 编辑渠道.
+    await waitFor(window, `[...document.querySelectorAll('.capability-model-group.capability-disabled h4')].map(el => el.textContent).join('|').includes('生图模型未启用')`, "disabled image capability shown on channel page");
+    assert(await evaluate(window, `[...document.querySelectorAll('.capability-model-form button')].find(el => el.textContent === '启用' && el.closest('.capability-model-group').textContent.includes('生图模型')).disabled`), "Enabling image generation must wait for a model ID.");
+    await evaluate(window, `(() => { const input = [...document.querySelectorAll('.capability-model-form input')].find(el => el.getAttribute('aria-label') === '生图模型 ID'); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'gateway-image-1'); input.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await evaluate(window, `[...document.querySelectorAll('.capability-model-form button')].find(el => el.textContent === '启用' && el.closest('.capability-model-group').textContent.includes('生图模型')).click()`);
+    await waitFor(window, `window.xiuSmoke.calls().includes('provider:upsert:legacy-gateway:image=true:gateway-image-1:key=') && [...document.querySelectorAll('.capability-model-group')].some(el => el.textContent.includes('生图模型1 个') && el.textContent.includes('gateway-image-1') && el.textContent.includes('当前'))`, "image capability enabled from the channel page with the typed model visible");
+    assert(await evaluate(window, `[...document.querySelectorAll('.capability-model-group')].some(el => el.textContent.includes('视频模型未启用'))`), "Other capabilities stay disabled.");
+    // The highlight fades between rows, so wait for it to settle on the open channel instead of sampling one frame.
+    await waitFor(window, `document.querySelectorAll('.provider-nav-row > button.selected').length === 1 && document.querySelector('.provider-nav-row > button.selected').textContent.includes('Legacy Gateway') && [...document.querySelectorAll('.provider-nav-row > button')].every(b => (getComputedStyle(b).backgroundColor !== 'rgba(0, 0, 0, 0)') === b.classList.contains('selected'))`, "channel list highlights exactly the open channel");
+    await fs.promises.writeFile(path.join(smokeRoot, 'channel-page-1366.png'), (await window.webContents.capturePage()).toPNG());
     await waitFor(window, `document.querySelector('.provider-credentials')?.textContent.includes('凭据来源：兼容文件') && document.querySelector('.provider-credentials').textContent.includes('旧明文 有')`, "legacy provider credential details");
     assert(await evaluate(window, `!document.querySelector('.provider-credentials').textContent.includes('清理旧明文')`), "Cleanup must not be offered before a migration.");
     await clickText(window, "迁移到系统凭据管理器", ".provider-credentials button");

@@ -29,6 +29,10 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
   const [deleting, setDeleting] = useState<DesktopProviderProfile>();
   const [credentialAction, setCredentialAction] = useState<DesktopProviderCredentialOperation>();
   const [typedId, setTypedId] = useState("");
+  // Model IDs typed into the capability groups of the channel page; cleared when the channel or snapshot changes.
+  const [capabilityDraft, setCapabilityDraft] = useState<Partial<Record<DesktopProviderCapability, string>>>({});
+  const capabilityLabels: Record<DesktopProviderCapability, string> = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
+  const capabilityTools: Record<DesktopProviderCapability, string> = { vision: "图片分析", image: "图片生成", video: "视频生成", audio: "音频生成" };
   const [visionTesting, setVisionTesting] = useState(false);
   const [visionNotice, setVisionNotice] = useState<string>();
   const [visionProgress, setVisionProgress] = useState<Awaited<ReturnType<typeof window.xiuDesktop.visionProbeProgress>>>({ total: 0, results: [] });
@@ -44,7 +48,7 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
     finally { setVisionTesting(false); }
   };
   useEffect(() => { setVisionNotice(undefined); setVisionProgress({ total: 0, results: [] }); }, [settings]);
-  useEffect(() => { setCredentialAction(undefined); setTypedId(""); }, [selectedProviderId, settings]);
+  useEffect(() => { setCredentialAction(undefined); setTypedId(""); setCapabilityDraft({}); }, [selectedProviderId, settings]);
   useEffect(() => {
     if (!visionTesting) return;
     let live = true;
@@ -66,6 +70,8 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
     credential.forgettable ? { operation: "forget" as const, label: "遗忘本地 Key", confirm: "永久遗忘", typed: true, text: "删除系统凭据库和兼容文件中的全部本地 Key 副本；环境变量不会改变。此操作不可逆，请输入完整的 Provider 标识确认。" } : undefined,
   ].filter((item): item is NonNullable<typeof item> => Boolean(item));
   const editProfile = (profile: DesktopProviderProfile) => setEditing({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels }, features: { ...profile.features } });
+  // Enabling a capability or pointing it at a typed model ID saves the profile through the same upsert as 编辑渠道; an empty apiKey leaves the stored key untouched.
+  const saveCapability = (profile: DesktopProviderProfile, capability: DesktopProviderCapability, model: string) => onUpsert({ existingId: profile.id, id: profile.id, name: profile.name, kind: profile.kind as DesktopProviderKind, model: profile.selectedModel, baseURL: profile.baseURL ?? "", apiKeyEnv: profile.apiKeyEnv ?? "", apiKey: "", contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels, ...(model ? { [capability]: model } : {}) }, features: { ...profile.features, [capability]: true } }).then(() => setCapabilityDraft((current) => ({ ...current, [capability]: "" }))).catch(() => undefined);
   const updateEditing = <K extends keyof DesktopProviderUpsertRequest>(key: K, value: DesktopProviderUpsertRequest[K]) => setEditing((current) => current ? { ...current, [key]: value } : current);
   // Only the generic per-kind template follows a type change; vendor presets are chosen explicitly below.
   const chooseKind = (kind: DesktopProviderKind) => setEditing((current) => {
@@ -92,11 +98,11 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
   };
   const updateCapabilityModel = (capability: "vision" | "image" | "video" | "audio", value: string) => setEditing((current) => current ? { ...current, capabilityModels: { ...current.capabilityModels, [capability]: value } } : current);
   return <div className={`provider-popover${management ? " provider-manager" : " provider-selection"}`} role={management ? "region" : "dialog"} aria-label={management ? "管理模型与渠道" : "选择 Provider 和模型"}>
-    <header><div><strong>{management ? "渠道配置" : "选择模型"}</strong><small>{management ? "管理渠道、凭据与模型能力" : "仅切换模型；配置请前往设置 → 模型与渠道"}</small></div><div className="provider-header-actions">{management && <button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button>}{!management && <button onClick={onClose} aria-label="关闭">×</button>}</div></header>
+    {!management && <header><div><strong>选择模型</strong><small>仅切换模型；配置请前往设置 → 模型与渠道</small></div><div className="provider-header-actions"><button onClick={onClose} aria-label="关闭">×</button></div></header>}
     {!settings && <p className="muted">正在读取 Provider 配置…</p>}
     {settings?.profiles.length === 0 && !editing && <p className="provider-notice">{management ? "尚未添加渠道。点击“新增渠道”，选择 Agnes、OpenAI、本地模型、国内厂商模板或兼容服务。模板不会自动添加渠道，环境变量不是必需项。" : "尚未添加渠道，请前往设置 → 模型与渠道添加。"}</p>}
     {settings && <div className="provider-grid">
-      <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{management && !profile.builtin && <span><button title="编辑渠道" disabled={busy || disabled} onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" disabled={busy || disabled} onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}</nav>
+      <nav>{settings.profiles.map((profile) => <div className="provider-nav-row" key={profile.id}><button className={selected?.id === profile.id ? "selected" : ""} onClick={() => { setEditing(undefined); setDeleting(undefined); onChooseProvider(profile.id); }}><span>{profile.name}</span><small>{credentialLabel(profile)}</small></button>{management && !profile.builtin && <span><button title="编辑渠道" disabled={busy || disabled} onClick={() => editProfile(profile)}>✎</button><button title="删除渠道" disabled={busy || disabled} onClick={() => { setEditing(undefined); setDeleting(profile); }}>×</button></span>}</div>)}{management && <button className="provider-add" disabled={busy || disabled} onClick={() => { setDeleting(undefined); setEditing(blankProvider()); }}>＋ 新增渠道</button>}</nav>
       {management && editing ? <section className="provider-editor"><header><div><strong>{editing.existingId ? "编辑渠道" : "新增渠道"}</strong><small>凭据只保存在系统凭据库，不写入项目文件</small></div><button onClick={() => setEditing(undefined)}>取消</button></header><div className="provider-form">
         <label>名称<input value={editing.name} onChange={(event) => updateEditing("name", event.target.value)} placeholder="例如：公司网关" /></label>
         <label>{editing.existingId ? "标识（创建后不可修改）" : "标识"}<input value={editing.id} disabled={Boolean(editing.existingId)} title={editing.existingId ? "标识用于关联凭据，创建后不可修改" : undefined} onChange={(event) => updateEditing("id", event.target.value)} placeholder="company-gateway" /></label>
@@ -136,11 +142,21 @@ export function ProviderPicker({ settings, selectedProviderId, busy, disabled, m
         {management && credentialEditing === selected.id && <div className="credential-form"><label htmlFor="provider-api-key">API Key</label><input id="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder="仅发送到主进程并保存至系统凭据库" /><div><button onClick={onCancelCredential}>取消</button><button className="primary-button compact" disabled={busy || !apiKey} onClick={onSaveCredential}>保存</button></div></div>}
         <div className="model-groups">
           <section className="model-group"><h4>对话模型</h4><div className="model-list">{(settings.modelsByProvider[selected.id] ?? []).map((model) => <button key={model.id} disabled={busy || disabled} className={settings.activeProviderId === selected.id && settings.activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}</span><span>{model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : model.source === "api" ? "在线" : model.source === "current" ? "当前" : "内置"}</span></button>)}</div></section>
-          {(["vision", "image", "video", "audio"] as const).filter((capability) => selected.features[capability]).map((capability) => {
-            const labels: Record<DesktopProviderCapability, string> = { vision: "视觉模型", image: "生图模型", video: "视频模型", audio: "音频模型" };
+          {(["vision", "image", "video", "audio"] as const).filter((capability) => management || selected.features[capability]).map((capability) => {
             const models = settings.capabilityModelsByProvider[selected.id]?.[capability] ?? [];
             const activeModel = selected.capabilityModels?.[capability];
-            return <section className="model-group capability-model-group" key={capability}><h4>{labels[capability]}<span>{models.length} 个</span></h4>{capability === "vision" && <p className="empty-note">包含能力未知的对话模型；候选不代表视觉实测通过。</p>}{models.length ? <div className="model-list">{models.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}{capability === "vision" && <small>{model.capabilityEvidence === "declared" ? "接口声明支持视觉" : model.capabilityEvidence === "inferred" ? "名称推测，未验证" : "能力未知，未验证"}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">刷新模型后选择，或在自定义渠道中手动填写模型 ID。</p>}</section>;
+            const enabled = selected.features[capability];
+            // A hand-typed model ID is the channel's current choice even when discovery never listed it, so it stays visible and selectable.
+            const listed = activeModel && !models.some((model) => model.id === activeModel) ? [{ id: activeModel, source: "current" as const }, ...models] : models;
+            const draft = capabilityDraft[capability] ?? "";
+            const listId = `provider-panel-${capability}-models`;
+            const form = management && !selected.builtin && <div className="capability-model-form"><input list={listId} aria-label={`${capabilityLabels[capability]} ID`} value={draft} disabled={busy || disabled} onChange={(event) => setCapabilityDraft((current) => ({ ...current, [capability]: event.target.value }))} placeholder={capability === "vision" ? "输入供应商模型 ID，留空则用对话模型" : "输入供应商模型 ID"} /><datalist id={listId}>{models.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}</datalist><button disabled={busy || disabled || (!draft.trim() && (enabled || capability !== "vision"))} onClick={() => void saveCapability(selected, capability, draft.trim())}>{enabled ? "保存" : "启用"}</button></div>;
+            return <section className={`model-group capability-model-group${enabled ? "" : " capability-disabled"}`} key={capability}><h4>{capabilityLabels[capability]}<span>{enabled ? `${listed.length} 个` : "未启用"}</span></h4>
+              {!enabled && <p className="empty-note">{selected.builtin ? "此内置渠道未声明该能力。" : `启用后 Xiu 才会为这个渠道注册${capabilityTools[capability]}工具；填写模型 ID 后点“启用”。`}</p>}
+              {enabled && capability === "vision" && <p className="empty-note">包含能力未知的对话模型；候选不代表视觉实测通过。</p>}
+              {enabled && (listed.length ? <div className="model-list">{listed.map((model) => <button key={model.id} disabled={busy || disabled} className={activeModel === model.id ? "selected" : ""} onClick={() => onSelect(selected.id, model.id, capability)}><span><strong>{model.name ?? model.id}</strong>{model.name && model.name !== model.id && <small>{model.id}</small>}{capability === "vision" && <small>{model.capabilityEvidence === "declared" ? "接口声明支持视觉" : model.capabilityEvidence === "inferred" ? "名称推测，未验证" : "能力未知，未验证"}</small>}</span><span>{activeModel === model.id ? "当前" : model.source === "api" ? "在线" : "内置"}</span></button>)}</div> : <p className="empty-note">{management && !selected.builtin ? "刷新模型后选择，或在下方填写供应商模型 ID。" : "刷新模型后选择，或在自定义渠道中手动填写模型 ID。"}</p>)}
+              {form}
+            </section>;
           })}
         </div>
       </section>}
