@@ -357,3 +357,23 @@ test("desktop provider credential migration fails closed without a system backen
   assert.match(await fs.readFile(registryFile, "utf8"), new RegExp(secret));
   assert.deepEqual(audits, ["provider-migrate:openai:failed"]);
 });
+
+test("desktop provider controller stores a channel root certificate only as an absolute, readable PEM file and keeps it across edits", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const pem = path.join(item.root, "gateway.pem");
+  await fs.writeFile(pem, "-----BEGIN CERTIFICATE-----\nMIIBgateway\n-----END CERTIFICATE-----\n");
+  const empty = path.join(item.root, "empty.pem");
+  await fs.writeFile(empty, "not a certificate\n");
+  const base = { id: "team-gateway", name: "Team Gateway", kind: "openai-compatible" as const, model: "team-default", baseURL: "https://team.example.test/v1", features: { tools: true, vision: false, image: false, video: false, audio: false } };
+  await assert.rejects(item.controller.upsert({ ...base, caCertFile: "certs/gateway.pem" }), /绝对路径/);
+  await assert.rejects(item.controller.upsert({ ...base, caCertFile: empty }), /PEM 证书/);
+  await assert.rejects(item.controller.upsert({ ...base, caCertFile: path.join(item.root, "missing.pem") }), /不存在或不可读/);
+  assert.equal(item.registry.get("team-gateway"), undefined, "a rejected certificate saves nothing");
+  const created = await item.controller.upsert({ ...base, caCertFile: ` ${pem} ` });
+  assert.equal(created.profiles.find((profile) => profile.id === "team-gateway")?.caCertFile, pem);
+  const kept = await item.controller.upsert({ ...base, existingId: "team-gateway", name: "Team Gateway 2", caCertFile: pem, capabilityModels: { image: "team-image" }, features: { ...base.features, image: true } });
+  assert.equal(kept.profiles.find((profile) => profile.id === "team-gateway")?.caCertFile, pem, "enabling a capability from the channel page sends the certificate back unchanged");
+  const cleared = await item.controller.upsert({ ...base, existingId: "team-gateway", caCertFile: "" });
+  assert.equal(cleared.profiles.find((profile) => profile.id === "team-gateway")?.caCertFile, undefined, "a blank field clears the certificate");
+});

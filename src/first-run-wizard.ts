@@ -1,9 +1,10 @@
+import path from "node:path";
 import type { ProviderName } from "./config.js";
 import { localize, type UiLanguage } from "./i18n.js";
 import type { SelectOption } from "./interactive-ui.js";
 import { type ProviderProfile, type ProviderRegistry, type ProviderTemplate, providerTemplates } from "./provider-registry.js";
 import type { AvailableModel } from "./types.js";
-import { formatUserFacingError } from "./user-facing-errors.js";
+import { explainError, formatUserFacingError } from "./user-facing-errors.js";
 
 /**
  * Three-step first-run wizard shown when the CLI starts without any provider.
@@ -155,9 +156,22 @@ async function chooseModel(options: FirstRunWizardOptions, draft: Draft, models:
   return io.select(stepTitle(language, 3, `选择模型（服务返回了 ${ids.length} 个）`, `Choose a model (${ids.length} returned by the service)`), entries);
 }
 
-async function afterFailure(options: FirstRunWizardOptions): Promise<"retry" | "reselect" | "later" | undefined> {
+type FailureNext = "retry" | "reselect" | "later" | "ca" | "http";
+
+const toPlainHttp = (url: string): string => url.replace(/^https:\/\//i, "http://");
+
+/**
+ * After a failed probe. A certificate failure adds two explicit ways out: a
+ * PEM file that only widens this channel's trust roots, and a plain `http://`
+ * address the user has to pick knowingly; Xiu never downgrades on its own.
+ */
+async function afterFailure(options: FirstRunWizardOptions, draft?: Draft, error?: unknown): Promise<FailureNext | undefined> {
   const { language, io } = options;
-  return io.select<"retry" | "reselect" | "later">(localize(language, "连接没有成功，未保存任何配置", "The connection failed; nothing was saved"), [
+  const certificateFailure = draft !== undefined && error !== undefined && explainError(error, language).code === "network/tls";
+  const httpsAddress = draft?.profile.baseURL && /^https:\/\//i.test(draft.profile.baseURL) ? draft.profile.baseURL : undefined;
+  return io.select<FailureNext>(localize(language, "连接没有成功，未保存任何配置", "The connection failed; nothing was saved"), [
+    ...(certificateFailure ? [{ label: localize(language, "指定企业根证书（PEM 文件）", "Use an enterprise root certificate (PEM file)"), description: localize(language, "只给这个渠道追加信任根，不关闭证书校验", "Adds trust roots for this channel only; verification stays on"), value: "ca" as const }] : []),
+    ...(certificateFailure && httpsAddress ? [{ label: localize(language, "改用 http:// 明文连接", "Switch to a plain http:// connection"), description: localize(language, `地址改为 ${toPlainHttp(httpsAddress)}；Key 和对话内容将不加密传输，仅限可信内网`, `Uses ${toPlainHttp(httpsAddress)}; the key and conversation travel unencrypted, so only on a trusted private network`), value: "http" as const }] : []),
     { label: localize(language, "重新输入", "Enter the details again"), description: localize(language, "回到第 2 步", "Back to step 2"), value: "retry" },
     { label: localize(language, "换一个渠道", "Choose another provider"), description: localize(language, "回到第 1 步", "Back to step 1"), value: "reselect" },
     { label: localize(language, "稍后配置", "Configure later"), description: localize(language, "先进入 xiu>，之后用 /provider add 添加", "Go to xiu> now and add a provider later with /provider add"), value: "later" },
@@ -172,11 +186,14 @@ export async function runFirstRunWizard(options: FirstRunWizardOptions): Promise
     "Welcome to Xiu. No model provider is configured yet. Three steps get you started: choose a provider → enter the connection details → Xiu tests the connection and lists the models."));
   try {
     let choice: Choice | undefined;
+    // Kept across a certificate retry so the typed address, model and key are reused with the new trust roots or scheme.
+    let pending: Draft | undefined;
     for (;;) {
       choice ??= await chooseChannel(options, templates);
       if (!choice) return { status: "cancelled" };
       if (choice.type === "later") return { status: "skipped" };
-      const draft = await fillConnection(options, choice);
+      const draft = pending ?? await fillConnection(options, choice);
+      pending = undefined;
       if (!draft) { choice = undefined; continue; }
 
       io.log(stepTitle(language, 3, `正在测试 ${draft.profile.name} 连接……`, `Testing the connection to ${draft.profile.name}…`));
@@ -185,7 +202,21 @@ export async function runFirstRunWizard(options: FirstRunWizardOptions): Promise
         probe = await options.probe(draft.profile);
       } catch (error) {
         io.log(formatUserFacingError(localize(language, "连接测试失败", "Connection test failed"), error, language, { sensitive: draft.profile.apiKey ? [draft.profile.apiKey] : [], diagnostic: "/provider test" }));
-        const next = await afterFailure(options);
+        const next = await afterFailure(options, draft, error);
+        if (next === "ca") {
+          const file = (await io.ask(localize(language, "企业根证书 PEM 文件路径（直接回车返回上一步）：", "Path of the enterprise root certificate PEM file (press Enter to go back): "))).trim();
+          if (!file) continue;
+          const caCertFile = path.resolve(file);
+          pending = { ...draft, profile: { ...draft.profile, caCertFile } };
+          io.log(localize(language, `已为该渠道指定证书文件 ${caCertFile}，重新测试连接。`, `Using the certificate file ${caCertFile} for this channel; testing again.`));
+          continue;
+        }
+        if (next === "http" && draft.profile.baseURL) {
+          const baseURL = toPlainHttp(draft.profile.baseURL);
+          pending = { ...draft, profile: { ...draft.profile, baseURL } };
+          io.log(localize(language, `已改用 ${baseURL}（明文传输），重新测试连接。`, `Switched to ${baseURL} (unencrypted); testing again.`));
+          continue;
+        }
         if (next === "retry") continue;
         if (next === "reselect") { choice = undefined; continue; }
         return next === "later" ? { status: "skipped" } : { status: "cancelled" };

@@ -43,7 +43,8 @@
 | `http/5xx` | 服务端出错，不是本机配置问题。 | 稍后重试；持续出现请查看服务商状态页。 |
 | `network/dns` | 找不到这个服务器地址：域名拼写错误，或本机 DNS/代理无法解析它。 | 核对 Base URL 的域名；公司网络请用 --proxy 或 /web proxy set 指定代理。 |
 | `network/refused` | 连接被拒绝：目标服务没有在这个地址和端口上运行。 | 本地模型请先启动 Ollama、LM Studio 或 vLLM，并核对端口。 |
-| `network/tls` | HTTPS 证书不受信任，通常是公司网关替换了证书。Xiu 没有关闭证书校验。 | 把企业根证书加入系统信任或 NODE_EXTRA_CA_CERTS，或改用允许的代理。 |
+| `network/tls` | HTTPS 证书不受信任，通常是公司网关替换了证书。Xiu 没有关闭证书校验。 | 在这个渠道上指定企业根证书 PEM 文件（首次向导、/provider edit 或桌面的编辑渠道），或把证书加入系统信任/NODE_EXTRA_CA_CERTS。 |
+| `network/ca-file` | 渠道配置的企业根证书文件读不到，或者里面没有 PEM 证书。 | 核对文件路径与内容（应包含 -----BEGIN CERTIFICATE-----），或用 /provider edit、桌面的编辑渠道清空证书项。 |
 | `network/proxy-auth` | 代理服务器要求认证（HTTP 407）。 | 在代理地址中带上账号密码，或换用不需要认证的代理。 |
 | `network/timeout` | 连接或响应超时，服务没有在限定时间内回应。 | 检查网络和代理设置后重试；本地模型可能还在加载。 |
 | `network/unreachable` | 无法建立网络连接。 | 检查网络、防火墙和代理设置后重试。 |

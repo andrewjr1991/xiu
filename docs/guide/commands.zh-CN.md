@@ -96,6 +96,7 @@
 | `--base-url <URL>` | OpenAI 兼容 API 地址 |
 | `--media-base-url <URL>` | 多媒体生成 API 地址 |
 | `--proxy <URL>` | HTTP(S) 代理 |
+| `--ca-cert <文件>` | 额外信任的根证书 PEM 文件（如公司网关证书）；只追加信任根，不关闭校验 |
 | `--vision-model <模型>` | 图片分析模型 |
 | `--image-model <模型>` | 图片生成模型 |
 | `--video-model <模型>` | 视频生成模型 |

@@ -246,7 +246,7 @@ export class OpenAIVisionBackend implements MediaBackend {
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
     this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
-    this.dispatcher = createTrustedDispatcher(config.proxy);
+    this.dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
     this.clientOptions = {
       apiKey: this.apiKey,
       baseURL: this.baseURL,

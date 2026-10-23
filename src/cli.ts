@@ -114,6 +114,7 @@ const program = new Command()
   .option("--base-url <url>", "OpenAI-compatible API base URL")
   .option("--media-base-url <url>", "media generation API base URL")
   .option("--proxy <url>", "HTTP(S) proxy URL, for example http://127.0.0.1:12334")
+  .option("--ca-cert <file>", "PEM file whose certificates are also trusted for this channel, for example a corporate gateway root certificate")
   .option("--vision-model <model>", "model used to analyze images")
   .option("--image-model <model>", "model used to generate and edit images")
   .option("--video-model <model>", "model used to generate videos")
@@ -344,6 +345,7 @@ async function main(): Promise<void> {
       audioModel: effective.capabilityModels?.audio,
       baseURL: options.baseURL ?? effective.baseURL,
       proxy: options.proxy ?? effective.proxy,
+      caCert: options.caCert ?? effective.caCertFile,
       contextWindow: options.contextWindow ?? (effective.contextWindow ? String(effective.contextWindow) : apiContextWindow ? String(apiContextWindow) : undefined),
       model: selectedModel,
       language: options.language ?? process.env.XIU_LANGUAGE ?? settings.language,

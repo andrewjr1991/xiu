@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import { resolveConfig } from "../src/config.js";
 import { UsageError } from "../src/usage-error.js";
@@ -82,6 +83,12 @@ test("unified override does not claim unsupported generation APIs", () => {
     vision: "omni-model",
     unified: "omni-model",
   });
+});
+
+test("a channel certificate file is resolved to an absolute path and otherwise absent", () => {
+  assert.equal(resolveConfig({ provider: "agnes", caCert: "certs/gateway.pem" }).caCertFile, path.resolve("certs/gateway.pem"));
+  assert.equal(resolveConfig({ provider: "agnes", caCert: "  " }).caCertFile, undefined);
+  assert.equal(resolveConfig({ provider: "agnes" }).caCertFile, undefined);
 });
 
 test("proxy option is validated and stored", () => {

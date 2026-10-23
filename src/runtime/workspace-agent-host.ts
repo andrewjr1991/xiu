@@ -77,6 +77,7 @@ export function createWorkspaceProviderConfig(profile: ProviderProfile, model: s
     audioModel: profile.capabilityModels?.audio,
     baseURL: profile.baseURL,
     proxy: profile.proxy,
+    caCert: profile.caCertFile,
     contextWindow: profile.contextWindow ? String(profile.contextWindow) : undefined,
     model,
     cwd: workspace,
