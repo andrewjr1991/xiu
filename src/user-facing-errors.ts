@@ -129,8 +129,11 @@ const GENERAL: Record<string, Entry> = {
     zh: ["连接被拒绝：目标服务没有在这个地址和端口上运行。", "本地模型请先启动 Ollama、LM Studio 或 vLLM，并核对端口。"],
     en: ["The connection was refused: nothing is listening at that address and port.", "For local models start Ollama, LM Studio or vLLM first and check the port."] },
   "network/tls": { code: "network/tls",
-    zh: ["HTTPS 证书不受信任，通常是公司网关替换了证书。Xiu 没有关闭证书校验。", "把企业根证书加入系统信任或 NODE_EXTRA_CA_CERTS，或改用允许的代理。"],
-    en: ["The HTTPS certificate is not trusted, usually because a corporate gateway replaces certificates. Xiu did not disable verification.", "Add the enterprise root certificate to the system trust store or NODE_EXTRA_CA_CERTS, or use an allowed proxy."] },
+    zh: ["HTTPS 证书不受信任，通常是公司网关替换了证书。Xiu 没有关闭证书校验。", "在这个渠道上指定企业根证书 PEM 文件（首次向导、/provider edit 或桌面的编辑渠道），或把证书加入系统信任/NODE_EXTRA_CA_CERTS。"],
+    en: ["The HTTPS certificate is not trusted, usually because a corporate gateway replaces certificates. Xiu did not disable verification.", "Point this channel at the enterprise root certificate PEM file (first-run wizard, /provider edit or the desktop channel editor), or add it to the system trust store or NODE_EXTRA_CA_CERTS."] },
+  "network/ca-file": { code: "network/ca-file",
+    zh: ["渠道配置的企业根证书文件读不到，或者里面没有 PEM 证书。", "核对文件路径与内容（应包含 -----BEGIN CERTIFICATE-----），或用 /provider edit、桌面的编辑渠道清空证书项。"],
+    en: ["The channel's root-certificate file cannot be read, or it contains no PEM certificate.", "Check the path and content (it should contain -----BEGIN CERTIFICATE-----), or clear the certificate field with /provider edit or the desktop channel editor."] },
   "network/proxy-auth": { code: "network/proxy-auth",
     zh: ["代理服务器要求认证（HTTP 407）。", "在代理地址中带上账号密码，或换用不需要认证的代理。"],
     en: ["The proxy server requires authentication (HTTP 407).", "Include credentials in the proxy URL or use a proxy that needs none."] },
@@ -192,6 +195,7 @@ function entryFor(error: unknown): Entry | undefined {
   if (/XIU_BACKGROUND_PID_REUSED/.test(message)) return GENERAL["background/pid-reused"];
   if (/ is not set$|missing api key|no api key/i.test(message)) return GENERAL["credential/missing"];
   if (status === 407 || /proxy authentication required/i.test(message)) return GENERAL["network/proxy-auth"];
+  if (/XIU_CA_CERT_/.test(message)) return GENERAL["network/ca-file"];
   if (/SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|UNABLE_TO_GET_ISSUER_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_CERT_ALTNAME_INVALID/.test(`${codes} ${message}`)) return GENERAL["network/tls"];
   switch (classifyRetryError(error)) {
     case "cancelled": return GENERAL.cancelled;

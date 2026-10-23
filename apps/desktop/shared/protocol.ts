@@ -85,6 +85,8 @@ export interface DesktopProviderProfile {
   baseURL?: string;
   apiKeyEnv?: string;
   contextWindow?: number;
+  /** Absolute PEM path whose certificates are also trusted for this channel; verification is never disabled. */
+  caCertFile?: string;
   credential: {
     source: "environment" | "system" | "legacy-file" | "missing" | "not-required";
     configured: boolean;
@@ -115,6 +117,8 @@ export interface DesktopProviderUpsertRequest {
   apiKeyEnv?: string;
   apiKey?: string;
   contextWindow?: number;
+  /** Absolute PEM path; blank clears it. */
+  caCertFile?: string;
   capabilityModels?: { vision?: string; image?: string; video?: string; audio?: string };
   features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
 }

@@ -154,7 +154,7 @@ class OpenAIProvider implements ModelProvider {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv)
       ?? config.apiKey
       ?? readEnvironmentCredential(config.provider === "agnes" ? "AGNES_API_KEY" : "OPENAI_API_KEY");
-    const dispatcher = createTrustedDispatcher(config.proxy);
+    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
     this.clientOptions = {
       apiKey: apiKey || "xiu-local",
       maxRetries: 0,
@@ -352,7 +352,7 @@ class AnthropicProvider implements ModelProvider {
   private replayThinking = true;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
-    const dispatcher = createTrustedDispatcher(config.proxy);
+    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
     this.clientOptions = {
       apiKey,
       maxRetries: 0,

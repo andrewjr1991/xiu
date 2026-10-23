@@ -41,6 +41,8 @@ export interface AgentConfig {
   baseURL?: string;
   mediaBaseURL?: string;
   proxy?: string;
+  /** Absolute path of a PEM file added to this channel's trusted roots; verification is never disabled. */
+  caCertFile?: string;
   capabilities?: CapabilityModels;
   contextLimit?: number;
   contextWindow?: number;
@@ -70,6 +72,8 @@ export function resolveConfig(options: {
   baseURL?: string;
   mediaBaseURL?: string;
   proxy?: string;
+  /** PEM file whose certificates join the trusted roots of model requests; relative paths resolve against the cwd. */
+  caCert?: string;
   visionModel?: string;
   imageModel?: string;
   videoModel?: string;
@@ -121,6 +125,7 @@ export function resolveConfig(options: {
       throw new UsageError("proxy must use http:// or https://");
     }
   }
+  const caCertFile = options.caCert?.trim() ? path.resolve(options.caCert.trim()) : undefined;
 
   const model = options.model ?? process.env.XIU_MODEL ?? defaultModel;
   const unified = options.unifiedModel ?? process.env.XIU_UNIFIED_MODEL;
@@ -204,6 +209,7 @@ export function resolveConfig(options: {
       ?? process.env.XIU_MEDIA_BASE_URL
       ?? baseURL,
     proxy,
+    caCertFile,
     capabilities,
     ...context,
     agentConcurrency,

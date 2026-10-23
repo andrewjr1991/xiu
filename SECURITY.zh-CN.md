@@ -76,6 +76,7 @@
 - 系统凭证迁移必须经过预检、复制、回读验证、原子切换、独立清理；不得静默删除或静默回退明文。
 - Provider 与 MCP OAuth 支持显式迁移、回退、清理、遗忘和注销。0.20.14 起桌面「扩展」面板的 MCP 凭据迁移/清理/回退与 CLI `/mcp credentials` 调用同一 `McpAuthStore` 流程：Renderer 只能提交当前配置清单指纹加字面量确认，清理还必须带用户输入的完整 MCP 名称，主进程逐字段校验；系统后端不可用时迁移不开始、不改动旧凭据；快照只给出登录状态与凭据来源，不含 Token，结果写入同一本机审计账本（`mcp-migrate`/`mcp-cleanup`/`mcp-rollback`）。同一版本起桌面「模型与渠道」对 Provider Key 提供迁移/清理/回退/遗忘，调用与 CLI `/credentials` 相同的 `ProviderRegistry` 方法：Renderer 只能提交渠道 ID、操作名和字面量确认，清理与遗忘还必须带用户输入的完整 Provider 标识，主进程按当前凭据状态逐项核对（没有旧明文不能迁移、未迁移不能清理）；系统后端不可用时迁移不开始、旧明文不改动；快照只含来源、副本有无与迁移时间，不含 Key；结果写入同一账本（`provider-migrate`/`provider-cleanup`/`provider-rollback`/`provider-forget`），账本不可写不改变结果。
 - 配置只保存必要的非秘密引用和 revision。
+- 模型与媒体请求不关闭 HTTPS 证书校验。渠道可配置 `caCertFile`（企业根证书 PEM 的绝对路径，0.20.14）作为该渠道的额外信任根，与 Node 内置根和 Windows 系统信任库合并；改用 `http://` 只能由用户在首次向导或渠道编辑中显式选择，证书失败时 Xiu 不会自动降级，也不会读取 `NODE_TLS_REJECT_UNAUTHORIZED` 之外的任何“跳过校验”开关。
 - 系统凭证后端按平台选择：Windows 凭据管理器、macOS 钥匙串、Linux Secret Service（经 D-Bus，需要 GNOME Keyring、KWallet 一类提供者），其他平台明确报告不可用；三者经同一可选原生模块访问，错误文本只含后端名称与操作，不回显原生错误。Linux 上该模块在没有 Secret Service 时会静默退回内核 keyring（keyutils，重启即丢失），Xiu 在创建后端前先经只走 Secret Service 的搜索确认服务可达，不可达则根本不创建系统后端，不接受这一回退。任何平台都只在显式迁移后选用系统后端；已选定的后端不可用（原生模块缺失、策略拦截、无 D-Bus 会话、钥匙串锁定）时失败关闭，不静默回退明文。Windows 在 ARM64、企业策略和真实 OAuth 迁移矩阵完成前，macOS 与 Linux 在真机验收前，都保持可选、不设为默认。
 
 ### Provider 配置备份与恢复（0.20.3-preview.4 候选）

@@ -17,9 +17,11 @@ interface Script {
 function scriptedIo(script: Script) {
   const log: string[] = [];
   const titles: string[] = [];
+  const menus: string[][] = [];
   const io: FirstRunWizardIo = {
     async select<T>(title: string, options: SelectOption<T>[]): Promise<T | undefined> {
       titles.push(title);
+      menus.push(options.map((item) => item.label));
       assert.ok(script.selections.length, `unexpected selector: ${title}`);
       const matcher = script.selections.shift();
       if (!matcher) return undefined;
@@ -37,7 +39,7 @@ function scriptedIo(script: Script) {
     },
     log(line: string): void { log.push(line); },
   };
-  return { io, log, titles };
+  return { io, log, titles, menus };
 }
 
 async function registryFixture(t: test.TestContext) {
@@ -172,4 +174,74 @@ test("activation failure after a passed probe removes the just-saved profile", a
   assert.deepEqual(result, { status: "skipped" });
   assert.deepEqual(registry.list(), []);
   assert.match(script.log.join("\n"), /已撤销刚保存的配置/);
+});
+
+const certificateFailure = () => new Error("fetch failed", { cause: Object.assign(new Error("self signed certificate in certificate chain"), { code: "SELF_SIGNED_CERT_IN_CHAIN" }) });
+
+test("a certificate failure offers a channel root certificate; the PEM path is kept on the saved channel and the probe reruns with it", async (t) => {
+  const { registry } = await registryFixture(t);
+  const script = scriptedIo({ selections: [/自定义/, /企业根证书/], answers: ["https://gateway.example.test/v1", "gw-model", "certs/gateway.pem"], secrets: ["sk-gateway"] });
+  const probed: ProviderProfile[] = [];
+  const result = await runFirstRunWizard({
+    language: "zh-CN", registry, env: {}, io: script.io,
+    probe: async (profile) => { probed.push({ ...profile }); if (!profile.caCertFile) throw certificateFailure(); return { models: [] }; },
+    activate: async () => true,
+  });
+  assert.deepEqual(result, { status: "configured", providerId: "custom", model: "gw-model" });
+  assert.equal(probed.length, 2, "the same draft is probed again with the certificate");
+  assert.equal(probed[0].caCertFile, undefined);
+  assert.equal(probed[1].caCertFile, path.resolve("certs/gateway.pem"));
+  assert.equal(probed[1].baseURL, "https://gateway.example.test/v1", "the certificate path never changes the scheme");
+  assert.equal(probed[1].apiKey, "sk-gateway", "the typed key is reused, not asked again");
+  assert.equal(registry.get("custom")?.caCertFile, path.resolve("certs/gateway.pem"));
+  assert.deepEqual(script.menus.at(-1)?.slice(0, 2), ["指定企业根证书（PEM 文件）", "改用 http:// 明文连接"]);
+  assert.match(script.log.join("\n"), /已为该渠道指定证书文件/);
+  assert.doesNotMatch(script.log.join("\n"), /sk-gateway/);
+});
+
+test("the plain http:// downgrade is an explicit choice that keeps the rest of the address and the key", async (t) => {
+  const { registry } = await registryFixture(t);
+  const script = scriptedIo({ selections: [/自定义/, /改用 http/], answers: ["https://gateway.example.test/v1", "gw-model"], secrets: ["sk-gateway"] });
+  const probed: ProviderProfile[] = [];
+  const result = await runFirstRunWizard({
+    language: "zh-CN", registry, env: {}, io: script.io,
+    probe: async (profile) => { probed.push({ ...profile }); if (profile.baseURL?.startsWith("https://")) throw certificateFailure(); return { models: [] }; },
+    activate: async () => true,
+  });
+  assert.equal(result.status, "configured");
+  assert.deepEqual(probed.map((profile) => profile.baseURL), ["https://gateway.example.test/v1", "http://gateway.example.test/v1"]);
+  assert.equal(probed[1].caCertFile, undefined);
+  assert.equal(registry.get("custom")?.baseURL, "http://gateway.example.test/v1");
+  assert.match(script.log.join("\n"), /明文传输/);
+});
+
+test("neither certificate option is offered for other failures or for an http:// address, and a blank PEM path returns to step 2", async (t) => {
+  const { registry } = await registryFixture(t);
+  const unauthorized = scriptedIo({ selections: [/自定义/, /稍后配置/], answers: ["https://gateway.example.test/v1", "gw-model"], secrets: ["sk-gateway"] });
+  const skipped = await runFirstRunWizard({
+    language: "zh-CN", registry, env: {}, io: unauthorized.io,
+    probe: async () => { throw Object.assign(new Error("401 Unauthorized"), { status: 401 }); },
+    activate: async () => true,
+  });
+  assert.deepEqual(skipped, { status: "skipped" });
+  assert.deepEqual(unauthorized.menus.at(-1), ["重新输入", "换一个渠道", "稍后配置"]);
+
+  const plain = scriptedIo({ selections: [/自定义/, /稍后配置/], answers: ["http://gateway.example.test/v1", "gw-model"], secrets: ["sk-gateway"] });
+  await runFirstRunWizard({
+    language: "zh-CN", registry, env: {}, io: plain.io,
+    probe: async () => { throw certificateFailure(); },
+    activate: async () => true,
+  });
+  assert.deepEqual(plain.menus.at(-1), ["指定企业根证书（PEM 文件）", "重新输入", "换一个渠道", "稍后配置"], "no http:// option when the address is already plain");
+
+  let attempts = 0;
+  const blank = scriptedIo({ selections: [/自定义/, /企业根证书/, /稍后配置/], answers: ["https://gateway.example.test/v1", "gw-model", "", "https://gateway.example.test/v1", "gw-model"], secrets: ["sk-gateway", "sk-gateway"] });
+  const result = await runFirstRunWizard({
+    language: "zh-CN", registry, env: {}, io: blank.io,
+    probe: async () => { attempts += 1; throw certificateFailure(); },
+    activate: async () => true,
+  });
+  assert.deepEqual(result, { status: "skipped" });
+  assert.equal(attempts, 2, "a blank path returns to step 2, which asks for the details again and probes once more");
+  assert.deepEqual(registry.list(), []);
 });

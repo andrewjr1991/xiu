@@ -8,6 +8,7 @@ import { ProviderRegistry, providerTemplates, type ProviderProfile } from "../..
 import { ProviderConfigurationError } from "../../../src/provider-config-migration.js";
 import { createProvider, probeProvider } from "../../../src/providers.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
+import { readCertificateAuthorityFile } from "../../../src/trusted-dispatcher.js";
 import { summarizeUserFacingError } from "../../../src/user-facing-errors.js";
 import { createSystemCredentialStore, systemCredentialBackendName } from "../../../src/system-credential-store.js";
 import { createWorkspaceProviderConfig } from "../../../src/runtime/workspace-agent-host.js";
@@ -126,6 +127,7 @@ export class DesktopProviderController {
         ...(profile.baseURL ? { baseURL: profile.baseURL } : {}),
         ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
         ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
+        ...(profile.caCertFile ? { caCertFile: profile.caCertFile } : {}),
         credential: this.credentialState(profile, credentials.get(profile.id)),
         capabilityModels: { ...(profile.capabilityModels ?? {}) },
         features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
@@ -289,6 +291,19 @@ export class DesktopProviderController {
     }
   }
 
+  /** The channel's extra trust anchors: an absolute, readable PEM file. Verification is never relaxed, so a bad file fails here instead of at the first request. */
+  private certificateFile(value: unknown): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new Error("证书文件路径无效。");
+    const file = value.trim();
+    if (!file) return undefined;
+    if (file.length > 1024 || /[\r\n\0]/.test(file)) throw new Error("证书文件路径无效。");
+    if (!path.isAbsolute(file)) throw new Error("证书文件请填写绝对路径。");
+    try { readCertificateAuthorityFile(file); }
+    catch (error) { throw new Error(/XIU_CA_CERT_INVALID/.test(String(error)) ? "证书文件里没有 PEM 证书（应包含 -----BEGIN CERTIFICATE-----）。" : "证书文件不存在或不可读。"); }
+    return file;
+  }
+
   async upsert(request: DesktopProviderUpsertRequest): Promise<DesktopProviderSnapshot> {
     const existingId = request?.existingId?.trim();
     const previous = existingId ? this.profile(existingId) : undefined;
@@ -307,6 +322,7 @@ export class DesktopProviderController {
     const apiKeyEnv = request?.apiKeyEnv?.trim() ? this.environmentName(request.apiKeyEnv) : undefined;
     if (apiKeyEnv && request.apiKey) throw new Error("环境变量凭据和直接输入 Key 不能同时配置。");
     const contextWindow = request?.contextWindow === undefined ? undefined : this.contextWindow(request.contextWindow);
+    const caCertFile = this.certificateFile(request?.caCertFile);
     const features = request?.features;
     if (!features || [features.tools, features.vision, features.image, features.video].some((value) => typeof value !== "boolean") || (features.audio !== undefined && typeof features.audio !== "boolean")) throw new Error("渠道能力配置无效。");
     const normalizedFeatures = { ...features, audio: features.audio === true };
@@ -318,7 +334,7 @@ export class DesktopProviderController {
     }
     const profile: ProviderProfile = {
       id, name, kind, model, ...(baseURL ? { baseURL } : {}), ...(apiKeyEnv ? { apiKeyEnv } : {}),
-      ...(contextWindow ? { contextWindow } : {}), ...(Object.keys(capabilityModels ?? {}).length ? { capabilityModels } : {}), features: { text: true, ...normalizedFeatures },
+      ...(contextWindow ? { contextWindow } : {}), ...(caCertFile ? { caCertFile } : {}), ...(Object.keys(capabilityModels ?? {}).length ? { capabilityModels } : {}), features: { text: true, ...normalizedFeatures },
     };
     try {
       await this.registry.upsert(profile);

@@ -8,6 +8,7 @@ import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "../provider-rou
 import { probeProvider } from "../providers.js";
 import type { StatusLine } from "../status.js";
 import { askQuestion, askSecret } from "../terminal-prompts.js";
+import path from "node:path";
 import { formatUserFacingError } from "../user-facing-errors.js";
 
 export interface ProviderCommandContext {
@@ -229,13 +230,14 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       return true;
     }
     const current = providerRegistry.get(selected)!;
-    console.log(chalk.cyan(localize(language, "直接回车保留当前值；环境变量名或上下文窗口输入 - 可清空。本地 Key 请使用 /provider key 单独修改。", "Press Enter to keep the current value. Enter - to clear the environment variable or context window. Use /provider key to change the local key.")));
+    console.log(chalk.cyan(localize(language, "直接回车保留当前值；环境变量名、上下文窗口或证书文件输入 - 可清空。本地 Key 请使用 /provider key 单独修改。", "Press Enter to keep the current value. Enter - to clear the environment variable, context window or certificate file. Use /provider key to change the local key.")));
     try {
       const nameText = (await askQuestion(localize(language, `显示名称 [${current.name}]：`, `Display name [${current.name}]: `))).trim();
       const baseURLText = (await askQuestion(localize(language, `API Base URL [${current.baseURL ?? ""}]：`, `API base URL [${current.baseURL ?? ""}]: `))).trim();
       const modelText = (await askQuestion(localize(language, `默认模型 ID [${current.model}]：`, `Default model ID [${current.model}]: `))).trim();
       const envText = (await askQuestion(localize(language, `密钥环境变量名 [${current.apiKeyEnv ?? "未设置"}]：`, `API-key environment variable [${current.apiKeyEnv ?? "not set"}]: `))).trim();
       const contextText = (await askQuestion(localize(language, `上下文窗口 Token 数 [${current.contextWindow ?? "默认"}]：`, `Context-window tokens [${current.contextWindow ?? "default"}]: `))).trim();
+      const caCertText = (await askQuestion(localize(language, `企业根证书 PEM 文件 [${current.caCertFile ?? "未设置"}]（公司网关替换证书时填写，只追加信任根）：`, `Enterprise root certificate PEM file [${current.caCertFile ?? "not set"}] (for a corporate gateway certificate; only adds trust roots): `))).trim();
       const visionDefault = current.features.vision ? "Y/n" : "y/N";
       const visionText = (await askQuestion(localize(language, `确认支持视觉？[${visionDefault}]：`, `Confirmed vision support? [${visionDefault}]: `))).trim();
       const updated: ProviderProfile = {
@@ -245,6 +247,7 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
         model: modelText || current.model,
         apiKeyEnv: envText === "-" ? undefined : envText || current.apiKeyEnv,
         contextWindow: contextText === "-" ? undefined : contextText ? Number(contextText) : current.contextWindow,
+        caCertFile: caCertText === "-" ? undefined : caCertText ? path.resolve(caCertText) : current.caCertFile,
         features: {
           ...current.features,
           vision: visionText ? /^(y|yes)$/i.test(visionText) : current.features.vision,

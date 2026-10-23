@@ -36,6 +36,7 @@ test("HTTP and network failures are classified from status codes and error codes
     [new Error("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:11434"), { code: "ECONNREFUSED" }) }), "network/refused"],
     [new Error("fetch failed", { cause: Object.assign(new Error("self signed certificate in certificate chain"), { code: "SELF_SIGNED_CERT_IN_CHAIN" }) }), "network/tls"],
     [new Error("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) }), "network/unreachable"],
+    [new Error("XIU_CA_CERT_INVALID: /etc/ssl/gateway.pem contains no PEM certificate block"), "network/ca-file"],
     [Object.assign(new Error("Request timed out"), { code: "ETIMEDOUT" }), "network/timeout"],
     [new Error("OPENAI_API_KEY is not set"), "credential/missing"],
     [new Error("XIU_NODE_NOT_FOUND: Background commands require a local Node.js runtime."), "background/node-missing"],
@@ -48,7 +49,7 @@ test("HTTP and network failures are classified from status codes and error codes
   }
   const refused = explainError(cases[8][0], "zh-CN");
   assert.match(refused.nextStep, /Ollama、LM Studio 或 vLLM/);
-  assert.equal(explainError(cases[14][0], "en-US").diagnostic, "/background list");
+  assert.equal(explainError(cases[15][0], "en-US").diagnostic, "/background list");
 });
 
 test("a damaged configuration file is explained by its kind, points at xiu doctor and keeps the owner's message as the detail", () => {

@@ -199,6 +199,11 @@ test("provider validation rejects unsafe ids, URLs, and secret-shaped fields", (
   };
   assert.throws(() => validateProviderProfile({ ...base, id: "__proto__" }), /Provider id/);
   assert.throws(() => validateProviderProfile({ ...base, baseURL: "file:///secret" }), /http:\/\//);
+  assert.throws(() => validateProviderProfile({ ...base, caCertFile: "certs/gateway.pem" }), /absolute path/);
+  assert.throws(() => validateProviderProfile({ ...base, caCertFile: "   " }), /1-1024/);
+  const served = { ...base, baseURL: "https://gateway.example.test/v1" };
+  assert.equal(validateProviderProfile({ ...served, caCertFile: " /etc/ssl/gateway.pem " }).caCertFile, "/etc/ssl/gateway.pem");
+  assert.equal("caCertFile" in validateProviderProfile(served), false, "profiles without a certificate stay unchanged");
   assert.throws(() => validateProviderProfile({ ...base, apiKeyEnv: "actual secret" }), /environment variable/);
   const media = validateProviderProfile({ ...base, baseURL: "https://example.test/v1", capabilityModels: { image: "vendor-image-1" }, features: { ...base.features, image: true, audio: true } });
   assert.equal(media.capabilityModels?.image, "vendor-image-1");

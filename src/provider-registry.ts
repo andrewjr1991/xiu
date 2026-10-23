@@ -36,6 +36,8 @@ export interface ProviderProfile {
   /** Plaintext local credential. Never copy this value into project sessions or terminal output. */
   apiKey?: string;
   proxy?: string;
+  /** Absolute path of a PEM file whose certificates join the trusted roots for this channel only; verification is never relaxed. */
+  caCertFile?: string;
   contextWindow?: number;
   capabilityModels?: ProviderCapabilityModels;
   features: ProviderFeatures;
@@ -91,6 +93,7 @@ function probeFingerprint(profile: ProviderProfile, model: string): string {
     baseURL: profile.baseURL,
     apiKeyEnv: profile.apiKeyEnv,
     proxy: profile.proxy,
+    caCertFile: profile.caCertFile,
     contextWindow: profile.contextWindow,
     features: profile.features,
   })).digest("hex").slice(0, 24);
@@ -243,6 +246,11 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
   }
   validateURL(profile.baseURL, "baseURL");
   validateURL(profile.proxy, "proxy");
+  if (profile.caCertFile !== undefined) {
+    const file = typeof profile.caCertFile === "string" ? profile.caCertFile.trim() : "";
+    if (!file || file.length > 1024 || /[\r\n\0]/.test(file)) throw new Error("caCertFile must be a file path of 1-1024 characters");
+    if (!path.isAbsolute(file)) throw new Error("caCertFile must be an absolute path");
+  }
   if (["openai-compatible", "ollama", "lmstudio", "vllm"].includes(profile.kind) && !profile.baseURL) {
     throw new Error(`${profile.kind} profiles require a baseURL`);
   }
@@ -269,6 +277,7 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
     ...profile,
     id: profile.id.trim(), name: profile.name.trim(), model: profile.model.trim(),
     baseURL: profile.baseURL?.replace(/\/$/, ""), apiKeyEnv: profile.apiKeyEnv?.trim(), builtin: Boolean(profile.builtin),
+    ...(profile.caCertFile !== undefined ? { caCertFile: profile.caCertFile.trim() } : {}),
     ...(capabilityModels ? { capabilityModels } : {}), features: { ...profile.features, audio: profile.features.audio === true },
   };
 }
