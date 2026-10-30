@@ -9,11 +9,12 @@
 - **0.20.14 桌面 MCP 对齐（2026-10-20，未发布）：** “扩展”面板的 Resource Template 变成变量表单，主进程用用户填写的值按 CLI 同一套 RFC 6570 规则展开，缺变量即拒绝；每条 MCP 配置多一行只读字段摘要（名称不含值），项目/插件/高级配置可读不可改；插件贡献的服务改标“插件贡献”并撤掉误显示的编辑/删除按钮，授权记录来源不变。
 - **0.20.14 桌面 Skills 对齐（2026-10-20，未发布）：** 管理面板“Skills”页支持 HTTPS Git 浅克隆预览、逐技能标出替换与新增权限并要求单独确认、全局技能带确认卸载；CLI 新增 `/skills uninstall`；替换与卸载的旧版本统一移入 `~/.xiu/skill-backups`，不再留在技能目录里被重复扫描。
 - **0.20.14 桌面对话候选（2026-10-20，未发布）：** 用户请求与模型回复增加复制操作；宽屏正文居中、输入框贴齐会话面板，用户消息收窄并增加留白，模型回复可渲染 Markdown 管道表格；左侧记录轨道支持按消息跳转并暂停自动跟随。本机版本门禁（1362 项测试：1350 通过、12 跳过）、桌面 UI 冒烟、491 文件 npm 清单、隔离包/Windows 平台 smoke 与安装生命周期均通过；跨平台 CI 和真实用户验收仍需完成。同版 CLI 新增一次性任务的 `--json` JSON Lines 事件流（第 4 项“已做”）。
+- **0.20.14 渠道代理策略（2026-10-30，未发布）：** 每个 Provider 可独立选择直连、系统代理或自定义 HTTP(S) 代理；桌面渠道页提供专门入口，连接测试、模型发现、对话、视觉与媒体共用同一策略。系统模式读取标准代理环境变量及 Windows 当前用户的手动代理设置，PAC 不执行；联网搜索仍使用独立 `/web proxy`。类型检查、lint、文档、72 项代理/Provider/IPC 专项与桌面 UI 冒烟通过；企业策略拦截测试临时编译的原生 EXE，维护者要求停止该项，不据此判定代理回归。
 - **0.20.12 已发布 GitHub 与 npm（2026-10-19）：** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) 标签指向 `c5e273bffd6c3dde2bbb5f0ad84dc7b7a351cbf7`；同提交 CI 38936632221 九项作业与 CodeQL 通过，五份 CI 原始附件已按大小/SHA256 回读。Windows 安装器未签名；npm latest 已于 02:35 UTC 回读为 0.20.12，440 个代码文件与 CI tarball 一致。Computer Use 编辑器修复已通过本地真实记事本与隔离 Windows/Chromium 测试。
 
 - **0.20.11 已发布 GitHub 与 npm：** 新增 /web configure managed 与托管搜索菜单，可跳过企业策略禁止的本机 free-search；健康检查 403 明确提示网关/代理/服务端访问规则，维护者已确认 403 为企业网络策略拦截，放行后可用。手动选择托管后不启动非默认本机搜索后端。
 
-更新于 2026-10-20。
+更新于 2026-10-30。
 
 - **0.20.9 已发布 GitHub（2026-10-15）。** [Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.9) 与标签精确绑定 `961fd47e154b43747e3136843caea9ae368f0c44`；[main CI 38674245057](https://github.com/andrewjr1991/xiu/actions/runs/38674245057) 九作业通过，Windows CLI 全量 1164 项：1155 通过、9 跳过、0 失败。发布前修正 npm 清单漏列当前设计稿并补回归；旧未公开草稿已删除，旧制品及 rejected 摘要保留本地。最终五份附件采用新 CI 原始制品，大小/SHA256 回读通过。固定 uv、安装/启动/升级/中断重启/卸载已再次本地验收。npm 0.20.9 已于 2026-10-15 发布，回读 version/latest 均为 0.20.9，integrity 与 tarball SHA256 与 Release 附件一致。Windows 未签名。仅文档补记跳过重复 CI，不改正式标签或附件。
 - **0.20.8 已发布。** [GitHub 0.20.8](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.8) 的标签指向 main 合并提交 `d36c488fc5706277562d3018a23907761440d124`，[main CI 38374657792](https://github.com/andrewjr1991/xiu/actions/runs/38374657792) 九作业全部通过，五份附件使用同源 CI 制品并已回读大小与 SHA256。npm latest 已于 2026-10-13 09:38 UTC 核实为 0.20.8。Windows 安装器仍未签名。

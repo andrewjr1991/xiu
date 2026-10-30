@@ -345,6 +345,7 @@ async function main(): Promise<void> {
       audioModel: effective.capabilityModels?.audio,
       baseURL: options.baseURL ?? effective.baseURL,
       proxy: options.proxy ?? effective.proxy,
+      proxyMode: options.proxy ? "custom" : effective.proxyMode,
       caCert: options.caCert ?? effective.caCertFile,
       contextWindow: options.contextWindow ?? (effective.contextWindow ? String(effective.contextWindow) : apiContextWindow ? String(apiContextWindow) : undefined),
       model: selectedModel,

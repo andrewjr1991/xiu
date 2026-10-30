@@ -246,7 +246,7 @@ export class OpenAIVisionBackend implements MediaBackend {
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
     this.apiKey = (readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("OPENAI_API_KEY")) || "xiu-local";
     this.baseURL = trimSlash(config.mediaBaseURL ?? config.baseURL ?? "https://api.openai.com/v1");
-    this.dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
+    this.dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile, config.proxyMode, this.baseURL);
     this.clientOptions = {
       apiKey: this.apiKey,
       baseURL: this.baseURL,
@@ -351,7 +351,7 @@ export class AnthropicVisionBackend implements MediaBackend {
   private clientPromise?: Promise<Anthropic>;
 
   constructor(private readonly config: AgentConfig, options: { maxRetries?: number } = {}) {
-    const dispatcher = createTrustedDispatcher(config.proxy);
+    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile, config.proxyMode, config.mediaBaseURL ?? config.baseURL);
     this.clientOptions = {
       ...options,
       apiKey: readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY"),

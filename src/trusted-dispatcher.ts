@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as tls from "node:tls";
 import { Agent, type Dispatcher, ProxyAgent } from "undici";
+import { resolveSystemProxy, type ProviderProxyMode } from "./system-proxy.js";
 
 export function combineCertificateAuthorities(defaultRoots: readonly string[], systemRoots: readonly string[]): string[] | undefined {
   if (!systemRoots.length) return undefined;
@@ -40,7 +41,7 @@ function readOptionalCertificates(file: string): string[] {
  * Windows trust store, or handed out as a PEM file. Keeping every set preserves
  * public CA support without weakening certificate verification.
  */
-export function createTrustedDispatcher(proxy?: string, caCertFile?: string): Dispatcher | undefined {
+export function createTrustedDispatcher(proxy?: string, caCertFile?: string, proxyMode?: ProviderProxyMode, targetUrl = "https://example.invalid"): Dispatcher | undefined {
   const certificateApiAvailable = typeof tls.getCACertificates === "function";
   const defaultRoots = certificateApiAvailable ? tls.getCACertificates("default") : tls.rootCertificates;
   const systemRoots = process.platform === "win32" && certificateApiAvailable
@@ -53,9 +54,11 @@ export function createTrustedDispatcher(proxy?: string, caCertFile?: string): Di
     : [];
   const ca = combineCertificateAuthorities(defaultRoots, [...systemRoots, ...environmentRoots, ...channelRoots]);
 
-  if (proxy) {
+  const mode = proxyMode ?? (proxy ? "custom" : "direct");
+  const effectiveProxy = mode === "system" ? resolveSystemProxy(targetUrl) : mode === "custom" ? proxy : undefined;
+  if (effectiveProxy) {
     return new ProxyAgent({
-      uri: proxy,
+      uri: effectiveProxy,
       ...(ca ? { requestTls: { ca }, proxyTls: { ca } } : {}),
     });
   }

@@ -83,6 +83,11 @@ export interface DesktopProviderProfile {
   selectedModel: string;
   builtin: boolean;
   baseURL?: string;
+  proxyMode: "direct" | "system" | "custom";
+  /** Present only for a credential-free custom proxy URL. Authenticated proxy URLs are never returned to the renderer. */
+  proxyURL?: string;
+  proxyConfigured: boolean;
+  proxyEditable: boolean;
   apiKeyEnv?: string;
   contextWindow?: number;
   /** Absolute PEM path whose certificates are also trusted for this channel; verification is never disabled. */
@@ -114,6 +119,9 @@ export interface DesktopProviderUpsertRequest {
   kind: DesktopProviderKind;
   model: string;
   baseURL?: string;
+  proxyMode?: "direct" | "system" | "custom";
+  /** Required for custom mode; blank clears it. Embedded proxy credentials are rejected by the desktop flow. */
+  proxyURL?: string;
   apiKeyEnv?: string;
   apiKey?: string;
   contextWindow?: number;
@@ -123,6 +131,7 @@ export interface DesktopProviderUpsertRequest {
   features: { tools: boolean; vision: boolean; image: boolean; video: boolean; audio: boolean };
 }
 export interface DesktopProviderDeleteRequest { providerId: string; confirmed: true }
+export interface DesktopProviderProxyRequest { providerId: string; proxyMode: "direct" | "system" | "custom"; proxyURL?: string }
 /** A suggestion for the new-channel form. `vendor` presets are hosted OpenAI-compatible services; nothing is registered until saved. */
 export interface DesktopProviderTemplate extends DesktopProviderUpsertRequest { preset?: "kind" | "vendor" }
 
@@ -374,6 +383,7 @@ export interface XiuDesktopBridge {
   visionProbeProgress(): Promise<{ total: number; current?: string; results: Array<{ model: string; status: "passed" | "failed" | "unknown" | "cancelled"; message: string }> }>;
   cancelVisionProbe(): Promise<void>;
   upsertProvider(request: DesktopProviderUpsertRequest): Promise<DesktopProviderMutationResult>;
+  saveProviderProxy(request: DesktopProviderProxyRequest): Promise<DesktopProviderMutationResult>;
   deleteProvider(request: DesktopProviderDeleteRequest): Promise<DesktopProviderMutationResult>;
   terminalSnapshot(): Promise<DesktopTerminalSnapshot>;
   startTerminal(request?: DesktopTerminalStartRequest): Promise<DesktopTerminalSnapshot>;
@@ -448,6 +458,7 @@ export const desktopChannels = {
   providerVisionCancel: "provider:vision-cancel",
   providerVisionProgress: "provider:vision-progress",
   providerUpsert: "provider:upsert",
+  providerProxySave: "provider:proxy-save",
   providerDelete: "provider:delete",
   terminalSnapshot: "terminal:snapshot",
   terminalStart: "terminal:start",

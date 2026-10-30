@@ -27,6 +27,26 @@ app.whenReady().then(async () => {
     await settleLayout(window);
     await evaluate(window, `document.querySelector('.user-question form').requestSubmit()`);
     await waitFor(window, `window.xiuSmoke.calls().includes('question:answer:Windows') && !document.querySelector('.user-question')`, "answer continuation");
+    for (const source of ['paste', 'drop', 'choose']) {
+      await evaluate(window, "window.xiuSmoke.workflowFixture()");
+      await waitFor(window, "Boolean(document.querySelector('.user-question'))", 'question ready for attachments');
+      assert(await evaluate(window, "document.querySelector('.user-question button[type=submit]').disabled"), 'Empty answers cannot submit');
+      if (source === 'choose') {
+        await evaluate(window, "document.querySelector('.user-question button[type=button]').click()");
+      } else {
+        await evaluate(window, `(() => {
+          const data = new DataTransfer();
+          data.items.add(new File([new Uint8Array([137,80,78,71])], 'question-${source}.png', { type: 'image/png' }));
+          const event = ${JSON.stringify(source)} === 'paste' ? new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }) : new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true });
+          document.querySelector('.user-question textarea').dispatchEvent(event);
+        })()`);
+      }
+      await waitFor(window, "document.querySelector('.user-question .attachment-tile') && !document.querySelector('.user-question button[type=submit]').disabled", 'image-only answer enabled');
+      if (source !== 'choose') assert(await evaluate(window, "Boolean(document.querySelector('.user-question .attachment-tile img'))"), 'Screenshot preview is visible');
+      await evaluate(window, "document.querySelector('.user-question form').requestSubmit()");
+      const name = source === 'choose' ? 'round-two.png' : `question-${source}.png`;
+      await waitFor(window, `window.xiuSmoke.calls().some(call => call.startsWith('question:answer:') && call.includes(${JSON.stringify(name)})) && !document.querySelector('.user-question')`, 'image answer reaches the bound question');
+    }
     await evaluate(window, "window.xiuSmoke.computerAcceptanceFixture()");
     await waitFor(window, "Boolean(document.querySelector('.computer-acceptance button'))", "manual acceptance controls");
     assert(await evaluate(window, "getComputedStyle(document.querySelector('.computer-acceptance button')).borderRadius === '10px'"), "Shared styled acceptance controls");

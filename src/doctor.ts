@@ -421,8 +421,8 @@ async function providerSection(registry: DoctorProviderRegistry | undefined, env
         try { if (profile.baseURL) host = new URL(profile.baseURL).host; } catch { /* keep the raw value; it is validated elsewhere */ }
         const level: DoctorLevel = source === "missing" && needsKey ? "warning" : "pass";
         items.push(item(`provider-${profile.id}`, level, [profile.id, profile.id],
-          [`${profile.kind} · ${profile.model}${host ? ` · ${host}` : ""} · Key：${sourceZh}${profile.proxy ? " · 专用代理" : ""}`,
-            `${profile.kind} · ${profile.model}${host ? ` · ${host}` : ""} · key: ${sourceEn}${profile.proxy ? " · dedicated proxy" : ""}`],
+          [`${profile.kind} · ${profile.model}${host ? ` · ${host}` : ""} · Key：${sourceZh}${profile.proxyMode === "system" ? " · 系统代理" : profile.proxy ? " · 专用代理" : ""}`,
+            `${profile.kind} · ${profile.model}${host ? ` · ${host}` : ""} · key: ${sourceEn}${profile.proxyMode === "system" ? " · system proxy" : profile.proxy ? " · dedicated proxy" : ""}`],
           level === "warning" ? ["运行 /provider key 保存 Key，或设置对应环境变量后重启。", "Save a key with /provider key, or set the environment variable and restart."] : undefined));
       }
     }

@@ -30,7 +30,7 @@ import type {
 } from "../shared/protocol.js";
 
 type ProviderRegistryLike = Pick<ProviderRegistry,
-  "list" | "get" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "rollbackSystemApiKey" | "forgetLocalApiKey" | "upsert" | "remove"
+  "list" | "get" | "isPluginProfile" | "activeId" | "activeModel" | "credentialInfo" | "credentialRevision" | "setActive" | "setCapabilityModel" | "setApiKey" | "setProxyPolicy" | "migrateApiKeysToSystem" | "cleanupLegacyApiKey" | "rollbackSystemApiKey" | "forgetLocalApiKey" | "upsert" | "remove"
 > & Partial<Pick<ProviderRegistry, "load">>;
 
 interface ProviderControllerDependencies {
@@ -89,7 +89,7 @@ export class DesktopProviderController {
     const templates: DesktopProviderTemplate[] = providerTemplates().map((profile) => ({
       id: profile.id, name: profile.name, kind: profile.kind, model: profile.model, preset: profile.preset,
       // Generic kinds keep onboarding free of environment variables; vendor presets suggest the usual variable name.
-      baseURL: profile.baseURL, apiKeyEnv: profile.preset === "vendor" ? profile.apiKeyEnv : undefined, contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels },
+      baseURL: profile.baseURL, proxyMode: profile.proxyMode ?? "direct", apiKeyEnv: profile.preset === "vendor" ? profile.apiKeyEnv : undefined, contextWindow: profile.contextWindow, capabilityModels: { ...profile.capabilityModels },
       features: { tools: profile.features.tools, vision: profile.features.vision, image: profile.features.image, video: profile.features.video, audio: profile.features.audio === true },
     }));
     const allProfiles = this.registry.list();
@@ -125,6 +125,10 @@ export class DesktopProviderController {
         id: profile.id, name: profile.name, kind: profile.kind, defaultModel: profile.model,
         selectedModel: this.registry.activeModel(profile.id) ?? profile.model, builtin: Boolean(profile.builtin),
         ...(profile.baseURL ? { baseURL: profile.baseURL } : {}),
+        proxyMode: profile.proxyMode ?? (profile.proxy ? "custom" : "direct"),
+        proxyConfigured: Boolean(profile.proxy),
+        proxyEditable: !this.registry.isPluginProfile(profile.id),
+        ...(this.safeProxyUrl(profile.proxy) ? { proxyURL: this.safeProxyUrl(profile.proxy) } : {}),
         ...(profile.apiKeyEnv ? { apiKeyEnv: profile.apiKeyEnv } : {}),
         ...(profile.contextWindow ? { contextWindow: profile.contextWindow } : {}),
         ...(profile.caCertFile ? { caCertFile: profile.caCertFile } : {}),
@@ -304,6 +308,25 @@ export class DesktopProviderController {
     return file;
   }
 
+  /** Proxy credentials stay out of renderer snapshots and the desktop editor; system mode is resolved at request time. */
+  private proxyPolicy(mode: unknown, value: unknown): Pick<ProviderProfile, "proxyMode" | "proxy"> {
+    if (mode !== undefined && !["direct", "system", "custom"].includes(String(mode))) throw new Error("代理策略无效。");
+    const proxyMode = (mode ?? (typeof value === "string" && value.trim() ? "custom" : "direct")) as NonNullable<ProviderProfile["proxyMode"]>;
+    if (proxyMode !== "custom") return { proxyMode, proxy: undefined };
+    if (typeof value !== "string" || !value.trim() || value.length > 2048 || /[\r\n\0]/.test(value)) throw new Error("自定义代理需要填写有效的 HTTP(S) 地址。");
+    let parsed: URL;
+    try { parsed = new URL(value.trim()); } catch { throw new Error("自定义代理地址无效。"); }
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("自定义代理只支持 http:// 或 https://。");
+    if (parsed.username || parsed.password) throw new Error("桌面代理地址不能内嵌账号密码；请使用无凭据的本机代理或系统代理。");
+    return { proxyMode, proxy: parsed.toString() };
+  }
+
+  private safeProxyUrl(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    try { const parsed = new URL(value); return parsed.username || parsed.password ? undefined : parsed.toString(); }
+    catch { return undefined; }
+  }
+
   async upsert(request: DesktopProviderUpsertRequest): Promise<DesktopProviderSnapshot> {
     const existingId = request?.existingId?.trim();
     const previous = existingId ? this.profile(existingId) : undefined;
@@ -319,6 +342,7 @@ export class DesktopProviderController {
     const kind = request?.kind;
     if (!["openai", "anthropic", "agnes", "openai-compatible", "ollama", "lmstudio", "vllm"].includes(kind)) throw new Error("Provider 类型无效。");
     const baseURL = this.baseURL(request?.baseURL, kind);
+    const proxyPolicy = this.proxyPolicy(request?.proxyMode, request?.proxyURL);
     const apiKeyEnv = request?.apiKeyEnv?.trim() ? this.environmentName(request.apiKeyEnv) : undefined;
     if (apiKeyEnv && request.apiKey) throw new Error("环境变量凭据和直接输入 Key 不能同时配置。");
     const contextWindow = request?.contextWindow === undefined ? undefined : this.contextWindow(request.contextWindow);
@@ -333,7 +357,7 @@ export class DesktopProviderController {
       if (normalizedFeatures[capability] && !capabilityModels?.[capability] && capability !== "vision") throw new Error(`请为 ${capability} 能力选择模型。`);
     }
     const profile: ProviderProfile = {
-      id, name, kind, model, ...(baseURL ? { baseURL } : {}), ...(apiKeyEnv ? { apiKeyEnv } : {}),
+      id, name, kind, model, ...(baseURL ? { baseURL } : {}), ...proxyPolicy, ...(apiKeyEnv ? { apiKeyEnv } : {}),
       ...(contextWindow ? { contextWindow } : {}), ...(caCertFile ? { caCertFile } : {}), ...(Object.keys(capabilityModels ?? {}).length ? { capabilityModels } : {}), features: { text: true, ...normalizedFeatures },
     };
     try {
@@ -345,6 +369,13 @@ export class DesktopProviderController {
       throw new Error(this.safeError(error, previous ?? profile));
     }
     return this.snapshot(id);
+  }
+
+  async saveProxy(request: import("../shared/protocol.js").DesktopProviderProxyRequest): Promise<DesktopProviderSnapshot> {
+    const profile = this.profile(request?.providerId);
+    const policy = this.proxyPolicy(request?.proxyMode, request?.proxyURL);
+    await this.registry.setProxyPolicy(profile.id, policy.proxyMode ?? "direct", policy.proxy);
+    return this.snapshot(profile.id);
   }
 
   async delete(request: DesktopProviderDeleteRequest): Promise<DesktopProviderSnapshot> {

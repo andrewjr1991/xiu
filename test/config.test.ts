@@ -94,6 +94,9 @@ test("a channel certificate file is resolved to an absolute path and otherwise a
 test("proxy option is validated and stored", () => {
   const config = resolveConfig({ provider: "agnes", proxy: "http://127.0.0.1:12334" });
   assert.equal(config.proxy, "http://127.0.0.1:12334");
+  assert.equal(config.proxyMode, "custom");
+  assert.equal(resolveConfig({ provider: "anthropic", proxyMode: "system" }).proxyMode, "system");
+  assert.throws(() => resolveConfig({ provider: "anthropic", proxyMode: "custom" }), /requires a proxy URL/);
   assert.throws(() => resolveConfig({ provider: "agnes", proxy: "not a URL" }), /valid URL/);
   assert.throws(() => resolveConfig({ provider: "agnes", proxy: "socks5://127.0.0.1:1080" }), /http:\/\//);
 });

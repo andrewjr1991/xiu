@@ -83,6 +83,7 @@ function requestFingerprint(config: AgentConfig): string {
     model: config.model,
     baseURL: config.baseURL,
     proxy: config.proxy,
+    proxyMode: config.proxyMode,
     apiKeyEnv: config.apiKeyEnv,
     credentialRevision: config.credentialRevision ?? 0,
   })).digest("hex").slice(0, 24);
@@ -154,7 +155,7 @@ class OpenAIProvider implements ModelProvider {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv)
       ?? config.apiKey
       ?? readEnvironmentCredential(config.provider === "agnes" ? "AGNES_API_KEY" : "OPENAI_API_KEY");
-    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
+    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile, config.proxyMode, config.baseURL ?? "https://api.openai.com/v1");
     this.clientOptions = {
       apiKey: apiKey || "xiu-local",
       maxRetries: 0,
@@ -352,7 +353,7 @@ class AnthropicProvider implements ModelProvider {
   private replayThinking = true;
   constructor(private config: AgentConfig) {
     const apiKey = readEnvironmentCredential(config.apiKeyEnv) ?? config.apiKey ?? readEnvironmentCredential("ANTHROPIC_API_KEY");
-    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile);
+    const dispatcher = createTrustedDispatcher(config.proxy, config.caCertFile, config.proxyMode, config.baseURL ?? "https://api.anthropic.com");
     this.clientOptions = {
       apiKey,
       maxRetries: 0,

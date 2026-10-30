@@ -21,6 +21,7 @@ function harness(options: { workspace?: string; visionModels?: string[] } = {}) 
     manageCredential: async (request: unknown) => { calls.push(`providers.manageCredential:${JSON.stringify(request)}`); return settings; },
     test: async (workspace: string, request: unknown) => { calls.push(`providers.test:${workspace}:${JSON.stringify(request)}`); return { ok: true }; },
     upsert: async (request: unknown) => { calls.push(`providers.upsert:${JSON.stringify(request)}`); return settings; },
+    saveProxy: async (request: unknown) => { calls.push(`providers.saveProxy:${JSON.stringify(request)}`); return settings; },
     delete: async (request: unknown) => { calls.push(`providers.delete:${JSON.stringify(request)}`); return settings; },
     visionProbeConfig: (_workspace: string, request: { providerId: string; model: string }) => { calls.push(`providers.visionProbeConfig:${request.model}`); return { model: request.model, apiKeyEnv: "X_KEY" }; },
     snapshot: (providerId: string) => ({ capabilityModelsByProvider: { [providerId]: { vision: (options.visionModels ?? []).map((id) => ({ id })) } } }),
@@ -54,7 +55,7 @@ function harness(options: { workspace?: string; visionModels?: string[] } = {}) 
 test("the provider page registers exactly its channels and every handler refuses an untrusted sender first", async () => {
   const { calls, handlers, invoke } = harness({ workspace: "/ws" });
   assert.deepEqual([...handlers.keys()].sort(), [...providerIpcChannels].sort());
-  assert.equal(handlers.size, 11);
+  assert.equal(handlers.size, 12);
   for (const channel of providerIpcChannels) {
     calls.length = 0;
     await assert.rejects(() => invoke(channel, stranger, { providerId: "p", model: "m" }), /untrusted sender/, channel);
@@ -69,6 +70,7 @@ test("configuration writes run on the writer queue, check reconfiguration and re
     [desktopChannels.providerCredentialSave, "saveCredential", { providerId: "p", apiKey: "k" }],
     [desktopChannels.providerCredentialManage, "manageCredential", { providerId: "p", action: "clear" }],
     [desktopChannels.providerUpsert, "upsert", { id: "custom", label: "Custom" }],
+    [desktopChannels.providerProxySave, "saveProxy", { providerId: "custom", proxyMode: "system" }],
     [desktopChannels.providerDelete, "delete", { providerId: "custom" }],
   ];
   for (const [channel, method, request] of writes) {

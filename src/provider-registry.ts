@@ -9,6 +9,7 @@ import { LegacyCredentialStore, credentialRef, readEnvironmentCredential, type C
 import { ProviderConfigurationStorage, ProviderConfigurationError, type ProviderConfigurationSnapshot, type ProviderConfigurationDiagnostics, type ProviderConfigurationRecoveryPreview } from "./provider-config-migration.js";
 export type { ProviderConfigurationDiagnostics, ProviderConfigurationRecoveryPreview } from "./provider-config-migration.js";
 import { isProviderRoutingPhase, type ProviderRoutingPhase, type ProviderRoutingPolicy } from "./provider-routing.js";
+import type { ProviderProxyMode } from "./system-proxy.js";
 
 export interface ProviderFeatures {
   text: true;
@@ -36,6 +37,8 @@ export interface ProviderProfile {
   /** Plaintext local credential. Never copy this value into project sessions or terminal output. */
   apiKey?: string;
   proxy?: string;
+  /** Direct, operating-system proxy, or a channel-specific HTTP(S) proxy. Legacy profiles with only `proxy` are custom. */
+  proxyMode?: ProviderProxyMode;
   /** Absolute path of a PEM file whose certificates join the trusted roots for this channel only; verification is never relaxed. */
   caCertFile?: string;
   contextWindow?: number;
@@ -93,6 +96,7 @@ function probeFingerprint(profile: ProviderProfile, model: string): string {
     baseURL: profile.baseURL,
     apiKeyEnv: profile.apiKeyEnv,
     proxy: profile.proxy,
+    proxyMode: profile.proxyMode,
     caCertFile: profile.caCertFile,
     contextWindow: profile.contextWindow,
     features: profile.features,
@@ -246,6 +250,11 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
   }
   validateURL(profile.baseURL, "baseURL");
   validateURL(profile.proxy, "proxy");
+  const configuredProxyMode = profile.proxyMode ?? (profile.proxy ? "custom" : undefined);
+  const proxyMode = configuredProxyMode ?? "direct";
+  if (!["direct", "system", "custom"].includes(proxyMode)) throw new Error("proxyMode must be direct, system, or custom");
+  if (proxyMode === "custom" && !profile.proxy) throw new Error("custom proxy mode requires a proxy URL");
+  if (proxyMode !== "custom" && profile.proxy) throw new Error("only custom proxy mode may store a proxy URL");
   if (profile.caCertFile !== undefined) {
     const file = typeof profile.caCertFile === "string" ? profile.caCertFile.trim() : "";
     if (!file || file.length > 1024 || /[\r\n\0]/.test(file)) throw new Error("caCertFile must be a file path of 1-1024 characters");
@@ -275,6 +284,7 @@ export function validateProviderProfile(profile: ProviderProfile): ProviderProfi
   }
   return {
     ...profile,
+    ...(configuredProxyMode ? { proxyMode: configuredProxyMode } : { proxyMode: undefined }),
     id: profile.id.trim(), name: profile.name.trim(), model: profile.model.trim(),
     baseURL: profile.baseURL?.replace(/\/$/, ""), apiKeyEnv: profile.apiKeyEnv?.trim(), builtin: Boolean(profile.builtin),
     ...(profile.caCertFile !== undefined ? { caCertFile: profile.caCertFile.trim() } : {}),
@@ -531,6 +541,8 @@ export class ProviderRegistry {
   get(id: string): ProviderProfile | undefined {
     return this.list().find((profile) => profile.id === id);
   }
+
+  isPluginProfile(id: string): boolean { return this.pluginProfiles.some((profile) => profile.id === id); }
 
   activeId(): string | undefined { return this.file.active; }
 
@@ -830,6 +842,19 @@ export class ProviderRegistry {
       if (apiKey || !previous || probeFingerprint(previous, previous.model) !== probeFingerprint(normalized, normalized.model)) {
         this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== normalized.id);
       }
+      await this.save();
+    });
+  }
+
+  async setProxyPolicy(id: string, proxyMode: ProviderProxyMode, proxy?: string): Promise<void> {
+    return this.mutate(async () => {
+      const index = this.file.profiles.findIndex((profile) => profile.id === id);
+      if (index < 0) throw new Error(`Provider profile not found or is read-only: ${id}`);
+      const current = this.file.profiles[index]!;
+      const normalized = validateProviderProfile({ ...current, proxyMode, proxy });
+      const { apiKey: _apiKey, ...stored } = normalized;
+      this.file.profiles[index] = stored;
+      this.file.probes = (this.file.probes ?? []).filter((probe) => probe.providerId !== id);
       await this.save();
     });
   }

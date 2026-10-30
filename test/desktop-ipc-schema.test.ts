@@ -29,8 +29,8 @@ test("well-formed requests pass through in canonical form", () => {
   assert.deepEqual(validateIpcArguments(desktopChannels.taskCreate, [{ text: "hello", answerTo: undefined }]), [{ text: "hello" }]);
   // Undeclared fields never reach the handler: UI-only form state and injected keys alike.
   assert.deepEqual(validateIpcArguments(desktopChannels.taskCreate, [{ text: "hello", shell: "rm -rf /", __proto__: { admin: true } }]), [{ text: "hello" }]);
-  assert.deepEqual(validateIpcArguments(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "openai", model: "m", features: { tools: true, vision: false, image: false, video: false, audio: false }, preset: "vendor", templateId: "deepseek" }]),
-    [{ id: "p", name: "P", kind: "openai", model: "m", features: { tools: true, vision: false, image: false, video: false, audio: false } }]);
+  assert.deepEqual(validateIpcArguments(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "openai", model: "m", proxyMode: "custom", proxyURL: "http://127.0.0.1:7890", features: { tools: true, vision: false, image: false, video: false, audio: false }, preset: "vendor", templateId: "deepseek" }]),
+    [{ id: "p", name: "P", kind: "openai", model: "m", proxyMode: "custom", proxyURL: "http://127.0.0.1:7890", features: { tools: true, vision: false, image: false, video: false, audio: false } }]);
   assert.deepEqual(validateIpcArguments(desktopChannels.computerUse, [{ action: "stop", handle: "h" }]), [{ action: "stop" }]);
   assert.deepEqual(validateIpcArguments(desktopChannels.taskContinue, [{ text: "", taskId: "t1", answerTo: { taskId: "t1", questionId: "q1" } }]),
     [{ text: "", taskId: "t1", answerTo: { taskId: "t1", questionId: "q1" } }]);
@@ -115,6 +115,7 @@ test("malformed requests are rejected with the channel and field, never the valu
   rejects(desktopChannels.computerUse, [{ action: "input", input: { kind: "key", frameId: "f", key: "Backspace", repeat: 0 } }], /input\.repeat must be an integer between 1/);
   rejects(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "openai", model: "m", features: { tools: true, vision: false, image: false, video: false } }], /features\.audio must be a boolean/);
   rejects(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "google", model: "m", features: { tools: true, vision: false, image: false, video: false, audio: false } }], /kind must be one of/);
+  rejects(desktopChannels.providerUpsert, [{ id: "p", name: "P", kind: "openai", model: "m", proxyMode: "pac", features: { tools: true, vision: false, image: false, video: false, audio: false } }], /proxyMode must be one of/);
   rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "delete", confirmed: true }], /operation must be one of "migrate", "cleanup", "rollback", "forget"/);
   rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "migrate", confirmed: false }], /confirmed must be one of true/);
   rejects(desktopChannels.providerCredentialManage, [{ providerId: "p", operation: "cleanup", confirmed: true, typedId: 7 }], /typedId must be a string/);

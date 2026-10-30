@@ -105,6 +105,7 @@ const bridge: XiuDesktopBridge = Object.freeze({
   visionProbeProgress: () => ipcRenderer.invoke(desktopChannels.providerVisionProgress),
   cancelVisionProbe: () => ipcRenderer.invoke(desktopChannels.providerVisionCancel),
   upsertProvider: (request: DesktopProviderUpsertRequest) => ipcRenderer.invoke(desktopChannels.providerUpsert, request),
+  saveProviderProxy: (request: import("../shared/protocol.js").DesktopProviderProxyRequest) => ipcRenderer.invoke(desktopChannels.providerProxySave, request),
   deleteProvider: (request: DesktopProviderDeleteRequest) => ipcRenderer.invoke(desktopChannels.providerDelete, request),
   terminalSnapshot: () => ipcRenderer.invoke(desktopChannels.terminalSnapshot),
   startTerminal: (request?: DesktopTerminalStartRequest) => ipcRenderer.invoke(desktopChannels.terminalStart, request),

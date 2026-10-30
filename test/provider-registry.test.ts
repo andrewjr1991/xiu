@@ -56,6 +56,15 @@ test("fresh registration stays empty even with environment credentials, and temp
   assert.equal(restarted.activeId(), undefined);
 });
 
+test("provider proxy policy defaults safely and persists system/custom choices", async () => {
+  const base = { ...providerTemplate("anthropic")!, id: "proxy-test", builtin: false };
+  assert.equal(validateProviderProfile(base).proxyMode, undefined, "legacy profiles keep their environment-derived default until explicitly saved");
+  assert.equal(validateProviderProfile({ ...base, proxyMode: "system" }).proxyMode, "system");
+  assert.equal(validateProviderProfile({ ...base, proxy: "http://127.0.0.1:7890" }).proxyMode, "custom", "legacy proxy URLs become custom mode");
+  assert.throws(() => validateProviderProfile({ ...base, proxyMode: "custom" }), /requires a proxy URL/);
+  assert.throws(() => validateProviderProfile({ ...base, proxyMode: "direct", proxy: "http://127.0.0.1:7890" }), /only custom proxy mode/);
+});
+
 test("legacy selected channels migrate once, retaining credentials, media and routing without seeding unused presets", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-legacy-providers-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));

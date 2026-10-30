@@ -66,11 +66,13 @@ const environmentCredential = { source: "environment", configured: true, editabl
 // A user channel whose key still lives in the compatibility file: the management picker offers the explicit migration flow.
 let legacyFeatures = { tools: true, vision: false, image: false, video: false, audio: false };
 let legacyCapabilityModels = {};
+let legacyProxyMode = "direct";
+let legacyProxyURL;
 let legacyCredential = { source: "legacy-file", configured: true, editable: true, backend: "系统凭据管理器", legacyCopyPresent: true, systemCopyPresent: false, interruptedMigration: false, migratable: true, cleanable: false, rollbackable: false, forgettable: true };
 const providers = () => onboardingSnapshot ?? ({ activeProviderId, activeModel, modelProviderId: activeProviderId, profiles: [
-  { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, apiKeyEnv: "OPENAI_API_KEY", credential: { ...environmentCredential }, capabilityModels: { ...activeCapabilityModels.openai }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
-  { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, apiKeyEnv: "AGNES_API_KEY", credential: { ...environmentCredential }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
-  { id: "legacy-gateway", name: "Legacy Gateway", kind: "openai-compatible", defaultModel: "gateway-default", selectedModel: "gateway-default", builtin: false, baseURL: "https://gateway.example.test/v1", credential: { ...legacyCredential }, capabilityModels: { ...legacyCapabilityModels }, features: { ...legacyFeatures } },
+  { id: "openai", name: "OpenAI", kind: "openai", defaultModel: "gpt-5", selectedModel: activeProviderId === "openai" ? activeModel : "gpt-5", builtin: true, proxyMode: "direct", proxyConfigured: false, proxyEditable: true, apiKeyEnv: "OPENAI_API_KEY", credential: { ...environmentCredential }, capabilityModels: { ...activeCapabilityModels.openai }, features: { tools: true, vision: true, image: true, video: true, audio: true } },
+  { id: "agnes", name: "Agnes", kind: "agnes", defaultModel: "agnes-3.0-flash", selectedModel: "agnes-3.0-flash", builtin: true, proxyMode: "direct", proxyConfigured: false, proxyEditable: true, apiKeyEnv: "AGNES_API_KEY", credential: { ...environmentCredential }, capabilityModels: { ...activeCapabilityModels.agnes }, features: { tools: true, vision: true, image: true, video: true, audio: false } },
+  { id: "legacy-gateway", name: "Legacy Gateway", kind: "openai-compatible", defaultModel: "gateway-default", selectedModel: "gateway-default", builtin: false, baseURL: "https://gateway.example.test/v1", proxyMode: legacyProxyMode, proxyConfigured: Boolean(legacyProxyURL), proxyEditable: true, ...(legacyProxyURL ? { proxyURL: legacyProxyURL } : {}), credential: { ...legacyCredential }, capabilityModels: { ...legacyCapabilityModels }, features: { ...legacyFeatures } },
 ], models: [{ id: activeModel, source: "current", contextWindow: 128000 }], modelsByProvider: { openai: [{ id: "gpt-5", source: "builtin", contextWindow: 128000 }], agnes: [{ id: "agnes-3.0-flash", source: "builtin", contextWindow: 128000 }], "legacy-gateway": [{ id: "gateway-default", source: "builtin", contextWindow: 128000 }] }, capabilityModelsByProvider: { openai: { vision: [{ id: "gpt-5", source: "builtin" }], image: [{ id: "gpt-image-1", source: "builtin" }], video: [{ id: "sora-2", source: "builtin" }], audio: [{ id: "gpt-4o-mini-tts", source: "builtin" }] }, agnes: { vision: [{ id: "agnes-2.5-flash", source: "builtin" }], image: [{ id: "agnes-image-2.1-flash", source: "builtin" }], video: [{ id: "agnes-video-v2.0", source: "builtin" }], audio: [] }, "legacy-gateway": { vision: [], image: [], video: [], audio: [] } } });
 
 const skillList = [{ name: "fixture-skill", description: "Local fixture", scope: "global", permissions: ["instructions:load"], warnings: [], removable: true }, { name: "project-skill", description: "Project fixture", scope: "project", permissions: ["instructions:load"], warnings: [], removable: false }];
@@ -218,7 +220,10 @@ const bridge = {
   chooseAttachments: async () => ({ insertText: "", attachments: [{ reference: '@".xiu/attachments/round-two.png"', path: ".xiu/attachments/round-two.png", name: "round-two-image-canary.png", bytes: 100, kind: "image" }] }),
   pasteAttachments: async () => ({ insertText: "", attachments: [] }),
   copyMessage: async (text) => { copiedMessage = text; calls.push("copy-message"); },
-  importAttachments: async () => ({ insertText: "", attachments: [] }),
+  importAttachments: async ({ files }) => {
+    calls.push(`attachments:import:${files.map(file => file.name).join(',')}`);
+    return { insertText: "", attachments: files.map(file => ({ reference: `@".xiu/attachments/${file.name}"`, path: `.xiu/attachments/${file.name}`, name: file.name, bytes: file.data.length, kind: "image", previewDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwyBNAMDAC/IBft7Y/jOAAAAAElFTkSuQmCC" })) };
+  },
   reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], fullDiff: undefined, preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
   previewMedia: async ({ path }) => { calls.push(`media-preview:${path}`); return { path, kind: "image", bytes: 2048, dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwyBNAMDAC/IBft7Y/jOAAAAAElFTkSuQmCC" }; },
@@ -259,9 +264,14 @@ const bridge = {
         profiles: [{ ...request, defaultModel: request.model, selectedModel: request.model, builtin: false, credential: { source: "missing", configured: false, editable: true } }] };
       calls.push(`onboarding:add:${request.id}`);
     } else if (request.existingId === "legacy-gateway") {
-      legacyFeatures = { ...request.features }; legacyCapabilityModels = { ...request.capabilityModels };
-      calls.push(`provider:upsert:${request.existingId}:image=${request.features.image}:${request.capabilityModels?.image ?? ""}:key=${request.apiKey ?? ""}`);
+      legacyFeatures = { ...request.features }; legacyCapabilityModels = { ...request.capabilityModels }; legacyProxyMode = request.proxyMode ?? "direct"; legacyProxyURL = request.proxyURL || undefined;
+      calls.push(`provider:upsert:${request.existingId}:image=${request.features.image}:${request.capabilityModels?.image ?? ""}:key=${request.apiKey ?? ""}:proxy=${legacyProxyMode}`);
     }
+    return { settings: providers(), connection: runtime() };
+  },
+  saveProviderProxy: async (request) => {
+    if (request.providerId === "legacy-gateway") { legacyProxyMode = request.proxyMode; legacyProxyURL = request.proxyURL || undefined; }
+    calls.push(`provider:proxy:${request.providerId}:${request.proxyMode}`);
     return { settings: providers(), connection: runtime() };
   },
   deleteProvider: async ({ providerId }) => {

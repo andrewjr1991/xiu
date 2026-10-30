@@ -3,7 +3,7 @@ import type { DesktopProviderController } from "./provider-controller.js";
 import type { IpcSenderLike } from "./security-policy.js";
 import type { DesktopTaskController } from "./task-controller.js";
 import type { VisionProbeController } from "./vision-probe-controller.js";
-import { desktopChannels, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest } from "../shared/protocol.js";
+import { desktopChannels, type DesktopProviderCredentialManageRequest, type DesktopProviderCredentialRequest, type DesktopProviderDeleteRequest, type DesktopProviderModelsRequest, type DesktopProviderProxyRequest, type DesktopProviderSelectRequest, type DesktopProviderTestRequest, type DesktopProviderUpsertRequest } from "../shared/protocol.js";
 
 /**
  * Renderer→main IPC for the Provider settings page: snapshot, model
@@ -36,7 +36,7 @@ export interface ProviderIpcContext<Event extends IpcSenderLike = IpcSenderLike,
 export const providerIpcChannels = [
   desktopChannels.providerSnapshot, desktopChannels.providerModels, desktopChannels.providerSelect, desktopChannels.providerCredentialSave,
   desktopChannels.providerCredentialManage, desktopChannels.providerTest, desktopChannels.providerVisionCancel, desktopChannels.providerVisionProgress,
-  desktopChannels.providerVisionTest, desktopChannels.providerUpsert, desktopChannels.providerDelete,
+  desktopChannels.providerVisionTest, desktopChannels.providerUpsert, desktopChannels.providerProxySave, desktopChannels.providerDelete,
 ] as const;
 
 export function registerProviderIpc<Event extends IpcSenderLike, Window extends VisionProbeParentWindow>(ctx: ProviderIpcContext<Event, Window>): void {
@@ -114,6 +114,13 @@ export function registerProviderIpc<Event extends IpcSenderLike, Window extends 
     const workspace = ctx.trustedWorkspacePath();
     await ctx.tasks.assertCanReconfigure(workspace);
     const settings = await (await ctx.providers()).upsert(request);
+    return { settings, connection: await ctx.tasks.reload(workspace) };
+  }));
+  ctx.handleIpc(desktopChannels.providerProxySave, async (event, request: DesktopProviderProxyRequest) => ctx.serializeWriterStart(async () => {
+    ctx.assertTrustedSender(event);
+    const workspace = ctx.trustedWorkspacePath();
+    await ctx.tasks.assertCanReconfigure(workspace);
+    const settings = await (await ctx.providers()).saveProxy(request);
     return { settings, connection: await ctx.tasks.reload(workspace) };
   }));
   ctx.handleIpc(desktopChannels.providerDelete, async (event, request: DesktopProviderDeleteRequest) => ctx.serializeWriterStart(async () => {

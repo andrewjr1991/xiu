@@ -377,3 +377,23 @@ test("desktop provider controller stores a channel root certificate only as an a
   const cleared = await item.controller.upsert({ ...base, existingId: "team-gateway", caCertFile: "" });
   assert.equal(cleared.profiles.find((profile) => profile.id === "team-gateway")?.caCertFile, undefined, "a blank field clears the certificate");
 });
+
+test("desktop persists a per-channel direct, system, or custom proxy policy", async (t) => {
+  const item = await fixture();
+  t.after(() => fs.rm(item.root, { recursive: true, force: true }));
+  const base = { id: "proxy-gateway", name: "Proxy Gateway", kind: "openai-compatible" as const, model: "team-default", baseURL: "https://team.example.test/v1", features: { tools: true, vision: false, image: false, video: false, audio: false } };
+  const system = await item.controller.upsert({ ...base, proxyMode: "system" });
+  assert.equal(system.profiles.find((profile) => profile.id === base.id)?.proxyMode, "system");
+  assert.equal(item.registry.get(base.id)?.proxy, undefined);
+
+  const custom = await item.controller.upsert({ ...base, existingId: base.id, proxyMode: "custom", proxyURL: "http://127.0.0.1:7890" });
+  const customProfile = custom.profiles.find((profile) => profile.id === base.id)!;
+  assert.equal(customProfile.proxyMode, "custom");
+  assert.equal(customProfile.proxyURL, "http://127.0.0.1:7890/");
+  assert.equal(customProfile.proxyConfigured, true);
+  await assert.rejects(item.controller.upsert({ ...base, existingId: base.id, proxyMode: "custom", proxyURL: "http://user:secret@127.0.0.1:7890" }), /不能内嵌账号密码/);
+
+  const direct = await item.controller.upsert({ ...base, existingId: base.id, proxyMode: "direct" });
+  assert.equal(direct.profiles.find((profile) => profile.id === base.id)?.proxyMode, "direct");
+  assert.equal(item.registry.get(base.id)?.proxy, undefined);
+});

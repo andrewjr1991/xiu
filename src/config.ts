@@ -3,6 +3,7 @@ import { resolveContextProfile, type ContextWindowSource } from "./context.js";
 import { defaultLanguage, normalizeLanguage, type UiLanguage } from "./i18n.js";
 import type { TaskBudgetLimits } from "./task-budget.js";
 import { UsageError } from "./usage-error.js";
+import type { ProviderProxyMode } from "./system-proxy.js";
 
 export type ProviderName = "openai" | "anthropic" | "agnes" | "openai-compatible" | "ollama" | "lmstudio" | "vllm";
 
@@ -41,6 +42,7 @@ export interface AgentConfig {
   baseURL?: string;
   mediaBaseURL?: string;
   proxy?: string;
+  proxyMode?: ProviderProxyMode;
   /** Absolute path of a PEM file added to this channel's trusted roots; verification is never disabled. */
   caCertFile?: string;
   capabilities?: CapabilityModels;
@@ -72,6 +74,7 @@ export function resolveConfig(options: {
   baseURL?: string;
   mediaBaseURL?: string;
   proxy?: string;
+  proxyMode?: ProviderProxyMode;
   /** PEM file whose certificates join the trusted roots of model requests; relative paths resolve against the cwd. */
   caCert?: string;
   visionModel?: string;
@@ -118,6 +121,9 @@ export function resolveConfig(options: {
   }
 
   const proxy = options.proxy ?? (provider === "agnes" ? process.env.AGNES_PROXY : undefined);
+  const proxyMode: ProviderProxyMode = options.proxyMode ?? (proxy ? "custom" : "direct");
+  if (!["direct", "system", "custom"].includes(proxyMode)) throw new UsageError("proxy-mode must be direct, system, or custom");
+  if (proxyMode === "custom" && !proxy) throw new UsageError("custom proxy mode requires a proxy URL");
   if (proxy) {
     let parsed: URL;
     try { parsed = new URL(proxy); } catch { throw new UsageError("proxy must be a valid URL, for example http://127.0.0.1:12334"); }
@@ -209,6 +215,7 @@ export function resolveConfig(options: {
       ?? process.env.XIU_MEDIA_BASE_URL
       ?? baseURL,
     proxy,
+    proxyMode,
     caCertFile,
     capabilities,
     ...context,
