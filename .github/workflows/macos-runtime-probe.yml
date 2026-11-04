@@ -1,0 +1,45 @@
+name: macOS runtime probe
+
+on:
+  push:
+    branches: [diagnostics/xiu-macos-runtime-20261104]
+    paths: [.github/workflows/macos-runtime-probe.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Runtime (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-26-intel]
+        node: [20.18.1, "22"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Host ready
+        run: |
+          echo "::notice title=Runtime probe::Host shell started"
+          sw_vers
+          uname -m
+      - name: Prepare Node
+        timeout-minutes: 4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Check Node and npm
+        timeout-minutes: 1
+        run: |
+          node -e 'console.log("::notice title=Runtime probe::Node " + process.version + " " + process.arch)'
+          npm --version
+      - name: Prepare baseline Python
+        timeout-minutes: 4
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Check Python
+        timeout-minutes: 1
+        run: python -c 'import sys; print("::notice title=Runtime probe::Python " + sys.version.split()[0])'
