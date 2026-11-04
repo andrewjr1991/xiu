@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -106,4 +107,37 @@ test("stale content fingerprints and damaged state cannot enable an advertised s
   await assert.rejects(registry.refresh(), /Invalid skill preference/);
   assert.deepEqual(registry.list(), []);
   await assert.rejects(registry.read("review"));
+});
+
+
+test("a preference replaced by a FIFO fails closed without blocking", { skip: process.platform === "win32" }, async (t) => {
+  const f = await fixture(t);
+  await f.store.setDisabled("review", true);
+  const [name] = await fs.readdir(f.store.directory);
+  const file = path.join(f.store.directory, name!);
+  const script = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import { execFileSync } from "node:child_process";
+    import { SkillStateStore } from ${JSON.stringify(new URL("../src/skill-state.ts", import.meta.url).href)};
+    const file = ${JSON.stringify(file)};
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    fs.open = async (...args) => {
+      if (args[0] === file && !replaced) {
+        replaced = true;
+        await fs.unlink(file);
+        execFileSync("mkfifo", ["-m", "600", file]);
+      }
+      return open(...args);
+    };
+    const store = new SkillStateStore(${JSON.stringify(f.user)}, ${JSON.stringify(f.cwd)});
+    await assert.rejects(store.disabled(), /private regular/);
+    assert.equal(replaced, true);
+    await assert.rejects(store.setDisabled("review", false), /private regular/);
+    assert.equal((await store.inspect()).state, "unreadable");
+    assert.equal((await fs.lstat(file)).isFIFO(), true);
+    console.log("rejected-without-overwrite");
+  `;
+  assert.equal(execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 10_000 }).trim(), "rejected-without-overwrite");
 });

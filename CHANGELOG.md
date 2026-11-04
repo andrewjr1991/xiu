@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Skills: reading a skill or its private availability preferences no longer waits on a substituted FIFO. Non-regular content is rejected, corrupt preferences still fail closed, and failed reads never clear a disabled skill.
+
 - Sessions: open disposable summary caches without blocking, so replacing a checked cache with a FIFO cannot hang history listing. The opened object is still checked and unsafe caches fall back to the original log.
 
 - Sessions: resolve complete session IDs before newer prefix matches. An unreadable or invalid exact target fails explicitly instead of silently restoring a different conversation; shortened IDs still require an unambiguous match.

@@ -62,7 +62,7 @@ export class SkillStateStore {
       const before = await fs.lstat(file);
       this.privateObject(before, false);
       if (before.size > 4096) throw new Error("Skill preference entry is too large.");
-      const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       try {
         const opened = await handle.stat();
         this.privateObject(opened, false);

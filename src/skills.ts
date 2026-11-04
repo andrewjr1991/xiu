@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -21,7 +22,8 @@ class SkillTooLargeError extends Error {
 
 /** Enforce the existing character limit without first allocating an unbounded file. */
 async function readSkillText(file: string): Promise<string> {
-  const handle = await fs.open(file, "r");
+  // Refuse non-regular files after open without waiting for a FIFO writer.
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const before = await handle.stat();
     if (!before.isFile()) throw new Error("Skill must be a regular file.");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -243,4 +244,31 @@ test("remote skill sources must be credential-free HTTPS URLs", () => {
   for (const bad of ["http://github.com/example/skills.git", "https://user:token@github.com/example/skills.git", "git@github.com:example/skills.git", "ssh://git@github.com/example/skills.git", "https://", "not a url"]) {
     assert.throws(() => validateRemoteSkillSource(bad), /HTTPS Git URLs/, bad);
   }
+});
+
+
+test("a discovered skill replaced by a FIFO rejects loading without blocking", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-fifo-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const directory = path.join(cwd, ".xiu", "skills", "review");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "SKILL.md");
+  await fs.writeFile(file, skillMarkdown("review", "ordinary skill"));
+  const script = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import os from "node:os";
+    import { execFileSync } from "node:child_process";
+    import { SkillRegistry } from ${JSON.stringify(new URL("../src/skills.ts", import.meta.url).href)};
+    os.homedir = () => ${JSON.stringify(path.join(cwd, "home"))};
+    const registry = new SkillRegistry(${JSON.stringify(cwd)}, ${JSON.stringify(path.join(cwd, "global"))});
+    await registry.refresh();
+    assert.equal(registry.list().length, 1);
+    const file = ${JSON.stringify(file)};
+    await fs.unlink(file);
+    execFileSync("mkfifo", [file]);
+    await assert.rejects(registry.read("review"), /regular file/);
+    console.log("rejected-without-blocking");
+  `;
+  assert.equal(execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 10_000 }).trim(), "rejected-without-blocking");
 });
