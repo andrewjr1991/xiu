@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Dependencies: pin undici to 7.30.1 and refresh MCP's transitive Zod to 4.6.7, clearing the current production audit advisories without changing the Node baseline or audit threshold. Synchronize desktop's local CLI lock metadata while preserving unrelated optional-platform metadata.
+
 - Desktop acceptance: exercise the real main/preload/IPC startup with an isolated temporary profile, including workspace-trust and foreign-sender rejection. The UI runner now requires a complete success result from the current child process and both viewports, bounds execution, and removes only its own profile; a zero exit or stale screenshots cannot substitute for completion. Both runners are part of the existing CI UI gate.
 
 - Sessions: malformed known saved Plan mode, plan or statistics now stop restoration with `session/state-invalid`, rather than silently changing mode or crashing later. History and doctor retain a damaged-record count; valid legacy partial stats/plans and unknown event types remain readable. Summary schema 2 forces older caches to rescan for the new checks, without implicit writes.

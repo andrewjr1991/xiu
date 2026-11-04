@@ -63,7 +63,7 @@
     "opencc-js": "^1.4.1",
     "tinyglobby": "0.2.17",
     "typescript": "^5.9.2",
-    "undici": "7.30.0",
+    "undici": "7.30.1",
     "yauzl": "3.4.0"
   },
   "devDependencies": {
