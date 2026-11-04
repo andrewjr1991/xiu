@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- CI: keep the full macOS 26 Verify/Desktop gates on the explicit Intel runner during the hosted ARM64 capacity incident. Manual workflow runs can select macOS 26 ARM64; Intel success does not attest ARM64, and failed/cancelled gates remain visible.
+
 - Skills: reading a skill or its private availability preferences no longer waits on a substituted FIFO. Non-regular content is rejected, corrupt preferences still fail closed, and failed reads never clear a disabled skill.
 
 - Sessions: open disposable summary caches without blocking, so replacing a checked cache with a FIFO cannot hang history listing. The opened object is still checked and unsafe caches fall back to the original log.
