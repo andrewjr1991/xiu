@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Tests/CI: set a ten-minute default test timeout and expose non-sensitive stage/process notices for long verification jobs. Main Node 20 CI can report a stalled test file earlier; workflow deadlines and failure exit codes remain enforced, with no forced successful exit.
+
 - CI: keep the full macOS 26 Verify/Desktop gates on the explicit Intel runner during the hosted ARM64 capacity incident. Manual workflow runs can select macOS 26 ARM64; Intel success does not attest ARM64, and failed/cancelled gates remain visible.
 
 - Skills: reading a skill or its private availability preferences no longer waits on a substituted FIFO. Non-regular content is rejected, corrupt preferences still fail closed, and failed reads never clear a disabled skill.

@@ -56,7 +56,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - id: dependencies
-        run: npm ci
+        run: |
+          echo "::notice title=Verify stage::Installing dependencies"
+          npm ci
       # The two packaged smoke runs install the candidate tarball; reusing the cache that `npm ci`
       # just warmed (restored by setup-node) removes two full dependency downloads per platform.
       - id: smoke_cache
@@ -95,7 +97,9 @@ jobs:
         run: python test/xiu-search-auth-migration.test.py -v
       - id: build
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
-        run: npm run build
+        run: |
+          echo "::notice title=Verify stage::Building CLI"
+          npm run build
       - name: Run deterministic evaluation smoke
         id: evaluation
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -109,13 +113,17 @@ jobs:
         run: node scripts/ci-artifacts.mjs prepare cli
       - id: package_smoke
         if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
-        run: npm run smoke:package
+        run: |
+          echo "::notice title=Verify stage::Running isolated package smoke"
+          npm run smoke:package
         env:
           XIU_PACKAGE_ARCHIVE: ${{ steps.candidate.outputs.archive }}
       - name: Run packaged platform acceptance
         id: platform_smoke
         if: ${{ !cancelled() && steps.candidate.outcome == 'success' }}
-        run: npm run smoke:platform
+        run: |
+          echo "::notice title=Verify stage::Running platform smoke"
+          npm run smoke:platform
         env:
           XIU_EXPECTED_PLATFORM: ${{ matrix.platform }}
           XIU_PACKAGE_ARCHIVE: ${{ steps.candidate.outputs.archive }}

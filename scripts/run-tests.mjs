@@ -17,7 +17,10 @@ if (testFiles.length === 0) {
   // coverage itself launches additional PowerShell and Node children. Keep the
   // suite parallel without starving those lifecycle checks on shared runners.
   const concurrency = process.platform === "win32" ? 2 : 4;
-  const child = spawn(process.execPath, ["--test", `--test-concurrency=${concurrency}`, "--import", "tsx", ...testFiles], {
+  // Keep a stuck test observable as a failure instead of waiting for the job limit.
+  // Node 20 also applies this deadline to test-file processes with leaked handles.
+  // Newer Node versions differ there; retain the workflow deadline and never force a green exit.
+  const child = spawn(process.execPath, ["--test", "--test-timeout=600000", `--test-concurrency=${concurrency}`, "--import", "tsx", ...testFiles], {
     stdio: "inherit",
     windowsHide: true,
     env: { ...process.env, FORCE_COLOR: "0" },

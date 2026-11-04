@@ -4,6 +4,10 @@ import process from "node:process";
 const outputLimit = 2_000_000;
 let output = "";
 
+if (process.env.GITHUB_ACTIONS === "true") {
+  console.log(`::notice title=Test process started::Node ${process.version}, ${process.platform}/${process.arch}`);
+}
+
 const child = spawn(process.execPath, ["scripts/run-tests.mjs"], {
   cwd: process.cwd(),
   env: process.env,
@@ -64,6 +68,10 @@ if (result.code !== 0) {
     const message = escapeData((failure.details.join(" | ") || "See the test log for details.").slice(0, 4000));
     console.error(`::error title=${title}::${message}`);
   }
+}
+
+if (process.env.GITHUB_ACTIONS === "true") {
+  console.log(`::notice title=Test process exited::exit code ${result.code}${result.signal ? `, signal ${result.signal}` : ""}`);
 }
 
 process.exitCode = result.code;
