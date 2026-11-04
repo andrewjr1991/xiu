@@ -4,6 +4,8 @@
 
 ## 所有交互命令速查
 
+Skills 启停：`/skills enable <技能名>`、`/skills disable <技能名>`，均须交互确认，只影响当前工作区，不改权限授权或已加载的历史文本。
+
 | 命令 | 作用 |
 | --- | --- |
 | `/resume` | 选择并恢复项目会话 |
@@ -104,6 +106,8 @@
 | `--unified-model <模型>` | 一个模型承担可支持的全部能力 |
 | `-r, --resume [会话]` | 选择或指定恢复会话。会话日志是工作区里的内容，只在工作区受信任后读取：未信任时终端里先询问是否信任，管道/CI 下按未信任处理并退出码 1（与 `xiu report`、`xiu recover`、`xiu audit` 一致） |
 | `--list-sessions` | 列出工作区会话，同样只在工作区受信任后读取 |
+| `--session-limit <数量>` / `--session-offset <偏移>` | 配合 `--list-sessions` 分页；数量为正整数，偏移为非负整数，启用分页时默认数量 50 |
+| `--refresh-session-index` | 在受信任工作区重建可丢弃的会话显示摘要，不调用模型或改写原始日志；失败项会计数，退出码为 1 |
 | `--context-window <Token>` | Provider 元数据不可用时覆盖模型真实窗口 |
 | `--context-limit <Token>` | 覆盖自动压缩阈值，最大为窗口的 90% |
 | `--max-turns <次数>` | 可选的单任务轮数上限；默认不限制 |

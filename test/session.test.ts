@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { Agent } from "../src/agent.js";
 import type { AgentConfig } from "../src/config.js";
 import { estimateConversationTokens, formatRestoredConversation, listSessions, listSessionsWithIssues, loadSession, sessionTitle, unreadableSessionsNote } from "../src/session.js";
@@ -331,4 +332,94 @@ test("one unreadable session log no longer hides the others, and loading it name
   assert.deepEqual(await listSessions(cwd), []);
   await assert.rejects(loadSession(cwd, "broken"), /cannot be read \(EISDIR\)/, "an unreadable log is told apart from a workspace without sessions");
   await assert.rejects(loadSession(cwd), /No Xiu sessions exist in this workspace/);
+});
+
+test("session lists reject FIFOs and linked logs without blocking other history", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-special-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const good = path.join(directory, "good.jsonl");
+  await fs.writeFile(good, '{"type":"task","task":"ordinary history"}\n');
+  execFileSync("mkfifo", [path.join(directory, "pipe.jsonl")]);
+  await fs.symlink(good, path.join(directory, "linked.jsonl"));
+  const listing = await listSessionsWithIssues(cwd);
+  assert.deepEqual(listing.sessions.map((item) => item.id), ["good"]);
+  assert.deepEqual(listing.unreadable, [{ id: "linked", reason: "ELOOP" }, { id: "pipe", reason: "EINVAL" }]);
+  await assert.rejects(loadSession(cwd, "pipe"), { code: "EINVAL" });
+  assert.equal((await loadSession(cwd, "good")).id, "good");
+});
+
+test("session scanner rejects a log replaced with a FIFO between inspection and open", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-fifo-race-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "changed.jsonl");
+  await fs.writeFile(file, '{"type":"task","task":"before replacement"}\n');
+  const open = fs.open.bind(fs);
+  let replaced = false;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+    if (args[0] === file && !replaced) {
+      replaced = true;
+      await fs.unlink(file);
+      execFileSync("mkfifo", [file]);
+    }
+    return open(...args);
+  });
+  const listing = await listSessionsWithIssues(cwd);
+  assert.equal(replaced, true);
+  assert.deepEqual(listing.sessions, []);
+  assert.deepEqual(listing.unreadable, [{ id: "changed", reason: "EINVAL" }]);
+});
+
+test("malformed event shapes are isolated and reported without exposing their contents", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-damaged-session-"));
+  try {
+    const directory = path.join(cwd, ".xiu", "sessions");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "mixed.jsonl"), [
+      'null', '[]', '42', 'true', '"private-canary"', '{}', '{"type":null}', '{"type":""}', '{truncated',
+      JSON.stringify({ type: "task", task: "保留有效任务", timestamp: "2026-11-04T01:00:00.000Z" }),
+      JSON.stringify({ type: "assistant", text: "有效回复", timestamp: "2026-11-04T01:00:01.000Z" }),
+      '', '  ',
+    ].join("\r\n"));
+    const listing = await listSessionsWithIssues(cwd);
+    assert.equal(listing.sessions.length, 1);
+    assert.equal(listing.sessions[0]!.firstTask, "保留有效任务");
+    assert.equal(listing.sessions[0]!.damagedLines, 9);
+    assert.deepEqual(listing.unreadable, []);
+    const note = unreadableSessionsNote([], "en-US", listing.sessions);
+    assert.equal(note, "9 damaged record(s) skipped in 1 session log(s); history may be incomplete.");
+    assert.equal(unreadableSessionsNote([], "zh-CN", listing.sessions), "1 个会话日志中有 9 条损坏记录已跳过；历史可能不完整。");
+    assert.equal(note.includes("private-canary"), false);
+    const restored = await loadSession(cwd, "mixed");
+    assert.deepEqual(restored.messages.map((message) => message.content), ["保留有效任务", "有效回复"]);
+    await fs.writeFile(path.join(directory, "only-null.jsonl"), "null\n");
+    assert.equal((await listSessions(cwd)).length, 2, "a damaged-only log does not hide other sessions");
+  } finally { await fs.rm(cwd, { recursive: true, force: true }); }
+});
+
+test("large session listing preserves title precedence, last routing and UTF-8 across stream chunks", async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-large-session-"));
+  try {
+    const directory = path.join(cwd, ".xiu", "sessions");
+    await fs.mkdir(directory, { recursive: true });
+    const records = [
+      { type: "diagnostics", snapshot: { task: "fallback" }, timestamp: "2026-11-04T01:00:00.000Z" },
+      { type: "ui_turn", turn: { task: "turn fallback" } },
+      { type: "task", task: "中文标题😀", config: { provider: "original", model: "first" } },
+      ...Array.from({ length: 2000 }, () => ({ type: "tool", result: "中文😀".repeat(200) })),
+      { type: "provider_changed", providerId: "final-provider", model: "second" },
+      { type: "model_changed", model: "final-model", timestamp: "2026-11-04T02:00:00.000Z" },
+    ];
+    await fs.writeFile(path.join(directory, "large.jsonl"), records.map((record) => JSON.stringify(record)).join("\n"));
+    const [item] = await listSessions(cwd);
+    assert.equal(item!.firstTask, "中文标题😀");
+    assert.equal(item!.providerId, "final-provider");
+    assert.equal(item!.model, "final-model");
+    assert.equal(item!.createdAt, "2026-11-04T01:00:00.000Z");
+    assert.equal(item!.updatedAt, "2026-11-04T02:00:00.000Z");
+    assert.equal(item!.damagedLines, undefined);
+  } finally { await fs.rm(cwd, { recursive: true, force: true }); }
 });

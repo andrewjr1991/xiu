@@ -175,6 +175,22 @@ async function workspaceFixture(t: test.TestContext) {
   return { cwd, taskRunRoot, directory, record };
 }
 
+test("doctor reports damaged session records while preserving strict interrupted-run checks", async (t) => {
+  const f = await workspaceFixture(t);
+  await fs.writeFile(path.join(f.cwd, ".xiu", "sessions", "damaged.jsonl"), 'null\n{"type":"task","task":"private-canary"}\n{broken\n');
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  assert.equal(probe.sessions, 1);
+  assert.equal(probe.damagedSessionRecords, 2);
+  assert.equal(probe.listingFailure, undefined);
+  assert.doesNotMatch(JSON.stringify(probe), /private-canary/);
+  const report = await collectDoctorReport({
+    version: "0.20.14", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "24.22.1", osRelease: "6.1",
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
+  });
+  assert.match(formatDoctorReport(report, "en-US"), /2 damaged record\(s\) skipped; history may be incomplete/);
+  assert.match(formatDoctorReport(report, "zh-CN"), /2 条损坏记录已跳过/);
+});
+
 test("the workspace section counts records, names unreadable ones and warns about an interrupted task", async (t) => {
   const f = await workspaceFixture(t);
   await fs.writeFile(path.join(f.directory, "3f2a9c1e-0000-4000-8000-000000000001.json"), JSON.stringify(f.record("3f2a9c1e-0000-4000-8000-000000000001", "completed")));

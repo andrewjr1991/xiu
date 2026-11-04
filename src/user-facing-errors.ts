@@ -152,6 +152,9 @@ const GENERAL: Record<string, Entry> = {
   "background/pid-reused": { code: "background/pid-reused", diagnostic: "/background list",
     zh: ["后台任务的进程早已退出，记录的进程号现在属于其他程序，Xiu 没有结束它们；任务已标记为中断。", "用 /background list 确认状态；不需要手动处理。"],
     en: ["The background job's processes had already exited; the recorded process numbers now belong to unrelated programs, which were left alone. The job is recorded as interrupted.", "Check the state with /background list; nothing needs to be done by hand."] },
+  "session/state-invalid": { code: "session/state-invalid", diagnostic: "xiu doctor",
+    zh: ["会话中保存的 Plan 模式、计划或统计字段无效，已停止恢复。", "先备份该会话日志，再检查损坏字段或使用完好的备份；不要通过清除模式记录来绕过只读限制。"],
+    en: ["Saved session mode, plan or statistics are invalid; restoration stopped.", "Back up the session log, then inspect the damaged fields or use an intact backup; do not remove mode records to bypass read-only restrictions."] },
   cancelled: { code: "cancelled",
     zh: ["操作已取消。", "需要时重新运行。"],
     en: ["The operation was cancelled.", "Run it again when ready."] },
@@ -176,6 +179,7 @@ function chain(error: unknown): ErrorShape[] {
 function entryFor(error: unknown): Entry | undefined {
   if (error instanceof ProviderConfigurationError) return PROVIDER_CONFIG[error.code] ?? PROVIDER_CONFIG.io;
   const items = chain(error);
+  if (items.some((item) => item.code === "SESSION_STATE_INVALID")) return GENERAL["session/state-invalid"];
   const configFile = items.find((item): item is ConfigFileError => item instanceof ConfigFileError);
   if (configFile) return CONFIG[configFile.kind];
   const workspace = items.find((item): item is WorkspaceDirectoryError => item instanceof WorkspaceDirectoryError);

@@ -4,6 +4,13 @@ import type { ContextWindowSource } from "./context.js";
 import type { CredentialBackendStatus } from "./credential-store.js";
 import { localize, type UiLanguage } from "./i18n.js";
 import type { TaskRunStatus } from "./task-run.js";
+import type { VerificationSummary } from "./verification.js";
+
+export function verificationSummaryLabel(value: VerificationSummary | undefined, language: UiLanguage): string {
+  if (!value) return localize(language, "本进程尚无账本记录", "no ledger recorded in this process");
+  if (!value.total) return localize(language, "本轮未运行程序检查", "no program check ran in this task");
+  return localize(language, `通过 ${value.passed}/${value.total} · 失败 ${value.failed} · 需重跑 ${value.stale}`, `passed ${value.passed}/${value.total} · failed ${value.failed} · stale ${value.stale}`);
+}
 
 /** The values `/status` shows next to its localized labels, in the user's language rather than as the raw enum. */
 export function runOutcomeLabel(outcome: AgentRunOutcome, language: UiLanguage): string {

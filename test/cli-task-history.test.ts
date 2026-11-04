@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { loadTaskChangeHistory } from "../src/task-change-history.js";
 import { trustWorkspace } from "../src/trust.js";
+import { SkillStateStore } from "../src/skill-state.js";
 import { FixtureProcess, cleanupFixtureProcesses } from "./fixtures/fixture-process.js";
 
 /**
@@ -22,8 +23,64 @@ const tsxLoader = import.meta.resolve("tsx");
 const execFileAsync = promisify(execFile);
 const FINAL_ANSWER = "Done: notes written by the fake model.";
 
-async function startFakeModelServer(t: TestContext): Promise<string> {
+test("piped skill enable/disable never treats the first menu item as confirmation", { timeout: 60_000 }, async (t) => {
+  const baseURL = await startFakeModelServer(t);
+  const { cwd, home, processes } = await fixture(t, baseURL);
+  const directory = path.join(cwd, ".xiu", "skills", "review");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "SKILL.md"), "---\nname: review\ndescription: fixture\n---\nread only instructions");
+  const state = new SkillStateStore(path.join(home, ".xiu"), cwd);
+  const app = await launch(processes, cwd, home);
+  await app.command("/skills disable review");
+  assert.deepEqual([...(await state.disabled())], [], "no terminal means no disable confirmation");
+  await state.setDisabled("review", true);
+  await app.command("/skills enable review");
+  assert.deepEqual([...(await state.disabled())], ["review"], "no terminal means no enable confirmation");
+  await app.close();
+});
+
+test("CLI session pagination returns the selected page and rejects invalid standalone options", { timeout: 60_000 }, async (t) => {
+  const { cwd, home } = await fixture(t, "https://unused.example/v1");
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  for (let index = 1; index <= 3; index++) await fs.writeFile(path.join(directory, `page-${index}.jsonl`), `${JSON.stringify({ type: "task", task: `task ${index}`, timestamp: `2026-11-04T00:00:0${index}.000Z` })}\n`);
+  const args = ["--import", tsxLoader, cli, "--language", "en", "--list-sessions", "--session-offset", "1", "--session-limit", "1"];
+  const result = await execFileAsync(process.execPath, args, { cwd, env: environment(home), timeout: 30_000 });
+  assert.match(result.stdout, /^page-2 /m);
+  assert.doesNotMatch(result.stdout, /^page-[13] /m);
+  assert.match(result.stdout, /Sessions 2–2 \/ 3 \(offset 1, limit 1\)/);
+  const refresh = await execFileAsync(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--refresh-session-index"], { cwd, env: environment(home), timeout: 30_000 });
+  assert.match(refresh.stdout, /indexed 3, skipped 0, failed 0/);
+  assert.equal((await fs.readdir(directory)).filter((name) => name.endsWith(".summary.json")).length, 3);
+  const cachedPage = await execFileAsync(process.execPath, args, { cwd, env: environment(home), timeout: 30_000 });
+  assert.equal(cachedPage.stdout, result.stdout);
+  for (const invalid of [["--session-limit", "0", "--list-sessions"], ["--session-offset", "-1", "--list-sessions"], ["--session-limit", "1.5", "--list-sessions"], ["--session-limit", "2"]]) {
+    await assert.rejects(execFileAsync(process.execPath, ["--import", tsxLoader, cli, ...invalid], { cwd, env: environment(home), timeout: 30_000 }), (error: { code?: number; stderr?: string }) => error.code === 1 && /integer|require --list-sessions/.test(error.stderr ?? ""));
+  }
+  await fs.unlink(path.join(home, ".xiu", "trusted-workspaces.json"));
+  await fs.writeFile(path.join(directory, "not-trusted.jsonl"), '{"type":"task","task":"not-read-canary"}\n');
+  await assert.rejects(execFileAsync(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--refresh-session-index"], { cwd, env: environment(home), timeout: 30_000 }), (error: { code?: number; stdout?: string; stderr?: string }) => error.code === 1 && /no interactive terminal/i.test((error.stdout ?? "") + (error.stderr ?? "")));
+  await assert.rejects(fs.stat(path.join(directory, "not-trusted.jsonl.summary.json")), { code: "ENOENT" });
+});
+
+test("CLI refuses malformed saved mode before model requests or workspace writes", { timeout: 60_000 }, async (t) => {
+  let requests = 0;
+  const baseURL = await startFakeModelServer(t, () => { requests++; });
+  const { cwd, home } = await fixture(t, baseURL);
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "broken-mode.jsonl");
+  const source = '{"type":"task","task":"Inspect only"}\n{"type":"plan_mode","enabled":true}\n{"type":"plan_mode","enabled":null}\n';
+  await fs.writeFile(file, source);
+  await assert.rejects(execFileAsync(process.execPath, ["--import", tsxLoader, cli, "--language", "en", "--provider", "fake", "--resume", "broken-mode", "--yes", "write notes"], { cwd, env: environment(home), timeout: 30_000 }), (error: { code?: number; stdout?: string; stderr?: string }) => error.code === 1 && /session\/state-invalid/.test((error.stdout ?? "") + (error.stderr ?? "")));
+  assert.equal(requests, 0);
+  await assert.rejects(fs.stat(path.join(cwd, "notes.txt")), { code: "ENOENT" });
+  assert.equal(await fs.readFile(file, "utf8"), source);
+});
+
+async function startFakeModelServer(t: TestContext, onRequest?: () => void): Promise<string> {
   const server = http.createServer((request, response) => {
+    onRequest?.();
     let body = "";
     request.on("data", (chunk) => { body += String(chunk); });
     request.on("end", () => {

@@ -51,6 +51,7 @@
 | `background/node-missing` | 后台任务需要本机安装的 Node.js，但没有找到。 | 安装 Node.js 22 或更高版本后重试。 |
 | `background/stop-unconfirmed` | 后台任务的进程没能在限定时间内确认退出，任务仍标记为运行中。 | 用 /background list 查看进程号，必要时在任务管理器或 ps 中手动结束。（诊断：`/background list`） |
 | `background/pid-reused` | 后台任务的进程早已退出，记录的进程号现在属于其他程序，Xiu 没有结束它们；任务已标记为中断。 | 用 /background list 确认状态；不需要手动处理。（诊断：`/background list`） |
+| `session/state-invalid` | 会话中保存的 Plan 模式、计划或统计字段无效，已停止恢复。 | 先备份该会话日志，再检查损坏字段或使用完好的备份；不要通过清除模式记录来绕过只读限制。诊断：`xiu doctor`。 |
 | `cancelled` | 操作已取消。 | 需要时重新运行。 |
 
 ### 22.1 `xiu` 不是内部或外部命令

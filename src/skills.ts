@@ -7,10 +7,39 @@ import fg from "./glob.js";
 import { addedPermissions, parseExtensionPermissions, PermissionGrantStore, type ExtensionPermission, type ExtensionPermissionManifest } from "./extension-permissions.js";
 import type { AgentTool } from "./types.js";
 import { extractSkillArchive, readSkillImportFile } from "./skill-archive.js";
+import { createHash } from "node:crypto";
+import { SkillStateStore, normalizedSkillName } from "./skill-state.js";
 
 const execFileAsync = promisify(execFile);
 const MAX_SKILL_FILES = 300;
 const MAX_INSTALL_BYTES = 20 * 1024 * 1024;
+const MAX_SKILL_CHARACTERS = 120_000;
+
+class SkillTooLargeError extends Error {
+  constructor() { super("Skill is too large to load safely."); }
+}
+
+/** Enforce the existing character limit without first allocating an unbounded file. */
+async function readSkillText(file: string): Promise<string> {
+  const handle = await fs.open(file, "r");
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error("Skill must be a regular file.");
+    if (before.size > MAX_SKILL_CHARACTERS * 4) throw new SkillTooLargeError();
+    const bytes = Buffer.alloc(before.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, length);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    const after = await handle.stat();
+    if (length !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error("Skill changed while reading; refresh and retry.");
+    const content = bytes.subarray(0, length).toString("utf8");
+    if (content.length > MAX_SKILL_CHARACTERS) throw new SkillTooLargeError();
+    return content;
+  } finally { await handle.close(); }
+}
 const GENERIC_WORKFLOW_SKILLS = new Set([
   "using-superpowers",
   "brainstorming",
@@ -26,6 +55,8 @@ export interface XiuSkill {
   permissions: ExtensionPermission[];
   permissionWarnings: string[];
   permissionsDeclared: boolean;
+  enabled?: boolean;
+  fingerprint?: string;
 }
 
 /** A skill file the registry found but does not list, and why; names only, never a path. */
@@ -33,7 +64,7 @@ export interface SkillIssue {
   /** The skill's folder (or the plugin skill's name) as the user would recognise it. */
   name: string;
   scope: XiuSkill["scope"];
-  /** `unreadable`: the file could not be read (`detail` is the system error code); `oversized`: a plugin skill over the size limit;
+  /** `unreadable`: the file could not be read (`detail` is the system error code); `oversized`: a skill over the size limit;
    * `shadowed`: another skill of the same name was found first (`detail` is its scope); `truncated`: a root holds more than the
    * limit of SKILL.md files (`detail` is the number not read). */
   reason: "unreadable" | "oversized" | "shadowed" | "truncated";
@@ -190,6 +221,7 @@ export class SkillRegistry {
   private skills: XiuSkill[] = [];
   private skillIssues: SkillIssue[] = [];
   private pluginFiles: Array<{ file: string; name: string }> = [];
+  private readonly state: SkillStateStore;
 
   constructor(
     private readonly cwd: string,
@@ -197,7 +229,7 @@ export class SkillRegistry {
     private readonly permissionStore = new PermissionGrantStore(globalRoot
       ? path.join(path.dirname(globalRoot), "extension-permissions.json")
       : path.join(os.homedir(), ".xiu", "extension-permissions.json")),
-  ) {}
+  ) { this.state = new SkillStateStore(path.dirname(this.globalDirectory()), cwd); }
 
   globalDirectory(): string { return this.globalRoot ?? path.join(os.homedir(), ".xiu", "skills"); }
 
@@ -206,6 +238,9 @@ export class SkillRegistry {
   }
 
   async refresh(includeProject = true): Promise<XiuSkill[]> {
+    let disabled: Set<string>;
+    try { disabled = await this.state.disabled(); }
+    catch (error) { this.skills = []; throw error; }
     const roots: Array<{ directory: string; scope: XiuSkill["scope"]; label: string }> = [
       ...(includeProject ? [
         { directory: path.join(this.cwd, ".xiu", "skills"), scope: "project" as const, label: ".xiu/skills" },
@@ -222,7 +257,7 @@ export class SkillRegistry {
       if (files.length > MAX_SKILL_FILES) issues.push({ name: root.label, scope: root.scope, reason: "truncated", detail: String(files.length - MAX_SKILL_FILES) });
       for (const file of files.slice(0, MAX_SKILL_FILES)) {
         try {
-          const content = await fs.readFile(file, "utf8");
+          const content = await readSkillText(file);
           const meta = frontmatter(content);
           const permissionInfo = skillPermissions(meta);
           const folder = path.basename(path.dirname(file));
@@ -234,17 +269,19 @@ export class SkillRegistry {
             permissions: permissionInfo.permissions,
             permissionWarnings: permissionInfo.unknown,
             permissionsDeclared: permissionInfo.declared,
+            fingerprint: createHash("sha256").update(JSON.stringify([root.scope, path.resolve(file), content])).digest("hex"),
           });
         } catch (error) {
           // The skill stays out of the list, but `/skills` names it so the user learns why it is missing.
-          issues.push({ name: path.basename(path.dirname(file)), scope: root.scope, reason: "unreadable", detail: readFailureReason(error) });
+          issues.push(error instanceof SkillTooLargeError
+            ? { name: path.basename(path.dirname(file)), scope: root.scope, reason: "oversized" }
+            : { name: path.basename(path.dirname(file)), scope: root.scope, reason: "unreadable", detail: readFailureReason(error) });
         }
       }
     }
     for (const entry of this.pluginFiles.slice(0, MAX_SKILL_FILES)) {
       try {
-        const content = await fs.readFile(entry.file, "utf8");
-        if (content.length > 120_000) { issues.push({ name: entry.name, scope: "plugin", reason: "oversized" }); continue; }
+        const content = await readSkillText(entry.file);
         const meta = frontmatter(content);
         const permissionInfo = skillPermissions(meta);
         discovered.push({
@@ -255,10 +292,13 @@ export class SkillRegistry {
           permissions: permissionInfo.permissions,
           permissionWarnings: permissionInfo.unknown,
           permissionsDeclared: permissionInfo.declared,
+          fingerprint: createHash("sha256").update(JSON.stringify(["plugin", entry.name, path.resolve(entry.file), content])).digest("hex"),
         });
       } catch (error) {
         // Invalid plugin contributions are reported by PluginRegistry; an unreadable file is still named here.
-        issues.push({ name: entry.name, scope: "plugin", reason: "unreadable", detail: readFailureReason(error) });
+        issues.push(error instanceof SkillTooLargeError
+          ? { name: entry.name, scope: "plugin", reason: "oversized" }
+          : { name: entry.name, scope: "plugin", reason: "unreadable", detail: readFailureReason(error) });
       }
     }
     const unique = new Map<string, XiuSkill>();
@@ -268,19 +308,31 @@ export class SkillRegistry {
       if (!winner) unique.set(key, skill);
       else issues.push({ name: skill.name, scope: skill.scope, reason: "shadowed", detail: winner.scope });
     }
-    this.skills = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
+    this.skills = [...unique.values()].map((skill) => ({ ...skill, enabled: !disabled.has(skill.name.trim().toLowerCase()) })).sort((a, b) => a.name.localeCompare(b.name));
     this.skillIssues = issues;
     return this.list();
   }
 
-  list(): XiuSkill[] { return this.skills.map((skill) => ({ ...skill })); }
+  list(): XiuSkill[] { return this.skills.filter((skill) => skill.enabled !== false).map((skill) => ({ ...skill })); }
+
+  all(): XiuSkill[] { return this.skills.map((skill) => ({ ...skill })); }
+
+  async setEnabled(name: string, enabled: boolean, fingerprint: string): Promise<void> {
+    if (typeof enabled !== "boolean") throw new Error("Invalid skill state.");
+    await this.refresh(true);
+    const skill = this.skills.find((item) => normalizedSkillName(item.name) === normalizedSkillName(name));
+    if (!skill || !fingerprint || fingerprint !== skill.fingerprint) throw new Error("Skill changed; refresh and confirm again.");
+    await this.state.setDisabled(skill.name, !enabled);
+    await this.refresh(true);
+  }
 
   /** The skill files the last `refresh()` found but did not list, in discovery order. */
   issues(): SkillIssue[] { return this.skillIssues.map((issue) => ({ ...issue })); }
 
   catalog(): string {
-    if (!this.skills.length) return "No Xiu skills are installed.";
-    const taskSkills = this.skills.filter((skill) => skill.scope === "project"
+    const active = this.list();
+    if (!active.length) return "No Xiu skills are enabled.";
+    const taskSkills = active.filter((skill) => skill.scope === "project"
       || skill.scope === "plugin"
       || !GENERIC_WORKFLOW_SKILLS.has(skill.name.toLowerCase()));
     return [
@@ -295,8 +347,8 @@ export class SkillRegistry {
     if (!matches.length) throw new Error(`Skill not found: ${name}`);
     if (matches.length > 1) throw new Error(`Skill name is ambiguous: ${name}`);
     const skill = matches[0]!;
-    const content = await fs.readFile(skill.file, "utf8");
-    if (content.length > 120_000) throw new Error(`Skill is too large to load safely: ${skill.name}`);
+    if (skill.enabled === false || (await this.state.disabled()).has(normalizedSkillName(skill.name))) throw new Error(`Skill is disabled in this workspace: ${skill.name}`);
+    const content = await readSkillText(skill.file);
     return `Skill: ${skill.name}\nScope: ${skill.scope}\nPermissions: ${skill.permissions.join(", ")}\n${skill.permissionWarnings.length ? `Unknown permission declarations: ${skill.permissionWarnings.join(", ")}\n` : ""}Source: ${skill.file}\n\n${content}`;
   }
 

@@ -221,6 +221,7 @@ const argumentSchemas: Record<string, Parser[]> = {
   [desktopChannels.managementChange]: [tagged("action", {
     "skill-install": { revision: id, token: string(SHORT), confirmed, replace: optional(confirmed) },
     "skill-uninstall": { revision: id, name: string(ID), confirmed },
+    "skill-state": { revision: id, name: string(ID), fingerprint: string(64), enabled: boolean, confirmed },
     routing: { revision: id, enabled: boolean },
     stage: { revision: id, phase: literal(...PROVIDER_ROUTING_PHASES), providerId: optional(id) },
     fallback: { revision: id, providerId: id, chain: array(id, 32) },

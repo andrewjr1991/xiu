@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultPreferences, type DesktopPreferences } from "../../shared/preferences.js";
 import { applyRuntimeEvent, type DesktopApprovalMode, type DesktopAttachment, type DesktopAttachmentResult, type DesktopChangeView, type DesktopMcpBrowseRequest, type DesktopMcpManageRequest, type DesktopProviderCapability, type DesktopProviderCredentialManageRequest, type DesktopProviderProfile, type DesktopProviderSnapshot, type DesktopProviderUpsertRequest, type DesktopReviewSnapshot, type DesktopReviewTab, type DesktopRuntimeConnection, type DesktopTaskHistorySnapshot, type DesktopWorkspaceSnapshot, type ReviewFilePreview, type RuntimeEvent, type WorkspaceMcpSnapshot, type XiuRuntimeSnapshot } from "../../shared/protocol.js";
 import type { DesktopProviderRecoveryRequest, DesktopProviderRecoverySnapshot } from "../../shared/provider-recovery.js";
@@ -85,7 +85,8 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
   const [review, setReview] = useState<DesktopReviewSnapshot>();
   const [taskCompletionChanges, setTaskCompletionChanges] = useState<DesktopReviewSnapshot["changes"]>();
   const [selectedDiff, setSelectedDiff] = useState<ChangeEntry>();
-  const openDiff = (entry: ChangeEntry) => { setSelectedDiff(entry); setReviewTab("changes"); };
+  const openDiff = useCallback((entry: ChangeEntry) => { setSelectedDiff(entry); setReviewTab("changes"); }, []);
+  const closeHistory = useCallback(() => setHistoryView(undefined), []);
   const [reviewTab, setReviewTab] = useState<DesktopReviewTab>("changes");
   const [workbenchCollapsed, setWorkbenchCollapsed] = useState(false);
   const [overviewHidden, setOverviewHidden] = useState(false);
@@ -127,16 +128,16 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
     else if (next.runtime.events.length) setEvents((old) => mergeRuntimeEvents(old, next.runtime.events));
   };
 
-  const refreshReview = async (view = changeViewRef.current) => {
+  const refreshReview = useCallback(async (view = changeViewRef.current) => {
     const next = await window.xiuDesktop.reviewSnapshot({ changeView: view });
     setReview(next);
-  };
-  const refreshAcceptance = () => {
+  }, []);
+  const refreshAcceptance = useCallback(() => {
     void window.xiuDesktop.snapshot().then(setWorkspace).catch(reason => setError(String(reason)));
     void refreshReview().catch(reason => setError(String(reason)));
     const history = historyViewRef.current;
     if (history) void window.xiuDesktop.openTaskHistory({ taskId: history.taskId }).then(value => { if (historyViewRef.current === history) setHistoryView(value); }).catch(reason => setError(String(reason)));
-  };
+  }, [refreshReview]);
 
   useEffect(() => {
     void window.xiuDesktop.snapshot().then(setWorkspace).catch((reason) => setError(String(reason)));
@@ -634,7 +635,7 @@ export function App({ initialPreferences = defaultPreferences }: { initialPrefer
         {workspace.trust === "required" && workspace.workspace && <div className="trust-panel"><div className="trust-icon">✓</div><div><span className="eyebrow">工作区信任</span><h2>你信任“{workspace.workspace.name}”中的内容吗？</h2><p>信任后，Xiu 才能读取项目文件与指令、发现项目 Skill、建立索引并运行命令。请只信任你了解来源的项目。</p><div className="trust-actions"><button className="secondary-button" onClick={() => void runWorkspace(() => window.xiuDesktop.closeWorkspace())}>暂不打开</button><button className="primary-button compact" onClick={() => void runWorkspace(() => window.xiuDesktop.trustWorkspace({ workspaceId: workspace.workspace!.id, acknowledged: true }))}>信任并打开</button></div></div></div>}
         {workspace.trust === "trusted" && <ResizableTaskLayout>
           <section className="task-console">
-             <div className="task-scroll-shell"><div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline onAcceptance={refreshAcceptance} history={taskView.history} submittedAttachments={submittedAttachments} onClose={() => setHistoryView(undefined)} onDiff={openDiff} />}{!taskView.history && <TaskTimeline onAcceptance={refreshAcceptance} taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
+             <div className="task-scroll-shell"><div className="task-scroll" ref={taskScrollRef}><div className="task-scroll-content">{taskView.history && <HistoryTimeline onAcceptance={refreshAcceptance} history={taskView.history} submittedAttachments={submittedAttachments} onClose={closeHistory} onDiff={openDiff} />}{!taskView.history && <TaskTimeline onAcceptance={refreshAcceptance} taskStartedAt={runtime?.task?.startedAt} events={timelineEvents} draft={draft} pendingMessage={pendingMessage} state={status} modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
               {!historyView && !isActive && taskCompletionChanges && <ChangeSummaryCard report={taskCompletionChanges} onDiff={openDiff} />}
               {approval && <section className={`approval-card risk-${approval.risk}`}><header><div><span className="eyebrow">需要你的批准</span><h2>{approval.description}</h2></div><span className="risk-chip">{approval.risk}</span></header>{approval.preview && <pre>{approval.preview}</pre>}<dl><div><dt>权限范围</dt><dd>{approval.sessionScope ? approval.risk === "dangerous" ? "可仅允许一次，或在确认风险后记住这一类操作直至退出 Xiu" : "可仅允许一次，或记住这一类操作直至退出 Xiu" : "仅本次操作"}</dd></div><div><dt>可能影响</dt><dd>{approval.effects.join("；")}</dd></div><div><dt>恢复方式</dt><dd>{approval.recovery}</dd></div></dl>{approval.risk === "dangerous" && <label className="danger-check"><input type="checkbox" checked={dangerConfirmed} onChange={(event) => setDangerConfirmed(event.target.checked)} />我理解该操作可能不可逆，并确认继续</label>}<footer><button className="secondary-button" disabled={busy} onClick={() => void decide(false)}>拒绝</button><button className="secondary-button" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true)}>仅本次允许</button>{approval.sessionScope && <button className="primary-button compact" disabled={busy || approval.risk === "dangerous" && !dangerConfirmed} onClick={() => void decide(true, true)}>本次会话始终允许</button>}</footer></section>}
              </div></div><TimelineNavigator scrollRef={taskScrollRef} contextKey={activeConversationId} onJump={outputFollow.pause} /></div>

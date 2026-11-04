@@ -14,7 +14,7 @@ import type { ProviderProfile, ProviderRegistry } from "../provider-registry.js"
 import type { XiuSettings } from "../settings.js";
 import { explainUnhandledSlashInput, formatHelpEntries, formatSlashInputProblem, helpEntriesFor } from "../slash-commands.js";
 import type { StatusLine } from "../status.js";
-import { contextLimitModeLabel, contextWindowSourceLabel, runOutcomeLabel } from "../status-labels.js";
+import { contextLimitModeLabel, contextWindowSourceLabel, runOutcomeLabel, verificationSummaryLabel } from "../status-labels.js";
 import { formatUserFacingError } from "../user-facing-errors.js";
 
 export interface InspectCommandContext {
@@ -86,6 +86,7 @@ export async function handleInspectCommand(task: string, ctx: InspectCommandCont
     console.log(zh ? [
       `会话：${current.sessionId ?? "尚未开始"}`, `Provider：${config.providerId}（${config.provider}）`, `模型：${current.model}`, `能力：${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `能力探测：${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `语言：简体中文`,
       `规划模式：${current.planMode ? "开启（只读）" : "关闭"}`, `上次结果：${runOutcomeLabel(current.outcome, language)}`,
+      `检查账本：${verificationSummaryLabel(current.verification, language)}（记录不代表当前文件仍通过或全部需求已覆盖）`,
       `轮次：${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : "（无限制）"}`, `待处理补充：${current.pendingSteering}`, `消息：${current.messages}`,
       `上下文估算：约 ${current.stats.estimatedTokens.toLocaleString()} tokens`, `自动压缩：${current.contextLimit.toLocaleString()} tokens（${contextLimitModeLabel(current.contextLimitMode, language)}）`,
       `模型窗口：${current.contextWindow.toLocaleString()} tokens（${contextWindowSourceLabel(current.contextWindowSource, language)}）`, `API Token：输入 ${current.stats.inputTokens.toLocaleString()} / 输出 ${current.stats.outputTokens.toLocaleString()}`,
@@ -97,6 +98,7 @@ export async function handleInspectCommand(task: string, ctx: InspectCommandCont
     ].join("\n") + "\n" : [
       `Session: ${current.sessionId ?? "not started"}`, `Provider: ${config.providerId} (${config.provider})`, `Model: ${current.model}`, `Capabilities: ${featureNames(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Capability probe: ${capabilityProbeSummary(providerRegistry.get(config.providerId) ?? startupProfile, current.model)}`, `Language: English`, `Plan mode: ${current.planMode ? "ON (read-only)" : "OFF"}`, `Last outcome: ${runOutcomeLabel(current.outcome, language)}`,
       `Turn: ${current.turn || "-"}${current.maxTurns ? `/${current.maxTurns}` : " (unlimited)"}`, `Pending steering: ${current.pendingSteering}`, `Messages: ${current.messages}`,
+      `Check ledger: ${verificationSummaryLabel(current.verification, language)} (recorded results do not prove current freshness or full requirement coverage)`,
       `Context estimate: ~${current.stats.estimatedTokens.toLocaleString()} tokens`, `Auto compact: ${current.contextLimit.toLocaleString()} tokens (${contextLimitModeLabel(current.contextLimitMode, language)})`,
       `Model window: ${current.contextWindow.toLocaleString()} tokens (${contextWindowSourceLabel(current.contextWindowSource, language)})`, `API tokens: ${current.stats.inputTokens.toLocaleString()} in / ${current.stats.outputTokens.toLocaleString()} out`,
       `Calls: ${current.stats.modelCalls} model / ${current.stats.toolCalls} tool`, `Compactions: ${current.stats.compactions}`, `Active time: ${(current.stats.activeMs / 1000).toFixed(1)}s`,

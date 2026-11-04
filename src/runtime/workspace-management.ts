@@ -16,11 +16,12 @@ export interface WorkspaceManagementSnapshot {
   routing: ProviderRoutingPolicy;
   web: { enabled: boolean; provider?: string; endpoint?: string; apiKeyEnv?: string; managed: boolean; local: boolean };
   /** `removable` marks global skills Xiu installed under ~/.xiu/skills; other scopes are not managed here. */
-  skills: Array<{ name: string; description: string; scope: string; permissions: string[]; warnings: string[]; removable: boolean }>;
+  skills: Array<{ name: string; description: string; scope: string; permissions: string[]; warnings: string[]; removable: boolean; enabled?: boolean; fingerprint?: string }>;
 }
 export type WorkspaceManagementRequest =
   | { action: "skill-install"; revision: string; token: string; confirmed: true; replace?: true }
   | { action: "skill-uninstall"; revision: string; name: string; confirmed: true }
+  | { action: "skill-state"; revision: string; name: string; fingerprint: string; enabled: boolean; confirmed: true }
   | { action: "routing"; revision: string; enabled: boolean }
   | { action: "stage"; revision: string; phase: ProviderRoutingPhase; providerId?: string }
   | { action: "fallback"; revision: string; providerId: string; chain: string[] }
@@ -111,15 +112,17 @@ export class WorkspaceManagementService {
     const clean = (value: string, limit: number) => redactSecrets(value, secrets).slice(0, limit);
     const providers = this.registry.list().map((item) => ({ id: item.id, name: clean(item.name, 160), fallback: this.registry.failoverChain(item.id) }));
     const routing = this.registry.routingPolicy();
-    const revision = createHash("sha256").update(JSON.stringify({ config, providers, routing })).digest("hex");
+    await this.skills.refresh(true);
+    const skillItems = this.skills.all();
+    const revision = createHash("sha256").update(JSON.stringify({ config, providers, routing, skills: skillItems.map((skill) => [skill.name, skill.scope, skill.fingerprint, skill.enabled]) })).digest("hex");
     return { revision, providers, routing,
       web: { enabled: config.webSearch?.enabled === true, provider: config.webSearch?.provider,
         apiKeyEnv: config.webSearch?.apiKeyEnv,
         endpoint: config.webSearch?.baseURL ? clean(config.webSearch.baseURL.split(/[?#]/)[0]!, 2_000) : undefined, managed: Boolean(config.webSearch?.managedAuth),
         local: config.webSearch?.provider === "free-search" },
-      skills: this.skills.list().slice(0, 300).map((item) => ({ name: clean(item.name, 160),
+      skills: skillItems.slice(0, 300).map((item) => ({ name: clean(item.name, 160),
         description: clean(item.description, 500), scope: item.scope,
-        permissions: item.permissions, warnings: item.permissionWarnings.map((value) => clean(value, 160)), removable: item.scope === "global" })),
+        permissions: item.permissions, warnings: item.permissionWarnings.map((value) => clean(value, 160)), removable: item.scope === "global", enabled: item.enabled !== false, fingerprint: item.fingerprint })),
     };
   }
 
@@ -130,6 +133,11 @@ export class WorkspaceManagementService {
       throw new Error("配置已变化，请刷新后重试。");
     }
     switch (request.action) {
+      case "skill-state": {
+        if (request.confirmed !== true || typeof request.name !== "string" || typeof request.fingerprint !== "string" || typeof request.enabled !== "boolean") throw new Error("Skill state requires explicit confirmation.");
+        await this.skills.setEnabled(request.name, request.enabled, request.fingerprint);
+        return;
+      }
       case "skill-install": {
         const pending = this.pending;
         this.pending = undefined; // A confirmation token is single-use, even on failure.
@@ -146,7 +154,7 @@ export class WorkspaceManagementService {
       }
       case "skill-uninstall": {
         if (request.confirmed !== true || typeof request.name !== "string" || !request.name) throw new Error("Skill removal requires confirmation.");
-        const skill = this.skills.list().find((item) => item.name === request.name);
+        const skill = this.skills.all().find((item) => item.name === request.name);
         if (!skill || skill.scope !== "global") throw new Error("Only global skills installed by Xiu can be removed here.");
         await this.skills.uninstall(request.name);
         return;

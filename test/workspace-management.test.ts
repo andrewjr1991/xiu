@@ -24,9 +24,39 @@ function fixture(realSkills?: SkillRegistry, initial?: XiuSettings) {
     setFailoverChain: async (id: string, chain: string[]) => { chains[id] = chain; },
   } as unknown as ProviderRegistry;
   const store = { load: async () => structuredClone(settings), save: async (value: XiuSettings) => { settings = structuredClone(value); } } as unknown as SettingsStore;
-  const skills = { list: () => [{ name: "fixture", description: "inert-canary-no-request", scope: "global", permissions: ["instructions:load"], permissionWarnings: [] }] } as unknown as SkillRegistry;
+  const skills = { refresh: async () => [], all: () => [{ name: "fixture", description: "inert-canary-no-request", scope: "global", permissions: ["instructions:load"], permissionWarnings: [] }] } as unknown as SkillRegistry;
   return { service: new WorkspaceManagementService(registry, realSkills ?? skills, store), registry, settings: () => settings };
 }
+
+test("skill state changes require current content and revision, persist per workspace and do not grant permissions", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-skill-state-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(root, "home"));
+  const installed = path.join(root, "installed");
+  await fs.mkdir(path.join(installed, "review"), { recursive: true });
+  const file = path.join(installed, "review", "SKILL.md");
+  await fs.writeFile(file, "---\nname: review\npermissions: workspace:read\n---\nreview instructions");
+  const skills = new SkillRegistry(root, installed);
+  const { service } = fixture(skills);
+  const snapshot = await service.snapshot();
+  const skill = snapshot.skills.find((item) => item.name === "review")!;
+  assert.equal(skill.enabled, true);
+  const request = { action: "skill-state" as const, revision: snapshot.revision, name: skill.name, fingerprint: skill.fingerprint!, enabled: false, confirmed: true as const };
+  await assert.rejects(service.change({ ...request, confirmed: false as never }), /confirmation/);
+  await service.change(request);
+  assert.equal((await service.snapshot()).skills.find((item) => item.name === "review")!.enabled, false);
+  assert.deepEqual(skills.list(), []);
+  await assert.rejects(service.change({ ...request, enabled: true }), /配置已变化/);
+  const disabled = await service.snapshot();
+  await fs.writeFile(file, "---\nname: review\npermissions: workspace:write\n---\nchanged instructions");
+  await assert.rejects(service.change({ ...request, revision: disabled.revision, enabled: true }), /配置已变化/);
+  const changed = await service.snapshot();
+  await assert.rejects(service.change({ ...request, revision: changed.revision, enabled: true }), /Skill changed/);
+  await service.change({ ...request, revision: changed.revision, fingerprint: changed.skills[0]!.fingerprint!, enabled: true });
+  assert.equal(skills.list()[0]!.name, "review");
+  await assert.rejects(fs.stat(path.join(root, "extension-permissions.json")), { code: "ENOENT" });
+  assert.equal(JSON.stringify(changed).includes(root), false);
+});
 
 test("local skill preview copies immutable bytes, requires confirmation and never overwrites", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-management-test-"));

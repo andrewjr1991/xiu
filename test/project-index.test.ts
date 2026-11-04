@@ -11,6 +11,79 @@ function readOnlyContext(cwd: string): ToolContext {
   return { cwd, approve: async () => { throw new Error("read tools must not request approval"); } };
 }
 
+test("scoped relevance search reaches files outside a truncated global index without replacing it", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-scoped-index-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  await fs.mkdir(path.join(cwd, "z-business"));
+  await fs.writeFile(path.join(cwd, "a.txt"), "unrelated global entry");
+  await fs.writeFile(path.join(cwd, "z-business", "billing.py"), "def invoice_boundary_marker(): pass\n");
+  const index = new ProjectIndex(cwd);
+  type Discovery = { discovered: number; paths: string[]; metadata: Array<{ path: string; size: number; modifiedMs: number; changedMs: number }> };
+  const internals = index as unknown as { discover(prefix?: string): Promise<Discovery> };
+  const discover = internals.discover.bind(index);
+  // Model the exact global-cap state with one retained file, keeping the fixture
+  // small; scoped discovery still traverses the real filesystem.
+  const stat = await fs.stat(path.join(cwd, "a.txt"));
+  t.mock.method(internals, "discover", async (prefix?: string) => prefix ? discover(prefix) : ({ discovered: 8001, paths: ["a.txt"], metadata: [{ path: "a.txt", size: stat.size, modifiedMs: stat.mtimeMs, changedMs: stat.ctimeMs }] }));
+  const tool = createProjectIndexTools(index).find((candidate) => candidate.name === "find_relevant_code")!;
+  const missing = await tool.execute({ query: "invoice_boundary_marker" }, readOnlyContext(cwd));
+  assert.match(missing, /coverage is incomplete/);
+  assert.doesNotMatch(missing, /billing\.py/);
+  const before = await fs.readFile(path.join(cwd, ".xiu", "index.json"), "utf8");
+  const found = await tool.execute({ query: "invoice_boundary_marker", path: "z-business" }, readOnlyContext(cwd));
+  assert.match(found, /z-business\/billing\.py/);
+  assert.match(found, /def invoice_boundary_marker/);
+  assert.equal(await fs.readFile(path.join(cwd, ".xiu", "index.json"), "utf8"), before);
+  assert.equal(index.status().truncated, true);
+  assert.equal(index.status().files, 1);
+  const map = JSON.parse(await index.repositoryMap({}));
+  assert.equal(map.index_truncated, true);
+  assert.equal(map.indexed_files, 1);
+});
+
+test("scoped search treats paths literally, observes ignores and sees external edits immediately", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-scope-literal-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  await fs.mkdir(path.join(cwd, "feature[one]"));
+  await fs.writeFile(path.join(cwd, "feature[one]", "handler.py"), "old_scope_marker");
+  await fs.writeFile(path.join(cwd, "feature[one]", ".env"), "private_scope_canary");
+  const index = new ProjectIndex(cwd);
+  assert.match(await index.search("old_scope_marker", 8, "feature[one]"), /handler\.py/);
+  await fs.writeFile(path.join(cwd, "feature[one]", "handler.py"), "new_scope_marker");
+  assert.match(await index.search("new_scope_marker", 8, "feature[one]/handler.py"), /handler\.py/);
+  assert.equal(await index.search("private_scope_canary", 8, "feature[one]"), "No relevant files found.");
+  assert.equal(index.status().mode, "none", "scope-only queries do not build or replace the global index");
+  const tool = createProjectIndexTools(index).find((candidate) => candidate.name === "find_relevant_code")!;
+  for (const scope of ["../", "/etc", "C:\\Windows", "bad\0path", 42]) await assert.rejects(tool.execute({ query: "marker", path: scope }, readOnlyContext(cwd)), /workspace-relative/);
+});
+
+test("scoped search refuses linked external directories", { skip: process.platform === "win32" }, async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-scope-link-"));
+  const external = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-scope-outside-"));
+  t.after(async () => { await fs.rm(cwd, { recursive: true, force: true }); await fs.rm(external, { recursive: true, force: true }); });
+  await fs.writeFile(path.join(external, "private.txt"), "external_canary_marker");
+  await fs.symlink(external, path.join(cwd, "linked"));
+  const index = new ProjectIndex(cwd);
+  await assert.rejects(index.search("external_canary_marker", 8, "linked"), /outside|escape|workspace|symbolic/i);
+});
+
+test("large search results have an explicitly bounded content scan", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-large-result-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const file = await fs.open(path.join(cwd, "large-marker.txt"), "w");
+  try {
+    await file.write("visible prefix\n");
+    await file.truncate(64 * 1024 * 1024);
+    await file.write("tail-canary-not-read", 64 * 1024 * 1024 - 32, "utf8");
+  } finally { await file.close(); }
+  const index = new ProjectIndex(cwd);
+  const result = await index.search("large-marker", 8, "large-marker.txt");
+  assert.match(result, /visible prefix/);
+  assert.match(result, /Content scan limited to the first 512 KiB/);
+  assert.doesNotMatch(result, /tail-canary/);
+  await assert.rejects(index.search("marker", Number.NaN), /limit must be an integer/);
+});
+
 test("project index detects stack, checks, and relevant source files", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-index-"));
   await fs.mkdir(path.join(cwd, "src"));

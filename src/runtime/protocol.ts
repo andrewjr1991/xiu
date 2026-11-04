@@ -1,6 +1,7 @@
 import type { WorkspaceChangeNotice } from "../change-summary.js";
 import type { TaskPlan } from "../plan.js";
 import type { ApprovalRequest, ToolResult } from "../types.js";
+import type { VerificationSummary } from "../verification.js";
 
 export const XIU_RUNTIME_SCHEMA_VERSION = 1 as const;
 
@@ -38,6 +39,7 @@ export interface RuntimeRecoverySnapshot {
 }
 
 export interface RuntimeTaskSnapshot {
+  verification?: VerificationSummary;
   subagents?: RuntimeSubagentCard[];
   id: string;
   state: RuntimeTaskState;
@@ -66,7 +68,7 @@ export interface RuntimeEventPayloads {
   "task.started": { taskPreview: string; resumedFrom?: string };
   "task.state": { state: RuntimeTaskState; reason?: string };
   "task.steered": { text: string };
-  "task.finished": { state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">; result?: string; error?: string; pendingQuestion?: { id: string; question: string } };
+  "task.finished": { state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">; result?: string; error?: string; pendingQuestion?: { id: string; question: string }; verification?: VerificationSummary };
   "assistant.message": { text: string; hasToolCalls: boolean };
   "assistant.draft": { text: string; receivedChars: number };
   "assistant.stream-end": Record<string, never>;
@@ -192,6 +194,8 @@ export function applyRuntimeEvent(snapshot: XiuRuntimeSnapshot, event: RuntimeEv
       next.task.error = event.payload.error;
       next.task.pendingApproval = undefined;
       next.task.pendingQuestion = event.payload.pendingQuestion;
+      if (event.payload.verification) next.task.verification = structuredClone(event.payload.verification);
+      else delete next.task.verification;
       break;
     case "plan.updated":
       next.task.plan = structuredClone(event.payload.plan);

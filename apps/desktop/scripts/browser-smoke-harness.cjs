@@ -14,6 +14,10 @@ app.whenReady().then(async () => {
   try {
     for (const url of ["file:///C:/secret", "http://example.com", "https://localhost/", "https://127.0.0.1/", "https://user:pass@example.com/"]) await assert.rejects(controller.control({ action: "navigate", url }));
     const view = controller.create();
+    // Both URL validation and per-request policy need deterministic DNS in this
+    // offline fixture. Production uses the session's real Chromium resolver.
+    // Unknown hosts resolve privately so accidental extra requests fail closed.
+    view.webContents.session.resolveHost = async (hostname) => ({ endpoints: [{ address: hostname === "example.com" ? "93.184.216.34" : "127.0.0.1" }] });
     await view.webContents.session.protocol.handle("https", (request) => request.url.endsWith('/redirect') ? new Response(null, { status: 302, headers: { location: "https://127.0.0.1/private" } }) : new Response('<!doctype html><title>Offline browser</title><h1>Browser canary</h1>', { headers: { "content-type": "text/html; charset=utf-8" } }));
     const loaded = new Promise((resolve) => view.webContents.once("did-finish-load", resolve));
     await controller.control({ action: "navigate", url: "https://example.com/" }); await loaded;

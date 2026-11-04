@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, type RefObject } from "react";
 
 type Marker = { id: string; label: string; top: number; documentTop: number; target: HTMLElement };
 
 /** A small map of the visible conversation. Positions follow rendered cards, including history. */
-export function TimelineNavigator({ scrollRef, contextKey, onJump }: { scrollRef: RefObject<HTMLDivElement | null>; contextKey?: string; onJump: () => void }) {
+export const TimelineNavigator = memo(function TimelineNavigator({ scrollRef, contextKey, onJump }: { scrollRef: RefObject<HTMLDivElement | null>; contextKey?: string; onJump: () => void }) {
   const [markers, setMarkers] = useState<Marker[]>([]);
   const [active, setActive] = useState<string>();
   const current = useRef<Marker[]>([]);
@@ -57,4 +57,4 @@ export function TimelineNavigator({ scrollRef, contextKey, onJump }: { scrollRef
       setActive(marker.id);
     }}><span /></button>)}
   </nav>;
-}
+});

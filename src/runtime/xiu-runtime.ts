@@ -4,6 +4,7 @@ import type { AgentEvents, AgentRunOutcome, AgentFailureReason } from "../agent.
 import { localize, type UiLanguage } from "../i18n.js";
 import { redactSecrets, sanitizeSecrets } from "../secret-redaction.js";
 import type { ApprovalRequest, ToolResult } from "../types.js";
+import type { VerificationSummary } from "../verification.js";
 import {
   XIU_RUNTIME_SCHEMA_VERSION,
   type RuntimeApprovalSnapshot,
@@ -27,7 +28,7 @@ export interface RuntimeTaskDriver {
   run(task: string): Promise<string>;
   cancel(): boolean;
   steer(text: string): boolean;
-  status(): { outcome: AgentRunOutcome; planMode?: boolean; failureReason?: AgentFailureReason; completionIssues?: string[] };
+  status(): { outcome: AgentRunOutcome; planMode?: boolean; failureReason?: AgentFailureReason; completionIssues?: string[]; verification?: VerificationSummary };
   setPlanMode?(enabled: boolean): Promise<void>;
 }
 
@@ -214,12 +215,13 @@ export class XiuRuntime {
       };
       const reason = state === "failed" && status.failureReason ? reasons[status.failureReason] : undefined;
       const error = reason ? this.clean([reason, ...(status.completionIssues ?? []).slice(0, 12)].join("\n"), MAX_TOOL_TEXT) : undefined;
-      this.finish(state, { result: safeResult, ...(error ? { error } : {}), ...(pendingQuestion ? { pendingQuestion } : {}) });
+      this.finish(state, { result: safeResult, ...(error ? { error } : {}), ...(pendingQuestion ? { pendingQuestion } : {}), ...(status.verification ? { verification: status.verification } : {}) });
       return result;
     } catch (error) {
-      const state = terminalState(driver.status().outcome);
+      const status = driver.status();
+      const state = terminalState(status.outcome);
       const message = this.clean(error instanceof Error ? error.message : String(error), MAX_TOOL_TEXT);
-      this.finish(state, { error: message });
+      this.finish(state, { error: message, ...(status.verification ? { verification: status.verification } : {}) });
       throw error;
     }
   }
@@ -391,7 +393,7 @@ export class XiuRuntime {
     };
   }
 
-  private finish(state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">, details: { result?: string; error?: string; pendingQuestion?: { id: string; question: string } }): void {
+  private finish(state: Exclude<RuntimeTaskState, "idle" | "running" | "waiting_approval" | "stopping" | "recoverable">, details: { result?: string; error?: string; pendingQuestion?: { id: string; question: string }; verification?: VerificationSummary }): void {
     if (!this.task) return;
     this.task.state = state;
     this.task.updatedAt = this.timestamp();
@@ -399,6 +401,8 @@ export class XiuRuntime {
     this.task.error = details.error;
     this.task.pendingApproval = undefined;
     this.task.pendingQuestion = details.pendingQuestion;
+    if (details.verification) this.task.verification = structuredClone(details.verification);
+    else delete this.task.verification;
     this.pendingApproval = undefined;
     this.emit("task.finished", { state, ...details });
   }

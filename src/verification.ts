@@ -97,6 +97,16 @@ export interface VerificationEvidence {
   checks: Array<{ toolName: string; path?: string }>;
 }
 
+/** Program-recorded counters only; never commands, paths, assertions or restored authority. */
+export interface VerificationSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  stale: number;
+  revision: number;
+  state: "not_run" | "passed" | "failed" | "stale";
+}
+
 export class VerificationLedger {
   private checks = new Map<string, { passed: boolean; stale?: boolean; name?: string; input?: Record<string, unknown> }>();
   private revision = 0;
@@ -116,6 +126,14 @@ export class VerificationLedger {
   }
   get passed(): boolean { return this.checks.size > 0 && [...this.checks.values()].every((value) => value.passed); }
   get failed(): boolean { return [...this.checks.values()].some((value) => !value.passed); }
+  summary(): VerificationSummary {
+    const values = [...this.checks.values()];
+    const passed = values.filter((value) => value.passed).length;
+    const stale = values.filter((value) => !value.passed && value.stale).length;
+    const failed = values.length - passed - stale;
+    return { total: values.length, passed, failed, stale, revision: this.revision,
+      state: !values.length ? "not_run" : failed ? "failed" : stale ? "stale" : "passed" };
+  }
   /** Concrete pending obligations for the model; never infer success from prose. */
   pendingChecks(): Array<{ tool: string; input: Record<string, unknown> }> {
     return [...this.checks.values()].flatMap((value) => !value.passed && value.name && value.input

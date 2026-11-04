@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
 import { crc32, deflateRawSync } from "node:zlib";
 import { downloadUvWheel, ensureManagedUv, readZipEntries, UV_VERSION, UV_WHEEL_HOSTS, UV_WHEELS, uvWheelFor, type UvDownload, type UvWheel } from "../src/uv-install.js";
 
@@ -100,7 +101,10 @@ for (const platform of ["linux", "win32"] as const) {
       assert.equal(await fs.readFile(uvx, "utf8"), "uvx binary");
       assert.equal(await fs.readFile(path.join(home, UV_VERSION, `uv${exe}`), "utf8"), "uv binary");
       assert.equal(await fs.readFile(path.join(home, UV_VERSION, "LICENSE-MIT"), "utf8"), "mit");
-      if (process.platform !== "win32") assert.equal((await fs.stat(uvx)).mode & 0o777, 0o755);
+      if (process.platform !== "win32") {
+        // Creation permissions respect the user's umask; 0700 is executable too.
+        assert.equal((await fs.stat(uvx)).mode & 0o777, 0o755 & ~process.umask());
+      }
       assert.deepEqual((await fs.readdir(home)).sort(), [UV_VERSION], "no staging directory is left behind");
       assert.equal(await ensureManagedUv(options), uvx);
       assert.equal(log.length, 1, "an installed uv is reused without downloading");
@@ -114,6 +118,30 @@ for (const platform of ["linux", "win32"] as const) {
     }
   });
 }
+
+test("verified uv extraction remains executable under private and standard POSIX umasks", { skip: process.platform === "win32" }, async () => {
+  const { bytes, wheel } = fakeWheel("linux");
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-uv-umask-"));
+  try {
+    for (const mask of [0o022, 0o077]) {
+      const target = path.join(directory, String(mask));
+      const script = `
+        import fs from 'node:fs/promises';
+        import { constants } from 'node:fs';
+        import { extractUv } from ${JSON.stringify(new URL("../src/uv-install.ts", import.meta.url).href)};
+        const [target, mask, archive, wheel] = process.argv.slice(1);
+        process.umask(Number(mask));
+        await extractUv(Buffer.from(archive, 'base64'), JSON.parse(wheel), target, 'linux');
+        await fs.access(target + '/uv', constants.X_OK);
+        await fs.access(target + '/uvx', constants.X_OK);
+        console.log((await fs.stat(target + '/uvx')).mode & 0o777);
+      `;
+      const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script, target, String(mask), bytes.toString("base64"), JSON.stringify(wheel)], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(Number(result.stdout.trim()), 0o755 & ~mask);
+    }
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+});
 
 test("a platform without a pinned build asks the user to install uv", async () => {
   await assert.rejects(ensureManagedUv({ home: os.tmpdir(), platform: "freebsd", arch: "x64", download: async () => { throw new Error("no download"); } }), /No pinned uv build for freebsd-x64; install uv/);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /** Layout changes are not user scroll intent. Never animate a moving target. */
 export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: unknown, enabled = true) {
@@ -6,7 +6,7 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
   const manualScroll = useRef(false);
   const leftBottom = useRef(false);
   const [paused, setPaused] = useState(false);
-  const pause = () => { manualScroll.current = true; leftBottom.current = false; following.current = false; setPaused(true); };
+  const pause = useCallback(() => { manualScroll.current = true; leftBottom.current = false; following.current = false; setPaused(true); }, []);
   const resume = () => {
     following.current = enabled;
     manualScroll.current = false;
@@ -72,7 +72,7 @@ export function useOutputFollow(ref: RefObject<HTMLDivElement | null>, context: 
       element.removeEventListener("touchstart", touchStart);
       element.removeEventListener("touchmove", touchMove);
     };
-  }, [ref, context, enabled]);
+  }, [ref, context, enabled, pause]);
   useEffect(() => {
     if (following.current && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   });

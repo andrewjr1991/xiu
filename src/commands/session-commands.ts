@@ -3,7 +3,7 @@ import type { Agent } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
-import { selectTerminalOption } from "../interactive-ui.js";
+import { selectTerminalOption, type SelectOption } from "../interactive-ui.js";
 import { formatLocalTime } from "../local-time.js";
 import type { ProviderProfile, ProviderRegistry } from "../provider-registry.js";
 import { listSessionsWithIssues, loadSession, type RestoredSession, type SessionReplayTurn, sessionTitle, unreadableSessionsNote } from "../session.js";
@@ -163,26 +163,49 @@ export interface SessionListIo {
 }
 
 /** `--list-sessions`: one line per saved session (id, local time, model, title), then a note on logs that could not be read. */
-export async function printSessionList(cwd: string, language: UiLanguage, io: SessionListIo = { list: listSessionsWithIssues, log: (line) => console.log(line) }): Promise<void> {
+export async function printSessionList(cwd: string, language: UiLanguage, io: SessionListIo = { list: listSessionsWithIssues, log: (line) => console.log(line) }, page: { offset?: number; limit?: number } = {}): Promise<void> {
+  const paged = page.offset !== undefined || page.limit !== undefined;
+  const offset = page.offset ?? 0;
+  const limit = page.limit ?? 50;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid session page.");
   const { sessions, unreadable } = await io.list(cwd);
+  const visible = paged ? sessions.slice(offset, offset + limit) : sessions;
   if (!sessions.length) io.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
-  else for (const session of sessions) io.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
-  const note = unreadableSessionsNote(unreadable, language);
+  else for (const session of visible) io.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
+  if (paged) io.log(localize(language, `会话 ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length}（offset ${offset}，limit ${limit}）`, `Sessions ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length} (offset ${offset}, limit ${limit})`));
+  const note = unreadableSessionsNote(unreadable, language, sessions);
   if (note) io.log(note);
 }
 
-/** Lists the workspace's sessions and lets the user pick one; undefined when there is none or the choice was cancelled. */
-export async function chooseSession(workspace: string, language: UiLanguage): Promise<RestoredSession | undefined> {
-  const { sessions, unreadable } = await listSessionsWithIssues(workspace);
-  const note = unreadableSessionsNote(unreadable, language);
+type SessionChoice = { kind: "session" | "next" | "previous"; id: string };
+export interface SessionChooserIo {
+  list: (cwd: string) => ReturnType<typeof listSessionsWithIssues>;
+  select: (title: string, options: SelectOption<SessionChoice>[], language: UiLanguage) => Promise<SessionChoice | undefined>;
+  load: (cwd: string, id: string) => Promise<RestoredSession>;
+}
+
+/** Lists sessions in pages and restores only a selected session; navigation/cancel never loads history. */
+export async function chooseSession(workspace: string, language: UiLanguage, io: SessionChooserIo = { list: listSessionsWithIssues, select: selectTerminalOption, load: loadSession }): Promise<RestoredSession | undefined> {
+  const { sessions, unreadable } = await io.list(workspace);
+  const note = unreadableSessionsNote(unreadable, language, sessions);
   if (note) console.log(chalk.yellow(note));
   if (!sessions.length) return undefined;
-  const selected = await selectTerminalOption(localize(language, "恢复哪个会话？", "Resume which session?"), sessions.map((session) => ({
-    label: sessionTitle(session, language),
-    description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
-    value: session.id,
-  })), language);
-  return selected ? await loadSession(workspace, selected) : undefined;
+  let offset = 0;
+  const limit = 20;
+  while (true) {
+    const choices = sessions.slice(offset, offset + limit).map((session) => ({
+      label: sessionTitle(session, language),
+      description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
+      value: { kind: "session" as const, id: session.id },
+    }));
+    const navigation: Array<{ label: string; description: string; value: { kind: "next" | "previous"; id: string } }> = [];
+    if (offset + limit < sessions.length) navigation.push({ label: localize(language, "下一页", "Next page"), description: "", value: { kind: "next", id: "" } });
+    if (offset > 0) navigation.push({ label: localize(language, "上一页", "Previous page"), description: "", value: { kind: "previous", id: "" } });
+    const selected = await io.select(localize(language, "恢复哪个会话？", "Resume which session?"), [...choices, ...navigation], language);
+    if (!selected) return undefined;
+    if (selected.kind === "session") return await io.load(workspace, selected.id);
+    offset += selected.kind === "next" ? limit : -limit;
+  }
 }
 
 /**
@@ -263,7 +286,7 @@ export async function handleSessionCommand(task: string, ctx: SessionCommandCont
   }
   if (task === "/history sessions") {
     const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
-    const note = unreadableSessionsNote(unreadable, language);
+    const note = unreadableSessionsNote(unreadable, language, sessions);
     console.log([
       sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
       ...(note ? [chalk.yellow(note)] : []),

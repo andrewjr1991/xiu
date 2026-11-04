@@ -76,6 +76,16 @@ test("a damaged configuration file is explained by its kind, points at xiu docto
   assert.match(formatUserFacingError("Xiu 无法启动", cases[0][0], "zh-CN"), /^Xiu 无法启动：Xiu 的设置文件.*\n下一步：修好它的 JSON.*\n诊断：xiu doctor\n详情：config\/settings · Could not read Xiu settings file/);
 });
 
+test("invalid saved session state has a repair explanation without recommending a mode downgrade", () => {
+  const error = Object.assign(new Error("Saved Plan mode is invalid; session restore stopped."), { code: "SESSION_STATE_INVALID" });
+  const zh = explainError(error, "zh-CN");
+  assert.equal(zh.code, "session/state-invalid");
+  assert.equal(zh.diagnostic, "xiu doctor");
+  assert.match(zh.nextStep, /先备份/);
+  assert.match(zh.nextStep, /不要.*绕过只读/);
+  assert.equal(explainError(new Error("wrapped", { cause: error }), "en-US").code, "session/state-invalid");
+});
+
 test("unknown errors keep their redacted message as the cause and never leak secrets", () => {
   const secret = "sk-live-canary-9f8e7d6c";
   const error = new Error(`Something odd happened with key ${secret}`);

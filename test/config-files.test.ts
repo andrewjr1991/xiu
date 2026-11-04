@@ -71,7 +71,7 @@ test("the trust store, permission store and MCP configs are inspected without th
 
 test("probeConfigFiles reads the workspace MCP config only for a trusted workspace and says why otherwise", async (t) => {
   const f = await fixture(t);
-  const options = { trustStore: f.trustStore, permissionStore: f.permissionStore, mcpUserConfig: f.mcpUserConfig };
+  const options = { trustStore: f.trustStore, permissionStore: f.permissionStore, mcpUserConfig: f.mcpUserConfig, skillStateRoot: path.dirname(f.permissionStore) };
   await fs.writeFile(f.mcpProjectConfig, JSON.stringify({ mcpServers: { local: { command: "node", args: ["server.js"] } } }));
 
   const untrusted = await probeConfigFiles(f.cwd, options);
@@ -80,6 +80,7 @@ test("probeConfigFiles reads the workspace MCP config only for a trusted workspa
     { id: "extension-permissions", state: "absent" },
     { id: "mcp-user", state: "absent" },
     { id: "mcp-project", state: "skipped", cause: "untrusted" },
+    { id: "skill-state", state: "absent" },
   ], "an untrusted workspace's project file is not read at all");
 
   await trustWorkspace(f.cwd, f.trustStore);

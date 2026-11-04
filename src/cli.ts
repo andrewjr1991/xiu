@@ -4,7 +4,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import chalk from "chalk";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
+import { rebuildSessionSummaries } from "./session.js";
 import { Agent } from "./agent.js";
 import { createProviderPolicy } from "./runtime/provider-policy.js";
 import { BackgroundManager } from "./background.js";
@@ -103,6 +104,12 @@ function printUpdateMessage(message: UpdateMessage): void {
 // A consumer that closes the pipe early (`xiu report | head -1`) must not turn into a Node stack trace: see broken-pipe.ts.
 installBrokenPipeHandling();
 
+function sessionPageInteger(value: string, minimum: number): number {
+  const number = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number < minimum) throw new InvalidArgumentError(`Expected an integer >= ${minimum}.`);
+  return number;
+}
+
 const program = new Command()
   .name("xiu")
   .version(packageJson.version)
@@ -122,6 +129,9 @@ const program = new Command()
   .option("--unified-model <model>", "use one model for every declared text and media capability")
   .option("-r, --resume [session]", "choose a workspace session to resume, or resume a specific session id")
   .option("--list-sessions", "list resumable sessions in this workspace")
+  .option("--refresh-session-index", "rebuild optional display summaries from trusted workspace session logs")
+  .option("--session-limit <count>", "page size for --list-sessions (default when paging: 50)", (value) => sessionPageInteger(value, 1))
+  .option("--session-offset <count>", "skip this many sessions with --list-sessions", (value) => sessionPageInteger(value, 0))
   .option("--context-window <tokens>", "override the model context window when provider metadata is unavailable")
   .option("--context-limit <tokens>", "override the automatic compaction threshold (maximum 90% of the window)")
   .option("--max-turns <number>", "optional user-selected agent turn limit (unlimited by default)")
@@ -220,9 +230,11 @@ let startupLanguage: UiLanguage = "en-US";
 
 async function main(): Promise<void> {
   const options = program.opts();
+  if (!options.listSessions && (options.sessionLimit !== undefined || options.sessionOffset !== undefined)) throw new UsageError("--session-limit and --session-offset require --list-sessions.");
+  if (options.refreshSessionIndex && (program.args.length || options.listSessions || options.resume || options.doctor || options.updateDoctor || options.checkUpdate || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover)) throw new UsageError("--refresh-session-index must be used without a task or another script command.");
   trustGrantedByFlag = Boolean(options.trustWorkspace);
   if (options.json) {
-    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover" || program.args[0] === "audit";
+    const exitEarly = options.doctor || options.updateDoctor || options.checkUpdate || options.listSessions || options.refreshSessionIndex || options.providerConfigDiagnostics || options.providerConfigPreview || options.providerConfigRecover || program.args[0] === "doctor" || program.args[0] === "report" || program.args[0] === "recover" || program.args[0] === "audit";
     if (!program.args.length || exitEarly) throw new UsageError("--json requires exactly one one-shot task and cannot be combined with doctor, report, audit, update, session-list or recovery commands.");
     // stdout now carries only JSON Lines; every human-readable message below lands on stderr.
     const redirected = redirectHumanOutputToStderr();
@@ -418,7 +430,7 @@ async function main(): Promise<void> {
     ].join("\n");
   };
   try {
-    if (options.listSessions || (options.resume !== undefined && options.resume !== false && typeof options.resume === "string")) {
+    if (options.listSessions || options.refreshSessionIndex || (options.resume !== undefined && options.resume !== false && typeof options.resume === "string")) {
       // A session log under the workspace's .xiu/sessions is workspace content, read only once the workspace is trusted,
       // like its task records (xiu report, recover, audit). `--resume` without an id chooses one after the trust question below.
       if (!(await workspaceTrusted(config.cwd))) {
@@ -428,7 +440,13 @@ async function main(): Promise<void> {
       }
     }
     if (options.listSessions) {
-      await printSessionList(config.cwd, language);
+      await printSessionList(config.cwd, language, undefined, { limit: options.sessionLimit, offset: options.sessionOffset });
+      return;
+    }
+    if (options.refreshSessionIndex) {
+      const result = await rebuildSessionSummaries(config.cwd);
+      console.log(localize(language, `会话摘要：已索引 ${result.indexed}，已跳过 ${result.skipped}，失败 ${result.failed}。原始日志未改动。`, `Session summaries: indexed ${result.indexed}, skipped ${result.skipped}, failed ${result.failed}. Original logs unchanged.`));
+      if (result.failed) process.exitCode = 1;
       return;
     }
     const resumeRequested = options.resume !== undefined && options.resume !== false;

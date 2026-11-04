@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 import type { DesktopAttachment, DesktopMediaPreview, DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent, RuntimeTaskState } from "../../shared/protocol.js";
 import { ComputerAcceptance } from "./ComputerAcceptance.js";
 import { SubagentActivity } from "./TaskDataPanel.js";
@@ -7,6 +7,7 @@ import { usePreferences } from "./preferences.js";
 import { activityRows, currentRuntimeActivity, groupedTimelineItems, modelProgressSummary } from "./task-presentation.js";
 import { safeSourceUrl, webEvidenceForDisplay } from "./text-presentation.js";
 import { conversationRounds, type GeneratedMediaItem, roundPresentation, turnElapsed } from "./turn-presentation.js";
+import { verificationSummary } from "./verification-presentation.js";
 
 export function Logo() {
   return <div className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 7.5c4.5 0 5.4 7 8 8.5 2.8 1.6 3.6 8.5 8 8.5" /><path d="M24 7.5c-4.5 0-5.4 7-8 8.5-2.8 1.6-3.6 8.5-8 8.5" /></svg></div>;
@@ -263,6 +264,7 @@ export function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
 function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt, onAcceptance }: TimelineProps) {
   const preferences = usePreferences();
   const round = roundPresentation(events);
+  const verification = verificationSummary(round.finished?.payload.verification);
   const computerResult = events.some(event => (event.type === "tool.started" || event.type === "tool.finished") && event.payload.name === "computer_input");
   const active = !round.finished && ["running", "waiting_approval", "stopping"].includes(state);
   const [expanded, setExpanded] = useState(active && preferences.processExpanded);
@@ -277,7 +279,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
     {round.users.length > 0 && <DetailedTaskTimeline events={round.users} state="idle" modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
     {(round.process.length > 0 || active) && <details className={`turn-process ${active ? "active" : ""}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)} data-timeline-jump={`process-${events[0]?.eventId}`} data-timeline-label={`运行记录 · ${round.operations} 次操作`}>
       <summary><span className={active ? "pulse" : "turn-chevron"}>{active ? "" : "›"}</span><span>{active ? `${label ?? "正在处理"} · ` : ""}{turnElapsed(start, active ? new Date(now).toISOString() : round.finished?.timestamp ?? events.at(-1)?.timestamp)}</span><small>{round.operations} 次操作{round.agents > 0 ? ` · ${round.agents} 个子任务` : ""}</small></summary>
-      {round.process.length > 0 && <DetailedTaskTimeline events={round.process} state="idle" modelLabel={modelLabel} expandProcesses />}
+      {expanded && round.process.length > 0 && <DetailedTaskTimeline events={round.process} state="idle" modelLabel={modelLabel} expandProcesses />}
     </details>}
     {round.alerts.length > 0 && <details className="turn-alerts" open={alertsExpanded} onToggle={(event) => setAlertsExpanded(event.currentTarget.open)}>
       <summary><span>运行提醒 · {round.alerts.length} 项</span><small>展开查看，不影响继续跟踪进展</small></summary>
@@ -290,17 +292,18 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
       })}
     </details>}
     {round.finished?.type === "task.finished" && !["completed", "waiting_user"].includes(round.finished.payload.state) && !(computerResult && round.finished.payload.state === "unverified") && <div className="review-warning" role="status">程序验收：{stateLabels[round.finished.payload.state]}。{round.finished.payload.error?.split("\n")[0] ?? "请查看运行提醒和证据。"}{round.answer ? " 以下是模型回复，不代表程序验收通过。" : ""}{round.finished.payload.error?.includes("\n") && <details><summary>查看未通过校验</summary><pre className="turn-alert-detail">{round.finished.payload.error.split("\n").slice(1).join("\n")}</pre></details>}</div>}
+    {verification && <details className="turn-alert" aria-label="检查账本摘要"><summary>{verification.total ? `检查账本：通过 ${verification.passed}/${verification.total} · 失败 ${verification.failed} · 需重跑 ${verification.stale}` : "检查账本：本轮未运行程序检查"}</summary><p>这是任务结束时的记录；文件之后变化需重新检查，不代表所有需求都已覆盖。</p></details>}
     {round.media.length > 0 && <div className="generated-media-list">{round.media.map((item) => <GeneratedMediaCard key={`${item.eventId}:${item.path}`} item={item} />)}</div>}
     {computerResult && round.finished?.type === "task.finished" && ["completed", "failed", "unverified"].includes(round.finished.payload.state) && <ComputerAcceptance taskId={round.finished.taskId} programState={round.finished.payload.state} disabled={activeStates.has(state)} onChange={onAcceptance} />}
     {round.answer && <DetailedTaskTimeline events={[round.answer]} state="idle" modelLabel={modelLabel} />}
   </section>;
 }
 
-export function TaskTimeline(props: TimelineProps) {
+export const TaskTimeline = memo(function TaskTimeline(props: TimelineProps) {
   const rounds = conversationRounds(props.events);
   if (!rounds.length) return <DetailedTaskTimeline {...props} />;
   return <div className="timeline conversation-timeline">{rounds.map((round, index) => <ConversationRound onAcceptance={props.onAcceptance} taskStartedAt={index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
-}
+});
 
 function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel, submittedAttachments = {}, expandProcesses = false }: TimelineProps) {
   const items = groupedTimelineItems(events, state);
@@ -326,10 +329,10 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
 
 export type ChangeEntry = DesktopReviewSnapshot["changes"]["changes"][number];
 
-export function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
+export const HistoryTimeline = memo(function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
   submittedAttachments = { ...submittedAttachments, ...history.attachments };
   return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => { const text = visibleMessageText(entry.text); return <article className={`event-card history-${entry.kind}`} key={entry.id} data-timeline-jump={entry.id} data-timeline-label={entry.title}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={text} /></div>{text && (entry.kind === "user" || entry.kind === "assistant") && <div className="message-actions"><CopyMessageButton text={text} label={entry.kind === "user" ? "你的消息" : "Xiu 回复"} /></div>}</article>; })}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
-}
+});
 
 export function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: DesktopReviewSnapshot["changes"]; legacy?: boolean; onDiff: (change: ChangeEntry) => void }) {
   if (!report) return <section className="change-summary-card unavailable"><div><span className="change-summary-icon">⌁</span><span><strong>没有历史变更快照</strong><small>该任务创建于快照功能启用前；不会用当前工作区变化伪造本任务 Diff。</small></span></div></section>;

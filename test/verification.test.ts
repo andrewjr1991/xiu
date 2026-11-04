@@ -5,6 +5,17 @@ import path from "node:path";
 import test from "node:test";
 import { captureVerificationStamp, isVerificationCommand, VerificationLedger, verificationCheckKey, verifyOutputSupersedes } from "../src/verification.js";
 
+test("verification counters distinguish no checks, failures and stale passes without exposing inputs", () => {
+  const ledger = new VerificationLedger();
+  assert.deepEqual(ledger.summary(), { total: 0, passed: 0, failed: 0, stale: 0, revision: 0, state: "not_run" });
+  ledger.recordTool("verify_output", { path: "private-path-canary", required_substrings: ["private-content-canary"] }, true);
+  ledger.recordTool("run_process", { program: "private-command-canary" }, false);
+  assert.deepEqual(ledger.summary(), { total: 2, passed: 1, failed: 1, stale: 0, revision: 0, state: "failed" });
+  ledger.invalidate();
+  assert.deepEqual(ledger.summary(), { total: 2, passed: 0, failed: 1, stale: 1, revision: 1, state: "failed" });
+  assert.doesNotMatch(JSON.stringify(ledger.summary()), /canary/);
+});
+
 test("completion diagnostics distinguish failed and stale checks without exposing inputs", () => {
   const ledger = new VerificationLedger();
   ledger.recordTool("verify_output", { path: "private-canary", required_substrings: ["secret-canary"], forbidden_substrings: ["token-canary"] }, true);

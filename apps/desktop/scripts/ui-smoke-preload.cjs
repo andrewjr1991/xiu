@@ -35,6 +35,7 @@ const terminalListeners = new Set();
 const browserListeners = new Set();
 const calls = [];
 let copiedMessage;
+let stressHistory;
 const manualAcceptance = new Map();
 let onboardingSnapshot;
 let providerRecoveryConfirm = false;
@@ -93,10 +94,11 @@ const bridge = {
   browser: async (request) => { calls.push(`browser:${request.action}`); if (request.action === "layout") calls.push(`browser:visible:${request.visible}`); return { url: request.action === "navigate" ? request.url : "", title: "新网页", loading: false, canGoBack: false, canGoForward: false }; },
   onBrowserState: (listener) => { browserListeners.add(listener); return () => browserListeners.delete(listener); },
   mcpSnapshot: async () => mcpView(),
-  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: managedWeb ? "https://search.jingran.vip" : "https://search.example.test", managed: managedWeb }, skills: skillList.map((skill) => ({ ...skill })) }),
+  managementSnapshot: async () => ({ revision: "fixture-revision", providers: [{ id: "openai", name: "OpenAI", fallback: [] }, { id: "agnes", name: "Agnes", fallback: [] }], routing: { enabled: false, phases: {} }, web: { enabled: false, provider: "searxng", endpoint: managedWeb ? "https://search.jingran.vip" : "https://search.example.test", managed: managedWeb }, skills: skillList.map((skill) => ({ enabled: true, fingerprint: "c".repeat(64), ...skill })) }),
   changeManagement: async (request) => {
     calls.push(`management:${request.action}`);
     if (request.action === "skill-install" && request.replace === true) calls.push("management:skill-install:replace");
+    if (request.action === "skill-state") { const skill = skillList.find(item => item.name === request.name); if (!skill || request.confirmed !== true || request.fingerprint !== "c".repeat(64) || typeof request.enabled !== "boolean") throw new Error("bad skill state confirmation"); skill.enabled = request.enabled; calls.push(`management:skill-state:${request.name}:${request.enabled}`); }
     if (request.action === "skill-uninstall") { if (request.confirmed !== true) throw new Error("bad skill confirmation"); const index = skillList.findIndex((skill) => skill.name === request.name); if (index < 0) throw new Error("unknown fixture skill"); skillList.splice(index, 1); calls.push(`management:skill-uninstall:${request.name}`); }
     if (request.action === "web") {
       if (request.mode === "managed" && (request.endpoint !== "https://search.jingran.vip" || request.provider !== "searxng" || request.apiKeyEnv)) throw new Error("Invalid managed search request");
@@ -164,7 +166,7 @@ const bridge = {
     calls.push("task:create");
     return runtime();
   },
-  openTaskHistory: async () => ({ taskId: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now(), fidelity: "reconstructed", entries: [{ id: "old", kind: "assistant", title: "Xiu", text: "old-snake-result-canary" }], events: oldHistoryEvents, attachments: { "old-start": [{ reference: "@.xiu/attachments/history-image.png", path: ".xiu/attachments/history-image.png", name: "restored-history-image.png", kind: "image", bytes: 42, previewDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=" }, { reference: "@.xiu/attachments/missing.png", path: ".xiu/attachments/missing.png", name: "missing.png", kind: "image", bytes: 0, unavailable: true }] } }),
+  openTaskHistory: async () => stressHistory ?? ({ taskId: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now(), fidelity: "reconstructed", entries: [{ id: "old", kind: "assistant", title: "Xiu", text: "old-snake-result-canary" }], events: oldHistoryEvents, attachments: { "old-start": [{ reference: "@.xiu/attachments/history-image.png", path: ".xiu/attachments/history-image.png", name: "restored-history-image.png", kind: "image", bytes: 42, previewDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=" }, { reference: "@.xiu/attachments/missing.png", path: ".xiu/attachments/missing.png", name: "missing.png", kind: "image", bytes: 0, unavailable: true }] } }),
   computerAcceptance: async request => { calls.push('computer:acceptance:'+request.taskId+':'+(request.decision??'read')); if(request.decision) manualAcceptance.set(request.taskId,{decision:request.decision,at:now()}); return {eligible:true,...manualAcceptance.get(request.taskId)}; },
   continueTask: async ({ text }) => {
     calls.push("task:continue");
@@ -316,7 +318,24 @@ contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...cal
     task = { ...task, state: "failed", error, updatedAt: now(), plan: { goal: "验收", steps: [{ id: "done", title: "实现", status: "completed" }] } };
     emit("plan.updated", { plan: task.plan });
     emit("assistant.message", { text: "模型声称全部通过-canary", hasToolCalls: false });
-    emit("task.finished", { state: "failed", error, result: "模型声称全部通过-canary" });
+    emit("task.finished", { state: "failed", error, result: "模型声称全部通过-canary", verification: { total: 2, passed: 0, failed: 1, stale: 1, revision: 1, state: "failed" } });
+  },
+  historyStressFixture: (count) => {
+    if (!Number.isInteger(count) || count < 1 || count > 500) throw new Error("Invalid stress fixture size");
+    const events = [];
+    for (let round = 1; round <= count; round++) {
+      const taskId = `stress-round-${round}`;
+      const add = (type, payload) => events.push({ schemaVersion: 1, eventId: `stress-${events.length + 1}`, taskId, sequence: events.length + 1, timestamp: "2026-11-04T12:00:00.000Z", type, payload });
+      const result = `历史回合 ${round}\n\n| 文件 | 结果 |\n| --- | --- |\n| example.ts | 已检查 |\n\n保留历史内容、运行记录与最终回复。`;
+      add("task.started", { taskPreview: `只读检查第 ${round} 个合成模块` });
+      add("tool.started", { name: "read_file", operationId: taskId, description: "读取合成夹具" });
+      add("tool.finished", { name: "read_file", operationId: taskId, summary: "合成文件内容\n".repeat(10), result: { status: "success", summary: "已读取" }, verification: false });
+      add("assistant.message", { text: result, hasToolCalls: false });
+      add("task.finished", { state: "completed", result });
+    }
+    stressHistory = { taskId: "stress-history", title: `合成历史 ${count} 回合`, status: "completed", updatedAt: now(), fidelity: "exact", entries: [], events };
+    workspace.tasks = [{ id: stressHistory.taskId, title: stressHistory.title, status: "completed", updatedAt: now() }];
+    for (const listener of workspaceListeners) listener(workspace);
   },
   historyFixture: () => {
     recoveryActive = false;

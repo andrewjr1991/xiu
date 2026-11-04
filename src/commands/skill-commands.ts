@@ -18,7 +18,8 @@ export interface SkillCommandContext {
 export async function handleSkillCommand(task: string, ctx: SkillCommandContext): Promise<boolean> {
   const { agent, language, skillRegistry, status } = ctx;
   if (task === "/skills") {
-    const skills = await skillRegistry.refresh(true);
+    await skillRegistry.refresh(true);
+    const skills = skillRegistry.all();
     agent.reloadInstructions();
     const issuesNote = skillIssuesNote(skillRegistry.issues(), language);
     if (issuesNote) console.log(chalk.yellow(issuesNote));
@@ -28,7 +29,7 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
     }
     const selected = await selectTerminalOption(localize(language, "已安装技能", "Installed skills"), skills.map((skill) => ({
       label: skill.name,
-      description: `${skill.scope}  ${skill.permissions.join(", ")}  ${skill.description.slice(0, 80)}`,
+      description: `${skill.enabled === false ? localize(language, "已禁用", "disabled") : localize(language, "已启用", "enabled")}  ${skill.scope}  ${skill.permissions.join(", ")}  ${skill.description.slice(0, 80)}`,
       value: skill.name,
     })), language);
     if (selected) {
@@ -40,13 +41,36 @@ export async function handleSkillCommand(task: string, ctx: SkillCommandContext)
     }
     return true;
   }
+  if (/^\/skills (enable|disable)(?:\s|$)/.test(task)) {
+    const match = /^\/skills (enable|disable)(?:\s+(.*))?$/.exec(task.trim())!;
+    const enabled = match[1] === "enable";
+    const name = match[2]?.trim();
+    if (!name) { console.log(localize(language, "用法：/skills enable|disable <技能名>", "Usage: /skills enable|disable <skill-name>")); return true; }
+    try {
+      await skillRegistry.refresh(true);
+      const skill = skillRegistry.all().find((item) => item.name.trim().toLowerCase() === name.toLowerCase());
+      if (!skill?.fingerprint) throw new Error("Skill not found; refresh /skills.");
+      const accepted = await selectTerminalOption(localize(language,
+        `${enabled ? "启用" : "禁用"}当前工作区中的技能 ${skill.name}？这不会更改权限授权，也不会清除已加载的历史文本。`,
+        `${enabled ? "Enable" : "Disable"} skill ${skill.name} in this workspace? This does not change permission grants or erase previously loaded history.`), [
+        { label: localize(language, "确认", "Confirm"), value: true },
+        { label: localize(language, "取消", "Cancel"), value: false },
+      ], language);
+      if (!accepted) return true;
+      await skillRegistry.setEnabled(skill.name, enabled, skill.fingerprint);
+      agent.reloadInstructions();
+      console.log(localize(language, `技能 ${skill.name} 已${enabled ? "启用" : "禁用"}（仅当前工作区）。`, `Skill ${skill.name} ${enabled ? "enabled" : "disabled"} in this workspace.`));
+    } catch (error) { console.error(describeFailure(localize(language, "技能状态修改失败", "Skill state change failed"), error, language)); }
+    return true;
+  }
   if (task === "/skills uninstall" || task.startsWith("/skills uninstall ")) {
     const name = task.slice("/skills uninstall".length).trim();
     if (!name) {
       console.log(chalk.yellow(localize(language, "用法：/skills uninstall <全局技能名>\n", "Usage: /skills uninstall <global-skill-name>\n")));
       return true;
     }
-    const skills = await skillRegistry.refresh(true);
+    await skillRegistry.refresh(true);
+    const skills = skillRegistry.all();
     const skill = skills.find((item) => item.name === name && item.scope === "global");
     if (!skill) {
       console.log(chalk.yellow(localize(language, `没有名为 ${name} 的已安装全局技能；项目、兼容目录和插件提供的技能不能在此卸载。\n`, `No installed global skill named ${name}; project, compatible-directory and plugin skills cannot be uninstalled here.\n`)));

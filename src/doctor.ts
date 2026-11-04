@@ -11,6 +11,7 @@ import { redactSecrets } from "./secret-redaction.js";
 import { PermissionGrantStore } from "./extension-permissions.js";
 import { inspectMcpConfig } from "./mcp.js";
 import { listSessionsWithIssues } from "./session.js";
+import { SkillStateStore } from "./skill-state.js";
 import type { XiuSettings } from "./settings.js";
 import { TaskRunJournal } from "./task-run.js";
 import { inspectTrustStore, isWorkspaceTrusted } from "./trust.js";
@@ -74,7 +75,7 @@ export interface PowerShellProbe {
 /** What the workspace's own records look like: counts, what could not be read, and whether an interrupted task is pending. */
 /** One of Xiu's own configuration files as the doctor saw it. */
 export interface ConfigFileProbe {
-  id: "settings" | "trust-store" | "extension-permissions" | "mcp-user" | "mcp-project";
+  id: "settings" | "trust-store" | "extension-permissions" | "mcp-user" | "mcp-project" | "skill-state";
   /** `read`: parsed; `absent`: no file; `unreadable`: exists but cannot be used (`cause` says why); `skipped`: not read, `cause` says why (an untrusted workspace). */
   state: "read" | "absent" | "unreadable" | "skipped";
   cause?: string;
@@ -91,6 +92,7 @@ export interface WorkspaceRecordsProbe {
   unreadableRuns: Array<{ runId: string; reason: string }>;
   sessions: number;
   unreadableSessions: Array<{ id: string; reason: string }>;
+  damagedSessionRecords?: number;
   interrupted?: { runId: string; status: string; startedAt: string };
   /** The interrupted-run check could not complete; a reason without a path. One-shot runs are refused until it can. */
   interruptedCheckFailure?: string;
@@ -130,13 +132,14 @@ export interface DoctorOptions {
  * MCP config, which is read only when the workspace is trusted (an untrusted workspace's project
  * files are not read, see SECURITY §1). Read-only.
  */
-export async function probeConfigFiles(cwd: string, options: { trusted?: () => Promise<boolean>; trustStore?: string; permissionStore?: string; mcpUserConfig?: string } = {}): Promise<ConfigFileProbe[]> {
+export async function probeConfigFiles(cwd: string, options: { trusted?: () => Promise<boolean>; trustStore?: string; permissionStore?: string; mcpUserConfig?: string; skillStateRoot?: string } = {}): Promise<ConfigFileProbe[]> {
   const strip = (value: { state: "read" | "absent" | "unreadable"; cause?: string }, count: number | undefined): Omit<ConfigFileProbe, "id"> =>
     ({ state: value.state, ...(value.cause ? { cause: value.cause } : {}), ...(count !== undefined ? { count } : {}) });
-  const [trust, permissions, mcpUser] = await Promise.all([
+  const [trust, permissions, mcpUser, skillState] = await Promise.all([
     inspectTrustStore(options.trustStore),
     new PermissionGrantStore(options.permissionStore).inspect(),
     inspectMcpConfig(options.mcpUserConfig ?? path.join(os.homedir(), ".xiu", "mcp.json")),
+    new SkillStateStore(options.skillStateRoot ?? path.join(os.homedir(), ".xiu"), cwd).inspect(),
   ]);
   let trusted: boolean | undefined;
   try { trusted = await (options.trusted ?? (() => isWorkspaceTrusted(cwd, options.trustStore)))(); }
@@ -151,10 +154,15 @@ export async function probeConfigFiles(cwd: string, options: { trusted?: () => P
     { id: "extension-permissions", ...strip(permissions, permissions.grants) },
     { id: "mcp-user", ...strip(mcpUser, mcpUser.servers) },
     { id: "mcp-project", ...mcpProject },
+    { id: "skill-state", ...skillState },
   ];
 }
 
 const CONFIG_FILE_TEXT: Record<ConfigFileProbe["id"], { display: string; label: [string, string]; count: [string, string]; impact: [string, string] }> = {
+  "skill-state": {
+    display: "~/.xiu/skill-state/<workspace hash>/", label: ["技能启停偏好", "Skill state preferences"], count: ["个禁用技能", "disabled skill(s)"],
+    impact: ["修好前技能加载失败关闭；先备份该工作区偏好目录，再修复损坏条目或私有权限。移走条目会恢复默认启用，不会清除已加载的历史文本。", "Skill loading fails closed until repaired. Back up this workspace's preferences and repair invalid entries or private permissions. Removing entries restores default-enabled behavior, not previously loaded history."],
+  },
   settings: { display: "~/.xiu/settings.json", label: ["设置文件", "Settings file"], count: ["", ""], impact: ["", ""] },
   "trust-store": {
     display: "~/.xiu/trusted-workspaces.json", label: ["信任名单", "Trusted workspaces"], count: ["个已信任工作区", "trusted workspace(s)"],
@@ -221,11 +229,13 @@ export async function probeWorkspaceRecords(cwd: string, options: { trusted?: ()
   if (!trusted) return probe;
   const journal = new TaskRunJournal(cwd, options.taskRunRoot);
   try {
-    const [scan, sessions] = await Promise.all([journal.scan(500), listSessionsWithIssues(cwd)]);
+    const [scan, sessions] = await Promise.all([journal.scan(500), listSessionsWithIssues(cwd, { useSummary: false })]);
     probe.runs = scan.records.length;
     probe.unreadableRuns = scan.unreadable;
     probe.sessions = sessions.sessions.length;
     probe.unreadableSessions = sessions.unreadable;
+    const damaged = sessions.sessions.reduce((sum, session) => sum + (session.damagedLines ?? 0), 0);
+    if (damaged) probe.damagedSessionRecords = damaged;
   } catch (error) {
     probe.listingFailure = reasonWithoutPath(error);
   }
@@ -272,7 +282,10 @@ function workspaceSection(probe: WorkspaceRecordsProbe): DoctorSection {
       [`${probe.sessions} 个可读，另有 ${probe.unreadableSessions.length} 个无法读取（${countReasons(probe.unreadableSessions, "zh")}）`, `${probe.sessions} readable, ${probe.unreadableSessions.length} more could not be read (${countReasons(probe.unreadableSessions, "en")})`],
       ["无法读取的会话不会出现在 /resume 与 /history sessions 里，相关运行的执行报告会标为“会话日志无法读取”；它们是工作区 .xiu/sessions/ 下的 <会话 ID>.jsonl。", "Unreadable sessions do not appear in /resume or /history sessions and their runs' execution reports say the session log is unreadable; they are <session id>.jsonl files under the workspace's .xiu/sessions/."])
     : item("sessions", "pass", ["会话日志", "Session logs"], [`${probe.sessions} 个，全部可读`, `${probe.sessions}, all readable`]);
-  return section([runs, sessions, ...interruptedItems(probe)]);
+  const damaged = probe.damagedSessionRecords ? [item("session-records", "warning", ["会话记录完整性", "Session record integrity"],
+    [`${probe.damagedSessionRecords} 条损坏记录已跳过，历史可能不完整`, `${probe.damagedSessionRecords} damaged record(s) skipped; history may be incomplete`],
+    ["先备份会话日志，再检查磁盘和写入失败原因；跳过记录不代表任务已完成或可以重放。", "Back up session logs and check disk or write failures; skipped records do not prove task completion or authorize replay."])] : [];
+  return section([runs, sessions, ...damaged, ...interruptedItems(probe)]);
 }
 
 function interruptedItems(probe: WorkspaceRecordsProbe): DoctorItem[] {

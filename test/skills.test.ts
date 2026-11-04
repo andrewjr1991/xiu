@@ -8,6 +8,52 @@ import { PermissionGrantStore } from "../src/extension-permissions.js";
 
 const skillMarkdown = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nFollow these instructions carefully.\n`;
 
+test("oversized project skills are diagnosed before loading large sparse files", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-large-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "home"));
+  const directory = path.join(cwd, ".xiu", "skills", "huge");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "SKILL.md");
+  const handle = await fs.open(file, "w");
+  try { await handle.write(skillMarkdown("huge", "oversized")); await handle.truncate(64 * 1024 * 1024); }
+  finally { await handle.close(); }
+  const registry = new SkillRegistry(cwd, path.join(cwd, "global"));
+  await registry.refresh();
+  assert.deepEqual(registry.list(), []);
+  assert.deepEqual(registry.issues(), [{ name: "huge", scope: "project", reason: "oversized" }]);
+});
+
+test("skill loading retains the character limit for multi-byte Chinese content", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-unicode-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "home"));
+  const directory = path.join(cwd, ".xiu", "skills", "unicode");
+  await fs.mkdir(directory, { recursive: true });
+  const content = `${skillMarkdown("unicode", "Chinese content")}${"汉".repeat(100000)}`;
+  await fs.writeFile(path.join(directory, "SKILL.md"), content);
+  const registry = new SkillRegistry(cwd, path.join(cwd, "global"));
+  await registry.refresh();
+  assert.deepEqual(registry.list().map((skill) => skill.name), ["unicode"]);
+  assert.ok((await registry.read("unicode")).endsWith(content));
+});
+
+test("a skill growing beyond the load limit after discovery is refused on read", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skill-grow-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  t.mock.method(os, "homedir", () => path.join(cwd, "home"));
+  const directory = path.join(cwd, ".xiu", "skills", "growing");
+  await fs.mkdir(directory, { recursive: true });
+  const file = path.join(directory, "SKILL.md");
+  await fs.writeFile(file, skillMarkdown("growing", "Initially small"));
+  const registry = new SkillRegistry(cwd, path.join(cwd, "global"));
+  await registry.refresh();
+  await fs.appendFile(file, "x".repeat(120001));
+  await assert.rejects(registry.read("growing"), /too large/);
+  await registry.refresh();
+  assert.deepEqual(registry.issues(), [{ name: "growing", scope: "project", reason: "oversized" }]);
+});
+
 test("skill registry discovers project, compatible, and global skills with project precedence", async (t) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-skills-"));
   t.after(() => fs.rm(cwd, { recursive: true, force: true }));
@@ -123,11 +169,11 @@ test("skills the registry finds but does not list are named with a reason, and /
   await fs.writeFile(oversized, `${skillMarkdown("big", "Too large")}${"x".repeat(120_001)}`);
   // A permission error is simulated for one file so the test does not depend on chmod (which Windows ignores).
   // The glob hands the registry forward-slash paths on Windows, so compare resolved paths, not strings.
-  const realReadFile = fs.readFile.bind(fs);
-  t.mock.method(fs, "readFile", ((file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+  const realOpen = fs.open.bind(fs);
+  t.mock.method(fs, "open", ((file: Parameters<typeof fs.open>[0], ...rest: unknown[]) => {
     if (typeof file === "string" && path.resolve(file) === path.resolve(locked)) return Promise.reject(Object.assign(new Error(`EACCES: permission denied, open '${locked}'`), { code: "EACCES" }));
-    return (realReadFile as (...args: unknown[]) => unknown)(file, ...rest);
-  }) as typeof fs.readFile);
+    return (realOpen as (...args: unknown[]) => unknown)(file, ...rest);
+  }) as typeof fs.open);
 
   const registry = new SkillRegistry(cwd, globalRoot);
   registry.setPluginFiles([{ file: oversized, name: "big" }, { file: path.join(cwd, "missing-SKILL.md"), name: "gone" }]);

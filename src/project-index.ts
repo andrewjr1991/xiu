@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import fg from "./glob.js";
 import {
@@ -17,6 +18,7 @@ import {
   type IndexedSymbolKind,
 } from "./code-intelligence.js";
 import type { AgentTool } from "./types.js";
+import { resolveWorkspacePath } from "./workspace-path.js";
 
 const INDEX_VERSION = 3;
 const MAX_FILES = 8_000;
@@ -33,6 +35,26 @@ const TEXT_EXTENSIONS = new Set([
   ".py", ".go", ".rs", ".java", ".kt", ".cs", ".php", ".rb", ".swift", ".sql", ".yaml", ".yml", ".toml", ".xml",
   ".sh", ".ps1", ".txt", ".env", ".graphql", ".proto",
 ]);
+
+/** Bound reads as well as returned excerpts, including files that grow after discovery. */
+async function readIndexText(cwd: string, relative: string): Promise<{ content: string; truncated: boolean }> {
+  const file = resolveWorkspacePath(cwd, relative);
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error("Index content must be a regular file");
+    const bytes = Buffer.alloc(Math.min(before.size, MAX_INDEXED_FILE_BYTES));
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, length);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    const after = await handle.stat();
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error("Index content changed while reading");
+    return { content: bytes.subarray(0, length).toString("utf8"), truncated: before.size > bytes.length };
+  } finally { await handle.close(); }
+}
 
 interface IndexedFile {
   path: string;
@@ -324,8 +346,16 @@ export class ProjectIndex {
     } catch { return undefined; }
   }
 
-  private async discover(): Promise<{ discovered: number; paths: string[]; metadata: FileMetadata[] }> {
-    const found = await fg("**/*", { cwd: this.cwd, onlyFiles: true, dot: true, unique: true, followSymbolicLinks: false, ignore: IGNORES });
+  private async discover(prefix = ""): Promise<{ discovered: number; paths: string[]; metadata: FileMetadata[] }> {
+    let pattern = "**/*";
+    if (prefix) {
+      const target = resolveWorkspacePath(this.cwd, prefix);
+      const stat = await fs.lstat(target);
+      if (stat.isSymbolicLink()) throw new Error("Search scope cannot be a symbolic link");
+      const literal = prefix.replace(/[\\*?{}()[\]!]/g, "\\$&");
+      pattern = stat.isDirectory() ? `${literal}/**/*` : literal;
+    }
+    const found = await fg(pattern, { cwd: this.cwd, onlyFiles: true, dot: true, unique: true, followSymbolicLinks: false, ignore: IGNORES });
     const paths = found.map((relative) => relative.replace(/\\/g, "/")).sort().slice(0, MAX_FILES);
     const metadata: FileMetadata[] = [];
     for (let offset = 0; offset < paths.length; offset += 128) {
@@ -341,16 +371,16 @@ export class ProjectIndex {
     return { discovered: found.length, paths: metadata.map((item) => item.path), metadata };
   }
 
-  private async indexFile(metadata: FileMetadata): Promise<IndexedFile> {
+  private async indexFile(metadata: FileMetadata, analyze = true): Promise<IndexedFile> {
     let terms = tokenize(metadata.path);
     let intelligence = { language: sourceLanguage(metadata.path), analyzed: false, symbols: [] as IndexedSymbol[], imports: [] as IndexedImport[], references: [] as IndexedReference[] };
     const extension = path.extname(metadata.path).toLowerCase();
     if (metadata.size <= MAX_INDEXED_FILE_BYTES && (TEXT_EXTENSIONS.has(extension) || !extension)) {
       try {
-        const content = await fs.readFile(path.join(this.cwd, metadata.path), "utf8");
+        const { content, truncated } = await readIndexText(this.cwd, metadata.path);
         const contentTerms = tokenize(content);
         terms = [...new Set([...terms, ...contentTerms])].slice(0, MAX_TERMS_PER_FILE);
-        intelligence = await analyzeSource(metadata.path, content);
+        if (analyze && !truncated) intelligence = await analyzeSource(metadata.path, content);
       } catch { /* retain path-only terms when a file changes during refresh */ }
     }
     return { ...metadata, terms, ...intelligence };
@@ -517,6 +547,8 @@ export class ProjectIndex {
       .map(([name, moduleCount]) => ({ name, modules: moduleCount }));
     return jsonPage({
       tool: "repository_map",
+      index_truncated: this.data!.truncated,
+      indexed_files: this.data!.files.length,
       path: pathFilter || ".",
       module_count: files.length,
       analyzed_module_count: files.filter((file) => file.analyzed).length,
@@ -598,11 +630,26 @@ export class ProjectIndex {
     return jsonPage({ tool, symbol: selection.selected.name, defined_in: selection.selected.path, ambiguous: false, definitions: [selection.selected], match_count: rows.length }, rows, offset, limit, callsOnly ? "calls" : "references");
   }
 
-  async search(query: string, limit = 8): Promise<string> {
-    await this.initialize();
+  async search(query: string, limit = 8, scope?: string): Promise<string> {
+    limit = integerInput(limit, 8, 1, 20, "limit");
+    const prefix = workspaceFilter(scope, "path");
+    if (!prefix) await this.initialize();
+    let files = this.data?.files ?? [];
+    let truncated = this.data?.truncated ?? false;
+    if (prefix) {
+      // A scoped query has its own file budget, including files excluded by
+      // the global alphabetical cap. It never replaces the shared index.
+      const discovery = await this.discover(prefix);
+      truncated = discovery.discovered > MAX_FILES;
+      files = [];
+      for (let offset = 0; offset < discovery.metadata.length; offset += 64) {
+        files.push(...await Promise.all(discovery.metadata.slice(offset, offset + 64).map((metadata) => this.indexFile(metadata, false))));
+      }
+    }
+    const notice = truncated ? `Index coverage is incomplete (file limit ${MAX_FILES}). Use a narrower path with find_relevant_code; no match does not prove absence.\n\n` : "";
     const terms = tokenize(query, 64).filter((term) => term.length >= 2);
-    if (!terms.length) return "No relevant files found.";
-    const scored = this.data!.files.map((file) => {
+    if (!terms.length) return `${notice}No relevant files found.`;
+    const scored = files.map((file) => {
       const pathText = file.path.toLowerCase();
       const fileTerms = new Set(file.terms);
       let score = 0;
@@ -612,20 +659,22 @@ export class ProjectIndex {
       }
       return { file, score };
     }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path)).slice(0, Math.min(20, Math.max(1, limit)));
-    if (!scored.length) return "No relevant files found.";
+    if (!scored.length) return `${notice}No relevant files found.`;
     const results: string[] = [];
     for (const { file, score } of scored) {
       let excerpt = "";
+      let contentTruncated = false;
       try {
-        const content = await fs.readFile(path.join(this.cwd, file.path), "utf8");
+        const { content, truncated } = await readIndexText(this.cwd, file.path);
+        contentTruncated = truncated;
         const lines = content.split(/\r?\n/);
         const match = lines.findIndex((line) => terms.some((term) => line.toLowerCase().includes(term)));
         const start = Math.max(0, match < 0 ? 0 : match - 2);
         excerpt = lines.slice(start, start + 8).map((line, index) => `${start + index + 1}: ${line}`).join("\n").slice(0, 1600);
       } catch { /* metadata-only result */ }
-      results.push(`### ${file.path} (relevance ${score})${excerpt ? `\n${excerpt}` : ""}`);
+      results.push(`### ${file.path} (relevance ${score})${contentTruncated ? "\nContent scan limited to the first 512 KiB." : ""}${excerpt ? `\n${excerpt}` : ""}`);
     }
-    return results.join("\n\n");
+    return notice + results.join("\n\n");
   }
 }
 
@@ -633,17 +682,18 @@ export function createProjectIndexTools(index: ProjectIndex): AgentTool[] {
   return [
     {
       name: "find_relevant_code",
-      description: "Search Xiu's project index for files and code relevant to a concept, bug, symbol, or requested change. Prefer this before broad file scanning.",
+      description: "Search Xiu's project index for relevant files and code. Optional path scopes a fresh search to one workspace file or directory with its own file budget, including files omitted from a truncated global index. Text matches do not imply AST analysis for every language.",
       risk: "read",
       inputSchema: {
         type: "object",
-        properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 } },
+        properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 }, path: { type: "string", description: "Literal workspace-relative file or directory, not a glob." } },
         required: ["query"], additionalProperties: false,
       },
       describe: (input) => `find code relevant to ${String(input.query)}`,
       async execute(input) {
         if (typeof input.query !== "string" || !input.query.trim()) throw new Error("query must be a non-empty string");
-        return await index.search(input.query, typeof input.limit === "number" ? input.limit : 8);
+        const scope = workspaceFilter(input.path, "path");
+        return await index.search(input.query, typeof input.limit === "number" ? input.limit : 8, scope);
       },
     },
     {

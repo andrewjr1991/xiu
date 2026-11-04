@@ -17,6 +17,21 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("runtime snapshots and replay carry program verification counters without converting model claims into success", async () => {
+  const runtime = new XiuRuntime();
+  const verification = { total: 2, passed: 0, failed: 1, stale: 1, revision: 1, state: "failed" as const };
+  runtime.attachDriver({ run: async () => "All checks passed (model claim)", cancel: () => false, steer: () => false,
+    status: () => ({ outcome: "failed", verification, failureReason: "verification_failed" }) });
+  await runtime.createTask("verify changes");
+  const snapshot = runtime.snapshot();
+  assert.equal(snapshot.task!.state, "failed");
+  assert.deepEqual(snapshot.task!.verification, verification);
+  const connection = runtime.connect(0);
+  const replayed = connection.events.reduce(applyRuntimeEvent, { schemaVersion: XIU_RUNTIME_SCHEMA_VERSION, sequence: 0, generatedAt: "" } as XiuRuntimeSnapshot);
+  assert.deepEqual(replayed.task!.verification, verification);
+  assert.equal(replayed.task!.state, "failed");
+});
+
 test("failed completion retains the reply but explains program-observed verification rejection", async () => {
   const runtime = new XiuRuntime();
   runtime.attachDriver({ run: async () => "Model claims PASS", cancel: () => false, steer: () => false,

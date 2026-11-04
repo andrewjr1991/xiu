@@ -19,7 +19,8 @@ import { normalizeAssistantText } from "./language-output.js";
 import { parseAssistantInteraction } from "./assistant-interaction.js";
 import { localize } from "./i18n.js";
 import type { UiLanguage } from "./i18n.js";
-import { emptySessionStats, estimateConversationTokens, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
+import { emptySessionStats, estimateConversationTokens, estimateTextTokens, refreshSessionSummary, type RestoredSession, type SessionReplayTurn, type SessionStats } from "./session.js";
+import { formatUserRequirements, isUserRequirement, retainUserRequirements } from "./user-requirements.js";
 import { executeToolResult, formatProcessInvocation, looksLikeVerification } from "./tools.js";
 import type { AgentTool, ApprovalRequest, ConversationMessage, ModelProvider, ModelStreamProgress, ToolResult } from "./types.js";
 import { buildWorkspaceChangeNotice, captureWorkspaceFiles, type WorkspaceChangeNotice } from "./change-summary.js";
@@ -33,7 +34,7 @@ import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, ty
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
-import { VerificationLedger, captureVerificationStamp, type VerificationEvidence } from "./verification.js";
+import { VerificationLedger, captureVerificationStamp, type VerificationEvidence, type VerificationSummary } from "./verification.js";
 import { SafeDraftPreview } from "./stream-preview.js";
 
 export interface AgentEvents {
@@ -254,12 +255,15 @@ export class Agent {
   private repeatedFailures = new Map<string, number>();
   private pendingSteering: string[] = [];
   private steeringHistory: string[] = [];
+  private retainedUserRequirements: string[] = [];
+  private lastUserTask?: string;
   private primaryTask?: string;
   private toolEvidence: ToolEvidenceEntry[] = [];
   private lastRunOutcome: AgentRunOutcome = "idle";
   private lastRunFailureReason?: AgentFailureReason;
   private lastCompletionIssues: string[] = [];
   private verificationEvidence?: VerificationEvidence;
+  private verificationLedger?: VerificationLedger;
   private currentTurn = 0;
   private taskDiagnostics?: TaskDiagnostics;
   private failoverController?: ProviderFailoverController;
@@ -299,6 +303,7 @@ export class Agent {
     const restored = options.restored;
     if (restored) {
       this.messages = restored.messages;
+      this.restoreUserRequirementCache(restored);
       this.sessionPath = restored.file;
       this.sessionId = restored.id;
       this.stats = restored.stats;
@@ -320,6 +325,7 @@ export class Agent {
   }
 
   async run(task: string): Promise<string> {
+    if (this.activeController) throw new Error("Cannot start a task while another task or compaction is active.");
     if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -327,9 +333,12 @@ export class Agent {
     this.lastRunOutcome = "running";
     this.lastRunFailureReason = undefined;
     this.verificationEvidence = undefined;
+    this.verificationLedger = undefined;
     this.currentTurn = 0;
     this.repeatedFailures.clear();
     this.primaryTask = task.trim();
+    this.lastUserTask = retainUserRequirements([task], [], estimateTextTokens)[0];
+    this.retainedUserRequirements = retainUserRequirements([task], this.retainedUserRequirements, estimateTextTokens);
     this.steeringHistory = [];
     this.toolEvidence = [];
     this.taskDiagnostics = new TaskDiagnostics(task.trim(), Date.now, undefined, this.config.taskBudget, this.config.stallTimeoutMs);
@@ -387,6 +396,7 @@ export class Agent {
         this.stats.estimatedTokens = estimateConversationTokens(this.messages);
         if (this.sessionPath) await this.log(this.sessionPath, { type: "stats", stats: this.stats });
         await this.checkpointDiagnostics();
+        await this.cacheSessionSummary();
       } catch (error) {
         this.lastRunOutcome = "failed";
         this.lastRunFailureReason = "runtime_error";
@@ -439,10 +449,11 @@ export class Agent {
 
   steer(text: string): boolean {
     const normalized = text.trim();
-    if (!normalized || !this.activeController || this.activeController.signal.aborted) return false;
+    if (!normalized || this.lastRunOutcome !== "running" || !this.activeController || this.activeController.signal.aborted) return false;
     if (this.pendingSteering.length >= 20) return false;
     this.pendingSteering.push(normalized);
     this.steeringHistory.push(normalized);
+    this.retainedUserRequirements = retainUserRequirements([normalized], this.retainedUserRequirements, estimateTextTokens);
     return true;
   }
 
@@ -522,6 +533,7 @@ export class Agent {
     let unverifiedChange = false;
     let verifiedAfterChange = false;
     const verification = new VerificationLedger();
+    this.verificationLedger = verification;
     const verificationPaths = new Set<string>();
     let verificationStamp: string | undefined;
     let verificationAttempted = false;
@@ -1094,10 +1106,13 @@ export class Agent {
     this.stats = emptySessionStats();
     this.lastRunOutcome = "idle";
     this.lastRunFailureReason = undefined;
+    this.verificationLedger = undefined;
     this.currentTurn = 0;
     this.pendingSteering = [];
     this.steeringHistory = [];
     this.primaryTask = undefined;
+    this.retainedUserRequirements = [];
+    this.lastUserTask = undefined;
     this.toolEvidence = [];
     this.taskDiagnostics = undefined;
     this.planManager?.restore(undefined, options.preservePlanMode ? this.planManager.mode() : false);
@@ -1105,6 +1120,7 @@ export class Agent {
   }
 
   async compact(focus?: string): Promise<string> {
+    if (this.activeController || this.changingPlanMode) throw new Error("Cannot compact while a task, compaction or mode change is active.");
     if (!this.messages.length) return localize(this.config.language ?? "en-US", "没有可压缩的对话上下文。", "No conversation context to compact.");
     const controller = new AbortController();
     this.activeController = controller;
@@ -1123,7 +1139,7 @@ export class Agent {
     }).join("\n");
   }
 
-  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; failureReason?: AgentFailureReason; completionIssues?: string[]; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot } {
+  status(): { sessionId?: string; model: string; messages: number; stats: SessionStats; contextLimit: number; contextWindow: number; contextWindowSource: string; contextLimitMode: string; index?: ReturnType<ProjectIndex["status"]>; planMode: boolean; outcome: AgentRunOutcome; failureReason?: AgentFailureReason; completionIssues?: string[]; turn: number; maxTurns?: number; pendingSteering: number; diagnostics?: TaskDiagnosticSnapshot; verification?: VerificationSummary } {
     return {
       sessionId: this.sessionId,
       model: this.config.model,
@@ -1142,6 +1158,7 @@ export class Agent {
       maxTurns: this.config.maxTurns,
       pendingSteering: this.pendingSteering.length,
       diagnostics: this.taskDiagnostics?.snapshot(),
+      ...(this.verificationLedger ? { verification: this.verificationLedger.summary() } : {}),
     };
   }
 
@@ -1182,7 +1199,16 @@ export class Agent {
 
   /** Persist the semantic terminal result once the CLI has assembled its visible cards. */
   async recordReplayTurn(turn: SessionReplayTurn): Promise<void> {
-    if (this.sessionPath) await this.log(this.sessionPath, { type: "ui_turn", version: 1, turn });
+    if (this.sessionPath) {
+      await this.log(this.sessionPath, { type: "ui_turn", version: 1, turn });
+      await this.cacheSessionSummary();
+    }
+  }
+
+  private async cacheSessionSummary(): Promise<void> {
+    if (!this.sessionPath || (this.config.sessionNamespace && this.config.sessionNamespace !== "sessions")) return;
+    try { await refreshSessionSummary(this.sessionPath); }
+    catch { console.error(localize(this.config.language ?? "en-US", "会话摘要缓存未更新；原始日志已保存，列表将重新扫描。", "Session summary cache was not updated; the original log is saved and lists will scan it again.")); }
   }
 
   async listModels(): Promise<{ models: AvailableModel[]; discoveryError?: string }> {
@@ -1210,6 +1236,8 @@ export class Agent {
   restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
     if (this.activeController || this.changingPlanMode) throw new Error("Cannot switch sessions while a task or mode change is active.");
     this.messages = restored.messages;
+    this.restoreUserRequirementCache(restored);
+    this.verificationLedger = undefined;
     this.sessionPath = restored.file;
     this.sessionId = restored.id;
     this.stats = restored.stats;
@@ -1335,12 +1363,13 @@ export class Agent {
     if (this.messages.length < 2) return localize(this.config.language ?? "en-US", "当前对话已经足够精简。", "Conversation is already compact.");
     const before = estimateConversationTokens(this.messages);
     this.events.onCompaction?.(localize(this.config.language ?? "en-US", `正在压缩约 ${before.toLocaleString()} tokens（${reason}）`, `Compacting ${before.toLocaleString()} estimated tokens (${reason})`));
-    const primaryGoal = this.primaryTask?.trim() || this.recentUserGoals()[0] || "Continue the most recent user task.";
+    const primaryGoal = this.primaryTask?.trim() || this.lastUserTask || "Continue the most recent user task.";
     const additionalRequirements = this.steeringHistory.length
       ? this.steeringHistory.map((item, index) => `${index + 1}. ${item}`).join("\n")
       : "None recorded.";
     const currentPlan = this.planManager?.snapshot() ? this.planManager.format() : "No explicit task plan recorded.";
-    const recentRequirements = this.recentUserRequirements();
+    const requirements = retainUserRequirements([...this.retainedUserRequirements].reverse(), [], estimateTextTokens);
+    const recentRequirements = formatUserRequirements(requirements);
     const taskContract = [
       "ACTIVE TASK CONTRACT (authoritative; must survive compaction)",
       "PRIMARY GOAL:",
@@ -1391,7 +1420,7 @@ export class Agent {
       if (signal.aborted) {
         throw error;
       }
-      const userGoals = this.recentUserGoals().slice(0, 8).map((message) => message.slice(0, 2500));
+      const userGoals = [...this.retainedUserRequirements].reverse().map((message) => message.slice(0, 2500));
       const recent = this.messages.slice(-12).map((message) => `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content.slice(0, 2500)}`);
       summary = this.boundCheckpointSummary(`Model-assisted compaction failed (${error instanceof Error ? error.message : String(error)}). Local continuation brief:\nRecent user goals:\n${userGoals.join("\n---\n")}\n\nRecent activity:\n${recent.join("\n\n")}`);
     }
@@ -1406,6 +1435,8 @@ export class Agent {
       "2. The PRIMARY GOAL remains mandatory. ADDITIONAL REQUIREMENTS supplement it and never replace it.",
       "3. Verify concrete outputs before declaring completion.",
     ].join("\n");
+    // Automatic compaction may receive new steering while awaiting the model.
+    // Input boundaries own the cache; a compaction snapshot never writes it back.
     this.messages = [{ role: "user", content: context }];
     this.stats.compactions++;
     this.stats.estimatedTokens = estimateConversationTokens(this.messages);
@@ -1414,34 +1445,21 @@ export class Agent {
     return localize(this.config.language ?? "en-US", `上下文已从约 ${before.toLocaleString()} tokens 压缩到 ${this.stats.estimatedTokens.toLocaleString()} tokens。`, `Compacted context from about ${before.toLocaleString()} to ${this.stats.estimatedTokens.toLocaleString()} tokens.`);
   }
 
+  private restoreUserRequirementCache(restored: RestoredSession): void {
+    // Missing metadata from older API callers differs from an explicit empty
+    // source reconstructed by loadSession from a checkpoint-only log.
+    const fallback = restored.userRequirements === undefined ? this.recentUserGoals() : [];
+    this.retainedUserRequirements = retainUserRequirements(fallback, restored.userRequirements, estimateTextTokens);
+    const task = typeof restored.lastUserTask === "string" ? restored.lastUserTask : fallback[0];
+    this.lastUserTask = task ? retainUserRequirements([task], [], estimateTextTokens)[0] : undefined;
+  }
+
   private recentUserGoals(): string[] {
-    const internalPrefixes = [
-      "Compacted session context",
-      "ACTIVE TASK CONTRACT",
-      "User steering received while the task was running",
-      "Task-contract completion audit",
-      "Completion gate:",
-      "Plan gate:",
-    ];
     return this.messages
       .filter((message) => message.role === "user")
       .map((message) => message.content.trim())
-      .filter((content) => content && !internalPrefixes.some((prefix) => content.startsWith(prefix)))
+      .filter(isUserRequirement)
       .reverse();
-  }
-
-  private recentUserRequirements(): string {
-    const selected: string[] = [];
-    let tokens = 0;
-    for (const message of this.recentUserGoals()) {
-      const bounded = message.length > 24_000 ? `${message.slice(0, 16_000)}\n...[middle omitted]...\n${message.slice(-8_000)}` : message;
-      const estimated = estimateConversationTokens([{ role: "user", content: bounded }]);
-      if (selected.length && tokens + estimated > 16_000) break;
-      selected.push(bounded);
-      tokens += estimated;
-      if (tokens >= 16_000 || selected.length >= 6) break;
-    }
-    return selected.reverse().map((message, index) => `[User requirement ${index + 1}]\n${message}`).join("\n\n") || "None recorded.";
   }
 
   private boundCheckpointSummary(summary: string): string {

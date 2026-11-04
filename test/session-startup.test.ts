@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyRestoredSession, printSessionList, type RestoredSessionConfigDeps } from "../src/commands/session-commands.js";
+import { applyRestoredSession, chooseSession, printSessionList, type RestoredSessionConfigDeps } from "../src/commands/session-commands.js";
 import type { AgentConfig } from "../src/config.js";
 import type { ProviderProfile } from "../src/provider-registry.js";
-import type { SessionListItem } from "../src/session.js";
+import type { RestoredSession, SessionListItem } from "../src/session.js";
 
 const profile = (id: string, model: string): ProviderProfile => ({ id, name: id, kind: "openai", model } as unknown as ProviderProfile);
 
@@ -55,6 +55,59 @@ test("an unknown provider id, a missing model or no session leave the config alo
   applyRestoredSession(target, { providerId: undefined, model: "gpt-a" }, d.value);
   assert.deepEqual(d.calls, []);
   assert.deepEqual(target, config());
+});
+
+test("--list-sessions warns when readable histories contain damaged records", async () => {
+  const logs: string[] = [];
+  await printSessionList("/w", "en-US", {
+    list: async () => ({ sessions: [{ id: "s", file: "s.jsonl", createdAt: "2026-11-04T00:00:00.000Z", updatedAt: "2026-11-04T00:00:00.000Z", firstTask: "valid task", size: 100, damagedLines: 2 }], unreadable: [] }),
+    log: (line) => { logs.push(line); },
+  });
+  assert.equal(logs.length, 2);
+  assert.match(logs[1]!, /2 damaged record\(s\) skipped/);
+});
+
+test("session list pages preserve order, totals and corruption warnings outside the selected page", async () => {
+  const sessions: SessionListItem[] = Array.from({ length: 5 }, (_, i) => ({ id: `s-${i}`, file: `s-${i}.jsonl`, createdAt: "2026-11-04T00:00:00.000Z", updatedAt: "2026-11-04T00:00:00.000Z", firstTask: `task ${i}`, size: 10, ...(i === 0 ? { damagedLines: 3 } : {}) }));
+  const logs: string[] = [];
+  const io = { list: async () => ({ sessions, unreadable: [] }), log: (line: string) => { logs.push(line); } };
+  await printSessionList("/w", "en-US", io, { offset: 2, limit: 2 });
+  assert.match(logs[0]!, /^s-2 /);
+  assert.match(logs[1]!, /^s-3 /);
+  assert.equal(logs[2], "Sessions 3–4 / 5 (offset 2, limit 2)");
+  assert.match(logs[3]!, /3 damaged record/);
+  logs.length = 0;
+  await printSessionList("/w", "en-US", io, { offset: 100, limit: 2 });
+  assert.equal(logs[0], "Sessions 0–0 / 5 (offset 100, limit 2)");
+  for (const page of [{ offset: -1 }, { limit: 0 }, { limit: 1.5 }, { offset: Number.MAX_VALUE }]) {
+    await assert.rejects(printSessionList("/w", "en-US", io, page), /Invalid session page/);
+  }
+});
+
+test("interactive resume navigates forward and backward without loading a navigation action", async () => {
+  const sessions: SessionListItem[] = Array.from({ length: 45 }, (_, i) => ({ id: `s-${i}`, file: `s-${i}.jsonl`, createdAt: "2026-11-04T00:00:00.000Z", updatedAt: "2026-11-04T00:00:00.000Z", firstTask: `task ${i}`, size: 10 }));
+  let calls = 0;
+  const loaded: string[] = [];
+  const result = await chooseSession("/w", "en-US", {
+    list: async () => ({ sessions, unreadable: [] }),
+    select: async (_title, options) => {
+      calls++;
+      const choices = options.filter((option) => option.value.kind === "session");
+      assert.ok(choices.length <= 20);
+      if (calls === 1) { assert.equal(choices[0]!.value.id, "s-0"); return options.find((option) => option.value.kind === "next")!.value; }
+      if (calls === 2) { assert.equal(choices[0]!.value.id, "s-20"); return options.find((option) => option.value.kind === "previous")!.value; }
+      if (calls === 3) return options.find((option) => option.value.kind === "next")!.value;
+      if (calls === 4) return options.find((option) => option.value.kind === "next")!.value;
+      assert.equal(choices[0]!.value.id, "s-40");
+      assert.equal(choices.length, 5);
+      assert.equal(options.some((option) => option.value.kind === "next"), false);
+      return choices[4]!.value;
+    },
+    load: async (workspace, id) => { assert.equal(workspace, "/w"); loaded.push(id); return { id } as RestoredSession; },
+  });
+  assert.equal(result?.id, "s-44");
+  assert.deepEqual(loaded, ["s-44"]);
+  assert.equal(await chooseSession("/w", "en-US", { list: async () => ({ sessions, unreadable: [] }), select: async () => undefined, load: async () => { throw new Error("cancelled selections must not load"); } }), undefined);
 });
 
 test("--list-sessions prints one line per session, the unknown-model fallback and the unreadable note", async () => {

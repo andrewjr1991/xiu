@@ -173,9 +173,13 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum node node_modules/electron/cli.js scripts/ui-smoke-harness.cjs
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum node scripts/startup-smoke.mjs
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum node node_modules/electron/cli.js scripts/terminal-loading-smoke.cjs
+            ELECTRON_DISABLE_SANDBOX=1 xvfb-run --auto-servernum node scripts/ui-smoke.mjs
           else
-            node node_modules/electron/cli.js scripts/ui-smoke-harness.cjs
+            node scripts/startup-smoke.mjs
+            node node_modules/electron/cli.js scripts/terminal-loading-smoke.cjs
+            node scripts/ui-smoke.mjs
           fi
       - name: Verify synthetic UI screenshot evidence
         id: ui_evidence

@@ -11,7 +11,8 @@ const { createSmokeWindow, evaluate, waitFor, settleLayout, resizeViewport, focu
 
 const smokeRoot = path.resolve(__dirname, "../../..", ".desktop-build-temp");
 fs.mkdirSync(smokeRoot, { recursive: true });
-const userData = fs.mkdtempSync(path.join(smokeRoot, "ui-smoke-"));
+const userData = process.env.XIU_UI_SMOKE_PROFILE ? path.resolve(process.env.XIU_UI_SMOKE_PROFILE) : fs.mkdtempSync(path.join(smokeRoot, "ui-smoke-"));
+if (path.dirname(userData) !== smokeRoot || !path.basename(userData).startsWith("ui-smoke-") || !fs.lstatSync(userData).isDirectory() || fs.lstatSync(userData).isSymbolicLink()) throw new Error("UI smoke requires its own temporary profile.");
 app.setPath("userData", userData);
 app.disableHardwareAcceleration();
 app.on("will-quit", () => {
@@ -203,6 +204,18 @@ app.whenReady().then(async () => {
       assert(await evaluate(window, "(() => {const r=document.querySelector('.management-panel').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})()"), "Management dialog exceeds viewport.");
       await clickText(window, "Skills", '.management-panel nav button');
       await waitFor(window, "[...document.querySelectorAll('.management-panel nav button')].some(el => el.textContent === 'Skills' && el.getAttribute('aria-pressed') === 'true')", "Skills tab selected");
+      const skillStateCalls = await evaluate(window, "window.xiuSmoke.calls().filter(call => call.startsWith('management:skill-state:')).length");
+      const toggleProjectSkill = () => evaluate(window, "(() => { const entry = [...document.querySelectorAll('.skill-entry')].find(el => el.querySelector('summary').textContent.includes('project-skill')); entry.open = true; [...entry.querySelectorAll('button')].find(el => ['启用', '禁用'].includes(el.textContent.trim())).click(); return true; })()");
+      await toggleProjectSkill();
+      await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能状态确认\"]'))", "skill state confirmation");
+      await clickText(window, "取消", '[aria-label="技能状态确认"] button');
+      assert(await evaluate(window, `window.xiuSmoke.calls().filter(call => call.startsWith('management:skill-state:')).length === ${skillStateCalls}`), "Cancelling a skill toggle changed its state.");
+      await toggleProjectSkill();
+      await clickText(window, "确认禁用", '[aria-label="技能状态确认"] button');
+      await waitFor(window, "[...document.querySelectorAll('.skill-entry summary')].some(el => el.textContent.includes('project-skill') && el.textContent.includes('已禁用'))", "disabled skill remains listed");
+      await toggleProjectSkill();
+      await clickText(window, "确认启用", '[aria-label="技能状态确认"] button');
+      await waitFor(window, "[...document.querySelectorAll('.skill-entry summary')].some(el => el.textContent.includes('project-skill') && el.textContent.includes('已启用'))", "skill re-enabled through confirmation");
       await clickText(window, "选择文件夹并预览", '.management-panel button');
       await waitFor(window, "Boolean(document.querySelector('[aria-label=\"技能安装预览\"]'))", "skill permission preview");
       await clickText(window, "取消预览", '.management-panel button');
@@ -474,7 +487,11 @@ app.whenReady().then(async () => {
     await waitFor(window, `window.xiuSmoke.calls().filter(call => call === 'task:steer').length === 1`, "normal Enter steers active task exactly once");
     assert(await evaluate(window, `window.xiuSmoke.calls().filter(call => call === 'task:create').length === 1`), "Active Enter must steer without creating another task.");
     assert(await evaluate(window, `document.querySelectorAll('.event-task-steered .attachment-tile').length === 1 && !document.querySelector('.event-task-steered .event-text').innerText.includes('.xiu/attachments')`), "Steering attachment belongs to that message and internal references stay hidden.");
-    await waitFor(window, `document.querySelector('.timeline .subagent-activity')?.textContent.includes('调查任务验收')`, "chronological conversation subagent status");
+    assert(await evaluate(window, `!document.querySelector('.turn-process').open && !document.querySelector('.turn-process .subagent-activity')`), "Folded process remains closed and defers its child nodes while progress arrives.");
+    await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
+    await waitFor(window, `document.querySelector('.timeline .subagent-activity')?.textContent.includes('调查任务验收')`, "chronological conversation subagent status on expansion");
+    await evaluate(window, `document.querySelector('.turn-process > summary').click()`);
+    await waitFor(window, `!document.querySelector('.turn-process .subagent-activity')`, "folded process releases child nodes");
     assert(await evaluate(window, `!document.querySelector('.turn-process').open`), "Progress updates must not reopen a manually collapsed process.");
     await evaluate(window, `window.xiuSmoke.emitAlertFixture()`);
     await waitFor(window, `document.querySelector('.turn-alerts') && document.querySelector('.active-task-status')?.textContent.includes('3,783')`, 'compact warnings and actual parameter progress');
@@ -665,6 +682,10 @@ app.whenReady().then(async () => {
     assert(await evaluate(window, `(() => { const rounds=[...document.querySelectorAll('.conversation-round')]; return rounds.length === 2 && rounds[0].querySelectorAll('.attachment-tile').length === 2 && rounds[0].innerText.includes('restored-history-image.png') && !rounds[0].innerText.includes('round-two-image-canary') && rounds[1].querySelectorAll('.attachment-tile').length === 1 && rounds[1].innerText.includes('round-two-image-canary') && !rounds[1].innerText.includes('restored-history-image.png'); })()`), "Restored uploads persist through continuation; round two uploads never leak into the first round.");
     await settleLayout(window);
     assert(await evaluate(window, `document.querySelector('.task-scroll .turn-process') && [...document.querySelectorAll('.task-scroll .turn-process')].every(el => !el.open)`), "Completed turn defaults to a folded process with final answer visible.");
+    await evaluate(window, `document.querySelector('.conversation-round:last-child .turn-process').open = true`);
+    await waitFor(window, `document.querySelector('.conversation-round:last-child .turn-process .subagent-activity')?.textContent.includes('本轮审查')`, "completed record remains available on demand");
+    await evaluate(window, `document.querySelector('.conversation-round:last-child .turn-process').open = false`);
+    await waitFor(window, `!document.querySelector('.conversation-round:last-child .turn-process .subagent-activity')`, "completed record can close again");
     await fs.promises.writeFile(path.join(smokeRoot, 'compact-completed-turn.png'), (await window.webContents.capturePage()).toPNG());
     assert(await evaluate(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary') && document.querySelector('.task-scroll .conversation-round:last-child').innerText.includes('new-review-result-canary') && !document.querySelector('.task-scroll .conversation-round:last-child').innerText.includes('old-snake-result-canary')`), "Continuation preserves old rounds without attributing their answer to the new round.");
     await openTool(window, "子智能体");
@@ -674,6 +695,7 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.failContinuation()`);
     await waitFor(window, `document.querySelector('.conversation-round:last-child [role="status"]')?.textContent.includes('程序验收：失败')`, "authoritative failed completion alongside model reply");
     assert(await evaluate(window, `document.querySelector('.conversation-round:last-child').innerText.includes('模型声称全部通过-canary') && document.querySelector('.conversation-round:last-child [role="status"]').textContent.includes('文件修改后需重跑') && !document.querySelector('.conversation-round:last-child [role="status"] details').open`), "Failed acceptance retains model reply with folded pending verification details.");
+    assert(await evaluate(window, `document.querySelector('.conversation-round:last-child [aria-label="检查账本摘要"]').textContent.includes('通过 0/2') && document.querySelector('.conversation-round:last-child [aria-label="检查账本摘要"]').textContent.includes('失败 1') && document.querySelector('.conversation-round:last-child [aria-label="检查账本摘要"]').textContent.includes('需重跑 1')`), "Program verification counts must remain independent of the model's PASS claim.");
     await waitFor(window, `document.querySelector('.plan-pill')?.innerText.includes('验收未通过') || document.querySelector('.composer-area')?.innerText.includes('验收未通过')`, "plan completion is not acceptance success");
     await openTool(window, "变更");
     await evaluate(window, `window.xiuSmoke.nonGitFixture(true); document.querySelector('.refresh-button').click()`);

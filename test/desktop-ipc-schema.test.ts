@@ -12,6 +12,14 @@ const rejects = (channel: string, args: unknown[], detail: RegExp): void => {
   });
 };
 
+test("skill state IPC requires literal confirmation, a fingerprint and a boolean target state", () => {
+  const request = { action: "skill-state", revision: "r", name: "review", fingerprint: "a".repeat(64), enabled: false, confirmed: true };
+  assert.deepEqual(validateIpcArguments(desktopChannels.managementChange, [request]), [request]);
+  rejects(desktopChannels.managementChange, [{ ...request, confirmed: false }], /confirmed/);
+  rejects(desktopChannels.managementChange, [{ ...request, enabled: "false" }], /enabled/);
+  rejects(desktopChannels.managementChange, [{ ...request, fingerprint: "x".repeat(65) }], /fingerprint/);
+});
+
 test("every renderer invoke channel has an argument schema and push channels have none", () => {
   for (const [key, channel] of Object.entries(desktopChannels)) {
     if (PUSH_CHANNELS.has(channel)) {

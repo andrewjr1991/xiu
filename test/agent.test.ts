@@ -10,6 +10,22 @@ import { builtinTools } from "../src/tools.js";
 import { TaskRunJournal } from "../src/task-run.js";
 import type { AgentTool, AssistantTurn, ConversationMessage, ModelProvider, ToolDefinition } from "../src/types.js";
 
+test("Agent exposes only this task's program check counters and resets them for the next task", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-check-counters-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  await fs.writeFile(path.join(cwd, "artifact.txt"), "verified canary");
+  let calls = 0;
+  const agent = new Agent({ config: { cwd, provider: "openai", providerId: "test", model: "test", autoApprove: false, maxTurns: 3 },
+    provider: { async complete() { calls++; return calls === 1 ? { text: "check artifact", toolCalls: [{ id: "check", name: "verify_output", input: { path: "artifact.txt", required_substrings: ["verified canary"] } }], raw: {} } : { text: "done", toolCalls: [], raw: {} }; } },
+    tools: builtinTools, approve: async () => true });
+  await agent.run("verify the existing artifact");
+  assert.deepEqual(agent.status().verification, { total: 1, passed: 1, failed: 0, stale: 0, revision: 0, state: "passed" });
+  assert.doesNotMatch(JSON.stringify(agent.status().verification), /artifact|canary/);
+  await agent.run("answer only, without checks");
+  assert.equal(agent.status().verification!.total, 0);
+  assert.equal(agent.status().verification!.state, "not_run");
+});
+
 class ScriptedProvider implements ModelProvider {
   calls = 0;
   async complete(_system: string, messages: ConversationMessage[], _tools: ToolDefinition[]): Promise<AssistantTurn> {
@@ -223,7 +239,7 @@ test("agent executes tools and continues until the model finishes", async () => 
   assert.equal(agent.status().diagnostics?.model.attempts, 3);
   assert.equal(agent.status().diagnostics?.tools.calls, 1);
   assert.equal(agent.status().diagnostics?.outcome, "unverified");
-  const sessions = await fs.readdir(path.join(cwd, ".xiu", "sessions"));
+  const sessions = (await fs.readdir(path.join(cwd, ".xiu", "sessions"))).filter((name) => name.endsWith(".jsonl"));
   assert.equal(sessions.length, 1);
   assert.equal((await loadSession(cwd)).diagnostics?.tools.calls, 1);
 });

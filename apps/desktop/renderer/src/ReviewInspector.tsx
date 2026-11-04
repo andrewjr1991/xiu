@@ -1,13 +1,25 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { DesktopChangeView, DesktopReviewSnapshot, DesktopReviewTab, DesktopTaskHistorySnapshot, ReviewFilePreview, RuntimeEvent } from "../../shared/protocol.js";
 import { BrowserPane } from "./BrowserPane.js";
 import { ChangesPanel } from "./ChangesPanel.js";
 import { ComputerUsePanel } from "./ComputerUsePanel.js";
-import { InteractiveTerminal } from "./InteractiveTerminal.js";
 import { SubagentCards, TaskDataPanel } from "./TaskDataPanel.js";
 import { TaskOverview } from "./TaskOverview.js";
 import { type ChangeEntry, languageFromPath, reviewWarningLabel, SyntaxCode } from "./TaskTimeline.js";
 import { recoveryRecommendation } from "./text-presentation.js";
+
+function TerminalLoadFailure({ visible }: { visible: boolean; disabled: boolean }) {
+  return visible ? <p className="review-warning padded" role="alert">终端组件加载失败，请重启 Xiu 后重试。</p> : null;
+}
+
+const InteractiveTerminal = lazy(async () => {
+  try {
+    const module = await import("./InteractiveTerminal.js");
+    return { default: module.InteractiveTerminal };
+  } catch {
+    return { default: TerminalLoadFailure };
+  }
+});
 
 const operationLabels: Record<string, string> = {
   pending: "等待中", running: "运行中", succeeded: "已通过", failed: "失败", unknown: "待核验", cancelled: "已停止",
@@ -83,7 +95,7 @@ export function ReviewInspector({ onComputerTask, onComputerEnable, computerAuto
       {!preview && <div className="file-list">{review.files.map((file) => <button key={file.path} onClick={() => onPreview(file.path)}><span>{file.kind === "image" ? "▧" : file.kind === "markdown" || file.kind === "html" ? "◫" : "◻"}</span><span>{file.path}</span><small>{Math.ceil(file.bytes / 1024)} KB</small></button>)}</div>}
       {preview && <div className="file-preview"><header><button onClick={() => onPreview("")}>‹ 文件</button><strong>{preview.path}</strong>{preview.safeHtml && <div className="preview-toggle"><button className={previewMode === "source" ? "selected" : ""} onClick={() => onPreviewMode("source")}>源码</button><button className={previewMode === "preview" ? "selected" : ""} onClick={() => onPreviewMode("preview")}>预览</button></div>}</header>{preview.warning && <p className="review-warning">{preview.warning}</p>}{preview.kind === "image" && preview.dataUrl && <img src={preview.dataUrl} alt={preview.path} />}{preview.kind === "audio" && preview.dataUrl && <audio controls src={preview.dataUrl} />}{preview.kind === "video" && preview.dataUrl && <video controls src={preview.dataUrl} />}{previewMode === "preview" && preview.safeHtml ? <iframe title={`${preview.path} 安全预览`} sandbox="" referrerPolicy="no-referrer" srcDoc={preview.safeHtml} /> : preview.source !== undefined && <pre><SyntaxCode code={`${preview.source}${preview.truncated ? "\n…预览已截断" : ""}`} language={languageFromPath(preview.path)} /></pre>}</div>}
     </section>}
-    {review && terminalMounted && <InteractiveTerminal visible={tab === "terminal"} disabled={active} />}
+    {review && terminalMounted && <Suspense fallback={tab === "terminal" ? <p className="muted padded" role="status">正在加载终端…</p> : null}><InteractiveTerminal visible={tab === "terminal"} disabled={active} /></Suspense>}
     {review && tab === "evidence" && <section className="review-pane evidence-pane">
       {!active && review.recovery && <article className="recovery-card"><span className="eyebrow">中断恢复</span><h3>{review.recovery.taskPreview}</h3><p>{recoveryRecommendation(review.recovery.recommendation)}</p>{review.recovery.lastRecoveryPoint && <p>最后安全点：{review.recovery.lastRecoveryPoint.evidence}</p>}<strong>{review.recovery.unknownOperations.length} 项操作待核验</strong><div><button onClick={() => onAbandon(review.recovery!.runId)}>放弃旧任务</button><button className="primary-button compact" onClick={() => onRecover(review.recovery!.runId)}>确认恢复</button></div></article>}
       <h3>命令证据</h3><p className="pane-intro">这里只展示 Agent 已执行命令的有界、脱敏记录；交互终端输出不会进入这里。</p>{review.commands.length === 0 && <p className="empty-note">暂无命令记录。</p>}{review.commands.map((item) => <article className="operation-card" key={item.id}><header><strong>{item.name}</strong><span className={item.status}>{operationLabels[item.status] ?? item.status}</span></header><p>{item.evidence ?? "没有记录可展示的输出摘要。"}</p><footer>{item.durationMs !== undefined ? `${item.durationMs} ms` : "运行时间未知"} · {operationLabels[item.sideEffect] ?? item.sideEffect}</footer></article>)}
