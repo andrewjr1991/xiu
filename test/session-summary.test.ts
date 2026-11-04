@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -157,4 +158,34 @@ test("linked summary objects and source directories are not used for cache write
   await fs.symlink(path.dirname(f.file), linked);
   await assert.rejects(refreshSessionSummary(path.join(linked, "sample.jsonl")), /Linked session/);
   assert.equal((await fs.readFile(target, "utf8")).includes("original task"), true);
+});
+
+
+test("a summary replaced with a FIFO during open falls back without blocking history", { skip: process.platform === "win32" }, async (t) => {
+  const f = await fixture(t);
+  await refreshSessionSummary(f.file);
+  // Isolate the reader so a regression in open() is bounded even if its I/O blocks.
+  const script = `
+    import assert from "node:assert/strict";
+    import fs from "node:fs/promises";
+    import { execFileSync } from "node:child_process";
+    import { listSessionsWithIssues } from ${JSON.stringify(new URL("../src/session.ts", import.meta.url).href)};
+    const summary = ${JSON.stringify(f.summary)};
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    fs.open = async (...args) => {
+      if (args[0] === summary && !replaced) {
+        replaced = true;
+        await fs.unlink(summary);
+        execFileSync("mkfifo", [summary]);
+      }
+      return open(...args);
+    };
+    const listing = await listSessionsWithIssues(${JSON.stringify(f.cwd)});
+    assert.equal(replaced, true);
+    assert.equal(listing.sessions[0]?.firstTask, "original task");
+    assert.deepEqual(listing.unreadable, []);
+    console.log("fallback-completed");
+  `;
+  assert.equal(execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 10_000 }).trim(), "fallback-completed");
 });

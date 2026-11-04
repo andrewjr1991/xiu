@@ -30,7 +30,8 @@ export async function readSessionSummary(file: string, source: Stats): Promise<S
     if (stamp(await regularSource(file)) !== stamp(source)) return undefined;
     const entry = await fs.lstat(`${file}.summary.json`);
     if (!entry.isFile() || entry.isSymbolicLink() || entry.size > MAX_SUMMARY_BYTES) return undefined;
-    const handle = await fs.open(`${file}.summary.json`, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    // A regular cache can be replaced after lstat; never wait for a FIFO writer.
+    const handle = await fs.open(`${file}.summary.json`, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > MAX_SUMMARY_BYTES) return undefined;
