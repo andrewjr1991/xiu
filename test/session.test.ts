@@ -373,6 +373,37 @@ test("session scanner rejects a log replaced with a FIFO between inspection and 
   assert.deepEqual(listing.unreadable, [{ id: "changed", reason: "EINVAL" }]);
 });
 
+test("an exact session id wins over a newer prefix match", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-exact-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "exact.jsonl"), JSON.stringify({ type: "task", task: "Exact original task", timestamp: "2026-11-01T00:00:00Z", config: { providerId: "original", model: "original-model" } }) + "\n");
+  await fs.writeFile(path.join(directory, "exact-newer.jsonl"), JSON.stringify({ type: "task", task: "Different newer task", timestamp: "2026-11-04T00:00:00Z", config: { providerId: "different", model: "different-model" } }) + "\n");
+  const restored = await loadSession(cwd, "exact");
+  assert.equal(restored.id, "exact");
+  assert.equal(restored.providerId, "original");
+  assert.equal(restored.model, "original-model");
+  assert.equal(restored.messages[0]?.content, "Exact original task");
+  assert.equal((await loadSession(cwd, "exact-n")).id, "exact-newer");
+  await assert.rejects(loadSession(cwd, "exa"), /ambiguous/);
+});
+
+test("an unreadable or damaged exact session cannot fall through to a readable prefix match", async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-session-unreadable-exact-"));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const directory = path.join(cwd, ".xiu", "sessions");
+  await fs.mkdir(directory, { recursive: true });
+  const exact = path.join(directory, "exact.jsonl");
+  await fs.mkdir(exact);
+  await fs.writeFile(path.join(directory, "exact-newer.jsonl"), '{"type":"task","task":"Different task","timestamp":"2026-11-04T00:00:00Z"}\n');
+  await assert.rejects(loadSession(cwd, "exact"), { code: "EISDIR" });
+  assert.equal((await loadSession(cwd, "exact-n")).id, "exact-newer");
+  await fs.rm(exact, { recursive: true });
+  await fs.writeFile(exact, '{"type":"task","task":"Exact task","timestamp":"2026-11-01T00:00:00Z"}\n{"type":"plan_mode","enabled":null}\n');
+  await assert.rejects(loadSession(cwd, "exact"), { code: "SESSION_STATE_INVALID" });
+});
+
 test("malformed event shapes are isolated and reported without exposing their contents", async () => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-damaged-session-"));
   try {

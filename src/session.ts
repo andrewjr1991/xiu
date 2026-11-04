@@ -319,8 +319,11 @@ export async function deleteSession(cwd: string, requested: string): Promise<boo
 
 export async function loadSession(cwd: string, requested?: string): Promise<RestoredSession> {
   const { sessions, unreadable } = await listSessionsWithIssues(cwd, { useSummary: false });
+  const exact = requested ? sessions.find((item) => item.id === requested) : undefined;
+  const unreadableExact = requested ? unreadable.find((item) => item.id === requested) : undefined;
+  if (!exact && unreadableExact) throw Object.assign(new Error(`Session log cannot be read (${unreadableExact.reason}): ${unreadableExact.id}`), { code: unreadableExact.reason });
   const selected = requested
-    ? sessions.find((item) => item.id === requested || item.id.startsWith(requested))
+    ? exact ?? sessions.find((item) => item.id.startsWith(requested))
     : sessions[0];
   if (!selected) {
     const broken = requested ? unreadable.find((item) => item.id === requested || item.id.startsWith(requested)) : undefined;

@@ -206,3 +206,10 @@
 - CLI / Windows 候选：本次 CI 的 Artifacts 已保留；每份 ZIP 内含文件 SHA256SUMS 与精确提交 manifest。Windows 安装验收通过但整体仍未接受
 - 本地检查结果：Linux x64 / Node 24.19.0，732 项中 722 通过、10 Windows 专属跳过、0 失败；Python 9/9、模拟评测 10/10、CLI/桌面类型检查、CLI 构建、桌面主进程/Renderer 编译、静态 smoke、精确 tarball 安装和 Linux Unicode/后台进程 smoke、dry-pack、文档与 diff 检查通过。图形界面、Windows 安装和实际 Provider 尚未在本地执行。
 - 下一阶段：桌面只读 Plan、中文输入法/重复提交，以及首次配置/迁移恢复；在第一阶段候选验收后继续，不把未验收事项写成已完成。
+
+
+## 2026-11-04：远端反馈闭环与完整会话 ID 修正
+
+依赖修复提交 `ebc2af49a277e1d555ef26d5acc7c92286286c07` 已推送开发分支，[CI #453](https://github.com/andrewjr1991/xiu/actions/runs/41880122746) 九项检查全部通过：Windows/Linux/macOS Verify 与 Desktop、Node 22/24 兼容、Dependency audit。通过公开提交检查页逐项确认，不以产物存在推断通过。
+
+新增复现表明，按最新时间排列的历史会让完整 ID `exact` 误选较新的 `exact-newer`，也可能绕过不可读或状态损坏的精确目标。恢复现在先匹配完整 ID，再处理唯一前缀；完整目标不可读时保留原错误码，损坏状态仍返回 `SESSION_STATE_INVALID`。两项回归覆盖会话正文及模型渠道不串线、唯一/歧义前缀、目录占位与损坏 Plan 状态。专项 52/52、全量 1627 项（1615 通过、12 跳过、0 失败）、三类类型检查、Lint、两端构建通过；该增量需独立推送并检查新 CI，不能沿用 #453 的通过结果。
