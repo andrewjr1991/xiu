@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Tests: allow hosted child-process startup time in the verification retry identity regression (10/30-second deadlines). Keep exact failing/passing exit-code and completion assertions; production timeouts and separate timeout coverage are unchanged.
+
 - Doctor: report scanned readable session log bytes, largest log and damaged-session counts without writing caches. Exclude unreadable entries and explain that these are file lengths, not total disk usage. Inaccessible or broken current/legacy session directories now fail diagnosis instead of appearing empty.
 
 - Desktop history: initially display the latest 50 saved conversation rounds. Load earlier/later batches, jump directly to any round with the keyboard picker, or explicitly show all. Original events, full-message copying, attachments and existing report/Diff sources remain available. Loading records and late media preserve the reading anchor; returning to latest restores the actual last window and following. Active task timelines keep their existing rendering.

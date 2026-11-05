@@ -403,10 +403,12 @@ test("P1 ignored explicit artifacts cannot retain stale verify_output evidence",
 
 test("P1 a longer timeout retry replaces the same failed check rather than permanently blocking completion", async () => {
   const cwd = await fixture();
+  // This checks verification identity across deadline changes, not timeout handling.
+  // Give hosted runners enough child-process startup time; still require real exit codes.
   const provider = new ScriptedProvider([
-    action("run_process", { program: "node", args: ["--test", "calc.test.mjs"], timeout_ms: 1000 }, "first-test"),
+    action("run_process", { program: "node", args: ["--test", "calc.test.mjs"], timeout_ms: 10_000 }, "first-test"),
     fix(),
-    action("run_process", { program: "node", args: ["--test", "calc.test.mjs"], timeout_ms: 5000 }, "retry-test"),
+    action("run_process", { program: "node", args: ["--test", "calc.test.mjs"], timeout_ms: 30_000 }, "retry-test"),
     done(),
   ]);
   let verified: boolean | undefined;
