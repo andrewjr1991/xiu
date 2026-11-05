@@ -245,12 +245,17 @@ export async function rebuildSessionSummaries(cwd: string): Promise<{ indexed: n
   return result;
 }
 
-export async function listSessionsWithIssues(cwd: string, options: { useSummary?: boolean } = {}): Promise<SessionListing> {
+export async function listSessionsWithIssues(cwd: string, options: { useSummary?: boolean; strictDirectories?: boolean } = {}): Promise<SessionListing> {
   const items: SessionListItem[] = [];
   const unreadable: SessionListing["unreadable"] = [];
   const directories = [sessionDirectory(cwd), path.join(cwd, ".forge", "sessions"), path.join(cwd, ".forge_sessions")];
   for (const directory of directories) {
-    const files = await fs.readdir(directory).catch(() => [] as string[]);
+    const files = await fs.readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      // Missing directories are normal for new workspaces. Diagnostics must distinguish
+      // inaccessible/broken directories from an actually empty history.
+      if (options.strictDirectories && error.code !== "ENOENT") throw error;
+      return [] as string[];
+    });
     for (const name of files.filter((file) => file.endsWith(".jsonl"))) {
       const file = path.join(directory, name);
       try {

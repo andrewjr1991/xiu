@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Doctor: report scanned readable session log bytes, largest log and damaged-session counts without writing caches. Exclude unreadable entries and explain that these are file lengths, not total disk usage. Inaccessible or broken current/legacy session directories now fail diagnosis instead of appearing empty.
+
 - Desktop history: initially display the latest 50 saved conversation rounds. Load earlier/later batches, jump directly to any round with the keyboard picker, or explicitly show all. Original events, full-message copying, attachments and existing report/Diff sources remain available. Loading records and late media preserve the reading anchor; returning to latest restores the actual last window and following. Active task timelines keep their existing rendering.
 
 - Tests/CI: set a ten-minute default test timeout and expose non-sensitive stage/process notices for long verification jobs. Main Node 20 CI can report a stalled test file earlier; workflow deadlines and failure exit codes remain enforced, with no forced successful exit.

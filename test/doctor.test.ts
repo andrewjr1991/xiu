@@ -191,6 +191,81 @@ test("doctor reports damaged session records while preserving strict interrupted
   assert.match(formatDoctorReport(report, "zh-CN"), /2 条损坏记录已跳过/);
 });
 
+test("doctor measures readable raw log bytes across current and legacy directories without writing caches", async (t) => {
+  const f = await workspaceFixture(t);
+  const directories = [path.join(f.cwd, ".xiu", "sessions"), path.join(f.cwd, ".forge", "sessions"), path.join(f.cwd, ".forge_sessions")];
+  const contents = ['{"type":"task","task":"私密-canary"}\n{broken\nnull\n', '{"type":"task","task":"legacy"}\n', ""];
+  for (const [index, directory] of directories.entries()) {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, `log-${index}.jsonl`), contents[index]!);
+  }
+  const cache = path.join(directories[0]!, "log-0.jsonl.summary.json");
+  await fs.writeFile(cache, "invalid-summary-canary".repeat(100));
+  await fs.mkdir(path.join(directories[0]!, "unreadable.jsonl"));
+  const before = await Promise.all(directories.map((directory) => fs.readdir(directory)));
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  const sizes = contents.map((content) => Buffer.byteLength(content));
+  assert.deepEqual(probe.sessionStorage, { readableBytes: sizes.reduce((a, b) => a + b, 0), largestBytes: Math.max(...sizes), damagedSessions: 1 });
+  assert.equal(probe.sessions, 3, "empty logs count as readable files");
+  assert.equal(probe.damagedSessionRecords, 2, "damaged sessions and damaged records are different counts");
+  assert.equal(probe.unreadableSessions.length, 1);
+  assert.doesNotMatch(JSON.stringify(probe), /私密|canary|log-0|summary|legacy/);
+  assert.deepEqual(await Promise.all(directories.map((directory) => fs.readdir(directory))), before);
+  for (const [index, directory] of directories.entries()) {
+    assert.equal(await fs.readFile(path.join(directory, `log-${index}.jsonl`), "utf8"), contents[index]);
+  }
+  assert.equal(await fs.readFile(cache, "utf8"), "invalid-summary-canary".repeat(100));
+  const report = await collectDoctorReport({
+    version: "0.20.14", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "24.22.1", osRelease: "6.1",
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
+  });
+  const en = formatDoctorReport(report, "en-US");
+  assert.match(en, new RegExp(`Scanned readable logs: ${sizes.reduce((a, b) => a + b, 0)} bytes; largest ${Math.max(...sizes)} bytes; 1 session\\(s\\) contain damaged records`));
+  assert.match(en, /excludes summary caches, run records and unreadable entries/);
+  assert.match(formatDoctorReport(report, "zh-CN"), /1 个会话含损坏记录/);
+  assert.doesNotMatch(JSON.stringify(report), /私密|canary|log-0/);
+});
+
+test("doctor reports zero readable log bytes without creating a session directory", async (t) => {
+  const f = await workspaceFixture(t);
+  await fs.rm(path.join(f.cwd, ".xiu"), { recursive: true });
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  assert.deepEqual(probe.sessionStorage, { readableBytes: 0, largestBytes: 0, damagedSessions: 0 });
+  assert.deepEqual(await fs.readdir(f.cwd), []);
+});
+
+test("doctor does not mistake a session directory enumeration error for an empty healthy history", async (t) => {
+  const f = await workspaceFixture(t);
+  const directory = path.join(f.cwd, ".xiu", "sessions");
+  const originalReaddir = fs.readdir.bind(fs);
+  t.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+    if (String(args[0]) === directory) throw Object.assign(new Error("private-directory-canary"), { code: "EACCES" });
+    return originalReaddir(...args);
+  });
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  assert.equal(probe.listingFailure, "EACCES");
+  assert.equal(probe.sessionStorage, undefined, "an incomplete scan must not manufacture zero-byte statistics");
+  assert.equal(probe.interruptedCheckFailure, undefined, "the independent interrupted-run check still completes");
+  assert.doesNotMatch(JSON.stringify(probe), /private-directory-canary/);
+  const report = await collectDoctorReport({
+    version: "0.20.14", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "24.22.1", osRelease: "6.1",
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
+  });
+  assert.equal(report.status, "failure");
+  const workspace = report.sections.find((section) => section.id === "workspace")!;
+  assert.deepEqual(workspace.items.map((entry) => [entry.id, entry.level]), [["workspace-listing", "failure"], ["interrupted", "pass"]]);
+  assert.match(formatDoctorReport(report, "en-US"), /could not be listed \(EACCES\)/);
+  assert.doesNotMatch(JSON.stringify(report), /private-directory-canary/);
+});
+
+test("doctor strictly checks legacy session directories too", async (t) => {
+  const f = await workspaceFixture(t);
+  await fs.writeFile(path.join(f.cwd, ".forge_sessions"), "private-canary");
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  assert.equal(probe.listingFailure, "ENOTDIR");
+  assert.equal(probe.sessionStorage, undefined);
+});
+
 test("the workspace section counts records, names unreadable ones and warns about an interrupted task", async (t) => {
   const f = await workspaceFixture(t);
   await fs.writeFile(path.join(f.directory, "3f2a9c1e-0000-4000-8000-000000000001.json"), JSON.stringify(f.record("3f2a9c1e-0000-4000-8000-000000000001", "completed")));
@@ -202,6 +277,7 @@ test("the workspace section counts records, names unreadable ones and warns abou
   assert.deepEqual(probe, {
     trusted: true, runs: 1, unreadableRuns: [{ runId: "bad-version", reason: "corrupt" }],
     sessions: 1, unreadableSessions: [{ id: "broken", reason: "EISDIR" }],
+    sessionStorage: { readableBytes: Buffer.byteLength(`${JSON.stringify({ type: "task", task: "task", timestamp: "2026-10-19T01:00:00.000Z" })}\n`), largestBytes: Buffer.byteLength(`${JSON.stringify({ type: "task", task: "task", timestamp: "2026-10-19T01:00:00.000Z" })}\n`), damagedSessions: 0 },
     interruptedCheckFailure: "Unsupported or corrupt task-run journal",
   }, "a corrupt record also blocks the strict interrupted-task check, which the report must say");
   assert.doesNotMatch(JSON.stringify(probe), new RegExp(f.cwd.replace(/[\\/]/g, "[\\\\/]")), "no path in the probe");

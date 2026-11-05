@@ -25,7 +25,7 @@ npm install -g @xiu-ai/cli
 xiu --version
 ```
 
-In Windows PowerShell, if `npm.ps1` is blocked by the execution policy or ConstrainedLanguage mode, use `npm.cmd` instead of `npm`. If `xiu` is not found after installing, reopen the terminal or run `xiu doctor` for a read-only report covering the installation, providers, web search, proxy and certificates; it is redacted and can be pasted to a maintainer.
+In Windows PowerShell, if `npm.ps1` is blocked by the execution policy or ConstrainedLanguage mode, use `npm.cmd` instead of `npm`. If `xiu` is not found after installing, reopen the terminal or run `xiu doctor` for a read-only report covering the installation, providers, web search, proxy and certificates; it is redacted and can be pasted to a maintainer. Trusted workspaces also show readable session log bytes, the largest log and damaged-session counts; caches and unreadable entries are excluded.
 
 Desktop preview: download `Xiu-<version>-x64-<commit>-unsigned.exe` from [Releases](https://github.com/andrewjr1991/xiu/releases/latest). The installer is per-user and needs no administrator rights. Because it is unsigned, Windows SmartScreen shows an "unknown publisher" warning.
 

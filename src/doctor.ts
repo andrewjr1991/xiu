@@ -93,6 +93,8 @@ export interface WorkspaceRecordsProbe {
   sessions: number;
   unreadableSessions: Array<{ id: string; reason: string }>;
   damagedSessionRecords?: number;
+  /** File lengths from readable raw logs only; excludes caches and unreadable entries. */
+  sessionStorage?: { readableBytes: number; largestBytes: number; damagedSessions: number };
   interrupted?: { runId: string; status: string; startedAt: string };
   /** The interrupted-run check could not complete; a reason without a path. One-shot runs are refused until it can. */
   interruptedCheckFailure?: string;
@@ -229,11 +231,16 @@ export async function probeWorkspaceRecords(cwd: string, options: { trusted?: ()
   if (!trusted) return probe;
   const journal = new TaskRunJournal(cwd, options.taskRunRoot);
   try {
-    const [scan, sessions] = await Promise.all([journal.scan(500), listSessionsWithIssues(cwd, { useSummary: false })]);
+    const [scan, sessions] = await Promise.all([journal.scan(500), listSessionsWithIssues(cwd, { useSummary: false, strictDirectories: true })]);
     probe.runs = scan.records.length;
     probe.unreadableRuns = scan.unreadable;
     probe.sessions = sessions.sessions.length;
     probe.unreadableSessions = sessions.unreadable;
+    probe.sessionStorage = sessions.sessions.reduce((storage, session) => ({
+      readableBytes: storage.readableBytes + session.size,
+      largestBytes: Math.max(storage.largestBytes, session.size),
+      damagedSessions: storage.damagedSessions + (session.damagedLines ? 1 : 0),
+    }), { readableBytes: 0, largestBytes: 0, damagedSessions: 0 });
     const damaged = sessions.sessions.reduce((sum, session) => sum + (session.damagedLines ?? 0), 0);
     if (damaged) probe.damagedSessionRecords = damaged;
   } catch (error) {
@@ -285,7 +292,10 @@ function workspaceSection(probe: WorkspaceRecordsProbe): DoctorSection {
   const damaged = probe.damagedSessionRecords ? [item("session-records", "warning", ["会话记录完整性", "Session record integrity"],
     [`${probe.damagedSessionRecords} 条损坏记录已跳过，历史可能不完整`, `${probe.damagedSessionRecords} damaged record(s) skipped; history may be incomplete`],
     ["先备份会话日志，再检查磁盘和写入失败原因；跳过记录不代表任务已完成或可以重放。", "Back up session logs and check disk or write failures; skipped records do not prove task completion or authorize replay."])] : [];
-  return section([runs, sessions, ...damaged, ...interruptedItems(probe)]);
+  const storage = probe.sessionStorage ? [item("session-storage", "info", ["会话日志大小", "Session log size"],
+    [`已扫描的可读日志共 ${probe.sessionStorage.readableBytes} 字节，最大 ${probe.sessionStorage.largestBytes} 字节；${probe.sessionStorage.damagedSessions} 个会话含损坏记录`, `Scanned readable logs: ${probe.sessionStorage.readableBytes} bytes; largest ${probe.sessionStorage.largestBytes} bytes; ${probe.sessionStorage.damagedSessions} session(s) contain damaged records`],
+    ["只统计本次扫描可读原日志的文件长度（含旧版目录），不含摘要缓存、运行记录和无法读取的条目；不是完整磁盘占用，写入中的日志可能变化。诊断不清理或改写文件。", "File lengths of raw logs readable in this scan, including legacy directories; excludes summary caches, run records and unreadable entries. This is not total disk usage; active logs may change. Diagnosis does not clean up or rewrite files."])] : [];
+  return section([runs, sessions, ...storage, ...damaged, ...interruptedItems(probe)]);
 }
 
 function interruptedItems(probe: WorkspaceRecordsProbe): DoctorItem[] {
