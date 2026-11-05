@@ -255,6 +255,8 @@ test("doctor does not mistake a session directory enumeration error for an empty
   const workspace = report.sections.find((section) => section.id === "workspace")!;
   assert.deepEqual(workspace.items.map((entry) => [entry.id, entry.level]), [["workspace-listing", "failure"], ["interrupted", "pass"]]);
   assert.match(formatDoctorReport(report, "en-US"), /could not be listed \(EACCES\)/);
+  assert.match(workspace.items[0]!.detailEn!, /\.forge\/sessions and \.forge_sessions/);
+  assert.doesNotMatch(workspace.items[0]!.detailEn!, /are unavailable/);
   assert.doesNotMatch(JSON.stringify(report), /private-directory-canary/);
 });
 

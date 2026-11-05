@@ -276,7 +276,7 @@ function workspaceSection(probe: WorkspaceRecordsProbe): DoctorSection {
   if (probe.listingFailure) {
     return section([item("workspace-listing", "failure", ["任务记录", "Task records"],
       [`无法列出任务记录或会话日志（${probe.listingFailure}）`, `Task records or session logs could not be listed (${probe.listingFailure})`],
-      ["检查 ~/.xiu/task-runs 与工作区 .xiu/sessions 的读取权限；/report runs、/diff runs 与 /resume 在此之前都不可用。", "Check read access to ~/.xiu/task-runs and the workspace's .xiu/sessions; /report runs, /diff runs and /resume are unavailable until then."]),
+      ["检查 ~/.xiu/task-runs 与工作区 .xiu/sessions、.forge/sessions、.forge_sessions 的目录类型和读取权限；本次诊断未取得完整列表，中断任务检查结果见下方。", "Check directory types and read access for ~/.xiu/task-runs and the workspace's .xiu/sessions, .forge/sessions and .forge_sessions; this diagnosis could not obtain a complete listing. See the independent interrupted-task check below."]),
     ...interruptedItems(probe)]);
   }
   const runs = probe.unreadableRuns.length
