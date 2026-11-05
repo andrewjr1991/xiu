@@ -52,7 +52,9 @@ export const TimelineNavigator = memo(function TimelineNavigator({ scrollRef, co
       const scroll = scrollRef.current;
       if (!scroll || !marker.target.isConnected) return;
       onJump();
-      const top = marker.target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop - 48;
+      const historyControls = scroll.querySelector<HTMLElement>(".history-window-controls");
+      const inset = historyControls ? historyControls.offsetHeight + (Number.parseFloat(getComputedStyle(scroll).paddingTop) || 0) + 8 : 48;
+      const top = marker.target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop - inset;
       scroll.scrollTo({ top: Math.max(0, top), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       setActive(marker.id);
     }}><span /></button>)}

@@ -722,3 +722,13 @@ button, input, textarea { font: inherit; }
 .vision-probe-results { max-height: 240px; overflow-y: auto; margin: 12px 20px; overflow-wrap: anywhere; }
 .vision-probe-results > div { padding: 10px 0; border-bottom: 1px solid var(--tone-dfe5ee, #dfe5ee); display: flex; flex-wrap: wrap; gap: 8px; }
 .vision-probe-results small { width: 100%; color: var(--tone-7a8495, #7a8495); }
+
+.history-window-controls { position: sticky; top: 0; z-index: 5; display: grid; gap: 8px; padding: 10px 0; margin-bottom: 10px; background: var(--surface, white); border-bottom: 1px solid var(--tone-e7ebf1, #e7ebf1); }
+.history-window-range { color: var(--tone-8490a2, #8490a2); font-size: calc(11px * var(--ui-scale, 1)); }
+.history-window-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.history-window-actions > button { min-height: 30px; padding: 4px 9px; font: inherit; font-size: calc(11px * var(--ui-scale, 1)); }
+.history-window-actions .xiu-select { width: auto; min-width: 120px; }
+
+.history-window-actions > button:not(.xiu-select) { border: 1px solid var(--tone-dce5f0, #dce5f0); border-radius: 7px; background: var(--surface, white); color: var(--tone-344054, #344054); white-space: nowrap; cursor: pointer; }
+.history-window-actions > button:not(.xiu-select):hover:not(:disabled) { background: var(--tone-eaf4ff, #eaf4ff); color: var(--tone-176fc9, #176fc9); }
+.history-window-actions > button:disabled { opacity: .5; cursor: default; }

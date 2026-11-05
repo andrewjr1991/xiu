@@ -18,7 +18,7 @@ app.whenReady().then(async () => {
   let window;
   try {
     const observations = [];
-    for (const count of [100, 500]) {
+    for (const count of [100, 500, 2000]) {
       window = createSmokeWindow(BrowserWindow, path.join(__dirname, "ui-smoke-preload.cjs"));
       window.show();
       await window.loadFile(path.resolve(__dirname, "../dist/renderer/index.html"));
@@ -26,9 +26,9 @@ app.whenReady().then(async () => {
       await evaluate(window, `window.xiuSmoke.historyStressFixture(${count})`);
       await waitFor(window, `document.querySelector('.history-row')`, "synthetic history row");
       await evaluate(window, `window.historyRenderStart = performance.now(); document.querySelector('.history-row').click()`);
-      await waitFor(window, `document.querySelectorAll('.conversation-round').length === ${count}`, "complete history", 20000);
+      await waitFor(window, `document.querySelectorAll('.conversation-round').length === ${Math.min(count, 50)}`, "complete history", 20000);
       const observation = await evaluate(window, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve({
-        rounds: document.querySelectorAll('.conversation-round').length,
+        sourceRounds: ${count}, mountedRounds: document.querySelectorAll('.conversation-round').length,
         renderMs: Math.round(performance.now() - window.historyRenderStart),
         domNodes: document.querySelectorAll('*').length,
         lastReplyVisible: document.querySelector('.task-scroll').innerText.includes('历史回合 ${count}')
@@ -48,11 +48,15 @@ app.whenReady().then(async () => {
       observation.inputFrameMs = { median: samples[4], maximum: samples[8], samples };
       await evaluate(window, `document.querySelector('.turn-process').open = true`);
       await waitFor(window, `document.querySelector('.turn-process .process-row')`, "expanded process record");
-      assert(await evaluate(window, `document.querySelectorAll('.conversation-round').length === ${count} && document.querySelector('.turn-process').innerText.includes('合成')`), "Expanding must retain the stored tool record and all rounds.");
+      assert(await evaluate(window, `document.querySelectorAll('.conversation-round').length === ${Math.min(count, 50)} && document.querySelector('.turn-process').innerText.includes('合成')`), "Expanding must retain the stored tool record and all displayed rounds.");
       await evaluate(window, `document.querySelector('.turn-process').open = false`);
       await waitFor(window, `!document.querySelector('.turn-process .process-row')`, "closed details released");
       await evaluate(window, `document.querySelector('.turn-process').open = true`);
       await waitFor(window, `document.querySelector('.turn-process .process-row')`, "reopened process record");
+      await evaluate(window, `window.expandAllStart = performance.now(); document.querySelector('[data-history-action="all"]').click()`);
+      await waitFor(window, `document.querySelectorAll('.conversation-round').length === ${count}`, "explicit complete history", 30000);
+      observation.expandAllMs = await evaluate(window, `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(Math.round(performance.now()-window.expandAllStart)))))`);
+      assert(await evaluate(window, `document.querySelector('[data-history-round="0"]') && document.querySelector('[data-history-round="${count-1}"]')`), "Showing all must retain the oldest and newest rounds.");
       observations.push(observation);
       window.destroy();
       window = undefined;

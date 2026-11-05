@@ -36,6 +36,8 @@ const browserListeners = new Set();
 const calls = [];
 let copiedMessage;
 let stressHistory;
+let stressMediaReady = false;
+let stressMediaResolvers = [];
 const manualAcceptance = new Map();
 let onboardingSnapshot;
 let providerRecoveryConfirm = false;
@@ -228,7 +230,7 @@ const bridge = {
   },
   reviewSnapshot: async ({ changeView = "workspace" } = {}) => ({ ...review(), changeView, changes: { ...report, view: changeView }, changeRounds: [{ id: "old-round", startedAt: now(), report: { ...report, changes: [{ ...report.changes[0], fullDiff: undefined, preview: "@@ -1 +1 @@\n-old-round\n+round-one-canary" }] } }, { id: "missing-round", startedAt: now() }] }),
   previewFile: async ({ path }) => ({ path, kind: "text", bytes: 8, source: "old\nnew\n", truncated: false }),
-  previewMedia: async ({ path }) => { calls.push(`media-preview:${path}`); return { path, kind: "image", bytes: 2048, dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwyBNAMDAC/IBft7Y/jOAAAAAElFTkSuQmCC" }; },
+  previewMedia: async ({ path }) => { calls.push(`media-preview:${path}`); if (path.startsWith("assets/history-delayed-") && !stressMediaReady) await new Promise(resolve => stressMediaResolvers.push(resolve)); return { path, kind: "image", bytes: 2048, dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP4z8DwHwyBNAMDAC/IBft7Y/jOAAAAAElFTkSuQmCC" }; },
   restoreCheckpoint: async ({ checkpointId }) => { calls.push(`restore:${checkpointId}`); return review(); },
   recoverTask: async () => runtime(),
   abandonRecovery: async () => review(),
@@ -320,24 +322,31 @@ contextBridge.exposeInMainWorld("xiuSmoke", Object.freeze({ calls: () => [...cal
     emit("assistant.message", { text: "模型声称全部通过-canary", hasToolCalls: false });
     emit("task.finished", { state: "failed", error, result: "模型声称全部通过-canary", verification: { total: 2, passed: 0, failed: 1, stale: 1, revision: 1, state: "failed" } });
   },
-  historyStressFixture: (count) => {
-    if (!Number.isInteger(count) || count < 1 || count > 500) throw new Error("Invalid stress fixture size");
+  historyStressFixture: (count, withAttachments = false) => {
+    stressMediaReady = false;
+    stressMediaResolvers = [];
+    if (!Number.isInteger(count) || count < 1 || count > 2000) throw new Error("Invalid stress fixture size");
     const events = [];
     for (let round = 1; round <= count; round++) {
       const taskId = `stress-round-${round}`;
       const add = (type, payload) => events.push({ schemaVersion: 1, eventId: `stress-${events.length + 1}`, taskId, sequence: events.length + 1, timestamp: "2026-11-04T12:00:00.000Z", type, payload });
       const result = `历史回合 ${round}\n\n| 文件 | 结果 |\n| --- | --- |\n| example.ts | 已检查 |\n\n保留历史内容、运行记录与最终回复。`;
       add("task.started", { taskPreview: `只读检查第 ${round} 个合成模块` });
-      add("tool.started", { name: "read_file", operationId: taskId, description: "读取合成夹具" });
-      add("tool.finished", { name: "read_file", operationId: taskId, summary: "合成文件内容\n".repeat(10), result: { status: "success", summary: "已读取" }, verification: false });
+      const delayedMedia = withAttachments && round === Math.max(1, count - 99);
+      add("tool.started", { name: delayedMedia ? "generate_image" : "read_file", operationId: taskId, description: "读取合成夹具" });
+      add("tool.finished", { name: delayedMedia ? "generate_image" : "read_file", operationId: taskId, summary: delayedMedia ? `Saved: assets/history-delayed-${count}.png` : "合成文件内容\n".repeat(10), result: { status: "success", summary: "已读取" }, verification: false });
       add("assistant.message", { text: result, hasToolCalls: false });
       add("task.finished", { state: "completed", result });
     }
-    stressHistory = { taskId: "stress-history", title: `合成历史 ${count} 回合`, status: "completed", updatedAt: now(), fidelity: "exact", entries: [], events };
+    const attachments = withAttachments ? Object.fromEntries([1, count].map(round => [`stress-${(round - 1) * 5 + 1}`, [{ reference: `@.xiu/attachments/history-stress-${round}.png`, path: `.xiu/attachments/history-stress-${round}.png`, name: `history-stress-${round}.png`, kind: "image", bytes: 42, previewDataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1kAAAAASUVORK5CYII=" }]])) : undefined;
+    stressHistory = { attachments, taskId: `stress-history-${count}`, title: `合成历史 ${count} 回合`, status: "completed", updatedAt: now(), fidelity: "exact", entries: [], events };
     workspace.tasks = [{ id: stressHistory.taskId, title: stressHistory.title, status: "completed", updatedAt: now() }];
     for (const listener of workspaceListeners) listener(workspace);
   },
+  delayHistoryMedia: () => { stressMediaReady = false; },
+  resolveHistoryMedia: () => { stressMediaReady = true; for (const resolve of stressMediaResolvers) resolve(); stressMediaResolvers = []; },
   historyFixture: () => {
+    stressHistory = undefined;
     recoveryActive = false;
     workspace.tasks = [{ id: "history-fixture", title: "历史续接验收", status: "completed", updatedAt: now() }];
     for (const listener of workspaceListeners) listener(workspace);

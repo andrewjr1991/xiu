@@ -655,6 +655,7 @@ app.whenReady().then(async () => {
     assert(narrow.terminalDisplay !== "none", "Narrow terminal layout hid the terminal.");
 
     await resizeViewport(window, 1366, 768, "onboarding desktop viewport restore");
+    await require("./history-window-smoke.cjs")(window, smokeRoot);
     await evaluate(window, `window.xiuSmoke.historyFixture()`);
     await clickText(window, "历史续接验收", ".history-row");
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`, "old history fixture loaded");
@@ -809,7 +810,7 @@ app.whenReady().then(async () => {
     await waitFor(window, `document.querySelector('.send-button')?.disabled && document.querySelector('.composer textarea')?.disabled`, "restart latch disables new tasks");
 
     const calls = await evaluate(window, `window.xiuSmoke.calls()`);
-    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["custom-select-keyboard-focus", "custom-select-viewport", "empty-state-font", "closable-tool-tabs", "split-full-view", "browser-modal-isolation", "compact-data-expand", "independent-diff", "file-tree-search", "saved-round-selection", "missing-snapshot", "subagent-cards-status-result", "categorized-data", "synthetic-ime-idle-active", "ime-end-before-enter", "ime-blur-keyup-cleanup", "shift-enter-newline", "keyboard-submit-steer", "same-tick-duplicate-submit-steer", "plan-toggle-context", "plan-full-access-independent", "plan-active-lock", "provider-model", "provider-media-model", "provider-credential-migrate-cleanup", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle", "zero-provider-onboarding", "add-agnes-template", "delete-last-provider", "provider-recovery-before-startup", "provider-recovery-preview-cancel", "provider-recovery-native-cancel", "provider-recovery-restart-latch"], calls }, null, 2));
+    console.log(JSON.stringify({ passed: true, viewports: ["1366x768", "900x768"], workflows: ["history-round-window", "history-anchor-preservation", "history-cross-window-jump", "history-full-copy", "custom-select-keyboard-focus", "custom-select-viewport", "empty-state-font", "closable-tool-tabs", "split-full-view", "browser-modal-isolation", "compact-data-expand", "independent-diff", "file-tree-search", "saved-round-selection", "missing-snapshot", "subagent-cards-status-result", "categorized-data", "synthetic-ime-idle-active", "ime-end-before-enter", "ime-blur-keyup-cleanup", "shift-enter-newline", "keyboard-submit-steer", "same-tick-duplicate-submit-steer", "plan-toggle-context", "plan-full-access-independent", "plan-active-lock", "provider-model", "provider-media-model", "provider-credential-migrate-cleanup", "approval", "30-turn-task", "stop", "unknown-side-effect-gate", "checkpoint-restore", "terminal-lifecycle", "zero-provider-onboarding", "add-agnes-template", "delete-last-provider", "provider-recovery-before-startup", "provider-recovery-preview-cancel", "provider-recovery-native-cancel", "provider-recovery-restart-latch"], calls }, null, 2));
     app.exit(0);
   } catch (error) {
     console.error(error?.stack ?? String(error));

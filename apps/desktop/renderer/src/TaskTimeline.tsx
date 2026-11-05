@@ -1,4 +1,4 @@
-import { memo, type ReactNode, useEffect, useState } from "react";
+import { memo, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DesktopAttachment, DesktopMediaPreview, DesktopReviewSnapshot, DesktopTaskHistorySnapshot, RuntimeEvent, RuntimeTaskState } from "../../shared/protocol.js";
 import { ComputerAcceptance } from "./ComputerAcceptance.js";
 import { SubagentActivity } from "./TaskDataPanel.js";
@@ -8,6 +8,8 @@ import { activityRows, currentRuntimeActivity, groupedTimelineItems, modelProgre
 import { safeSourceUrl, webEvidenceForDisplay } from "./text-presentation.js";
 import { conversationRounds, type GeneratedMediaItem, roundPresentation, turnElapsed } from "./turn-presentation.js";
 import { verificationSummary } from "./verification-presentation.js";
+import { Select } from "./Select.js";
+import { expandHistoryWindow, historyWindowForRound, latestHistoryWindow, normalizeHistoryWindow, type HistoryWindow } from "./history-window.js";
 
 export function Logo() {
   return <div className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 7.5c4.5 0 5.4 7 8 8.5 2.8 1.6 3.6 8.5 8 8.5" /><path d="M24 7.5c-4.5 0-5.4 7-8 8.5-2.8 1.6-3.6 8.5-8 8.5" /></svg></div>;
@@ -249,7 +251,7 @@ function activityText(event: RuntimeEvent): string | undefined {
   return undefined;
 }
 
-type TimelineProps = { events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: Record<string, DesktopAttachment[]>; expandProcesses?: boolean; taskStartedAt?: string; onAcceptance?: () => void };
+type TimelineProps = { roundWindow?: HistoryWindow; events: RuntimeEvent[]; draft?: string; pendingMessage?: { text: string; timestamp: string; steering: boolean; attachments: DesktopAttachment[] }; state: RuntimeTaskState | "idle"; modelLabel: string; submittedAttachments?: Record<string, DesktopAttachment[]>; expandProcesses?: boolean; taskStartedAt?: string; onAcceptance?: () => void };
 
 export function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
   const [now, setNow] = useState(Date.now());
@@ -261,7 +263,7 @@ export function ActiveTaskStatus({ events, state, modelLabel }: TimelineProps) {
   return <div className="active-task-status" role="status" aria-live="polite"><span className="pulse" /><strong>{waiting ? "正在等待模型响应" : activity?.label ?? "正在处理任务"}</strong><small>{waiting ? `已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒 · 长响应可能需要更久，可随时停止` : activity?.detail}</small></div>;
 }
 
-function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt, onAcceptance }: TimelineProps) {
+function ConversationRound({ events, state, modelLabel, submittedAttachments, taskStartedAt, onAcceptance, roundIndex }: TimelineProps & { roundIndex: number }) {
   const preferences = usePreferences();
   const round = roundPresentation(events);
   const verification = verificationSummary(round.finished?.payload.verification);
@@ -275,7 +277,7 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
   const activity = currentRuntimeActivity(events, undefined, active ? state : "idle", modelLabel);
   const label = activity?.label.includes("wait_agents") ? "等待子智能体完成" : activity?.label.includes("web_search") ? "正在搜索网页" : activity?.label.includes("web_open") ? "正在读取网页" : activity?.label;
   const start = events.find((e) => e.type === "task.started")?.timestamp ?? taskStartedAt;
-  return <section className="conversation-round">
+  return <section className="conversation-round" data-history-round={roundIndex}>
     {round.users.length > 0 && <DetailedTaskTimeline events={round.users} state="idle" modelLabel={modelLabel} submittedAttachments={submittedAttachments} />}
     {(round.process.length > 0 || active) && <details className={`turn-process ${active ? "active" : ""}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)} data-timeline-jump={`process-${events[0]?.eventId}`} data-timeline-label={`运行记录 · ${round.operations} 次操作`}>
       <summary><span className={active ? "pulse" : "turn-chevron"}>{active ? "" : "›"}</span><span>{active ? `${label ?? "正在处理"} · ` : ""}{turnElapsed(start, active ? new Date(now).toISOString() : round.finished?.timestamp ?? events.at(-1)?.timestamp)}</span><small>{round.operations} 次操作{round.agents > 0 ? ` · ${round.agents} 个子任务` : ""}</small></summary>
@@ -301,8 +303,10 @@ function ConversationRound({ events, state, modelLabel, submittedAttachments, ta
 
 export const TaskTimeline = memo(function TaskTimeline(props: TimelineProps) {
   const rounds = conversationRounds(props.events);
+  const start = props.roundWindow?.start ?? 0;
+  const end = props.roundWindow?.end ?? rounds.length;
   if (!rounds.length) return <DetailedTaskTimeline {...props} />;
-  return <div className="timeline conversation-timeline">{rounds.map((round, index) => <ConversationRound onAcceptance={props.onAcceptance} taskStartedAt={index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
+  return <div className="timeline conversation-timeline">{rounds.slice(start, end).map((round, index) => <ConversationRound roundIndex={start + index} onAcceptance={props.onAcceptance} taskStartedAt={start + index === rounds.length - 1 ? props.taskStartedAt : undefined} key={round.id} events={round.events} state={start + index === rounds.length - 1 ? props.state : "idle"} modelLabel={props.modelLabel} submittedAttachments={props.submittedAttachments} />)}{(props.pendingMessage || props.draft) && <DetailedTaskTimeline {...props} events={[]} state="idle" />}</div>;
 });
 
 function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel, submittedAttachments = {}, expandProcesses = false }: TimelineProps) {
@@ -329,9 +333,116 @@ function DetailedTaskTimeline({ events, draft, pendingMessage, state, modelLabel
 
 export type ChangeEntry = DesktopReviewSnapshot["changes"]["changes"][number];
 
-export const HistoryTimeline = memo(function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance }: { history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
+type HistoryScrollTarget = { kind: "anchor"; node: HTMLElement; top: number } | { kind: "round"; index: number } | { kind: "latest" };
+
+function HistoryRoundBrowser({ events, latestRequest = 0, onBrowse, ...props }: TimelineProps & { latestRequest?: number; onBrowse?: () => void }) {
+  const rounds = useMemo(() => conversationRounds(events), [events]);
+  const total = rounds.length;
+  const root = useRef<HTMLDivElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
+  const pending = useRef<HistoryScrollTarget | undefined>(undefined);
+  const previousLatestRequest = useRef(latestRequest);
+  const releaseAnchor = useRef<() => void>(() => undefined);
+  useEffect(() => () => releaseAnchor.current(), []);
+  const [view, setView] = useState(() => ({ window: latestHistoryWindow(total), selected: total - 1, revision: 0 }));
+  const window = normalizeHistoryWindow(view.window, total);
+  const options = useMemo(() => rounds.map((round, index) => <option key={`${round.id}-${index}`} value={String(index)}>第 {index + 1} 回合</option>), [rounds]);
+
+  const retainAnchor = (node: HTMLElement, top: number, scroll: HTMLElement) => {
+    const region = root.current;
+    if (!region) return;
+    releaseAnchor.current();
+    let expectedScrollTop = scroll.scrollTop;
+    const release = () => {
+      observer.disconnect();
+      if (releaseAnchor.current === release) releaseAnchor.current = () => undefined;
+      scroll.removeEventListener("wheel", release);
+      scroll.removeEventListener("touchstart", release);
+      scroll.removeEventListener("scroll", moved);
+      document.removeEventListener("pointerdown", release, true);
+      document.removeEventListener("keydown", keyed, true);
+    };
+    const moved = () => { if (Math.abs(scroll.scrollTop - expectedScrollTop) > 1) release(); };
+    const keyed = (event: KeyboardEvent) => {
+      if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) release();
+    };
+    const observer = new ResizeObserver(() => {
+      if (!node.isConnected) { release(); return; }
+      scroll.scrollTop += node.getBoundingClientRect().top - top;
+      expectedScrollTop = scroll.scrollTop;
+    });
+    observer.observe(region);
+    scroll.addEventListener("wheel", release, { passive: true });
+    scroll.addEventListener("touchstart", release, { passive: true });
+    scroll.addEventListener("scroll", moved, { passive: true });
+    document.addEventListener("pointerdown", release, true);
+    document.addEventListener("keydown", keyed, true);
+    releaseAnchor.current = release;
+  };
+
+  useLayoutEffect(() => {
+    releaseAnchor.current();
+    const target = pending.current;
+    pending.current = undefined;
+    const scroll = root.current?.closest<HTMLElement>(".task-scroll");
+    if (!target || !scroll) return;
+    if (target.kind === "latest") scroll.scrollTop = scroll.scrollHeight;
+    else if (target.kind === "anchor" && target.node.isConnected) {
+      scroll.scrollTop += target.node.getBoundingClientRect().top - target.top;
+      retainAnchor(target.node, target.top, scroll);
+    }
+    else if (target.kind === "round") {
+      const node = root.current?.querySelector<HTMLElement>(`[data-history-round="${target.index}"]`);
+      if (node) {
+        scroll.scrollTop += node.getBoundingClientRect().top - scroll.getBoundingClientRect().top - (toolbar.current?.offsetHeight ?? 0) - (Number.parseFloat(getComputedStyle(scroll).paddingTop) || 0) - 8;
+        retainAnchor(node, node.getBoundingClientRect().top, scroll);
+      }
+    }
+  }, [view]);
+
+  useLayoutEffect(() => {
+    if (previousLatestRequest.current === latestRequest) return;
+    previousLatestRequest.current = latestRequest;
+    releaseAnchor.current();
+    pending.current = { kind: "latest" };
+    setView(previous => ({ window: latestHistoryWindow(total), selected: total - 1, revision: previous.revision + 1 }));
+  }, [latestRequest, total]);
+
+  const navigate = (next: HistoryWindow, target?: HistoryScrollTarget, selected = view.selected) => {
+    releaseAnchor.current();
+    onBrowse?.();
+    if (!target) {
+      const scroll = root.current?.closest<HTMLElement>(".task-scroll");
+      const edge = toolbar.current?.getBoundingClientRect().bottom ?? scroll?.getBoundingClientRect().top ?? 0;
+      const nodes = [...(root.current?.querySelectorAll<HTMLElement>("[data-timeline-jump]") ?? [])];
+      const anchor = nodes.find(node => node.getBoundingClientRect().bottom > edge) ?? nodes[0];
+      if (anchor) target = { kind: "anchor", node: anchor, top: anchor.getBoundingClientRect().top };
+    }
+    pending.current = target;
+    setView(previous => ({ window: next, selected, revision: previous.revision + 1 }));
+  };
+
+  return <div className="history-round-browser" ref={root}>
+    {total > 50 && <div className="history-window-controls" ref={toolbar} role="group" aria-label="历史回合浏览">
+      <span role="status" className="history-window-range">已显示第 {window.start + 1}–{window.end} 回合，共 {total} 回合</span>
+      <div className="history-window-actions">
+        <button type="button" data-history-action="earlier" disabled={window.start === 0} onClick={() => navigate(expandHistoryWindow(window, "earlier"))}>加载更早 50 回合</button>
+        <button type="button" data-history-action="later" disabled={window.end === total} onClick={() => navigate(expandHistoryWindow(window, "later"))}>加载更新 50 回合</button>
+        <Select aria-label="前往历史回合" value={String(Math.min(view.selected, total - 1))} onChange={event => {
+          const index = Number(event.target.value);
+          if (Number.isInteger(index) && index >= 0 && index < total) navigate(historyWindowForRound(total, index), { kind: "round", index }, index);
+        }}>{options}</Select>
+        <button type="button" data-history-action="latest" onClick={() => navigate(latestHistoryWindow(total), { kind: "latest" }, total - 1)}>最近 50 回合</button>
+        <button type="button" data-history-action="all" disabled={window.start === 0 && window.end === total} onClick={() => navigate({ start: 0, end: total, total })}>显示全部回合</button>
+      </div>
+    </div>}
+    <TaskTimeline {...props} events={events} roundWindow={window} />
+  </div>;
+}
+
+export const HistoryTimeline = memo(function HistoryTimeline({ history, submittedAttachments, onClose, onDiff, onAcceptance, onBrowse, latestRequest }: { onBrowse?: () => void; latestRequest?: number; history: DesktopTaskHistorySnapshot; submittedAttachments?: Record<string, DesktopAttachment[]>; onClose: () => void; onDiff: (change: ChangeEntry) => void; onAcceptance?: () => void }) {
   submittedAttachments = { ...submittedAttachments, ...history.attachments };
-  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <TaskTimeline onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => { const text = visibleMessageText(entry.text); return <article className={`event-card history-${entry.kind}`} key={entry.id} data-timeline-jump={entry.id} data-timeline-label={entry.title}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={text} /></div>{text && (entry.kind === "user" || entry.kind === "assistant") && <div className="message-actions"><CopyMessageButton text={text} label={entry.kind === "user" ? "你的消息" : "Xiu 回复"} /></div>}</article>; })}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
+  return <div className="history-view"><header><div><span className="eyebrow">{history.fidelity === "exact" ? "完整运行过程" : "从现有记录重建"}</span><h2>{history.title}</h2><small>{history.manualAcceptance?.decision === "passed" ? "人工验收通过 · 程序状态：" : ""}{stateLabels[history.status] ?? history.status}{history.providerId || history.model ? ` · ${[history.providerId, history.model].filter(Boolean).join(" / ")}` : ""}</small></div><button onClick={onClose}>退出会话</button></header>{history.events.length ? <HistoryRoundBrowser key={history.taskId} latestRequest={latestRequest} onBrowse={onBrowse} onAcceptance={onAcceptance} events={history.events} submittedAttachments={submittedAttachments} state="idle" modelLabel={[history.providerId, history.model].filter(Boolean).join(" · ") || "Xiu"} /> : <div className="timeline">{history.entries.map((entry) => { const text = visibleMessageText(entry.text); return <article className={`event-card history-${entry.kind}`} key={entry.id} data-timeline-jump={entry.id} data-timeline-label={entry.title}><header><span>{entry.title}</span></header><div className="event-text"><FormattedText text={text} /></div>{text && (entry.kind === "user" || entry.kind === "assistant") && <div className="message-actions"><CopyMessageButton text={text} label={entry.kind === "user" ? "你的消息" : "Xiu 回复"} /></div>}</article>; })}</div>}<ChangeSummaryCard report={history.changes} legacy onDiff={onDiff} /></div>;
 });
 
 export function ChangeSummaryCard({ report, legacy = false, onDiff }: { report?: DesktopReviewSnapshot["changes"]; legacy?: boolean; onDiff: (change: ChangeEntry) => void }) {

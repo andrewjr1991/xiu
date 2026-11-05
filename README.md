@@ -95,6 +95,8 @@ Xiu reads files and runs commands as the current OS account. It is not a contain
 
 The full rules are in [Security and privacy boundaries](./SECURITY.zh-CN.md) (Chinese).
 
+The 0.20.14 desktop development preview opens long saved conversations at the latest 50 rounds, with earlier/later loading, direct round navigation and an explicit show-all option. See the [desktop guide](./docs/guide/desktop.zh-CN.md).
+
 ## Platform status
 
 | Capability | Windows | macOS | Linux |

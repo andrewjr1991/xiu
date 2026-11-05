@@ -219,6 +219,8 @@ jobs:
             'workbench-data-1366.png',
             'recovery-preview-1366.png',
             'recovery-preview-900.png',
+            'history-window-1366.png',
+            'history-window-900.png',
           ];
           for (const file of files) {
             const stat = fs.statSync(`.desktop-build-temp/${file}`);
@@ -243,6 +245,8 @@ jobs:
             .desktop-build-temp/workbench-data-1366.png
             .desktop-build-temp/recovery-preview-1366.png
             .desktop-build-temp/recovery-preview-900.png
+            .desktop-build-temp/history-window-1366.png
+            .desktop-build-temp/history-window-900.png
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
