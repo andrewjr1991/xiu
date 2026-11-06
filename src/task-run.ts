@@ -272,6 +272,7 @@ export class TaskRunJournal {
     if (this.current?.status === "running") throw new Error("A task run is already active in this Xiu process.");
     if (options.resumedFrom !== undefined && !isTaskRunId(options.resumedFrom)) throw new Error("Unsupported or corrupt task-run recovery identifier.");
     const existing = (await this.recoverableRecords())[0];
+    if (options.resumedFrom && !existing) throw new Error("The selected recovery source is no longer recoverable. Refresh before making a new recovery decision.");
     if (existing?.status === "running" && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
       throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
     }
@@ -301,13 +302,17 @@ export class TaskRunJournal {
       ...(options.resumedFrom ? { resumedFrom: options.resumedFrom } : {}),
     };
     try {
-      if (options.resumedFrom) await this.abandon(options.resumedFrom, "superseded by confirmed recovery");
       await this.writeRecord(record);
       try {
         // A stale-lock cleaner can race a newer starter after the initial scan.
         // Publish before checking again so competing starters can observe us too.
-        const conflicting = (await this.recoverableRecords()).find(other => other.runId !== runId);
+        const recoverable = await this.recoverableRecords();
+        if (options.resumedFrom && !recoverable.some(other => other.runId === options.resumedFrom)) {
+          throw new Error("The selected recovery source changed before task start. Refresh before making a new recovery decision.");
+        }
+        const conflicting = recoverable.find(other => other.runId !== runId && other.runId !== options.resumedFrom);
         if (conflicting) throw new Error("Task start could not establish exclusive workspace ownership. A concurrent or recoverable task requires a new explicit decision.");
+        if (options.resumedFrom) await this.abandon(options.resumedFrom, "superseded by confirmed recovery");
       } catch (error) {
         record.status = "failed";
         record.finishedAt = new Date().toISOString();

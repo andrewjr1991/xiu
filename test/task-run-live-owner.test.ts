@@ -46,7 +46,7 @@ test("a matching recovery ID cannot replace a live lock whose record is not yet 
   const directory = f.directory;
   await fs.unlink(path.join(directory, record[0]!));
   const lockOnly = await f.snapshot();
-  await assert.rejects(f.other.begin({ ...options, resumedFrom: f.run.runId }), /running|active/i);
+  await assert.rejects(f.other.begin({ ...options, resumedFrom: f.run.runId }), /running|active|recover/i);
   assert.deepEqual(await f.snapshot(), lockOnly);
   await fs.writeFile(path.join(directory, record[0]!), record[1]!);
   await f.owner.complete("completed");

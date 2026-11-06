@@ -403,7 +403,7 @@ test("desktop task deletion removes a whole conversation but preserves workspace
   const journal = new TaskRunJournal(workspace, journals);
   const first = await journal.begin({ sessionId: "session-delete", task: "第一轮", providerId: "test", model: "model" });
   await journal.complete("completed");
-  const second = await journal.begin({ sessionId: "session-delete", task: "第二轮", providerId: "test", model: "model", resumedFrom: first.runId });
+  const second = await journal.begin({ sessionId: "session-delete", task: "第二轮", providerId: "test", model: "model" });
   await journal.complete("completed");
   await saveTaskChangeHistory(workspace, first.runId, historicalReport("first.txt", "first"));
   await saveTaskChangeHistory(workspace, second.runId, historicalReport("second.txt", "second"));
