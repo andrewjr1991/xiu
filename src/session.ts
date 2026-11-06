@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { assertSessionStorageParents, sameSessionFile } from "./session-storage.js";
 import { constants, type Stats } from "node:fs";
 import { readSessionSummary, writeSessionSummary } from "./session-summary.js";
 import { createInterface } from "node:readline";
@@ -112,12 +113,17 @@ function savedStateIssue(event: Record<string, unknown>): string | undefined {
 }
 
 async function scanEvents(file: string, visit: (event: Record<string, unknown>) => void, options: { strictState?: boolean } = {}): Promise<number> {
+  await assertSessionStorageParents(file);
   // O_NONBLOCK prevents a regular file replaced with a FIFO from blocking open.
   // Validate the opened object as well as the listing's earlier lstat.
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const stat = await handle.stat();
     assertSessionFile(stat);
+    const current = await fs.lstat(file);
+    assertSessionFile(current);
+    if (!sameSessionFile(stat, current)) throw Object.assign(new Error("Session log changed while opening."), { code: "SESSION_STORAGE_UNSAFE" });
+    await assertSessionStorageParents(file);
     const stream = handle.createReadStream({ encoding: "utf8", autoClose: false });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
     let damaged = 0;
@@ -253,7 +259,10 @@ export async function listSessionsWithIssues(cwd: string, options: { useSummary?
   const directoryIssues: NonNullable<SessionListing["directoryIssues"]> = [];
   const directories = [sessionDirectory(cwd), path.join(cwd, ".forge", "sessions"), path.join(cwd, ".forge_sessions")];
   for (const directory of directories) {
-    const files = await fs.readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    const files = await (async () => {
+      await assertSessionStorageParents(path.join(directory, "storage-check.jsonl"));
+      return fs.readdir(directory);
+    })().catch((error: NodeJS.ErrnoException) => {
       // Missing directories are normal for new workspaces. Diagnostics must distinguish
       // inaccessible/broken directories from an actually empty history.
       if (error.code !== "ENOENT") {
@@ -322,11 +331,14 @@ export async function deleteSession(cwd: string, requested: string): Promise<boo
     if (!stat) continue;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe session deletion target.");
   }
-  for (const item of selected) await fs.unlink(item.file).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") throw error;
-  });
   for (const item of selected) {
-    try { await fs.unlink(`${item.file}.summary.json`); }
+    await assertSessionStorageParents(item.file);
+    await fs.unlink(item.file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+  for (const item of selected) {
+    try { await assertSessionStorageParents(item.file); await fs.unlink(`${item.file}.summary.json`); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error("Session removed, but its optional summary could not be removed.");
     }

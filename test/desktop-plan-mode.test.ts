@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,6 +20,20 @@ function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((accept) => { resolve = accept; });
   return { promise, resolve };
+}
+function interceptLogAppends(t: test.TestContext, visit: (file: string, line: string) => Promise<void>) {
+  const open = fs.open.bind(fs);
+  t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (typeof args[1] === "number" && (args[1] & constants.O_APPEND)) {
+      const append = handle.appendFile.bind(handle);
+      t.mock.method(handle, "appendFile", async (...data: Parameters<typeof handle.appendFile>) => {
+        await visit(String(args[0]), String(data[0]));
+        return append(...data);
+      });
+    }
+    return handle;
+  });
 }
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-plan-")));
@@ -313,16 +328,16 @@ for (const failingRecord of ["stats", "diagnostics"]) {
     await controller.connect(workspace);
     let sawStats = false;
     let brokenFile: string | undefined;
-    const appendFile = fs.appendFile.bind(fs);
-    t.mock.method(fs, "appendFile", async (...args: Parameters<typeof fs.appendFile>) => {
-      const line = String(args[1]);
+    interceptLogAppends(t, async (file, line) => {
       if (line.includes('"type":"stats"')) sawStats = true;
       if (!brokenFile && sawStats && line.includes(`"type":"${failingRecord}"`)) {
-        brokenFile = String(args[0]);
+        brokenFile = file;
         await fs.rename(brokenFile, `${brokenFile}.backup`);
         await fs.mkdir(brokenFile);
+        // The verified handle is no longer path-based. Inject the actual write
+        // failure as well as replacing the destination to exercise repair.
+        throw Object.assign(new Error("fixture write failure"), { code: "EIO" });
       }
-      return appendFile(...args);
     });
     await assert.rejects(runtime.createTask("Planning only"));
     assert.ok(brokenFile, "the deterministic failure must hit final persistence");
@@ -376,10 +391,8 @@ for (const operation of ["new", "delete"]) {
     };
     const logEntered = deferred<void>();
     const log = deferred<void>();
-    const appendFile = fs.appendFile.bind(fs);
-    t.mock.method(fs, "appendFile", async (...args: Parameters<typeof fs.appendFile>) => {
-      if (String(args[1]).includes('"type":"plan_mode"')) { logEntered.resolve(); await log.promise; }
-      return appendFile(...args);
+    interceptLogAppends(t, async (_file, line) => {
+      if (line.includes('"type":"plan_mode"')) { logEntered.resolve(); await log.promise; }
     });
     const mutation = operation === "new"
       ? f.controller.newConversation(f.workspace)

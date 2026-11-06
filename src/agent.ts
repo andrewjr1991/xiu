@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { appendSessionLog, prepareSessionStorage, validateSessionDestination } from "./session-storage.js";
 import { retainLatestImages } from "./tool-images.js";
 import { ModelRequestSilenceError, watchModelRequest } from "./model-request-watchdog.js";
 import path from "node:path";
@@ -357,6 +358,7 @@ export class Agent {
         model: this.config.model,
         ...(this.recoverySource ? { resumedFrom: this.recoverySource.runId } : {}),
       });
+      await validateSessionDestination(this.config.cwd, this.sessionPath!, true);
       const response = await this.runWithSignal(task, controller.signal);
       const terminalOutcome = this.lastRunOutcome as AgentRunOutcome;
       await this.taskRunJournal?.complete(terminalOutcome === "waiting_user" ? "waiting_user" : terminalOutcome === "unverified" ? "unverified" : terminalOutcome === "failed" ? "failed" : "completed");
@@ -508,7 +510,7 @@ export class Agent {
     this.ensureSession();
     const sessionPath = this.sessionPath!;
     this.checkpointManager?.setSession(this.sessionId!);
-    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await prepareSessionStorage(this.config.cwd, sessionPath);
     await this.log(sessionPath, {
       type: "task",
       task,
@@ -1739,7 +1741,6 @@ export class Agent {
       readEnvironmentCredential(this.config.apiKeyEnv),
     ].filter((item): item is string => Boolean(item));
     const event = sanitizeSecrets({ timestamp: new Date().toISOString(), ...value as object }, activeSecrets);
-    await fs.appendFile(file, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
-    await fs.chmod(file, 0o600).catch(() => undefined);
+    await appendSessionLog(this.config.cwd, file, `${JSON.stringify(event)}\n`);
   }
 }

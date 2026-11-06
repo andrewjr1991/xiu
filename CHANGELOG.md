@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Session storage: reject linked application-owned history directories before listing, restoring, deleting or appending logs. Create storage directories individually and append through a verified regular-file handle with nonblocking/no-follow open flags and handle-based permissions. Recheck file identity before reading or writing; unsafe log failures cannot silently disable Plan mode or leave the Agent busy after repair.
+
 - Recovery diagnostics: add `xiu recover identity [json]`, a trusted-workspace, metadata-only preview of current/canonical legacy storage identities and a proposed POSIX identity. It bounds enumeration, groups errors and marks unknown lock presence/partial coverage. It never reads record/lock contents, verifies ownership, migrates storage or authorizes replay. Installed-package smoke now exercises this command with isolated configuration and network traps.
 
 - Desktop trust: bind confirmation to the selected workspace across asynchronous path checks and persistence; late saves cannot reopen a closed selection or trust a different one. Serialize trust IPC with other workspace writes. Distinguish POSIX path case and literal backslashes in desktop selection IDs, upgrading saved recent IDs in memory without rewriting them on reads. Legacy task-run identity migration remains separate.
