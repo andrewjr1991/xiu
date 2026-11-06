@@ -1,3 +1,4 @@
+import { plainTerminalSummary } from "../terminal-summary.js";
 import chalk from "chalk";
 import type { AgentConfig } from "../config.js";
 import { localize, type UiLanguage } from "../i18n.js";
@@ -50,10 +51,10 @@ function listCommands(language: UiLanguage): string {
 }
 
 function runHeading(run: TaskRunRecord, language: UiLanguage): string {
-  const preview = redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80);
+  const preview = plainTerminalSummary(redactSecrets(run.taskPreview), 80);
   return localize(language,
-    `运行 ${run.runId.slice(0, 8)} · ${run.startedAt.slice(0, 19)} · ${run.status} · ${preview}`,
-    `Run ${run.runId.slice(0, 8)} · ${run.startedAt.slice(0, 19)} · ${run.status} · ${preview}`);
+    `运行 ${plainTerminalSummary(run.runId, 8)} · ${plainTerminalSummary(run.startedAt, 19)} · ${run.status} · ${preview}`,
+    `Run ${plainTerminalSummary(run.runId, 8)} · ${plainTerminalSummary(run.startedAt, 19)} · ${run.status} · ${preview}`);
 }
 
 /** Why a saved change record could not be read: the system error code when there is one, else the loader's own message; never a path. */
@@ -65,14 +66,14 @@ function unreadableReason(error: unknown): string {
 
 function unreadableHistory(run: TaskRunRecord, error: unknown, language: UiLanguage): string {
   return localize(language,
-    `运行 ${run.runId.slice(0, 8)} 的改动记录无法读取（${unreadableReason(error)}）：记录存在但已损坏、被改动或超出限制。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
-    `The change record of run ${run.runId.slice(0, 8)} cannot be read (${unreadableReason(error)}): the record exists but is corrupt, altered or over its limits. The current workspace diff is not shown in its place; use /diff workspace for the present state.`);
+    `运行 ${plainTerminalSummary(run.runId, 8)} 的改动记录无法读取（${unreadableReason(error)}）：记录存在但已损坏、被改动或超出限制。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
+    `The change record of run ${plainTerminalSummary(run.runId, 8)} cannot be read (${unreadableReason(error)}): the record exists but is corrupt, altered or over its limits. The current workspace diff is not shown in its place; use /diff workspace for the present state.`);
 }
 
 function noHistory(run: TaskRunRecord, language: UiLanguage): string {
   return localize(language,
-    `运行 ${run.runId.slice(0, 8)} 没有保存的改动记录（任务在旧版本运行、被中断于记录之前，或记录已删除）。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
-    `Run ${run.runId.slice(0, 8)} has no saved change record (it ran on an older version, was interrupted before the record was written, or the record was deleted). The current workspace diff is not shown in its place; use /diff workspace for the present state.`);
+    `运行 ${plainTerminalSummary(run.runId, 8)} 没有保存的改动记录（任务在旧版本运行、被中断于记录之前，或记录已删除）。这里不会用当前工作区的差异冒充它；/diff workspace 查看现状。`,
+    `Run ${plainTerminalSummary(run.runId, 8)} has no saved change record (it ran on an older version, was interrupted before the record was written, or the record was deleted). The current workspace diff is not shown in its place; use /diff workspace for the present state.`);
 }
 
 /** `/diff runs`: recent runs, newest first, with the number of changed files each saved record holds. */
@@ -85,11 +86,11 @@ export async function formatRunChangeList(sources: DiffReplaySources, language: 
   const lines: string[] = [];
   for (const [index, run] of runs.entries()) {
     const changed = await load(sources.cwd, run.runId).then((report) => (report ? String(report.changes.length) : "-"), () => "!");
-    lines.push(`${formatRunListColumns(run, index, language)} ${changed.padEnd(9)} ${redactSecrets(run.taskPreview).replace(/\s+/g, " ").slice(0, 80)}`);
+    lines.push(`${formatRunListColumns(run, index, language)} ${changed.padEnd(9)} ${plainTerminalSummary(redactSecrets(run.taskPreview), 80)}`);
   }
   return [header, ...lines, localize(language,
-    `“-”表示没有保存的改动记录，“!”表示记录存在但无法读取（损坏、被改动或超出限制）。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`,
-    `"-" means no saved change record, "!" a record that exists but cannot be read (corrupt, altered or over its limits). Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${runs[0]!.runId.slice(0, 8)} src/index.ts`),
+    `“-”表示没有保存的改动记录，“!”表示记录存在但无法读取（损坏、被改动或超出限制）。回放：/diff run:<序号> 或 /diff run:<运行 ID 前缀>（至少 4 位），加文件路径查看该文件的完整差异，例如 /diff run:1、/diff run:${plainTerminalSummary(runs[0]!.runId, 8)} src/index.ts`,
+    `"-" means no saved change record, "!" a record that exists but cannot be read (corrupt, altered or over its limits). Replay with /diff run:<number> or /diff run:<run-id prefix> (at least 4 characters); add a file path for that file's complete diff, for example /diff run:1 or /diff run:${plainTerminalSummary(runs[0]!.runId, 8)} src/index.ts`),
   ...(note ? [note] : [])].join("\n");
 }
 
@@ -134,8 +135,8 @@ export async function replayRunChanges(sources: DiffReplaySources, selector: str
   const entry = report.changes.find((change) => normalizePath(change.path) === wanted);
   if (!entry) {
     throw new Error(localize(language,
-      `运行 ${run.runId.slice(0, 8)} 的改动记录里没有 ${JSON.stringify(file)}；共 ${report.changes.length} 个文件，用 /diff run:${selector} 查看列表。`,
-      `The change record of run ${run.runId.slice(0, 8)} has no ${JSON.stringify(file)}; it covers ${report.changes.length} file(s), listed by /diff run:${selector}.`));
+      `运行 ${plainTerminalSummary(run.runId, 8)} 的改动记录里没有 ${JSON.stringify(file)}；共 ${report.changes.length} 个文件，用 /diff run:${selector} 查看列表。`,
+      `The change record of run ${plainTerminalSummary(run.runId, 8)} has no ${JSON.stringify(file)}; it covers ${report.changes.length} file(s), listed by /diff run:${selector}.`));
   }
   return [heading, replayed, formatFileChange(entry, language)].join("\n");
 }

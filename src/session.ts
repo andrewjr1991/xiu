@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { plainTerminalSummary } from "./terminal-summary.js";
 import { assertSessionStorageParents, sameSessionFile } from "./session-storage.js";
 import { constants, type Stats } from "node:fs";
 import { readSessionSummary, writeSessionSummary } from "./session-summary.js";
@@ -293,7 +294,7 @@ export async function listSessionsWithIssues(cwd: string, options: { useSummary?
 
 /** The title a session list shows: its first task, or the language's "untitled" label. */
 export function sessionTitle(session: Pick<SessionListItem, "firstTask">, language: UiLanguage, maximum = 72): string {
-  return session.firstTask.replace(/\s+/g, " ").trim().slice(0, maximum) || localize(language, "未命名会话", "Untitled session");
+  return plainTerminalSummary(session.firstTask, maximum) || localize(language, "未命名会话", "Untitled session");
 }
 
 /** One line naming how many session logs a list leaves out and why; undefined when none. */

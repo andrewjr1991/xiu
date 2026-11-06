@@ -1,4 +1,5 @@
 import { localize, type UiLanguage } from "../i18n.js";
+import { plainTerminalSummary } from "../terminal-summary.js";
 import { terminalDisplayWidth } from "../interactive-ui.js";
 import { formatLocalTime } from "../local-time.js";
 import { taskRunStatusLabel } from "../status-labels.js";
@@ -38,7 +39,7 @@ function padColumn(value: string, width: number): string {
  * match the headers of `/report runs` and `/diff runs`; the caller appends its own columns.
  */
 export function formatRunListColumns(run: TaskRunRecord, index: number, language: UiLanguage): string {
-  return `${String(index + 1).padEnd(5)} ${run.runId.slice(0, 8).padEnd(9)} ${padColumn(formatLocalTime(run.startedAt), 21)} ${padColumn(taskRunStatusLabel(run.status, language), 13)}`;
+  return `${String(index + 1).padEnd(5)} ${plainTerminalSummary(run.runId, 8).padEnd(9)} ${padColumn(plainTerminalSummary(formatLocalTime(run.startedAt)), 21)} ${padColumn(plainTerminalSummary(taskRunStatusLabel(run.status, language)), 13)}`;
 }
 
 export { unreadableRunsNote } from "../history-notices.js";

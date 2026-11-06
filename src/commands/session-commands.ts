@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { plainTerminalSummary } from "../terminal-summary.js";
 import type { Agent } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
 import type { AgentConfig } from "../config.js";
@@ -99,8 +100,8 @@ export async function resolveStartupRecovery(ctx: StartupRecoveryContext): Promi
   }
   const point = recoverySource.recoveryPoints.at(-1);
   io.log(chalk.yellow(localize(language,
-    `检测到异常中断任务：${recoverySource.taskPreview || "（无摘要）"}\n最后恢复点：${point?.evidence ?? "尚无安全恢复点"}\n待核验副作用：${recoverySource.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,
-    `Interrupted task detected: ${recoverySource.taskPreview || "(no summary)"}\nLast recovery point: ${point?.evidence ?? "no safe recovery point"}\nSide effects awaiting verification: ${recoverySource.pendingSideEffects.length}. Xiu will not replay them automatically.`)));
+    `检测到异常中断任务：${plainTerminalSummary(recoverySource.taskPreview) || "（无摘要）"}\n最后恢复点：${plainTerminalSummary(point?.evidence ?? "尚无安全恢复点")}\n待核验副作用：${recoverySource.pendingSideEffects.length} 项。Xiu 不会自动重放这些操作。`,
+    `Interrupted task detected: ${plainTerminalSummary(recoverySource.taskPreview) || "(no summary)"}\nLast recovery point: ${plainTerminalSummary(point?.evidence ?? "no safe recovery point")}\nSide effects awaiting verification: ${recoverySource.pendingSideEffects.length}. Xiu will not replay them automatically.`)));
   const action = await io.select(localize(language, "如何处理异常中断任务？", "How should the interrupted task be handled?"), [
     { label: localize(language, "确认恢复", "Resume after confirmation"), description: localize(language, "恢复会话，先核验未知副作用，再继续剩余任务", "Restore the session, verify unknown side effects, then continue"), value: "resume" as const },
     { label: localize(language, "放弃旧任务", "Abandon old task"), description: localize(language, "将旧任务标记为已放弃，不执行任何旧操作", "Mark it abandoned without executing any old operation"), value: "abandon" as const },
@@ -173,7 +174,7 @@ export async function printSessionList(cwd: string, language: UiLanguage, io: Se
   if (!sessions.length) io.log(unreadable.length || directoryIssues?.length
     ? localize(language, "未找到可读的 Xiu 会话。", "No readable Xiu sessions were found.")
     : localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
-  else for (const session of visible) io.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
+  else for (const session of visible) io.log(`${plainTerminalSummary(session.id)}  ${plainTerminalSummary(formatLocalTime(session.updatedAt))}  ${plainTerminalSummary(session.model ?? localize(language, "未知模型", "unknown model"))}  ${sessionTitle(session, language, 80)}`);
   if (paged) io.log(localize(language, `会话 ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length}（offset ${offset}，limit ${limit}）`, `Sessions ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length} (offset ${offset}, limit ${limit})`));
   const note = unreadableSessionsNote(unreadable, language, sessions, directoryIssues);
   if (note) io.log(note);
@@ -200,7 +201,7 @@ export async function chooseSession(workspace: string, language: UiLanguage, io:
   while (true) {
     const choices = sessions.slice(offset, offset + limit).map((session) => ({
       label: sessionTitle(session, language),
-      description: `${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`,
+      description: plainTerminalSummary(`${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${session.id}`),
       value: { kind: "session" as const, id: session.id },
     }));
     const navigation: Array<{ label: string; description: string; value: { kind: "next" | "previous"; id: string } }> = [];
@@ -293,7 +294,7 @@ export async function handleSessionCommand(task: string, ctx: SessionCommandCont
     const { sessions, unreadable, directoryIssues } = await listSessionsWithIssues(config.cwd);
     const note = unreadableSessionsNote(unreadable, language, sessions, directoryIssues);
     console.log([
-      sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : unreadable.length || directoryIssues?.length
+      sessions.length ? sessions.map((session) => `${plainTerminalSummary(session.id)}  ${plainTerminalSummary(formatLocalTime(session.updatedAt))}  ${sessionTitle(session, language)}`).join("\n") : unreadable.length || directoryIssues?.length
         ? localize(language, "未找到可读的 Xiu 会话。", "No readable Xiu sessions were found.")
         : localize(language, "没有已保存会话。", "No saved sessions."),
       ...(note ? [chalk.yellow(note)] : []),

@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- History display: remove terminal control sequences from session titles, saved IDs/model names and report/diff run-list metadata and interrupted-task warning fields before displaying or truncating them. Preserve ordinary Unicode and hyperlink labels; original logs and selection identifiers are unchanged.
+
 - Summary cache consistency: verify cache identity at open and metadata before/after bounded reads. Replaced or concurrently modified caches fall back to authoritative session logs without rewriting or deleting the cache. Cache metadata remains advisory and does not establish record ownership.
 
 - Session storage: reject linked application-owned history directories before listing, restoring, deleting or appending logs. Create storage directories individually and append through a verified regular-file handle with nonblocking/no-follow open flags and handle-based permissions. Recheck file identity before reading or writing; unsafe log failures cannot silently disable Plan mode or leave the Agent busy after repair.
