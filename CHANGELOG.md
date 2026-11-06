@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- CI diagnostics: emit early Verify-stage annotations before checkout and Node/npm-cache setup, so pre-installation timeouts have a narrower last-observed phase. Keep all existing job limits, matrices and acceptance gates unchanged.
+
 - Session model switching (`Agent.setModel`, used by desktop history continuation): validate target context before logging, then commit live model/context/capability state only after persistence succeeds. Failed writes retain the prior configuration and permit retry. Pending model changes block tasks, compaction, session resets/restores, Plan/provider/recovery changes and another model switch; active tasks reject switching models.
 
 - History display: remove terminal control sequences from session titles, saved IDs/model names and report/diff run-list metadata and interrupted-task warning fields before displaying or truncating them. Preserve ordinary Unicode and hyperlink labels; original logs and selection identifiers are unchanged.

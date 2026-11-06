@@ -48,8 +48,14 @@ jobs:
       XIU_CI_PLATFORM: ${{ matrix.platform }}
       XIU_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Record Verify checkout stage
+        shell: bash
+        run: echo "::notice title=Verify stage::Runner ready; starting checkout"
       - id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Record Verify Node setup stage
+        shell: bash
+        run: echo "::notice title=Verify stage::Checkout completed; setting up Node and npm cache"
       - id: node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

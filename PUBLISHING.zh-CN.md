@@ -4,6 +4,8 @@
 
 ## 2026-11-04：macOS CI runner 与架构边界
 
+2026-11-06 补充：原候选 `f42f6b5` 的 macOS CLI 作业超过 35 分钟后取消，未取得全 9 项通过；公开注解未显示进入安装/测试，具体卡点未知。随后精确提交通过不能改写旧作业状态。Verify 现于 checkout 前及 Node/npm cache setup 前增加固定阶段注解，仍保留原时限与全部严格门禁；若没有任何阶段注解，只能说明尚未观察到这些步骤，不据此认定代码或托管运行器根因。
+
 GitHub 公开注解确认 `macos-latest` 当前为 macOS 26 ARM64，存在托管容量不足及多次未获 runner 后取消；这不是代码测试失败。默认 Verify/Desktop 使用官方支持的 `macos-26-intel`，所有既有步骤、失败门禁、候选及截图仍保留。手动 Actions → CI → Run workflow 的 `macos_runner` 可选 `macos-26` 执行 ARM64，或 `macos-26-intel` 执行 x64。默认通过只证明 macOS 26 x64，不得用其替代 ARM64 验收；需要 ARM64 交付时须检查该架构的精确提交运行及制品。没有启用付费 large runner，没有降低审计或加入容错跳过。
 
 ## 0.20.14 本地候选（2026-10-30，未发布）
