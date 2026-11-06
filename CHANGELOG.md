@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Masked secret input: reject EOF, closed input and Ctrl-D instead of leaving an unanswered prompt pending; remove listeners and restore the original input mode/pause state where available. Stream and cleanup failures use fixed errors and never return a partial credential. Decode raw UTF-8 across byte chunks so non-ASCII credentials are preserved; keep Enter, backspace, Ctrl-C and non-TTY line input behavior.
+
 - Desktop task starts: recheck host/conversation identity and idle state after asynchronous journal, history, model-event and baseline work. New, continued and recovered tasks cannot start while a Full Access confirmation begins during preflight. Preserve paused recovery state and already saved model events; rejected starts do not launch model requests or retry automatically.
 
 - Desktop history: continuation and same-workspace channel reload preserve the selected model while restoring conversation state, then persist that selection through the normal model-change path. An incompatible historical model no longer prevents using a valid current selection. Default CLI and interrupted-task recovery model preferences remain unchanged.

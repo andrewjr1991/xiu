@@ -33,7 +33,7 @@ API Key 有两种配置方式：
 - 使用环境变量，配置文件只记录环境变量名。
 - 输入 `/provider key`，把 Key 直接保存在本机 `~/.xiu/providers.json`。
 
-`/provider key` 的输入会用星号隐藏。配置文件使用原子写入，在支持 Unix 文件模式的平台上限制为当前用户读写；Key 不会写入项目会话日志或显示在状态界面。不过它仍然是本机明文凭证：不要提交、同步或发送整个 `providers.json`，同一系统账号、管理员或恶意软件仍可能读取它。
+`/provider key` 在可用的交互终端中用星号遮蔽输入，按 Enter 完成；Ctrl-C、Ctrl-D 或终端输入关闭会取消，不提交未确认的部分内容。Unicode 字符即使分为多个原始字节块到达也保持完整。若提示无法还原终端模式，请关闭并重新打开终端再试；非 TTY 沿用普通行读取。配置文件使用原子写入，在支持 Unix 文件模式的平台上限制为当前用户读写；Key 不会写入项目会话日志或显示在状态界面。不过它仍然是本机明文凭证：不要提交、同步或发送整个 `providers.json`，同一系统账号、管理员或恶意软件仍可能读取它。
 
 v0.12.3 阶段 A 起，Provider API Key、环境变量来源与 MCP OAuth 记录通过统一凭证接口读取，诊断、故障转移、OAuth 错误和会话持久化共享同一套脱敏规则。输入 `/credentials` 或 `/credentials status` 可查看 environment、Provider、MCP OAuth 和 Windows 后端的可用状态与条目数；命令永远不会显示、复制或散列 Key、Token 和 Client Secret。
 
