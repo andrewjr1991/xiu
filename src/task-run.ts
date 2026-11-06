@@ -234,7 +234,10 @@ function isRecord(value: unknown): value is TaskRunRecord {
 async function atomicWrite(file: string, value: unknown): Promise<void> {
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const existing = await fs.lstat(file).catch(() => undefined);
+  const existing = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
   if (existing?.isSymbolicLink() || (existing && !existing.isFile())) throw new Error(`Unsafe task-run journal path: ${file}`);
   const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
   try {
@@ -430,7 +433,10 @@ export class TaskRunJournal {
 
   async read(runId: string): Promise<TaskRunRecord | undefined> {
     const file = this.runFile(runId);
-    const stat = await fs.lstat(file).catch(() => undefined);
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
     if (!stat) return undefined;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run journal entry: ${file}`);
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
@@ -636,7 +642,10 @@ export class TaskRunJournal {
 
   private async releaseLock(runId: string): Promise<void> {
     const file = this.lockFile();
-    const stat = await fs.lstat(file).catch(() => undefined);
+    const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
     if (!stat) return;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run lock path: ${file}`);
     const existing = JSON.parse(await fs.readFile(file, "utf8")) as Partial<TaskRunLock>;
