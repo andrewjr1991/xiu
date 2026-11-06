@@ -318,6 +318,7 @@ export class Agent {
 
   private accessMode: "workspace" | "full" = "workspace";
   private changingPlanMode = false;
+  private changingModel = false;
 
   setAccessMode(mode: "workspace" | "full"): void {
     if (this.activeController) throw new Error("Cannot change access mode during a task");
@@ -328,6 +329,7 @@ export class Agent {
   async run(task: string): Promise<string> {
     if (this.activeController) throw new Error("Cannot start a task while another task or compaction is active.");
     if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
+    if (this.changingModel) throw new Error("Wait for the model change before starting a task.");
     const startedAt = Date.now();
     const controller = new AbortController();
     this.activeController = controller;
@@ -436,6 +438,7 @@ export class Agent {
 
   setRecoverySource(run: InterruptedTaskRun | undefined): void {
     if (this.activeController) throw new Error("Cannot change recovery state while a task is running.");
+    if (this.changingModel) throw new Error("Cannot change recovery state while a model change is active.");
     this.recoverySource = run;
     this.blockedRecoveryOperations = new Set(run?.operations
       .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "succeeded"))
@@ -479,6 +482,7 @@ export class Agent {
 
   async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
     if (this.activeController) throw new Error("Cannot switch providers while a task is running.");
+    if (this.changingModel) throw new Error("Cannot switch providers while a model change is active.");
     Object.assign(this.config, config);
     this.provider = provider;
     this.system = undefined;
@@ -1100,7 +1104,7 @@ export class Agent {
   }
 
   clearConversation(options: { preservePlanMode?: boolean } = {}): void {
-    if (this.activeController || this.changingPlanMode) throw new Error("Cannot clear the conversation while a task or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot clear the conversation while a task, model change or mode change is active.");
     this.messages = [];
     this.system = undefined;
     this.sessionPath = undefined;
@@ -1122,7 +1126,7 @@ export class Agent {
   }
 
   async compact(focus?: string): Promise<string> {
-    if (this.activeController || this.changingPlanMode) throw new Error("Cannot compact while a task, compaction or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot compact while a task, compaction, model change or mode change is active.");
     if (!this.messages.length) return localize(this.config.language ?? "en-US", "没有可压缩的对话上下文。", "No conversation context to compact.");
     const controller = new AbortController();
     this.activeController = controller;
@@ -1193,10 +1197,18 @@ export class Agent {
   }
 
   async setModel(model: string): Promise<void> {
+    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot change models while a task, model change or mode change is active.");
     const trimmed = model.trim();
     if (!trimmed) throw new Error("Model name cannot be empty.");
-    this.setModelInMemory(trimmed);
-    if (this.sessionPath) await this.log(this.sessionPath, { type: "model_changed", model: trimmed });
+    this.changingModel = true;
+    try {
+      // Validate context limits before recording a change, but keep the live
+      // model/capabilities unchanged until persistence has succeeded.
+      const prepared = { ...this.config };
+      refreshModelContext(prepared, trimmed);
+      if (this.sessionPath) await this.log(this.sessionPath, { type: "model_changed", model: trimmed });
+      this.setModelInMemory(trimmed, prepared);
+    } finally { this.changingModel = false; }
   }
 
   /** Persist the semantic terminal result once the CLI has assembled its visible cards. */
@@ -1236,7 +1248,7 @@ export class Agent {
   }
 
   restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
-    if (this.activeController || this.changingPlanMode) throw new Error("Cannot switch sessions while a task or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot switch sessions while a task, model change or mode change is active.");
     this.messages = restored.messages;
     this.restoreUserRequirementCache(restored);
     this.verificationLedger = undefined;
@@ -1267,7 +1279,7 @@ export class Agent {
   }
 
   async setPlanMode(enabled: boolean): Promise<void> {
-    if (this.activeController || this.changingPlanMode) throw new Error("Cannot change Plan mode while a task is running or another mode change is pending.");
+    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot change Plan mode while a task is running or another model change or mode change is pending.");
     if (typeof enabled !== "boolean") throw new Error("Invalid Plan mode.");
     if (!this.planManager) throw new Error("Plan manager is unavailable.");
     this.changingPlanMode = true;
@@ -1292,9 +1304,14 @@ export class Agent {
     this.reloadInstructions();
   }
 
-  private setModelInMemory(model: string): void {
+  private setModelInMemory(model: string, prepared?: Pick<AgentConfig, "contextWindow" | "contextWindowSource" | "contextLimit" | "contextLimitMode">): void {
     const previous = this.config.model;
-    refreshModelContext(this.config, model);
+    if (prepared) {
+      this.config.contextWindow = prepared.contextWindow;
+      this.config.contextWindowSource = prepared.contextWindowSource;
+      this.config.contextLimit = prepared.contextLimit;
+      this.config.contextLimitMode = prepared.contextLimitMode;
+    } else refreshModelContext(this.config, model);
     this.config.model = model;
     if (this.config.capabilities) {
       this.config.capabilities.text = model;
