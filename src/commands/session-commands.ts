@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { isUnconfiguredProvider } from "../provider-identity.js";
 import { plainTerminalSummary } from "../terminal-summary.js";
 import type { Agent } from "../agent.js";
 import type { CheckpointManager } from "../checkpoint.js";
@@ -139,11 +140,11 @@ export interface RestoredSessionConfigDeps {
 
 /**
  * Points the live config at the provider and model a restored session used (`--resume`, the session picker, a confirmed
- * recovery): the provider only when the command line did not choose one, the model always, with the text capability and a
- * vision capability that followed the old text model moving with it. Nothing is persisted.
+ * recovery): real provider preferences restore the model and related capabilities, with the provider only when the command
+ * line did not choose one. An internal inactive-host marker preserves the caller's current selection. Nothing is persisted.
  */
 export function applyRestoredSession(config: AgentConfig, restored: Pick<RestoredSession, "providerId" | "model"> | undefined, deps: RestoredSessionConfigDeps): void {
-  if (!restored) return;
+  if (!restored || isUnconfiguredProvider(restored.providerId)) return;
   if (restored.providerId && !deps.providerOverridden) {
     const restoredProfile = deps.providerRegistry.get(restored.providerId);
     if (restoredProfile) Object.assign(config, deps.profileConfig(restoredProfile, restored.model));

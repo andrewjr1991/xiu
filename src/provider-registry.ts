@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { UNCONFIGURED_PROVIDER_ID, UNCONFIGURED_PROVIDER_MODEL } from "./provider-identity.js";
 import { localize, type UiLanguage } from "./i18n.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import os from "node:os";
@@ -179,7 +180,7 @@ export function providerTemplateById(id: string): ProviderTemplate | undefined {
 
 /** Inert host identity for configuration screens. Never sent to a provider. */
 export const UNCONFIGURED_PROVIDER_PROFILE: ProviderProfile = {
-  id: "__xiu_unconfigured__", name: "未配置渠道", kind: "openai", model: "unconfigured",
+  id: UNCONFIGURED_PROVIDER_ID, name: "未配置渠道", kind: "openai", model: UNCONFIGURED_PROVIDER_MODEL,
   features: { text: true, tools: false, vision: false, image: false, video: false, audio: false },
 };
 

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { isUnconfiguredProvider } from "./provider-identity.js";
 import { appendSessionLog, prepareSessionStorage, validateSessionDestination } from "./session-storage.js";
 import { retainLatestImages } from "./tool-images.js";
 import { ModelRequestSilenceError, watchModelRequest } from "./model-request-watchdog.js";
@@ -308,7 +309,7 @@ export class Agent {
       this.sessionPath = restored.file;
       this.sessionId = restored.id;
       this.stats = restored.stats;
-      if (restored.model) this.setModelInMemory(restored.model);
+      if (restored.model && !isUnconfiguredProvider(restored.providerId)) this.setModelInMemory(restored.model);
       this.restoreTransportCompatibility(restored);
       this.planManager?.restore(restored.plan, restored.planMode);
       this.checkpointManager?.setSession(restored.id);
@@ -1283,7 +1284,7 @@ export class Agent {
     this.primaryTask = undefined;
     this.toolEvidence = [];
     this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
-    if (restored.model) this.setModelInMemory(restored.model);
+    if (restored.model && !isUnconfiguredProvider(restored.providerId)) this.setModelInMemory(restored.model);
     this.restoreTransportCompatibility(restored);
     this.planManager?.restore(restored.plan, options.preservePlanMode ? this.planManager.mode() : restored.planMode);
     this.checkpointManager?.setSession(restored.id);
