@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,62 @@ import test from "node:test";
 import { Agent } from "../src/agent.js";
 import { deleteSession, listSessionsWithIssues, loadSession, rebuildSessionSummaries, refreshSessionSummary } from "../src/session.js";
 import { inspectSessionSummaryStorage, readSessionSummary, writeSessionSummary } from "../src/session-summary.js";
+
+for (const replacement of ["regular", "symlink"] as const) {
+  test(`summary replacement with ${replacement} at open falls back to the original log`, { skip: replacement === "symlink" && process.platform === "win32" }, async (t) => {
+    const f = await fixture(t);
+    await refreshSessionSummary(f.file);
+    const value = JSON.parse(await fs.readFile(f.summary, "utf8"));
+    value.item.firstTask = "foreign cache canary";
+    const foreign = path.join(f.cwd, "foreign-cache.json");
+    await fs.writeFile(foreign, JSON.stringify(value));
+    const original = fs.open.bind(fs);
+    let replaced = false;
+    t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (String(args[0]) === f.summary && !replaced) {
+        replaced = true;
+        await fs.rename(f.summary, `${f.summary}.previous`);
+        if (replacement === "symlink") await fs.symlink(foreign, f.summary);
+        else await fs.copyFile(foreign, f.summary);
+        // Exercise the portable verification used when no-follow is unavailable.
+        args[1] = (args[1] as number) & ~(constants.O_NOFOLLOW ?? 0);
+      }
+      return original(...args);
+    });
+    const listing = await listSessionsWithIssues(f.cwd);
+    assert.equal(listing.sessions[0]?.firstTask, "original task");
+    assert.equal(await fs.readFile(foreign, "utf8"), JSON.stringify(value));
+  });
+}
+
+test("a summary changed during reading falls back without accepting mixed cache evidence", async (t) => {
+  const f = await fixture(t);
+  await refreshSessionSummary(f.file);
+  const value = JSON.parse(await fs.readFile(f.summary, "utf8"));
+  value.item.firstTask = "changed cache"; // Same byte length as the original title.
+  const original = fs.open.bind(fs);
+  let changed = false;
+  t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+    const handle = await original(...args);
+    if (String(args[0]) === f.summary) {
+      const read = handle.read.bind(handle);
+      t.mock.method(handle, "read", async (...data: Parameters<typeof handle.read>) => {
+        if (!changed) {
+          changed = true;
+          await fs.writeFile(f.summary, JSON.stringify(value));
+          const future = new Date(Date.now() + 10000);
+          await fs.utimes(f.summary, future, future);
+        }
+        return read(...data);
+      });
+    }
+    return handle;
+  });
+  const listing = await listSessionsWithIssues(f.cwd);
+  assert.equal(changed, true);
+  assert.equal(listing.sessions[0]?.firstTask, "original task");
+  assert.deepEqual(listing.unreadable, []);
+});
 
 async function fixture(t: { after: (callback: () => Promise<void>) => void }) {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-summary-"));

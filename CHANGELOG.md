@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Summary cache consistency: verify cache identity at open and metadata before/after bounded reads. Replaced or concurrently modified caches fall back to authoritative session logs without rewriting or deleting the cache. Cache metadata remains advisory and does not establish record ownership.
+
 - Session storage: reject linked application-owned history directories before listing, restoring, deleting or appending logs. Create storage directories individually and append through a verified regular-file handle with nonblocking/no-follow open flags and handle-based permissions. Recheck file identity before reading or writing; unsafe log failures cannot silently disable Plan mode or leave the Agent busy after repair.
 
 - Recovery diagnostics: add `xiu recover identity [json]`, a trusted-workspace, metadata-only preview of current/canonical legacy storage identities and a proposed POSIX identity. It bounds enumeration, groups errors and marks unknown lock presence/partial coverage. It never reads record/lock contents, verifies ownership, migrates storage or authorizes replay. Installed-package smoke now exercises this command with isolated configuration and network traps.

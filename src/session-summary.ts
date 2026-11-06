@@ -64,6 +64,10 @@ export async function readSessionSummary(file: string, source: Stats): Promise<S
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > MAX_SUMMARY_BYTES) return undefined;
+      const current = await fs.lstat(`${file}.summary.json`);
+      if (!current.isFile() || current.isSymbolicLink()
+        || stamp(entry) !== stamp(stat) || stamp(current) !== stamp(stat)) return undefined;
+      if (stamp(await regularSource(file)) !== stamp(source)) return undefined;
       const bytes = Buffer.alloc(stat.size + 1);
       let length = 0;
       while (length < bytes.length) {
@@ -72,6 +76,10 @@ export async function readSessionSummary(file: string, source: Stats): Promise<S
         length += read.bytesRead;
       }
       if (length !== stat.size) return undefined;
+      // A cache modified or replaced during the bounded read cannot attest a
+      // stable snapshot, even if its saved source stamp still matches the log.
+      if (stamp(await handle.stat()) !== stamp(stat)
+        || stamp(await fs.lstat(`${file}.summary.json`)) !== stamp(stat)) return undefined;
       const value = JSON.parse(bytes.subarray(0, length).toString("utf8")) as Record<string, unknown> | null;
       if (!value || value.version !== SUMMARY_VERSION || value.source !== stamp(source)) return undefined;
       const item = value.item as Record<string, unknown> | null;
