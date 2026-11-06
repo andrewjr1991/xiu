@@ -122,3 +122,34 @@ test("committing a model change preserves an independently updated UI language",
   assert.equal(f.config.language, "zh-CN");
   assert.equal(f.agent.status().model, "new-model");
 });
+
+for (const preservePlanMode of [false, true]) {
+  test(`failed history context validation preserves the active session and permits retry (preserve Plan ${preservePlanMode})`, async (t) => {
+    const f = await fixture(t, { provider: "agnes", model: "agnes-2.5-flash", contextWindow: 512000,
+      contextWindowSource: "official", contextLimit: 300000, contextLimitMode: "configured" });
+    await f.agent.setPlanMode(true);
+    const target = path.join(path.dirname(f.file), "other.jsonl");
+    await fs.writeFile(target, `${JSON.stringify({ type: "task", task: "other history", config: { providerId: "offline", provider: "agnes", model: "unknown-model" } })}\n`);
+    const restored = await loadSession(f.cwd, "other");
+    const before = { config: structuredClone(f.config), status: f.agent.status(), history: f.agent.history(), plan: f.agent.plan(), log: await fs.readFile(f.file, "utf8"), target: await fs.readFile(target, "utf8") };
+    assert.throws(() => f.agent.restoreSession(restored, { preservePlanMode }), /context-limit/);
+    assert.equal(f.agent.status().sessionId, before.status.sessionId);
+    const after = f.agent.status();
+    // Snapshot observation time advances even when no execution state changes.
+    if (after.diagnostics && before.status.diagnostics) after.diagnostics.updatedAt = before.status.diagnostics.updatedAt;
+    assert.deepEqual(after, before.status);
+    assert.deepEqual(f.config, before.config);
+    assert.equal(f.agent.history(), before.history);
+    assert.equal(f.agent.plan(), before.plan);
+    assert.equal(await fs.readFile(f.file, "utf8"), before.log);
+    assert.equal(await fs.readFile(target, "utf8"), before.target);
+    await f.agent.run("continue the original session");
+    assert.equal(f.agent.status().sessionId, before.status.sessionId);
+    assert.equal((await loadSession(f.cwd, f.restored.id)).lastUserTask, "continue the original session");
+    assert.equal(await fs.readFile(target, "utf8"), before.target);
+    f.agent.restoreSession({ ...restored, model: "agnes-2.5-flash" }, { preservePlanMode });
+    assert.equal(f.agent.status().sessionId, "other");
+    assert.equal(f.agent.status().planMode, preservePlanMode);
+    assert.match(f.agent.history(), /other history/);
+  });
+}

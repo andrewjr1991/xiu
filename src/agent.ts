@@ -1269,6 +1269,11 @@ export class Agent {
 
   restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
     if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot switch sessions while a task, configuration change or mode change is active.");
+    // A rejected model preference must leave the current session (including its
+    // log destination, requirements and execution state) intact.
+    const prepared = { ...this.config };
+    const restoreModel = restored.model && !isUnconfiguredProvider(restored.providerId) ? restored.model : undefined;
+    if (restoreModel) refreshModelContext(prepared, restoreModel);
     this.messages = restored.messages;
     this.restoreUserRequirementCache(restored);
     this.verificationLedger = undefined;
@@ -1284,7 +1289,7 @@ export class Agent {
     this.primaryTask = undefined;
     this.toolEvidence = [];
     this.taskDiagnostics = restoreTaskDiagnostics(restored.diagnostics);
-    if (restored.model && !isUnconfiguredProvider(restored.providerId)) this.setModelInMemory(restored.model);
+    if (restoreModel) this.setModelInMemory(restoreModel, prepared);
     this.restoreTransportCompatibility(restored);
     this.planManager?.restore(restored.plan, options.preservePlanMode ? this.planManager.mode() : restored.planMode);
     this.checkpointManager?.setSession(restored.id);

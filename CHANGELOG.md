@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Session restoration: validate a history model’s context limits before replacing the active session. A rejected preference preserves the original conversation, log destination, Plan selection, diagnostics and verification state; continued tasks still append to the original history, and valid restoration can be retried.
+
 - Session restoration: treat the internal inactive-provider marker as historical metadata, preserving the currently selected model, capabilities and context instead of restoring the placeholder model. Apply the same rule to CLI startup and shared Agent restoration; retain ordinary real-provider model preferences and the original logs.
 
 - Provider state: capture target configuration and commit the effective transport/config only after its redacted session event is saved. Share the model/provider pending-change guard, preserve independently updated UI language, reject workspace changes and retain the selected root for equivalent aliases. Disable the current transport/tools before removing its credentials; failed deactivation preserves the profile, and later removal failures leave the runtime inert. Fix buffered confirmation lines being lost to immediate EOF; typed yes/no requirements remain unchanged.
