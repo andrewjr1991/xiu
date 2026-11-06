@@ -293,7 +293,7 @@ export class DesktopTaskController {
     const selectedQuestion = selectedFinished?.type === "task.finished" ? selectedFinished.payload.pendingQuestion?.question : undefined;
     const continuation = selectedRun?.status === "waiting_user" && selectedQuestion === previousQuestion && previousQuestion && previousTurn
       ? continueTaskAfterAnswer(previousTurn.task, previousQuestion, normalized, "zh-CN") : normalized;
-    host.agent.restoreSession(restored, { preservePlanMode: true });
+    host.agent.restoreSession(restored, { preservePlanMode: true, preserveModel: true });
     this.modeContextId = randomUUID();
     await host.agent.setModel(host.provider.model);
     const history = await this.openTaskHistory(workspace, { taskId });
@@ -541,7 +541,7 @@ export class DesktopTaskController {
     const replacement = await this.ensure(workspace);
     if (restored && replacement.agent) {
       const replacementContext = this.modeContextId;
-      replacement.agent.restoreSession(restored, { preservePlanMode: true });
+      replacement.agent.restoreSession(restored, { preservePlanMode: true, preserveModel: true });
       await replacement.agent.setModel(replacement.provider.model);
       this.assertIdleContext(replacement, workspace, replacementContext);
       replacement.checkpointManager?.setSession(restored.id);

@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Desktop history: continuation and same-workspace channel reload preserve the selected model while restoring conversation state, then persist that selection through the normal model-change path. An incompatible historical model no longer prevents using a valid current selection. Default CLI and interrupted-task recovery model preferences remain unchanged.
+
 - Session restoration: validate a history model’s context limits before replacing the active session. A rejected preference preserves the original conversation, log destination, Plan selection, diagnostics and verification state; continued tasks still append to the original history, and valid restoration can be retried.
 
 - Session restoration: treat the internal inactive-provider marker as historical metadata, preserving the currently selected model, capabilities and context instead of restoring the placeholder model. Apply the same rule to CLI startup and shared Agent restoration; retain ordinary real-provider model preferences and the original logs.
