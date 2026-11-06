@@ -107,6 +107,7 @@ test("requires explicit abandon or resume before another task", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
   const first = await item.journal.begin({ sessionId: "session-3", task: "first", providerId: "p", model: "m" });
+  await item.journal.pause("explicit interruption fixture");
   const next = new TaskRunJournal(item.workspace, item.journalRoot);
   await assert.rejects(() => next.begin({ sessionId: "session-4", task: "second", providerId: "p", model: "m" }), /explicit resume or abandon/);
   await next.abandon(first.runId);
@@ -166,6 +167,7 @@ test("confirmed recovery supersedes the interrupted record", async (t) => {
   const item = await fixture();
   t.after(() => fs.rm(item.root, { recursive: true, force: true }));
   const first = await item.journal.begin({ sessionId: "session-5", task: "first", providerId: "p", model: "m" });
+  await item.journal.pause("explicit interruption fixture");
   const next = new TaskRunJournal(item.workspace, item.journalRoot);
   const resumed = await next.begin({ sessionId: "session-5", task: "continue", providerId: "p", model: "m", resumedFrom: first.runId });
   assert.equal(resumed.resumedFrom, first.runId);
@@ -273,6 +275,7 @@ test("agent recovery never replays the exact unknown side-effect operation", asy
     risk: "write",
     sideEffect: "workspace",
   });
+  await item.journal.pause("explicit interruption fixture");
   const next = new TaskRunJournal(item.workspace, item.journalRoot);
   const interrupted = await next.interrupted();
   assert.ok(interrupted);

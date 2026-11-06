@@ -269,6 +269,9 @@ export class TaskRunJournal {
     if (this.current?.status === "running") throw new Error("A task run is already active in this Xiu process.");
     if (options.resumedFrom !== undefined && !isTaskRunId(options.resumedFrom)) throw new Error("Unsupported or corrupt task-run recovery identifier.");
     const existing = (await this.recoverableRecords())[0];
+    if (existing?.status === "running" && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
+      throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
+    }
     if (existing && existing.runId !== options.resumedFrom) {
       if (existing.ownerPid !== process.pid && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
         throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
@@ -277,7 +280,7 @@ export class TaskRunJournal {
     }
     const now = new Date().toISOString();
     const runId = randomUUID();
-    await this.acquireLock(runId, options.resumedFrom);
+    await this.acquireLock(runId);
     const record: TaskRunRecord = {
       version: TASK_RUN_SCHEMA_VERSION,
       runId,
@@ -392,6 +395,7 @@ export class TaskRunJournal {
   async abandon(runId: string, evidence = "abandoned by user"): Promise<void> {
     const record = await this.read(runId);
     if (!record) return;
+    await this.assertInactiveOwner(record);
     record.status = "abandoned";
     record.finishedAt = new Date().toISOString();
     record.updatedAt = record.finishedAt;
@@ -447,6 +451,9 @@ export class TaskRunJournal {
     });
     if (!stat) return false;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run journal entry: ${file}`);
+    const record = await this.read(runId);
+    if (!record) throw new Error("Task-run journal changed before deletion.");
+    await this.assertInactiveOwner(record);
     await fs.unlink(file);
     return true;
   }
@@ -580,7 +587,13 @@ export class TaskRunJournal {
     }
   }
 
-  private async acquireLock(runId: string, resumedFrom?: string): Promise<void> {
+  private async assertInactiveOwner(record: TaskRunRecord): Promise<void> {
+    if (record.status === "running" && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) {
+      throw new Error("Cannot change an active task run while its owner is running.");
+    }
+  }
+
+  private async acquireLock(runId: string): Promise<void> {
     const directory = this.directory();
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const file = this.lockFile();
@@ -610,10 +623,9 @@ export class TaskRunJournal {
           && isTaskRunId(existing.runId)
           && isProcessId(existing.ownerPid);
         if (!valid) throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
-        const takeoverConfirmed = resumedFrom === existing.runId;
         const existingRecord = await this.read(existing.runId).catch(() => undefined);
         const terminal = existingRecord && existingRecord.status !== "running";
-        if (await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt) && !takeoverConfirmed && !terminal) {
+        if (await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt) && !terminal) {
           throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
         }
         await fs.unlink(file);
