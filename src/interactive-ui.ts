@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { plainTerminalSummary, stripTerminalControls } from "./terminal-summary.js";
 import chalk from "chalk";
 import { localize, type UiLanguage } from "./i18n.js";
 import { InputEndedError } from "./terminal-prompts.js";
@@ -453,22 +454,24 @@ export function terminalOptionFrameLines<T>(
   const lineWidth = Math.max(19, Math.min(columns - 4, 88));
   const start = Math.min(Math.max(0, selected - visibleCount + 1), Math.max(0, options.length - visibleCount));
   const visible = options.slice(start, start + visibleCount);
-  const titleLines = title.split(/\r?\n/).map((line) => chalk.bold(truncateDisplay(line, lineWidth)));
+  const titleLines = stripTerminalControls(title).split(/\r?\n/).map((line) => chalk.bold(truncateDisplay(plainTerminalSummary(line), lineWidth)));
   const lines = titleLines.length ? titleLines : [""];
   for (const [offset, option] of visible.entries()) {
     const index = start + offset;
     const pointer = index === selected ? chalk.green(">") : " ";
     const available = lineWidth - 2;
-    if (!option.description) {
-      const label = truncateDisplay(option.label, available);
+    const displayLabel = plainTerminalSummary(option.label);
+    const displayDescription = option.description ? plainTerminalSummary(option.description) : "";
+    if (!displayDescription) {
+      const label = truncateDisplay(displayLabel, available);
       lines.push(`${pointer} ${index === selected ? chalk.green(label) : label}`);
       continue;
     }
-    const labelWidth = Math.min(terminalDisplayWidth(option.label), Math.max(12, Math.floor(available * 0.42)));
-    const plainLabel = truncateDisplay(option.label, labelWidth);
+    const labelWidth = Math.min(terminalDisplayWidth(displayLabel), Math.max(12, Math.floor(available * 0.42)));
+    const plainLabel = truncateDisplay(displayLabel, labelWidth);
     const label = index === selected ? chalk.green(plainLabel) : plainLabel;
     const descriptionWidth = Math.max(0, available - terminalDisplayWidth(plainLabel) - 2);
-    const description = truncateDisplay(option.description, descriptionWidth);
+    const description = truncateDisplay(displayDescription, descriptionWidth);
     lines.push(`${pointer} ${label}  ${chalk.dim(description)}`.trimEnd());
   }
   lines.push(chalk.dim(truncateDisplay(localize(language, "↑/↓ 或数字键选择 · Enter 确认 · Esc 取消", "Up/Down or number keys - Enter select - Esc cancel"), lineWidth)));
@@ -802,7 +805,7 @@ export async function selectTerminalOption<T>(title: string, options: SelectOpti
   if (!options.length) return undefined;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     if (behaviour.nonInteractive === "first") return options[0]?.value;
-    const heading = title.split("\n")[0] ?? title;
+    const heading = plainTerminalSummary(stripTerminalControls(title).split("\n")[0] ?? "");
     process.stderr.write(`${chalk.dim(localize(language,
       `${heading} 没有可交互的终端，无法选择，已按取消处理；请在命令里直接给出参数，或在终端中运行。`,
       `${heading} There is no interactive terminal to choose from, so this counts as cancelled; pass the choice as a command argument or run in a terminal.`))}\n`);

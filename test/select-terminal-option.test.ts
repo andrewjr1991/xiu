@@ -44,3 +44,11 @@ test("an empty menu returns nothing without printing", async () => {
   assert.equal(result, undefined);
   assert.equal(stderr, "");
 });
+
+test("non-TTY cancellation sanitizes the heading before printing it and never chooses a value", async () => {
+  const title = "Choose\u001b]0;hidden\npayload\u0007\nScope: read";
+  const { result, stderr } = await withoutTty(() => captureStderr(() => selectTerminalOption(title, options, "en-US")));
+  assert.equal(result, undefined);
+  assert.match(stderr, /Choose There is no interactive terminal/);
+  assert.doesNotMatch(stderr, /\u001b\]|hidden|payload|Scope/);
+});
