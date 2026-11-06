@@ -8,6 +8,9 @@ function unsafe(code = "SESSION_STORAGE_UNSAFE"): Error {
 
 function parents(file: string): string[] {
   const directory = path.dirname(path.resolve(file));
+  // Flat legacy storage belongs directly to the selected workspace root,
+  // whose user-chosen alias may itself be named .xiu or .forge.
+  if (path.basename(directory) === ".forge_sessions") return [directory];
   const parent = path.dirname(directory);
   return [".xiu", ".forge"].includes(path.basename(parent)) ? [parent, directory] : [directory];
 }

@@ -3,6 +3,7 @@ import { constants, type Stats } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionListItem } from "./session.js";
+import { assertSessionStorageParents } from "./session-storage.js";
 
 const MAX_SUMMARY_BYTES = 64 * 1024;
 // Validation semantics changed: old caches cannot attest the saved-state damage count.
@@ -13,11 +14,7 @@ function stamp(stat: Stats): string {
 }
 
 async function regularSource(file: string): Promise<Stats> {
-  // Refuse links in the application-owned storage directories, while allowing
-  // OS aliases above the workspace such as macOS /tmp -> /private/tmp.
-  for (const directory of [path.dirname(file), path.dirname(path.dirname(file))]) {
-    if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error("Linked session summary source.");
-  }
+  await assertSessionStorageParents(file);
   const stat = await fs.lstat(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe session summary source.");
   return stat;

@@ -25,7 +25,7 @@ npm install -g @xiu-ai/cli
 xiu --version
 ```
 
-Windows PowerShell 中若 `npm.ps1` 被执行策略或 ConstrainedLanguage 限制，请用 `npm.cmd` 代替 `npm`。安装后找不到 `xiu` 命令时，重新打开终端，或运行 `xiu doctor` 做只读诊断（覆盖安装、渠道、联网搜索、代理与证书，输出已脱敏，可直接贴给维护者）。 已信任工作区还显示可读会话日志字节数、最大日志和损坏会话数，排除缓存与不可读条目。 摘要缓存元数据另行统计，仅覆盖可读日志对应缓存，不读取正文或清理文件。 CLI 和桌面历史列表也会提示目录读取异常；扫描不完整时恢复、删除和索引重建先停止。 会话自有存储目录拒绝链接/Junction 和非普通日志文件，写入失败需先修复存储再重试。 开发版 `xiu recover identity [json]` 可另做只读存储身份预览，不执行迁移。
+Windows PowerShell 中若 `npm.ps1` 被执行策略或 ConstrainedLanguage 限制，请用 `npm.cmd` 代替 `npm`。安装后找不到 `xiu` 命令时，重新打开终端，或运行 `xiu doctor` 做只读诊断（覆盖安装、渠道、联网搜索、代理与证书，输出已脱敏，可直接贴给维护者）。 已信任工作区还显示可读会话日志字节数、最大日志和损坏会话数，排除缓存与不可读条目。 摘要缓存元数据另行统计，仅覆盖可读日志对应缓存，不读取正文或清理文件。 CLI 和桌面历史列表也会提示目录读取异常；扫描不完整时恢复、删除和索引重建先停止。 用户选定的工作区根别名可用；根以下会话自有存储目录拒绝链接/Junction 和非普通日志文件，写入失败需先修复存储再重试。 开发版 `xiu recover identity [json]` 可另做只读存储身份预览，不执行迁移。
 
 桌面预览版：从 [Releases](https://github.com/andrewjr1991/xiu/releases/latest) 下载 `Xiu-<版本>-x64-<提交>-unsigned.exe`。安装器按当前用户安装、不要求管理员；因为未签名，Windows SmartScreen 会提示“未知发布者”。
 

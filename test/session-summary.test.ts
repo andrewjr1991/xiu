@@ -266,7 +266,7 @@ test("linked summary objects and source directories are not used for cache write
   assert.equal(await readSessionSummary(f.file, await fs.stat(f.file)), undefined);
   const linked = path.join(f.cwd, "linked");
   await fs.symlink(path.dirname(f.file), linked);
-  await assert.rejects(refreshSessionSummary(path.join(linked, "sample.jsonl")), /Linked session/);
+  await assert.rejects(refreshSessionSummary(path.join(linked, "sample.jsonl")), { code: "ELOOP" });
   assert.equal((await fs.readFile(target, "utf8")).includes("original task"), true);
 });
 

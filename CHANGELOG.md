@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Legacy history compatibility: distinguish an explicitly selected workspace-root alias (including roots named `.xiu` or `.forge`) from linked internal storage directories. Flat `.forge_sessions` logs and their summary caches share the same parent checks, so listing, restore, cache rebuilding and deletion work through valid root aliases while linked storage is still rejected.
+
 - CI diagnostics: emit early Verify-stage annotations before checkout and Node/npm-cache setup, so pre-installation timeouts have a narrower last-observed phase. Keep all existing job limits, matrices and acceptance gates unchanged.
 
 - Session model switching (`Agent.setModel`, used by desktop history continuation): validate target context before logging, then commit live model/context/capability state only after persistence succeeds. Failed writes retain the prior configuration and permit retry. Pending model changes block tasks, compaction, session resets/restores, Plan/provider/recovery changes and another model switch; active tasks reject switching models.

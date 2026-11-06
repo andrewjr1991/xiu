@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { appendSessionLog } from "../src/session-storage.js";
 import { Agent } from "../src/agent.js";
-import { deleteSession, listSessionsWithIssues, loadSession } from "../src/session.js";
+import { deleteSession, listSessionsWithIssues, loadSession, rebuildSessionSummaries } from "../src/session.js";
 
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-storage-boundary-"));
@@ -16,6 +16,30 @@ async function fixture(t: test.TestContext) {
   await fs.mkdir(cwd);
   await fs.mkdir(outside);
   return { root, cwd, outside };
+}
+
+for (const name of [".xiu", ".forge", "workspace-alias"]) {
+  test(`selected workspace root alias ${name} supports current and flat legacy history including cache rebuilding`, async (t) => {
+    const { root, cwd } = await fixture(t);
+    const alias = path.join(root, name);
+    await fs.symlink(cwd, alias, process.platform === "win32" ? "junction" : "dir");
+    const current = path.join(cwd, ".xiu", "sessions"), legacy = path.join(cwd, ".forge_sessions");
+    await fs.mkdir(current, { recursive: true });
+    await fs.mkdir(legacy);
+    await fs.writeFile(path.join(current, "current.jsonl"), '{"type":"task","task":"current local task"}\n');
+    const legacyFile = path.join(legacy, "legacy.jsonl");
+    await fs.writeFile(legacyFile, '{"type":"task","task":"legacy local task"}\n');
+    const listing = await listSessionsWithIssues(alias, { useSummary: false });
+    assert.deepEqual(listing.sessions.map((item) => item.id).sort(), ["current", "legacy"]);
+    assert.deepEqual(listing.directoryIssues ?? [], []);
+    assert.equal((await loadSession(alias, "legacy")).id, "legacy");
+    await rebuildSessionSummaries(alias);
+    assert.equal((await fs.lstat(`${legacyFile}.summary.json`)).isFile(), true);
+    assert.equal((await fs.lstat(path.join(current, "current.jsonl.summary.json"))).isFile(), true);
+    assert.equal(await deleteSession(alias, "legacy"), true);
+    await assert.rejects(fs.lstat(legacyFile), { code: "ENOENT" });
+    assert.equal((await fs.lstat(path.join(current, "current.jsonl"))).isFile(), true);
+  });
 }
 
 for (const storage of [".xiu", ".xiu/sessions", ".forge", ".forge_sessions"]) {
