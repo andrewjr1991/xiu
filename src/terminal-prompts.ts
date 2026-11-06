@@ -1,4 +1,4 @@
-import readline from "node:readline/promises";
+import readline from "node:readline";
 import process from "node:process";
 
 /** The input ended (EOF, Ctrl-D, a closed pipe) before the question was answered. */
@@ -26,7 +26,9 @@ export async function askQuestion(prompt: string, streams: PromptStreams = { inp
     return await new Promise<string>((resolve, reject) => {
       let settled = false;
       rl.once("close", () => { if (!settled) { settled = true; reject(new InputEndedError()); } });
-      rl.question(prompt).then((answer) => { settled = true; resolve(answer); }, (error: unknown) => { settled = true; reject(error); });
+      // Settle synchronously with the answered line. A buffered pipe can emit
+      // EOF in the same turn, before a promise question's `.then` would run.
+      rl.question(prompt, (answer) => { settled = true; resolve(answer); });
     });
   } finally { rl.close(); }
 }

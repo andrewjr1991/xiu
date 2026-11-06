@@ -318,7 +318,8 @@ export class Agent {
 
   private accessMode: "workspace" | "full" = "workspace";
   private changingPlanMode = false;
-  private changingModel = false;
+  private configurationChange?: "model" | "provider";
+  private languageRevision = 0;
 
   setAccessMode(mode: "workspace" | "full"): void {
     if (this.activeController) throw new Error("Cannot change access mode during a task");
@@ -329,7 +330,7 @@ export class Agent {
   async run(task: string): Promise<string> {
     if (this.activeController) throw new Error("Cannot start a task while another task or compaction is active.");
     if (this.changingPlanMode) throw new Error("Wait for the Plan mode change before starting a task.");
-    if (this.changingModel) throw new Error("Wait for the model change before starting a task.");
+    if (this.configurationChange) throw new Error(`Wait for the ${this.configurationChange} change before starting a task.`);
     const startedAt = Date.now();
     const controller = new AbortController();
     this.activeController = controller;
@@ -438,7 +439,7 @@ export class Agent {
 
   setRecoverySource(run: InterruptedTaskRun | undefined): void {
     if (this.activeController) throw new Error("Cannot change recovery state while a task is running.");
-    if (this.changingModel) throw new Error("Cannot change recovery state while a model change is active.");
+    if (this.configurationChange) throw new Error(`Cannot change recovery state while a ${this.configurationChange} change is active.`);
     this.recoverySource = run;
     this.blockedRecoveryOperations = new Set(run?.operations
       .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "succeeded"))
@@ -482,16 +483,34 @@ export class Agent {
 
   async replaceProvider(config: AgentConfig, provider: ModelProvider): Promise<void> {
     if (this.activeController) throw new Error("Cannot switch providers while a task is running.");
-    if (this.changingModel) throw new Error("Cannot switch providers while a model change is active.");
-    Object.assign(this.config, config);
-    this.provider = provider;
-    this.system = undefined;
-    if (this.sessionPath) await this.log(this.sessionPath, {
-      type: "provider_changed",
-      providerId: config.providerId,
-      provider: config.provider,
-      model: config.model,
-    });
+    if (this.configurationChange || this.changingPlanMode) throw new Error("Cannot switch providers while a configuration change or mode change is active.");
+    this.configurationChange = "provider";
+    try {
+      const previousLanguageRevision = this.languageRevision;
+      const prepared = structuredClone(config);
+      if (path.resolve(prepared.cwd) !== path.resolve(this.config.cwd)) {
+        const roots = await Promise.all([fs.stat(this.config.cwd, { bigint: true }), fs.stat(prepared.cwd, { bigint: true })]).catch(() => undefined);
+        if (!roots || !roots[0].isDirectory() || !roots[1].isDirectory() || roots[0].ino === 0n
+          || roots[0].dev !== roots[1].dev || roots[0].ino !== roots[1].ino || roots[0].birthtimeNs !== roots[1].birthtimeNs) {
+          throw Object.assign(new Error("Provider changes cannot switch the current workspace."), { code: "WORKSPACE_CONTEXT_CHANGED" });
+        }
+        // Equivalent aliases are valid input, but the selected lexical root
+        // stays fixed so existing log paths and legacy journal IDs do not move.
+        prepared.cwd = this.config.cwd;
+      }
+      // The live config still belongs to the previous provider until commit.
+      // Redact the target provider's credentials before the logger also applies
+      // the current provider's known-secret redaction.
+      const targetSecrets = [prepared.apiKey, readEnvironmentCredential(prepared.apiKeyEnv)]
+        .filter((value): value is string => Boolean(value));
+      if (this.sessionPath) await this.log(this.sessionPath, sanitizeSecrets({
+        type: "provider_changed", providerId: prepared.providerId, provider: prepared.provider, model: prepared.model,
+      }, targetSecrets));
+      if (this.languageRevision !== previousLanguageRevision) prepared.language = this.config.language;
+      Object.assign(this.config, prepared);
+      this.provider = provider;
+      this.system = undefined;
+    } finally { this.configurationChange = undefined; }
   }
 
   private async runWithSignal(task: string, signal: AbortSignal): Promise<string> {
@@ -1104,7 +1123,7 @@ export class Agent {
   }
 
   clearConversation(options: { preservePlanMode?: boolean } = {}): void {
-    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot clear the conversation while a task, model change or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot clear the conversation while a task, configuration change or mode change is active.");
     this.messages = [];
     this.system = undefined;
     this.sessionPath = undefined;
@@ -1126,7 +1145,7 @@ export class Agent {
   }
 
   async compact(focus?: string): Promise<string> {
-    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot compact while a task, compaction, model change or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot compact while a task, compaction, configuration change or mode change is active.");
     if (!this.messages.length) return localize(this.config.language ?? "en-US", "没有可压缩的对话上下文。", "No conversation context to compact.");
     const controller = new AbortController();
     this.activeController = controller;
@@ -1197,10 +1216,10 @@ export class Agent {
   }
 
   async setModel(model: string): Promise<void> {
-    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot change models while a task, model change or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot change models while a task, configuration change or mode change is active.");
     const trimmed = model.trim();
     if (!trimmed) throw new Error("Model name cannot be empty.");
-    this.changingModel = true;
+    this.configurationChange = "model";
     try {
       // Validate context limits before recording a change, but keep the live
       // model/capabilities unchanged until persistence has succeeded.
@@ -1208,7 +1227,7 @@ export class Agent {
       refreshModelContext(prepared, trimmed);
       if (this.sessionPath) await this.log(this.sessionPath, { type: "model_changed", model: trimmed });
       this.setModelInMemory(trimmed, prepared);
-    } finally { this.changingModel = false; }
+    } finally { this.configurationChange = undefined; }
   }
 
   /** Persist the semantic terminal result once the CLI has assembled its visible cards. */
@@ -1248,7 +1267,7 @@ export class Agent {
   }
 
   restoreSession(restored: RestoredSession, options: { preservePlanMode?: boolean } = {}): void {
-    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot switch sessions while a task, model change or mode change is active.");
+    if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot switch sessions while a task, configuration change or mode change is active.");
     this.messages = restored.messages;
     this.restoreUserRequirementCache(restored);
     this.verificationLedger = undefined;
@@ -1279,7 +1298,7 @@ export class Agent {
   }
 
   async setPlanMode(enabled: boolean): Promise<void> {
-    if (this.activeController || this.changingPlanMode || this.changingModel) throw new Error("Cannot change Plan mode while a task is running or another model change or mode change is pending.");
+    if (this.activeController || this.changingPlanMode || this.configurationChange) throw new Error("Cannot change Plan mode while a task is running or another configuration change or mode change is pending.");
     if (typeof enabled !== "boolean") throw new Error("Invalid Plan mode.");
     if (!this.planManager) throw new Error("Plan manager is unavailable.");
     this.changingPlanMode = true;
@@ -1299,6 +1318,7 @@ export class Agent {
   }
 
   setLanguage(language: UiLanguage): void {
+    this.languageRevision++;
     this.config.language = language;
     this.planManager?.setLanguage(language);
     this.reloadInstructions();

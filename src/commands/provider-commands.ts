@@ -7,7 +7,7 @@ import { type ProviderProfile, type ProviderRegistry, providerTemplates, UNCONFI
 import { isProviderRoutingPhase, PROVIDER_ROUTING_PHASES } from "../provider-routing.js";
 import { probeProvider } from "../providers.js";
 import type { StatusLine } from "../status.js";
-import { askQuestion, askSecret } from "../terminal-prompts.js";
+import { askQuestion, askSecret, type PromptStreams } from "../terminal-prompts.js";
 import path from "node:path";
 import { formatUserFacingError } from "../user-facing-errors.js";
 
@@ -24,6 +24,8 @@ export interface ProviderCommandContext {
   startupProfile: ProviderProfile;
   status: StatusLine;
   switchProviderProfile: (profile: ProviderProfile, persist?: boolean, preferredModel?: string, forceCapabilityProbe?: boolean) => Promise<boolean>;
+  /** Optional terminal streams for the existing typed removal confirmation. */
+  removalPromptStreams?: PromptStreams;
 }
 
 /** Handles the slash commands moved out of the interactive loop in cli.ts; returns false when `task` is not one of them. */
@@ -285,15 +287,18 @@ export async function handleProviderCommand(task: string, ctx: ProviderCommandCo
       console.log(chalk.dim(localize(language, "已取消删除。\n", "Removal cancelled.\n")));
       return true;
     }
-    const confirmed = await askQuestion(localize(language, `确认删除 ${selected} 的渠道配置和本机凭据？[y/N]：`, `Remove ${selected} and its local credential? [y/N]: `));
+    const confirmed = await askQuestion(localize(language, `确认删除 ${selected} 的渠道配置和本机凭据？[y/N]：`, `Remove ${selected} and its local credential? [y/N]: `), ctx.removalPromptStreams);
     if (!/^(y|yes)$/i.test(confirmed.trim())) return true;
-    await providerRegistry.remove(selected);
-    if (selected === config.providerId) {
+    const removingCurrent = selected === config.providerId;
+    if (removingCurrent) {
       const nextConfig = profileConfig(UNCONFIGURED_PROVIDER_PROFILE);
       await agent.replaceProvider(nextConfig, { async complete(): Promise<never> { throw new Error(localize(language, "请使用 /provider add 或 /providers 配置渠道。", "Use /provider add or /providers to configure a Provider.")); } });
       rebuildBaseTools();
       attachMcpTools();
     }
+    // A failed deactivation must not delete the credential of the still-live
+    // transport. Once disabled, a later removal failure must not reactivate it.
+    await providerRegistry.remove(selected);
     console.log(chalk.green(localize(language, `已删除 Provider ${selected}。\n`, `Removed provider ${selected}.\n`)));
     return true;
   }

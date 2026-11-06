@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { PassThrough } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import test from "node:test";
 import { askQuestion, askYesNo, InputEndedError } from "../src/terminal-prompts.js";
 
@@ -31,6 +31,16 @@ test("askQuestion still answers a line that arrives together with the end of the
   const pending = askQuestion("Select [1]: ", io);
   io.input.end("yes\n");
   assert.equal(await pending, "yes");
+});
+
+test("askQuestion accepts a buffered pipe line before its immediate EOF", async () => {
+  assert.equal(await askQuestion("Confirm? ", { input: Readable.from(["yes\n"]), output: new PassThrough() }), "yes");
+});
+
+test("buffered yes/no pipes still require a literal yes and empty input declines", async () => {
+  for (const [chunks, expected] of [[["YES\n"], true], [["no\n"], false], [[], false]] as const) {
+    assert.equal(await askYesNo("Confirm? [y/N] ", { input: Readable.from(chunks), output: new PassThrough() }), expected);
+  }
 });
 
 test("askYesNo accepts only y/yes and treats an ended input as no", async () => {
