@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Desktop history: bind asynchronous snapshots to their workspace selection so late results/errors cannot label an untrusted selection as trusted or carry old tasks into it. Clear recovered storage errors and surface unreadable run records using the same notice formatter as CLI lists; strict recovery checks remain unchanged.
+
 - History: report failed session-directory enumeration in CLI lists/resume and desktop history without hiding healthy tasks. Incomplete directory scans now stop restoration, deletion and explicit index rebuilding before side effects; the resume chooser raises an error instead of silently falling back to a new session. Missing directories remain normal, and per-file isolation is preserved.
 
 - Doctor: separately count summary cache files and bytes attached to readable logs, with missing/non-regular/uninspectable counts. Inspect metadata only, without opening cache contents or creating/deleting files; orphan caches and caches of unreadable logs are excluded. These observations do not validate caches or measure total disk usage.

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { listSessionsWithIssues, unreadableSessionsNote } from "../../../src/session.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
+import { unreadableRunsNote } from "../../../src/history-notices.js";
 import { TaskRunJournal } from "../../../src/task-run.js";
 import { isWorkspaceTrusted, trustWorkspace } from "../../../src/trust.js";
 import {
@@ -72,23 +73,27 @@ export class DesktopWorkspaceController {
   }
 
   async snapshot(): Promise<DesktopWorkspaceSnapshot> {
+    const current = this.current;
     const recent = await this.recentSnapshot();
-    if (!this.current) return this.safeSnapshot({ bridgeVersion: DESKTOP_BRIDGE_VERSION, trust: "none", recent, tasks: [] });
-    if (!this.current.trusted) {
+    if (current !== this.current) return this.snapshot();
+    if (!current) return this.safeSnapshot({ bridgeVersion: DESKTOP_BRIDGE_VERSION, trust: "none", recent, tasks: [] });
+    if (!current.trusted) {
       return this.safeSnapshot({
         bridgeVersion: DESKTOP_BRIDGE_VERSION,
         trust: "required",
-        workspace: { id: this.current.id, name: this.current.name, lock: "available" },
+        workspace: { id: current.id, name: current.name, lock: "available" },
         recent,
         tasks: [],
       });
     }
 
     try {
-      const journal = new TaskRunJournal(this.current.path, this.taskRunRoot);
-      const [runs, listing, lock] = await Promise.all([journal.recent(100), listSessionsWithIssues(this.current.path), journal.lockStatus()]);
+      const journal = new TaskRunJournal(current.path, this.taskRunRoot);
+      const [runListing, listing, lock] = await Promise.all([journal.scan(100), listSessionsWithIssues(current.path), journal.lockStatus()]);
+      if (current !== this.current) return this.snapshot();
+      const runs = runListing.records;
       const { sessions, unreadable, directoryIssues } = listing;
-      const historyWarning = unreadableSessionsNote(unreadable, "zh-CN", sessions, directoryIssues);
+      const historyWarning = [unreadableRunsNote(runListing.unreadable, "zh-CN"), unreadableSessionsNote(unreadable, "zh-CN", sessions, directoryIssues)].filter(Boolean).join(" ") || undefined;
       const sessionById = new Map(sessions.map((session) => [session.id, session]));
       const latestRunBySession = new Map<string, (typeof runs)[number]>();
       for (const run of runs) {
@@ -108,14 +113,15 @@ export class DesktopWorkspaceController {
           manualAccepted: run?.manualAcceptance?.decision === "passed",
         };
       }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 100);
+      this.lastError = undefined;
       const recoverable = runs.some((run) => (run.status === "running" && !lock.live) || run.status === "paused");
       return this.safeSnapshot({
         bridgeVersion: DESKTOP_BRIDGE_VERSION,
         trust: "trusted",
         workspace: {
-          id: this.current.id,
-          name: this.current.name,
-          path: this.current.path,
+          id: current.id,
+          name: current.name,
+          path: current.path,
           lock: lock.active && lock.live ? "active-elsewhere" : recoverable ? "recoverable" : "available",
         },
         recent,
@@ -123,11 +129,12 @@ export class DesktopWorkspaceController {
         ...(historyWarning ? { error: historyWarning } : {}),
       });
     } catch (error) {
+      if (current !== this.current) return this.snapshot();
       this.lastError = this.safeError(error);
       return this.safeSnapshot({
         bridgeVersion: DESKTOP_BRIDGE_VERSION,
         trust: "trusted",
-        workspace: { id: this.current.id, name: this.current.name, path: this.current.path, lock: "available" },
+        workspace: { id: current.id, name: current.name, path: current.path, lock: "available" },
         recent,
         tasks: [],
       });
