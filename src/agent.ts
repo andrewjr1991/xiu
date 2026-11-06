@@ -443,7 +443,7 @@ export class Agent {
     if (this.configurationChange) throw new Error(`Cannot change recovery state while a ${this.configurationChange} change is active.`);
     this.recoverySource = run;
     this.blockedRecoveryOperations = new Set(run?.operations
-      .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "succeeded"))
+      .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "unknown" || operation.status === "succeeded"))
       .map((operation) => operation.signature)
       .filter((value): value is string => Boolean(value)) ?? []);
   }

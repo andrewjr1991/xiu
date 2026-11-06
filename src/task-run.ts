@@ -382,7 +382,7 @@ export class TaskRunJournal {
     const record = (await this.recoverableRecords())[0];
     if (!record) return undefined;
     if (record.ownerPid !== process.pid && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) return undefined;
-    const interruptedOperations = record.operations.filter((operation) => operation.status === "started").map((operation) => ({ ...operation, status: "unknown" as const }));
+    const interruptedOperations = record.operations.filter((operation) => operation.status === "started" || operation.status === "unknown").map((operation) => ({ ...operation, status: "unknown" as const }));
     const pendingSideEffects = interruptedOperations.filter((operation) => operation.sideEffect !== "none");
     return {
       ...structuredClone(record),

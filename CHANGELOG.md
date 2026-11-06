@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Paused recovery: retain operations already persisted as `unknown` in interrupted-operation counts, side-effect warnings and exact-signature replay guards. Pausing no longer makes unresolved effects disappear from the recovery acknowledgement. Explicit recovery consent does not authorize replay; confirmed read-only operations remain permitted. Record format and original journal data are unchanged.
+
 - Terminal selectors: sanitize titles, option labels/descriptions and noninteractive cancellation headings before width calculation. Preserve caller title lines, hyperlink labels, UI styling and original option values. Strip complete multiline and unfinished OSC payloads consistently on Node 20/24 using a linear scan; shared history metadata summaries use the same correction. Original logs and stored IDs remain unchanged.
 
 - Masked secret input: reject EOF, closed input and Ctrl-D instead of leaving an unanswered prompt pending; remove listeners and restore the original input mode/pause state where available. Stream and cleanup failures use fixed errors and never return a partial credential. Decode raw UTF-8 across byte chunks so non-ASCII credentials are preserved; keep Enter, backspace, Ctrl-C and non-TTY line input behavior.
