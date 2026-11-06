@@ -679,7 +679,12 @@ export class TaskRunJournal {
   private async ownerAlive(pid: number, startedAt?: string): Promise<boolean> {
     if (!isProcessId(pid)) throw new Error("Unsupported or corrupt task-run owner PID.");
     try { process.kill(pid, 0); }
-    catch { return false; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return false;
+      if (code !== "EPERM") throw error;
+      // Permission denial is evidence of an existing process, not owner death.
+    }
     return compareStartTimes(startedAt, await processStartTime(pid)) !== "mismatch";
   }
 }
