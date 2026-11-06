@@ -234,6 +234,37 @@ test("doctor reports zero readable log bytes without creating a session director
   assert.deepEqual(await fs.readdir(f.cwd), []);
 });
 
+test("doctor reports cache metadata separately and excludes orphan and unreadable-log caches", async (t) => {
+  const f = await workspaceFixture(t);
+  const directory = path.join(f.cwd, ".xiu", "sessions");
+  await fs.writeFile(path.join(directory, "first.jsonl"), '{"type":"task","task":"private-task-canary"}\n');
+  await fs.writeFile(path.join(directory, "second.jsonl"), "");
+  const cache = path.join(directory, "first.jsonl.summary.json");
+  await fs.writeFile(cache, "private-cache-canary-私密");
+  await fs.mkdir(path.join(directory, "second.jsonl.summary.json"));
+  await fs.mkdir(path.join(directory, "unreadable.jsonl"));
+  await fs.writeFile(path.join(directory, "unreadable.jsonl.summary.json"), "excluded".repeat(100));
+  await fs.writeFile(path.join(directory, "orphan.jsonl.summary.json"), "excluded".repeat(100));
+  const before = await fs.readdir(directory);
+  const probe = await probeWorkspaceRecords(f.cwd, { trusted: async () => true, taskRunRoot: f.taskRunRoot });
+  const bytes = Buffer.byteLength("private-cache-canary-私密");
+  assert.deepEqual(probe.sessionSummaries, { files: 1, bytes, missing: 0, unsafe: 1, unreadable: [] });
+  assert.equal(probe.listingFailure, undefined);
+  assert.equal(probe.interruptedCheckFailure, undefined);
+  assert.deepEqual(await fs.readdir(directory), before);
+  assert.equal(await fs.readFile(cache, "utf8"), "private-cache-canary-私密");
+  const report = await collectDoctorReport({
+    version: "0.20.14", settings: {}, registry: fakeRegistry([]), env: { PATH: "" }, platform: "linux", arch: "x64", nodeVersion: "24.22.1", osRelease: "6.1",
+    cwd: f.cwd, homeDirectory: "/home/user", updateDoctor: async () => updateResult(), uvAvailable: async () => undefined, workspaceRecords: async () => probe, configFiles: NO_CONFIG_FILES,
+  });
+  const item = report.sections.find((section) => section.id === "workspace")!.items.find((entry) => entry.id === "session-summaries")!;
+  assert.equal(item.level, "warning");
+  assert.match(item.summaryEn, new RegExp(`1 regular file\\(s\\), ${bytes} bytes; 0 missing, 1 non-regular`));
+  assert.match(item.detailEn!, /Excludes orphan caches, caches of unreadable logs/);
+  assert.match(item.summaryZh, /1 个普通文件/);
+  assert.doesNotMatch(JSON.stringify(report), /private-task-canary|private-cache-canary|first\.jsonl/);
+});
+
 test("doctor does not mistake a session directory enumeration error for an empty healthy history", async (t) => {
   const f = await workspaceFixture(t);
   const directory = path.join(f.cwd, ".xiu", "sessions");
@@ -280,6 +311,7 @@ test("the workspace section counts records, names unreadable ones and warns abou
     trusted: true, runs: 1, unreadableRuns: [{ runId: "bad-version", reason: "corrupt" }],
     sessions: 1, unreadableSessions: [{ id: "broken", reason: "EISDIR" }],
     sessionStorage: { readableBytes: Buffer.byteLength(`${JSON.stringify({ type: "task", task: "task", timestamp: "2026-10-19T01:00:00.000Z" })}\n`), largestBytes: Buffer.byteLength(`${JSON.stringify({ type: "task", task: "task", timestamp: "2026-10-19T01:00:00.000Z" })}\n`), damagedSessions: 0 },
+    sessionSummaries: { files: 0, bytes: 0, missing: 1, unsafe: 0, unreadable: [] },
     interruptedCheckFailure: "Unsupported or corrupt task-run journal",
   }, "a corrupt record also blocks the strict interrupted-task check, which the report must say");
   assert.doesNotMatch(JSON.stringify(probe), new RegExp(f.cwd.replace(/[\\/]/g, "[\\\\/]")), "no path in the probe");

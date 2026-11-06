@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { Agent } from "../src/agent.js";
 import { deleteSession, listSessionsWithIssues, loadSession, rebuildSessionSummaries, refreshSessionSummary } from "../src/session.js";
-import { readSessionSummary, writeSessionSummary } from "../src/session-summary.js";
+import { inspectSessionSummaryStorage, readSessionSummary, writeSessionSummary } from "../src/session-summary.js";
 
 async function fixture(t: { after: (callback: () => Promise<void>) => void }) {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-summary-"));
@@ -17,6 +17,59 @@ async function fixture(t: { after: (callback: () => Promise<void>) => void }) {
   await fs.writeFile(file, `${JSON.stringify({ type: "task", task: "original task", timestamp: "2026-11-04T00:00:00.000Z", config: { providerId: "original-provider", model: "original-model" } })}\nnull\n`);
   return { cwd, file, summary: `${file}.summary.json` };
 }
+
+test("summary storage counts file bytes without opening contents or creating missing caches", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(f.summary, "invalid-private-cache-私密");
+  const missing = path.join(path.dirname(f.file), "missing-cache.jsonl");
+  await fs.writeFile(missing, "");
+  const directory = path.join(path.dirname(f.file), "directory-cache.jsonl");
+  await fs.writeFile(directory, "");
+  await fs.mkdir(`${directory}.summary.json`);
+  const large = path.join(path.dirname(f.file), "large-cache.jsonl");
+  await fs.writeFile(large, "");
+  const handle = await fs.open(`${large}.summary.json`, "w");
+  await handle.truncate(1024 * 1024);
+  await handle.close();
+  await fs.writeFile(path.join(path.dirname(f.file), "orphan.jsonl.summary.json"), "not-counted");
+  const before = await fs.readdir(path.dirname(f.file));
+  const originalOpen = fs.open.bind(fs);
+  t.mock.method(fs, "open", (...args: Parameters<typeof fs.open>) => {
+    assert.ok(!String(args[0]).endsWith(".summary.json"), "metadata inspection must never open cache contents");
+    return originalOpen(...args);
+  });
+  assert.deepEqual(await inspectSessionSummaryStorage([f.file, missing, directory, large]), {
+    files: 2, bytes: Buffer.byteLength("invalid-private-cache-私密") + 1024 * 1024, missing: 1, unsafe: 1, unreadable: [],
+  }, "oversized or invalid caches still occupy bytes; this is not content validation");
+  assert.deepEqual(await fs.readdir(path.dirname(f.file)), before);
+});
+
+test("summary storage isolates metadata errors and source disappearance without exposing paths", async (t) => {
+  const f = await fixture(t);
+  const removed = path.join(path.dirname(f.file), "removed.jsonl");
+  const original = fs.lstat.bind(fs);
+  t.mock.method(fs, "lstat", async (file: Parameters<typeof fs.lstat>[0]) => {
+    if (String(file) === f.summary) throw Object.assign(new Error(`private-cache-canary ${f.summary}`), { code: "EACCES" });
+    return original(file);
+  });
+  const result = await inspectSessionSummaryStorage([f.file, removed]);
+  assert.deepEqual(result, { files: 0, bytes: 0, missing: 0, unsafe: 0, unreadable: [{ reason: "EACCES" }, { reason: "ENOENT" }] });
+  assert.doesNotMatch(JSON.stringify(result), /private-cache-canary|sample|removed|xiu-summary/);
+});
+
+test("summary storage does not follow linked caches or wait on FIFOs", { skip: process.platform === "win32" }, async (t) => {
+  const f = await fixture(t);
+  await fs.symlink(f.file, f.summary);
+  const pipeSource = path.join(path.dirname(f.file), "pipe.jsonl");
+  await fs.writeFile(pipeSource, "");
+  execFileSync("mkfifo", [`${pipeSource}.summary.json`]);
+  const moduleUrl = new URL("../src/session-summary.ts", import.meta.url).href;
+  const code = `const {inspectSessionSummaryStorage}=await import(${JSON.stringify(moduleUrl)}); console.log(JSON.stringify(await inspectSessionSummaryStorage(${JSON.stringify([f.file, pipeSource])})));`;
+  const output = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { timeout: 10_000, encoding: "utf8" });
+  assert.deepEqual(JSON.parse(output), { files: 0, bytes: 0, missing: 0, unsafe: 2, unreadable: [] });
+  assert.equal((await fs.lstat(f.summary)).isSymbolicLink(), true);
+  assert.equal((await fs.lstat(`${pipeSource}.summary.json`)).isFIFO(), true);
+});
 
 test("summary survives a fresh read, preserves damage counts and contains no path or transcript", async (t) => {
   const f = await fixture(t);

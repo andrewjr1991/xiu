@@ -23,6 +23,35 @@ async function regularSource(file: string): Promise<Stats> {
   return stat;
 }
 
+export interface SessionSummaryStorage {
+  files: number;
+  bytes: number;
+  missing: number;
+  unsafe: number;
+  unreadable: Array<{ reason: string }>;
+}
+
+/** Metadata only, for caches attached to the supplied readable logs. Never opens a cache. */
+export async function inspectSessionSummaryStorage(files: readonly string[]): Promise<SessionSummaryStorage> {
+  const result: SessionSummaryStorage = { files: 0, bytes: 0, missing: 0, unsafe: 0, unreadable: [] };
+  for (const file of files) {
+    try {
+      await regularSource(file);
+      const stat = await fs.lstat(`${file}.summary.json`).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!stat) result.missing++;
+      else if (!stat.isFile() || stat.isSymbolicLink()) result.unsafe++;
+      else { result.files++; result.bytes += stat.size; }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      result.unreadable.push({ reason: typeof code === "string" && code ? code : "unreadable" });
+    }
+  }
+  return result;
+}
+
 /** Display acceleration only. Restore and recovery must read original evidence. */
 export async function readSessionSummary(file: string, source: Stats): Promise<SessionListItem | undefined> {
   if (!source.isFile()) return undefined;

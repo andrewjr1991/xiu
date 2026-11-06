@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Doctor: separately count summary cache files and bytes attached to readable logs, with missing/non-regular/uninspectable counts. Inspect metadata only, without opening cache contents or creating/deleting files; orphan caches and caches of unreadable logs are excluded. These observations do not validate caches or measure total disk usage.
+
 - Tests: allow hosted child-process startup time in the verification retry identity regression (10/30-second deadlines). Keep exact failing/passing exit-code and completion assertions; production timeouts and separate timeout coverage are unchanged.
 
 - Doctor: report scanned readable session log bytes, largest log and damaged-session counts without writing caches. Exclude unreadable entries and explain that these are file lengths, not total disk usage. Inaccessible or broken current/legacy session directories now fail diagnosis instead of appearing empty.

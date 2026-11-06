@@ -11,6 +11,7 @@ import { redactSecrets } from "./secret-redaction.js";
 import { PermissionGrantStore } from "./extension-permissions.js";
 import { inspectMcpConfig } from "./mcp.js";
 import { listSessionsWithIssues } from "./session.js";
+import { inspectSessionSummaryStorage, type SessionSummaryStorage } from "./session-summary.js";
 import { SkillStateStore } from "./skill-state.js";
 import type { XiuSettings } from "./settings.js";
 import { TaskRunJournal } from "./task-run.js";
@@ -95,6 +96,7 @@ export interface WorkspaceRecordsProbe {
   damagedSessionRecords?: number;
   /** File lengths from readable raw logs only; excludes caches and unreadable entries. */
   sessionStorage?: { readableBytes: number; largestBytes: number; damagedSessions: number };
+  sessionSummaries?: SessionSummaryStorage;
   interrupted?: { runId: string; status: string; startedAt: string };
   /** The interrupted-run check could not complete; a reason without a path. One-shot runs are refused until it can. */
   interruptedCheckFailure?: string;
@@ -243,6 +245,7 @@ export async function probeWorkspaceRecords(cwd: string, options: { trusted?: ()
     }), { readableBytes: 0, largestBytes: 0, damagedSessions: 0 });
     const damaged = sessions.sessions.reduce((sum, session) => sum + (session.damagedLines ?? 0), 0);
     if (damaged) probe.damagedSessionRecords = damaged;
+    probe.sessionSummaries = await inspectSessionSummaryStorage(sessions.sessions.map((session) => session.file));
   } catch (error) {
     probe.listingFailure = reasonWithoutPath(error);
   }
@@ -295,7 +298,11 @@ function workspaceSection(probe: WorkspaceRecordsProbe): DoctorSection {
   const storage = probe.sessionStorage ? [item("session-storage", "info", ["会话日志大小", "Session log size"],
     [`已扫描的可读日志共 ${probe.sessionStorage.readableBytes} 字节，最大 ${probe.sessionStorage.largestBytes} 字节；${probe.sessionStorage.damagedSessions} 个会话含损坏记录`, `Scanned readable logs: ${probe.sessionStorage.readableBytes} bytes; largest ${probe.sessionStorage.largestBytes} bytes; ${probe.sessionStorage.damagedSessions} session(s) contain damaged records`],
     ["只统计本次扫描可读原日志的文件长度（含旧版目录），不含摘要缓存、运行记录和无法读取的条目；不是完整磁盘占用，写入中的日志可能变化。诊断不清理或改写文件。", "File lengths of raw logs readable in this scan, including legacy directories; excludes summary caches, run records and unreadable entries. This is not total disk usage; active logs may change. Diagnosis does not clean up or rewrite files."])] : [];
-  return section([runs, sessions, ...storage, ...damaged, ...interruptedItems(probe)]);
+  const cache = probe.sessionSummaries;
+  const caches = cache ? [item("session-summaries", cache.unsafe || cache.unreadable.length ? "warning" : "info", ["会话摘要缓存", "Session summary caches"],
+    [`${cache.files} 个普通文件，共 ${cache.bytes} 字节；${cache.missing} 个缺失，${cache.unsafe} 个非普通文件，${cache.unreadable.length} 个无法检查${cache.unreadable.length ? `（${countReasons(cache.unreadable, "zh")}）` : ""}`, `${cache.files} regular file(s), ${cache.bytes} bytes; ${cache.missing} missing, ${cache.unsafe} non-regular, ${cache.unreadable.length} could not be inspected${cache.unreadable.length ? ` (${countReasons(cache.unreadable, "en")})` : ""}`],
+    ["仅检查本次可读原日志对应缓存的元数据，不读取或验证缓存正文；缺失时可从原日志读取。排除孤立缓存、不可读日志的缓存、运行记录及非普通条目，不是完整磁盘占用。诊断不创建或删除缓存，恢复仍读取原日志。", "Metadata only for caches attached to logs readable in this scan; cache contents are neither read nor validated. Missing caches can fall back to raw logs. Excludes orphan caches, caches of unreadable logs, run records and non-regular entries; not total disk usage. Diagnosis neither creates nor deletes caches; restoration still reads raw logs."])] : [];
+  return section([runs, sessions, ...storage, ...caches, ...damaged, ...interruptedItems(probe)]);
 }
 
 function interruptedItems(probe: WorkspaceRecordsProbe): DoctorItem[] {
