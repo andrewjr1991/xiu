@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Recovery record validation: reject unknown run/operation states, kinds, side-effect and replay tags, malformed operation identities and declared signature/risk fields before recovery or starting another task. Lists isolate corrupt records while retaining healthy entries; no records are rewritten or removed. Keep optional legacy metadata and additive display events compatible.
+
 - Paused recovery: retain operations already persisted as `unknown` in interrupted-operation counts, side-effect warnings and exact-signature replay guards. Pausing no longer makes unresolved effects disappear from the recovery acknowledgement. Explicit recovery consent does not authorize replay; confirmed read-only operations remain permitted. Record format and original journal data are unchanged.
 
 - Terminal selectors: sanitize titles, option labels/descriptions and noninteractive cancellation headings before width calculation. Preserve caller title lines, hyperlink labels, UI styling and original option values. Strip complete multiline and unfinished OSC payloads consistently on Node 20/24 using a linear scan; shared history metadata summaries use the same correction. Original logs and stored IDs remain unchanged.

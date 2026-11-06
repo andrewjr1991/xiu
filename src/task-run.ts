@@ -193,6 +193,25 @@ function unreadableRecordReason(error: unknown): TaskRunUnreadableReason {
   return typeof code === "string" && code ? code : "unreadable";
 }
 
+const RUN_STATUSES = new Set(["running", "paused", "completed", "failed", "cancelled", "unverified", "abandoned", "waiting_user"]);
+const OPERATION_STATUSES = new Set(["planned", "started", "succeeded", "failed", "cancelled", "unknown"]);
+const OPERATION_KINDS = new Set(["model", "tool", "verification", "checkpoint", "steering"]);
+const SIDE_EFFECTS = new Set(["none", "workspace", "process", "external", "unknown"]);
+const REPLAY_POLICIES = new Set(["safe-after-confirmation", "verify-first", "forbidden"]);
+const OPERATION_RISKS = new Set(["read", "write", "execute", "dangerous"]);
+
+function isOperation(value: unknown): value is TaskRunOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Partial<TaskRunOperation>;
+  return typeof item.id === "string" && typeof item.name === "string"
+    && typeof item.kind === "string" && OPERATION_KINDS.has(item.kind)
+    && typeof item.status === "string" && OPERATION_STATUSES.has(item.status)
+    && typeof item.sideEffect === "string" && SIDE_EFFECTS.has(item.sideEffect)
+    && typeof item.replay === "string" && REPLAY_POLICIES.has(item.replay)
+    && (item.signature === undefined || typeof item.signature === "string")
+    && (item.risk === undefined || OPERATION_RISKS.has(item.risk));
+}
+
 function isRecord(value: unknown): value is TaskRunRecord {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<TaskRunRecord>;
@@ -200,8 +219,8 @@ function isRecord(value: unknown): value is TaskRunRecord {
     && typeof item.runId === "string"
     && typeof item.workspaceId === "string"
     && typeof item.sessionId === "string"
-    && typeof item.status === "string"
-    && Array.isArray(item.operations)
+    && typeof item.status === "string" && RUN_STATUSES.has(item.status)
+    && Array.isArray(item.operations) && item.operations.every(isOperation)
     && Array.isArray(item.recoveryPoints)
     && Array.isArray(item.events)
     && (item.manualAcceptance === undefined || (item.manualAcceptance !== null && typeof item.manualAcceptance === "object" && item.manualAcceptance.scope === "computer-result" && ["passed", "rejected"].includes(item.manualAcceptance.decision) && typeof item.manualAcceptance.at === "string" && Number.isFinite(Date.parse(item.manualAcceptance.at))));
