@@ -12,7 +12,7 @@ import { TaskRunJournal, recoveryContinuation, taskOperationSignature, type Task
 import type { AgentTool } from "../src/types.js";
 
 type Risk = "read" | "write" | "execute" | "dangerous";
-interface Case { label: string; effect: TaskSideEffect; risk: Risk; changes?: boolean; status?: "unknown" | "started" | "succeeded"; signature?: "empty" | "opaque" | "known"; calls: number; full?: boolean }
+interface Case { label: string; effect: TaskSideEffect; risk: Risk; changes?: boolean; status?: "unknown" | "started" | "succeeded" | "failed" | "cancelled" | "planned"; signature?: "empty" | "opaque" | "known"; calls: number; full?: boolean }
 async function fixture(t: test.TestContext, c: Case) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-legacy-recovery-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -50,6 +50,11 @@ const cases: Case[] = [
   { label: "process effect", effect: "process", risk: "execute", calls: 0 },
   { label: "unknown effect under Full Access", effect: "unknown", risk: "dangerous", full: true, calls: 0 },
   { label: "successful effect", effect: "workspace", status: "succeeded", risk: "write", changes: true, calls: 0 },
+  { label: "failed effect without signature", effect: "workspace", status: "failed", risk: "write", changes: true, full: true, calls: 0 },
+  { label: "cancelled effect without signature", effect: "external", status: "cancelled", risk: "write", calls: 0 },
+  { label: "planned effect not attempted", effect: "workspace", status: "planned", risk: "write", changes: true, calls: 1 },
+  { label: "identified different failed operation", effect: "workspace", status: "failed", signature: "known", risk: "write", changes: true, calls: 1 },
+  { label: "identified different cancelled operation", effect: "workspace", status: "cancelled", signature: "known", risk: "write", changes: true, calls: 1 },
   { label: "started effect", effect: "workspace", status: "started", risk: "write", changes: true, calls: 0 },
   { label: "empty signature", effect: "workspace", signature: "empty", risk: "write", changes: true, calls: 0 },
   { label: "unrecognized signature", effect: "workspace", signature: "opaque", risk: "write", changes: true, calls: 0 },
@@ -61,7 +66,7 @@ const cases: Case[] = [
 for (const c of cases) {
   test(`legacy recovery signature boundary: ${c.label}`, async (t) => {
     const f = await fixture(t, c), state = agentFixture(f, c);
-    if (c.signature !== "known" && c.effect !== "none") {
+    if (c.signature !== "known" && c.effect !== "none" && c.status !== "planned") {
       assert.match(f.restored.recommendation, /usable.*signature/);
       assert.match(recoveryContinuation(f.restored, "en-US"), /read-only tools/);
       assert.match(recoveryContinuation(f.restored, "zh-CN"), /只读工具/);

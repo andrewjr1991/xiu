@@ -32,7 +32,7 @@ import { readEnvironmentCredential } from "./credential-store.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
-import { hasUnidentifiedRecoverySideEffects, taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
+import { hasUnidentifiedRecoverySideEffects, taskOperationMayHaveSideEffects, taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
@@ -446,7 +446,7 @@ export class Agent {
     this.recoverySource = run;
     this.recoveryInspectionOnly = hasUnidentifiedRecoverySideEffects(run?.operations ?? []);
     this.blockedRecoveryOperations = new Set(run?.operations
-      .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "unknown" || operation.status === "succeeded"))
+      .filter(taskOperationMayHaveSideEffects)
       .map((operation) => operation.signature)
       .filter((value): value is string => Boolean(value)) ?? []);
   }

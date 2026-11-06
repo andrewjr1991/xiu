@@ -414,7 +414,10 @@ export class TaskRunJournal {
     const record = (await this.recoverableRecords())[0];
     if (!record) return undefined;
     if (record.status === "running" && record.ownerPid !== process.pid && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) return undefined;
-    const interruptedOperations = record.operations.filter((operation) => operation.status === "started" || operation.status === "unknown").map((operation) => ({ ...operation, status: "unknown" as const }));
+    const interruptedOperations = record.operations
+      .filter((operation) => operation.status === "started" || operation.status === "unknown"
+        || (operation.sideEffect !== "none" && (operation.status === "failed" || operation.status === "cancelled")))
+      .map((operation) => ({ ...operation, status: "unknown" as const }));
     const pendingSideEffects = interruptedOperations.filter((operation) => operation.sideEffect !== "none");
     return {
       ...structuredClone(record),
@@ -687,9 +690,13 @@ export class TaskRunJournal {
 }
 
 /** Missing/opaque legacy signatures cannot prove that another side effect is distinct. */
+/** Without execution evidence, only planned operations are known to be unattempted. */
+export function taskOperationMayHaveSideEffects(operation: TaskRunOperation): boolean {
+  return operation.sideEffect !== "none" && operation.status !== "planned";
+}
+
 export function hasUnidentifiedRecoverySideEffects(operations: readonly TaskRunOperation[]): boolean {
-  return operations.some((operation) => operation.sideEffect !== "none"
-    && (operation.status === "started" || operation.status === "unknown" || operation.status === "succeeded")
+  return operations.some((operation) => taskOperationMayHaveSideEffects(operation)
     && (typeof operation.signature !== "string" || !/^[a-f0-9]{64}$/.test(operation.signature)));
 }
 
