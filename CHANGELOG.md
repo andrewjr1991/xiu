@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Task-run owners: require positive individual PIDs within Node’s supported process-ID range in records and locks. Invalid/missing PIDs are corrupt metadata rather than evidence of a dead owner, so they cannot silently clear a lock. Start-time probes reject invalid PIDs and process-group identifiers before OS or injected probes; retain legacy records without owner start time.
+
 - Task-run file identity: validate run, recovery-reference and lock IDs using the existing bounded alphanumeric/hyphen form; require a loaded record’s ID to match its filename exactly. Reject redirected reads, event writes and abandonment before touching another record. Preserve malformed locks instead of clearing them to admit a new starter; matching legacy IDs keep their case. Workspace namespace migration remains separate.
 
 - Recovery guidance: keep the explicit “Never replay unknown operations automatically” warning alongside the new legacy inspection-only recommendation. Restore the offline evaluation’s safety contract while preserving all program-enforced tool restrictions and abandonment cleanup.

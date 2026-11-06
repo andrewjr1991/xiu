@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSecrets } from "./secret-redaction.js";
-import { compareStartTimes, currentProcessStartedAt, processStartTime } from "./process-identity.js";
+import { compareStartTimes, currentProcessStartedAt, isProcessId, processStartTime } from "./process-identity.js";
 import type { RuntimeEvent } from "./runtime/protocol.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
@@ -224,6 +224,7 @@ function isRecord(value: unknown): value is TaskRunRecord {
     && typeof item.workspaceId === "string"
     && typeof item.sessionId === "string"
     && typeof item.status === "string" && RUN_STATUSES.has(item.status)
+    && isProcessId(item.ownerPid)
     && Array.isArray(item.operations) && item.operations.every(isOperation)
     && Array.isArray(item.recoveryPoints)
     && Array.isArray(item.events)
@@ -524,7 +525,7 @@ export class TaskRunJournal {
     if (lock.version !== TASK_RUN_SCHEMA_VERSION
       || lock.workspaceId !== this.workspaceId
       || !isTaskRunId(lock.runId)
-      || !Number.isSafeInteger(lock.ownerPid)) {
+      || !isProcessId(lock.ownerPid)) {
       throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
     }
     return {
@@ -607,7 +608,7 @@ export class TaskRunJournal {
         const valid = existing.version === TASK_RUN_SCHEMA_VERSION
           && existing.workspaceId === this.workspaceId
           && isTaskRunId(existing.runId)
-          && Number.isSafeInteger(existing.ownerPid);
+          && isProcessId(existing.ownerPid);
         if (!valid) throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
         const takeoverConfirmed = resumedFrom === existing.runId;
         const existingRecord = await this.read(existing.runId).catch(() => undefined);
@@ -655,7 +656,7 @@ export class TaskRunJournal {
    * start time cannot be read fall back to the PID alone.
    */
   private async ownerAlive(pid: number, startedAt?: string): Promise<boolean> {
-    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    if (!isProcessId(pid)) throw new Error("Unsupported or corrupt task-run owner PID.");
     try { process.kill(pid, 0); }
     catch { return false; }
     return compareStartTimes(startedAt, await processStartTime(pid)) !== "mismatch";

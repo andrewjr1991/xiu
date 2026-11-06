@@ -91,8 +91,14 @@ function windowsStartTime(pid: number): Promise<number | undefined> {
   });
 }
 
+/** Positive individual process IDs supported by Node's process API; never process groups. */
+export function isProcessId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 0x7fff_ffff;
+}
+
 /** Start time in epoch milliseconds from a cheap probe, or undefined when no cheap probe exists or it fails. */
 export function processStartTimeSync(pid: number): number | undefined {
+  if (!isProcessId(pid)) return undefined;
   if (override) return override.sync?.(pid);
   if (process.platform === "linux") return linuxStartTime(pid);
   if (process.platform === "darwin") return darwinStartTime(pid);
@@ -100,6 +106,7 @@ export function processStartTimeSync(pid: number): number | undefined {
 }
 
 export async function processStartTime(pid: number): Promise<number | undefined> {
+  if (!isProcessId(pid)) return undefined;
   if (override) return override.async ? override.async(pid) : override.sync?.(pid);
   if (process.platform === "win32") return windowsStartTime(pid);
   return processStartTimeSync(pid);
