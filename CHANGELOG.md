@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Recovery guidance: keep the explicit “Never replay unknown operations automatically” warning alongside the new legacy inspection-only recommendation. Restore the offline evaluation’s safety contract while preserving all program-enforced tool restrictions and abandonment cleanup.
+
 - Legacy recovery: when an unresolved or successful side effect has no usable comparison signature, restrict tools in that recovery task to read-only inspection. Missing, empty and opaque legacy signatures remain readable; confirmation, automatic approval and Full Access cannot authorize an unidentified replay. Explain the restriction in recovery guidance, retain exact-signature guards, and clear the temporary restriction with explicit recovery reset or task termination. Serialize desktop abandonment with its original workspace and clear attached Agent/runtime recovery only after its journal decision succeeds; write failures retain the in-memory protection.
 
 - Recovery record validation: reject unknown run/operation states, kinds, side-effect and replay tags, malformed operation identities and declared signature/risk fields before recovery or starting another task. Lists isolate corrupt records while retaining healthy entries; no records are rewritten or removed. Keep optional legacy metadata and additive display events compatible.

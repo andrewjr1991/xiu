@@ -143,3 +143,10 @@ test("failed desktop abandonment keeps the attached recovery decision and inspec
   assert.equal(state.calls(), 0);
   controller.detach();
 });
+
+test("inspection-only recovery guidance retains the categorical no-automatic-replay warning", async (t) => {
+  const c: Case = { label: "guidance", effect: "workspace", risk: "write", changes: true, calls: 0 };
+  const f = await fixture(t, c);
+  assert.match(f.restored.recommendation, /Never replay unknown operations automatically\./);
+  assert.match(f.restored.recommendation, /read-only tools/);
+});

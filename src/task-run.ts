@@ -408,7 +408,7 @@ export class TaskRunJournal {
       interruptedOperations,
       pendingSideEffects,
       recommendation: hasUnidentifiedRecoverySideEffects(record.operations)
-        ? "Earlier side effects lack a usable operation signature. Recovery is restricted to read-only tools; verify their results before an explicitly requested new task."
+        ? "Earlier side effects lack a usable operation signature. Recovery is restricted to read-only tools; verify their results before an explicitly requested new task. Never replay unknown operations automatically."
         : pendingSideEffects.length
         ? "Inspect the recorded recovery point and verify possible side effects before continuing. Never replay unknown operations automatically."
         : "Resume from the last recovery point only after user confirmation.",
