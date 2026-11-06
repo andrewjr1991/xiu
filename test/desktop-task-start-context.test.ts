@@ -17,8 +17,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-for (const action of ["create", "continue", "recover", "continue-model"] as const) {
-  test(`desktop ${action} rejects task start if Full Access confirmation begins during ${action === "continue-model" ? "model persistence" : "journal preflight"}`, async (t) => {
+for (const action of ["create", "continue", "recover", "continue-model", "abandon"] as const) {
+  test(`desktop ${action} rejects ${action === "abandon" ? "abandonment" : "task start"} if Full Access confirmation begins during ${action === "continue-model" ? "model persistence" : "journal preflight"}`, async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-desktop-start-context-"));
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     const workspace = path.join(root, "workspace"), sessions = path.join(workspace, ".xiu", "sessions");
@@ -34,7 +34,7 @@ for (const action of ["create", "continue", "recover", "continue-model"] as cons
     runtime.attachDriver(new AgentRuntimeAdapter(agent));
     const controller = new DesktopTaskController(() => {}, async () => ({ agent, runtime, journal, provider: { id: "offline", label: "Offline", model: "offline" } }));
     let recoveryRun: string | undefined;
-    if (action === "recover") {
+    if (action === "recover" || action === "abandon") {
       const paused = await journal.begin({ sessionId: "old", task: "old goal", providerId: "offline", model: "offline" });
       await journal.pause("fixture safe pause");
       recoveryRun = paused.runId;
@@ -58,7 +58,7 @@ for (const action of ["create", "continue", "recover", "continue-model"] as cons
         }
         return handle;
       });
-    } else if (action === "recover") {
+    } else if (action === "recover" || action === "abandon") {
       const interrupted = journal.interrupted.bind(journal);
       t.mock.method(journal, "interrupted", async () => {
         if (!held) { held = true; entered.resolve(); await release.promise; }
@@ -70,7 +70,8 @@ for (const action of ["create", "continue", "recover", "continue-model"] as cons
     });
     const starting = action === "create" ? controller.createTask(workspace, "new task")
       : action.startsWith("continue") ? controller.continueTask(workspace, "old", "continue task")
-      : controller.recoverTask(workspace, { runId: recoveryRun! }, false);
+      : action === "recover" ? controller.recoverTask(workspace, { runId: recoveryRun! }, false)
+      : controller.abandonRecovery(workspace, { runId: recoveryRun! }, true);
     await entered.promise;
     const current = action === "continue-model" ? await controller.connect(workspace) : initial;
     const selecting = controller.setApprovalMode(workspace, { mode: "full", contextId: current.modeContextId! }, () => { confirming.resolve(); return confirmation.promise; });
@@ -81,6 +82,7 @@ for (const action of ["create", "continue", "recover", "continue-model"] as cons
       release.resolve();
       await rejected;
       assert.equal(requests, 0);
+      if (action === "abandon") assert.equal((await journal.read(recoveryRun!))?.status, "paused");
       assert.deepEqual(runtime.snapshot().task, initialTask);
       assert.equal(agent.status().sessionId, action === "continue-model" ? "old" : undefined);
       const records = await fs.readFile(file, "utf8");

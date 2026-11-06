@@ -407,7 +407,9 @@ export class TaskRunJournal {
       ...structuredClone(record),
       interruptedOperations,
       pendingSideEffects,
-      recommendation: pendingSideEffects.length
+      recommendation: hasUnidentifiedRecoverySideEffects(record.operations)
+        ? "Earlier side effects lack a usable operation signature. Recovery is restricted to read-only tools; verify their results before an explicitly requested new task."
+        : pendingSideEffects.length
         ? "Inspect the recorded recovery point and verify possible side effects before continuing. Never replay unknown operations automatically."
         : "Resume from the last recovery point only after user confirmation.",
     };
@@ -651,6 +653,13 @@ export class TaskRunJournal {
   }
 }
 
+/** Missing/opaque legacy signatures cannot prove that another side effect is distinct. */
+export function hasUnidentifiedRecoverySideEffects(operations: readonly TaskRunOperation[]): boolean {
+  return operations.some((operation) => operation.sideEffect !== "none"
+    && (operation.status === "started" || operation.status === "unknown" || operation.status === "succeeded")
+    && (typeof operation.signature !== "string" || !/^[a-f0-9]{64}$/.test(operation.signature)));
+}
+
 export function taskToolSideEffect(risk: "read" | "write" | "execute" | "dangerous", changesWorkspace: boolean): TaskSideEffect {
   if (changesWorkspace) return "workspace";
   if (risk === "read") return "none";
@@ -662,8 +671,9 @@ export function taskToolSideEffect(risk: "read" | "write" | "execute" | "dangero
 export function recoveryContinuation(run: InterruptedTaskRun, language: "zh-CN" | "en-US" = "en-US"): string {
   const point = run.recoveryPoints.at(-1);
   const blocked = run.pendingSideEffects.map((operation) => `${operation.kind}:${operation.name} (${operation.sideEffect}, ${operation.replay})`).join(", ") || "none";
+  const inspectionOnly = hasUnidentifiedRecoverySideEffects(run.operations);
   if (language === "zh-CN") {
-    return `继续已由用户确认恢复的中断任务。原任务摘要：${run.taskPreview || "未记录"}。最后安全恢复点：${point?.evidence ?? "尚无恢复点"}。状态未知且禁止自动重放的副作用操作：${blocked}。先核验工作区、Git、文件、进程或远端状态，再从已有证据继续；不要重复已经成功的操作。`;
+    return `继续已由用户确认恢复的中断任务。原任务摘要：${run.taskPreview || "未记录"}。最后安全恢复点：${point?.evidence ?? "尚无恢复点"}。状态未知且禁止自动重放的副作用操作：${blocked}。先核验工作区、Git、文件、进程或远端状态，再从已有证据继续；不要重复已经成功的操作。${inspectionOnly ? " 较早副作用缺少可比对的操作签名，本次恢复仅允许只读工具核验；核实结果后再明确安排新任务。" : ""}`;
   }
-  return `Continue the interrupted task after explicit user confirmation. Original task summary: ${run.taskPreview || "not recorded"}. Last safe recovery point: ${point?.evidence ?? "none recorded"}. Unknown side-effect operations that must not be replayed automatically: ${blocked}. Verify workspace, Git, files, processes, or remote state first, then continue from existing evidence without repeating successful work.`;
+  return `Continue the interrupted task after explicit user confirmation. Original task summary: ${run.taskPreview || "not recorded"}. Last safe recovery point: ${point?.evidence ?? "none recorded"}. Unknown side-effect operations that must not be replayed automatically: ${blocked}. Verify workspace, Git, files, processes, or remote state first, then continue from existing evidence without repeating successful work.${inspectionOnly ? " Earlier effects lack a usable operation signature; this recovery permits read-only tools only. Verify results before an explicitly requested new task." : ""}`;
 }

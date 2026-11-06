@@ -32,7 +32,7 @@ import { readEnvironmentCredential } from "./credential-store.js";
 import { isTransientProviderError, safeProviderErrorMessage, type ProviderFailoverController } from "./provider-failover.js";
 import { retryDecision, retryDelay } from "./retry-policy.js";
 import { determineProviderRoutingPhase, type ProviderRoutingController, type ProviderRoutingPhase } from "./provider-routing.js";
-import { taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
+import { hasUnidentifiedRecoverySideEffects, taskOperationSignature, taskToolSideEffect, type InterruptedTaskRun, type TaskRunJournal } from "./task-run.js";
 import { budgetMetricLabel, TaskBudgetExceededError, type TaskBudgetMetric } from "./task-budget.js";
 
 import { normalizeToolResult } from "./tool-result.js";
@@ -278,6 +278,7 @@ export class Agent {
   private taskRouteNotices = new Set<string>();
   private recoverySource?: InterruptedTaskRun;
   private blockedRecoveryOperations = new Set<string>();
+  private recoveryInspectionOnly = false;
   private budgetWarnings = new Set<TaskBudgetMetric>();
 
   private config: AgentConfig;
@@ -433,6 +434,7 @@ export class Agent {
           this.taskRouteNotices.clear();
           this.recoverySource = undefined;
           this.blockedRecoveryOperations.clear();
+          this.recoveryInspectionOnly = false;
         }
       }
     }
@@ -442,6 +444,7 @@ export class Agent {
     if (this.activeController) throw new Error("Cannot change recovery state while a task is running.");
     if (this.configurationChange) throw new Error(`Cannot change recovery state while a ${this.configurationChange} change is active.`);
     this.recoverySource = run;
+    this.recoveryInspectionOnly = hasUnidentifiedRecoverySideEffects(run?.operations ?? []);
     this.blockedRecoveryOperations = new Set(run?.operations
       .filter((operation) => operation.sideEffect !== "none" && (operation.status === "started" || operation.status === "unknown" || operation.status === "succeeded"))
       .map((operation) => operation.signature)
@@ -878,6 +881,8 @@ export class Agent {
             result = `Tool error: web_open failure budget exhausted after ${webOpenFailureLimit(verifiedWebUrls.size)} failed page opens. Stop retrying blocked or unavailable hosts and answer with fewer successfully opened sources.`;
           } else if ((this.repeatedFailures.get(failureKey) ?? 0) >= 3) {
             result = "Tool error: the same operation already failed three times. Diagnose the cause or choose a different approach.";
+          } else if (this.recoveryInspectionOnly && taskToolSideEffect(risk, Boolean(tool.changesWorkspace)) !== "none") {
+            result = "Tool execution blocked by crash recovery: an earlier side effect lacks a usable operation signature. This recovery permits read-only tools only; verify the prior result before an explicitly requested new task.";
           } else if (this.blockedRecoveryOperations.has(taskOperationSignature(call.name, call.input))) {
             result = "Tool execution blocked by crash recovery: this exact side-effecting operation was in-flight when Xiu stopped. Verify its effect first; do not replay it automatically.";
           } else {

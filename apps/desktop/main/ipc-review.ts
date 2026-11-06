@@ -84,7 +84,10 @@ export function registerReviewIpc<Event extends IpcSenderLike>(ctx: ReviewIpcCon
   });
   ctx.handleIpc(desktopChannels.recoveryAbandon, async (event, request: DesktopRecoveryAbandonRequest) => {
     ctx.assertTrustedSender(event);
-    const confirmed = await ctx.confirmRecoveryAbandon();
-    return ctx.tasks.abandonRecovery(ctx.trustedWorkspacePath(), request, confirmed);
+    return ctx.serializeWriterStart(async () => {
+      const workspace = ctx.trustedWorkspacePath();
+      const confirmed = await ctx.confirmRecoveryAbandon();
+      return ctx.tasks.abandonRecovery(workspace, request, confirmed);
+    });
   });
 }

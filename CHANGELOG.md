@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Legacy recovery: when an unresolved or successful side effect has no usable comparison signature, restrict tools in that recovery task to read-only inspection. Missing, empty and opaque legacy signatures remain readable; confirmation, automatic approval and Full Access cannot authorize an unidentified replay. Explain the restriction in recovery guidance, retain exact-signature guards, and clear the temporary restriction with explicit recovery reset or task termination. Serialize desktop abandonment with its original workspace and clear attached Agent/runtime recovery only after its journal decision succeeds; write failures retain the in-memory protection.
+
 - Recovery record validation: reject unknown run/operation states, kinds, side-effect and replay tags, malformed operation identities and declared signature/risk fields before recovery or starting another task. Lists isolate corrupt records while retaining healthy entries; no records are rewritten or removed. Keep optional legacy metadata and additive display events compatible.
 
 - Paused recovery: retain operations already persisted as `unknown` in interrupted-operation counts, side-effect warnings and exact-signature replay guards. Pausing no longer makes unresolved effects disappear from the recovery acknowledgement. Explicit recovery consent does not authorize replay; confirmed read-only operations remain permitted. Record format and original journal data are unchanged.

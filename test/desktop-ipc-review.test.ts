@@ -87,7 +87,7 @@ test("checkpoint restore and recovery abandon always ask first and forward the u
   assert.deepEqual(accepted.calls, ["trust", "confirm:checkpoint:c1", "workspace", 'tasks.restoreCheckpoint:"/ws",{"checkpointId":"c1"},true']);
   accepted.calls.length = 0;
   assert.deepEqual(await accepted.invoke(desktopChannels.recoveryAbandon, trusted, { runId: "r1" }), { ok: "abandonRecovery" });
-  assert.deepEqual(accepted.calls, ["trust", "confirm:abandon", "workspace", 'tasks.abandonRecovery:"/ws",{"runId":"r1"},true']);
+  assert.deepEqual(accepted.calls, ["trust", "writer", "workspace", "confirm:abandon", 'tasks.abandonRecovery:"/ws",{"runId":"r1"},true']);
 
   const declined = harness({ workspace: "/ws", confirm: false });
   await declined.invoke(desktopChannels.checkpointRestore, trusted, { checkpointId: "c1" });

@@ -511,11 +511,18 @@ export class DesktopTaskController {
   async abandonRecovery(workspace: string, request: DesktopRecoveryAbandonRequest, confirmed: boolean): Promise<DesktopReviewSnapshot> {
     if (!confirmed || !request || typeof request.runId !== "string") throw new Error("放弃恢复需要主进程确认。");
     const host = await this.ensure(workspace);
+    const contextId = this.modeContextId;
     if (this.active(host)) throw new Error("已有任务正在运行。");
     const interrupted = await host.journal.interrupted();
+    this.assertIdleContext(host, workspace, contextId);
     if (!interrupted || interrupted.runId !== request.runId) throw new Error("恢复记录不存在或已经变化。");
-    await host.journal.abandon(request.runId, "abandoned by desktop user");
-    host.runtime.abandonRecovery(request.runId);
+    this.conversationBusy = true;
+    try {
+      await host.journal.abandon(request.runId, "abandoned by desktop user");
+      host.agent?.setRecoverySource(undefined);
+      host.runtime.abandonRecovery(request.runId);
+      this.modeContextId = randomUUID();
+    } finally { this.conversationBusy = false; }
     return this.reviewSnapshot(workspace, "workspace");
   }
 
