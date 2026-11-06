@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Desktop task starts: recheck host/conversation identity and idle state after asynchronous journal, history, model-event and baseline work. New, continued and recovered tasks cannot start while a Full Access confirmation begins during preflight. Preserve paused recovery state and already saved model events; rejected starts do not launch model requests or retry automatically.
+
 - Desktop history: continuation and same-workspace channel reload preserve the selected model while restoring conversation state, then persist that selection through the normal model-change path. An incompatible historical model no longer prevents using a valid current selection. Default CLI and interrupted-task recovery model preferences remain unchanged.
 
 - Session restoration: validate a history model’s context limits before replacing the active session. A rejected preference preserves the original conversation, log destination, Plan selection, diagnostics and verification state; continued tasks still append to the original history, and valid restoration can be retried.
