@@ -303,6 +303,19 @@ export class TaskRunJournal {
     try {
       if (options.resumedFrom) await this.abandon(options.resumedFrom, "superseded by confirmed recovery");
       await this.writeRecord(record);
+      try {
+        // A stale-lock cleaner can race a newer starter after the initial scan.
+        // Publish before checking again so competing starters can observe us too.
+        const conflicting = (await this.recoverableRecords()).find(other => other.runId !== runId);
+        if (conflicting) throw new Error("Task start could not establish exclusive workspace ownership. A concurrent or recoverable task requires a new explicit decision.");
+      } catch (error) {
+        record.status = "failed";
+        record.finishedAt = new Date().toISOString();
+        record.updatedAt = record.finishedAt;
+        this.appendEvent(record, { type: "run-finished", status: "failed", evidence: "Task start did not obtain execution permission; no task operations were started." });
+        await this.writeRecord(record);
+        throw error;
+      }
       this.current = record;
       return structuredClone(record);
     } catch (error) {
