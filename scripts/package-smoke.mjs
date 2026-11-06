@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 const workspace = process.cwd();
 const temporaryRoot = mkdtempSync(path.join(tmpdir(), "xiu-package-smoke-"));
@@ -66,6 +67,19 @@ try {
   }).trim();
   if (reportedVersion !== manifest.version) {
     throw new Error(`installed CLI reported ${reportedVersion || "no version"}; expected ${manifest.version}`);
+  }
+
+  // Exercise the installed command, with no real user configuration or outbound requests.
+  const diagnosticHome = path.join(temporaryRoot, "identity-home");
+  mkdirSync(diagnosticHome, { mode: 0o700 });
+  const networkMarker = path.join(temporaryRoot, "identity-network-attempted");
+  const preload = path.join(temporaryRoot, "identity-isolation.mjs");
+  writeFileSync(preload, `import os from 'node:os';import fs from 'node:fs';import http from 'node:http';import https from 'node:https';import net from 'node:net';import {syncBuiltinESMExports} from 'node:module';os.homedir=()=>${JSON.stringify(diagnosticHome)};const deny=()=>{fs.writeFileSync(${JSON.stringify(networkMarker)},'attempted');throw new Error('Unexpected diagnostic network request');};globalThis.fetch=deny;http.request=http.get=https.request=https.get=net.connect=net.createConnection=deny;syncBuiltinESMExports();`, { mode: 0o600 });
+  const identity = JSON.parse(execFileSync(process.execPath, ["--import", pathToFileURL(preload).href, cliPath, "--language", "en", "--trust-workspace", "recover", "identity", "json"], {
+    cwd: installRoot, encoding: "utf8", windowsHide: true, timeout: 45_000,
+  }));
+  if (identity.schemaVersion !== 1 || identity.metadataComplete !== true || identity.ownershipVerified !== false || identity.contentValidated !== false || identity.migrationSupported !== false || identity.changesApplied !== false || readdirSync(diagnosticHome).length || existsSync(networkMarker)) {
+    throw new Error("Installed identity preview did not meet its read-only, isolated diagnostic contract.");
   }
 
   console.log(`Package smoke test passed: ${manifest.name}@${manifest.version}`);

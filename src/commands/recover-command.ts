@@ -2,6 +2,7 @@ import { localize, type UiLanguage } from "../i18n.js";
 import { type InterruptedTaskRun, TaskRunJournal } from "../task-run.js";
 import { isWorkspaceTrusted } from "../trust.js";
 import { formatLocalTime } from "../local-time.js";
+import { formatWorkspaceIdentityPreview, identityPreviewReason, previewWorkspaceIdentity } from "../workspace-identity-preview.js";
 
 /**
  * `xiu recover [status]` and `xiu recover abandon <run id>`: the non-interactive half of crash
@@ -21,9 +22,10 @@ export interface RecoverCliOptions {
   stderr?: (text: string) => void;
   journal?: Pick<TaskRunJournal, "interrupted" | "abandon">;
   isTrusted?: (cwd: string) => Promise<boolean>;
+  identityPreview?: typeof previewWorkspaceIdentity;
 }
 
-/** Exit codes of `xiu recover`; `status` uses 2 for "an interrupted run exists" so scripts can branch. */
+/** `status` uses 2 for an interrupted run; identity's 0/1 describes metadata coverage, never recovery cleanliness. */
 export const RECOVER_EXIT_CODES = { clean: 0, failed: 1, interrupted: 2 } as const;
 
 const RUN_ID_PREFIX = /^[0-9a-f-]{4,36}$/i;
@@ -31,8 +33,8 @@ const MAX_LISTED_SIDE_EFFECTS = 10;
 
 function recoverUsage(language: UiLanguage): string {
   return localize(language,
-    "用法：xiu recover [status] 查看当前工作区的异常中断任务；xiu recover abandon <运行 ID 或至少 4 位前缀> 明确放弃它（不重放任何操作）。\n恢复任务需要在可交互终端里不带任务参数运行 xiu。",
-    "Usage: xiu recover [status] shows the interrupted task of this workspace; xiu recover abandon <run id or a prefix of at least 4 characters> abandons it explicitly (nothing is replayed).\nResuming requires running xiu without a task in an interactive terminal.");
+    "用法：xiu recover [status] 查看当前工作区的异常中断任务；xiu recover abandon <运行 ID 或至少 4 位前缀> 明确放弃它（不重放任何操作）。\nxiu recover identity [json] 只读预览工作区存储身份，不执行迁移。\n恢复任务需要在可交互终端里不带任务参数运行 xiu。",
+    "Usage: xiu recover [status] shows the interrupted task of this workspace; xiu recover abandon <run id or a prefix of at least 4 characters> abandons it explicitly (nothing is replayed).\nxiu recover identity [json] previews workspace storage identity without migrating it.\nResuming requires running xiu without a task in an interactive terminal.");
 }
 
 export function describeInterruptedRun(run: InterruptedTaskRun, language: UiLanguage): string {
@@ -61,7 +63,7 @@ export function describeInterruptedRun(run: InterruptedTaskRun, language: UiLang
   return lines.join("\n");
 }
 
-/** Returns the process exit code: 0 no interrupted run / abandoned, 2 an interrupted run exists (`status`), 1 usage error, untrusted workspace, unreadable journal or mismatch. */
+/** Identity returns 0/1 for complete/partial metadata. Status/abandon retain 0 clean/abandoned, 2 interrupted, 1 failed. */
 export async function runRecoverCommand(args: readonly string[], options: RecoverCliOptions): Promise<number> {
   const { cwd, language } = options;
   const stdout = options.stdout ?? ((text: string) => { process.stdout.write(`${text}\n`); });
@@ -71,7 +73,8 @@ export async function runRecoverCommand(args: readonly string[], options: Recove
   const usageError = rest.length > 0
     || (word === "status" && target !== undefined)
     || (word === "abandon" && (target === undefined || !RUN_ID_PREFIX.test(target)))
-    || (word !== "status" && word !== "abandon");
+    || (word === "identity" && target !== undefined && target.toLowerCase() !== "json")
+    || (word !== "status" && word !== "abandon" && word !== "identity");
   if (usageError) { stderr(recoverUsage(language)); return RECOVER_EXIT_CODES.failed; }
   const trusted = await (options.isTrusted ?? isWorkspaceTrusted)(cwd);
   if (!trusted) {
@@ -79,6 +82,16 @@ export async function runRecoverCommand(args: readonly string[], options: Recove
       "工作区尚未信任，不能读取它的任务记录。请先交互运行一次 xiu 并确认信任，或在你掌控的检出目录上显式加 --trust-workspace。",
       "This workspace is not trusted yet, so its task records are not read. Run xiu interactively once and confirm trust, or pass --trust-workspace explicitly on a checkout you control."));
     return RECOVER_EXIT_CODES.failed;
+  }
+  if (word === "identity") {
+    try {
+      const preview = await (options.identityPreview ?? previewWorkspaceIdentity)(cwd);
+      stdout(target?.toLowerCase() === "json" ? JSON.stringify(preview, null, 2) : formatWorkspaceIdentityPreview(preview, language));
+      return preview.metadataComplete ? RECOVER_EXIT_CODES.clean : RECOVER_EXIT_CODES.failed;
+    } catch (error) {
+      stderr(localize(language, `身份预览无法完成（${identityPreviewReason(error)}），没有改动任何记录。`, `Identity preview could not complete (${identityPreviewReason(error)}); no records were changed.`));
+      return RECOVER_EXIT_CODES.failed;
+    }
   }
   const journal = options.journal ?? new TaskRunJournal(cwd);
   let interrupted: InterruptedTaskRun | undefined;

@@ -1,3 +1,7 @@
+## 2026-11-06：安装包只读身份诊断门禁
+
+`npm run smoke:package` 还会运行安装后的 `recover identity json`：隔离用户配置目录并拦截网络，要求单份只读 JSON、无配置初始化、无迁移或恢复授权。它验证新增命令确实进入包，不替代真实用户数据的身份归属迁移验收。
+
 ## 2026-11-04：macOS CI runner 与架构边界
 
 GitHub 公开注解确认 `macos-latest` 当前为 macOS 26 ARM64，存在托管容量不足及多次未获 runner 后取消；这不是代码测试失败。默认 Verify/Desktop 使用官方支持的 `macos-26-intel`，所有既有步骤、失败门禁、候选及截图仍保留。手动 Actions → CI → Run workflow 的 `macos_runner` 可选 `macos-26` 执行 ARM64，或 `macos-26-intel` 执行 x64。默认通过只证明 macOS 26 x64，不得用其替代 ARM64 验收；需要 ARM64 交付时须检查该架构的精确提交运行及制品。没有启用付费 large runner，没有降低审计或加入容错跳过。

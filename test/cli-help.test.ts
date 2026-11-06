@@ -18,7 +18,7 @@ test("xiu --help lists the script commands, the one-shot exit codes and where sl
   const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoader, cli, "--help"], { cwd: root, env: { ...process.env, FORCE_COLOR: "0" } });
   assert.match(stdout, /^Usage: xiu \[options\] \[task\.\.\.\]/);
   assert.match(stdout, /Commands that run without an interactive session/);
-  for (const command of ["xiu doctor [json]", "xiu report [markdown|json|html] [summary|details] [run:<number|id prefix>] [path]", "xiu report runs", "xiu recover [status]", "xiu recover abandon <run id or prefix of 4+ characters>", "xiu audit [approvals|credentials] [json] [limit]"]) {
+  for (const command of ["xiu doctor [json]", "xiu report [markdown|json|html] [summary|details] [run:<number|id prefix>] [path]", "xiu report runs", "xiu recover [status]", "xiu recover identity [json]", "xiu recover abandon <run id or prefix of 4+ characters>", "xiu audit [approvals|credentials] [json] [limit]"]) {
     assert.ok(stdout.includes(command), `--help does not name ${command}`);
   }
   assert.match(stdout, new RegExp(`${ONE_SHOT_EXIT_CODES.completed} completed · ${ONE_SHOT_EXIT_CODES.unverified} changed but unverified · ${ONE_SHOT_EXIT_CODES.waiting_user} the model asked a question · ${ONE_SHOT_EXIT_CODES.failed} failed, cancelled, paused or not started`));

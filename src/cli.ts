@@ -160,6 +160,7 @@ Commands that run without an interactive session (trusted workspaces only, excep
                                                           export the latest task's execution report (stdout without a path; --yes to overwrite)
   xiu report runs                                         list recent runs and their ids
   xiu recover [status]                                    show the interrupted task of this workspace; exit 2 when one exists, 0 otherwise
+  xiu recover identity [json]                             read-only workspace identity/storage preview; does not migrate or replay
   xiu recover abandon <run id or prefix of 4+ characters> abandon that task explicitly without replaying anything
   xiu audit [approvals|credentials] [json] [limit]        list this workspace's local security-audit records read-only
 

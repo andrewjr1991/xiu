@@ -132,7 +132,8 @@ export class TaskRunPersistenceError extends Error {
   }
 }
 
-function workspaceIdentity(workspace: string): string {
+/** Version-1 on-disk namespace. Keep discoverable until an explicit, data-preserving migration exists. */
+export function legacyTaskRunWorkspaceId(workspace: string): string {
   const normalized = path.resolve(workspace).replace(/\\/g, "/").toLowerCase();
   return createHash("sha256").update(normalized).digest("hex").slice(0, 24);
 }
@@ -230,7 +231,7 @@ export class TaskRunJournal {
     private readonly workspace: string,
     private readonly root = path.join(os.homedir(), ".xiu", "task-runs"),
   ) {
-    this.workspaceId = workspaceIdentity(workspace);
+    this.workspaceId = legacyTaskRunWorkspaceId(workspace);
   }
 
   private directory(): string { return path.join(this.root, this.workspaceId); }
