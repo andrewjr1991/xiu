@@ -638,8 +638,12 @@ export class DesktopTaskController {
 
   async shutdown(): Promise<void> {
     const host = this.host ?? await this.creating;
-    await host?.close?.();
-    await this.disposing;
+    try {
+      await host?.close?.();
+      await this.disposing;
+    } finally {
+      await this.eventPersistence;
+    }
   }
 
   private taskText(text: string): string {

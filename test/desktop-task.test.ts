@@ -80,7 +80,10 @@ test("desktop cancellation binds current parent and child, requires confirmation
 
 test("an idle controller identifies its own unfinished journal lock rather than another window", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiu-own-journal-lock-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(async () => {
+    await controller.shutdown();
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const journal = new TaskRunJournal(root, path.join(root, "journals"));
   await journal.begin({ sessionId: "unfinished", task: "fixture", providerId: "p", model: "m" });
   const runtime = new XiuRuntime();
