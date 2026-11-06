@@ -168,6 +168,8 @@ export interface SessionListing {
   sessions: SessionListItem[];
   /** Session logs skipped because they could not be read, by id, with the system error code and never a path. */
   unreadable: Array<{ id: string; reason: string }>;
+  /** Storage directories that could not be enumerated; counts/codes only, never paths. */
+  directoryIssues?: Array<{ reason: string }>;
 }
 
 /**
@@ -234,7 +236,7 @@ export async function refreshSessionSummary(file: string): Promise<boolean> {
 
 /** Explicit maintenance for older logs; ordinary readers never create caches. */
 export async function rebuildSessionSummaries(cwd: string): Promise<{ indexed: number; skipped: number; failed: number }> {
-  const listing = await listSessionsWithIssues(cwd, { useSummary: false });
+  const listing = await listSessionsWithIssues(cwd, { useSummary: false, strictDirectories: true });
   const result = { indexed: 0, skipped: 0, failed: listing.unreadable.length };
   for (const session of listing.sessions) {
     try {
@@ -248,12 +250,17 @@ export async function rebuildSessionSummaries(cwd: string): Promise<{ indexed: n
 export async function listSessionsWithIssues(cwd: string, options: { useSummary?: boolean; strictDirectories?: boolean } = {}): Promise<SessionListing> {
   const items: SessionListItem[] = [];
   const unreadable: SessionListing["unreadable"] = [];
+  const directoryIssues: NonNullable<SessionListing["directoryIssues"]> = [];
   const directories = [sessionDirectory(cwd), path.join(cwd, ".forge", "sessions"), path.join(cwd, ".forge_sessions")];
   for (const directory of directories) {
     const files = await fs.readdir(directory).catch((error: NodeJS.ErrnoException) => {
       // Missing directories are normal for new workspaces. Diagnostics must distinguish
       // inaccessible/broken directories from an actually empty history.
-      if (options.strictDirectories && error.code !== "ENOENT") throw error;
+      if (error.code !== "ENOENT") {
+        const reason = typeof error.code === "string" && error.code ? error.code : "unreadable";
+        if (options.strictDirectories) throw Object.assign(new Error(`Session directories could not be completely listed (${reason}). Run xiu doctor for details.`), { code: reason });
+        directoryIssues.push({ reason });
+      }
       return [] as string[];
     });
     for (const name of files.filter((file) => file.endsWith(".jsonl"))) {
@@ -272,7 +279,7 @@ export async function listSessionsWithIssues(cwd: string, options: { useSummary?
     }
   }
   unreadable.sort((a, b) => a.id.localeCompare(b.id));
-  return { sessions: items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), unreadable };
+  return { sessions: items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), unreadable, ...(directoryIssues.length ? { directoryIssues } : {}) };
 }
 
 /** The title a session list shows: its first task, or the language's "untitled" label. */
@@ -281,26 +288,31 @@ export function sessionTitle(session: Pick<SessionListItem, "firstTask">, langua
 }
 
 /** One line naming how many session logs a list leaves out and why; undefined when none. */
-export function unreadableSessionsNote(unreadable: SessionListing["unreadable"], language: "zh-CN" | "en-US", sessions: SessionListItem[] = []): string | undefined {
+export function unreadableSessionsNote(unreadable: SessionListing["unreadable"], language: "zh-CN" | "en-US", sessions: SessionListItem[] = [], directoryIssues: NonNullable<SessionListing["directoryIssues"]> = []): string | undefined {
+  const reasons = (items: Array<{ reason: string }>): string => {
+    const counts = new Map<string, number>();
+    for (const entry of items) counts.set(entry.reason, (counts.get(entry.reason) ?? 0) + 1);
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ×${count}`).join(language === "zh-CN" ? "、" : ", ");
+  };
+  const directoryNote = directoryIssues.length ? language === "zh-CN"
+    ? `${directoryIssues.length} 个会话目录无法列出（${reasons(directoryIssues)}）；历史可能不完整，请运行 xiu doctor 检查。`
+    : `${directoryIssues.length} session ${directoryIssues.length === 1 ? "directory" : "directories"} could not be listed (${reasons(directoryIssues)}); history may be incomplete. Run xiu doctor for details.` : undefined;
   const damaged = sessions.filter((session) => session.damagedLines);
   const damagedLines = damaged.reduce((sum, session) => sum + session.damagedLines!, 0);
   const damageNote = damaged.length ? language === "zh-CN"
     ? `${damaged.length} 个会话日志中有 ${damagedLines} 条损坏记录已跳过；历史可能不完整。`
     : `${damagedLines} damaged record(s) skipped in ${damaged.length} session log(s); history may be incomplete.` : undefined;
-  if (!unreadable.length) return damageNote;
-  const counts = new Map<string, number>();
-  for (const item of unreadable) counts.set(item.reason, (counts.get(item.reason) ?? 0) + 1);
-  const reasons = [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason} ×${count}`);
+  if (!unreadable.length) return [directoryNote, damageNote].filter(Boolean).join(" ") || undefined;
   const unreadableNote = language === "zh-CN"
-    ? `另有 ${unreadable.length} 个会话日志无法读取（${reasons.join("、")}），未列出。`
-    : `${unreadable.length} more session log(s) could not be read (${reasons.join(", ")}) and are not listed.`;
-  return [unreadableNote, damageNote].filter(Boolean).join(" ");
+    ? `另有 ${unreadable.length} 个会话日志无法读取（${reasons(unreadable)}），未列出。`
+    : `${unreadable.length} more session log(s) could not be read (${reasons(unreadable)}) and are not listed.`;
+  return [unreadableNote, directoryNote, damageNote].filter(Boolean).join(" ");
 }
 
 /** Delete one exact local conversation log without touching workspace content. */
 export async function deleteSession(cwd: string, requested: string): Promise<boolean> {
   if (!/^[A-Za-z0-9-]{1,160}$/.test(requested)) throw new Error("Invalid session deletion request.");
-  const selected = (await listSessions(cwd)).filter((item) => item.id === requested);
+  const selected = (await listSessionsWithIssues(cwd, { strictDirectories: true })).sessions.filter((item) => item.id === requested);
   if (!selected.length) return false;
   for (const item of selected) {
     const stat = await fs.lstat(item.file).catch((error: NodeJS.ErrnoException) => {
@@ -323,7 +335,7 @@ export async function deleteSession(cwd: string, requested: string): Promise<boo
 }
 
 export async function loadSession(cwd: string, requested?: string): Promise<RestoredSession> {
-  const { sessions, unreadable } = await listSessionsWithIssues(cwd, { useSummary: false });
+  const { sessions, unreadable } = await listSessionsWithIssues(cwd, { useSummary: false, strictDirectories: true });
   const exact = requested ? sessions.find((item) => item.id === requested) : undefined;
   const unreadableExact = requested ? unreadable.find((item) => item.id === requested) : undefined;
   if (!exact && unreadableExact) throw Object.assign(new Error(`Session log cannot be read (${unreadableExact.reason}): ${unreadableExact.id}`), { code: unreadableExact.reason });

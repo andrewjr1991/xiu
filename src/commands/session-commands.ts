@@ -168,12 +168,14 @@ export async function printSessionList(cwd: string, language: UiLanguage, io: Se
   const offset = page.offset ?? 0;
   const limit = page.limit ?? 50;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid session page.");
-  const { sessions, unreadable } = await io.list(cwd);
+  const { sessions, unreadable, directoryIssues } = await io.list(cwd);
   const visible = paged ? sessions.slice(offset, offset + limit) : sessions;
-  if (!sessions.length) io.log(localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
+  if (!sessions.length) io.log(unreadable.length || directoryIssues?.length
+    ? localize(language, "未找到可读的 Xiu 会话。", "No readable Xiu sessions were found.")
+    : localize(language, "此工作区没有 Xiu 会话。", "No Xiu sessions in this workspace."));
   else for (const session of visible) io.log(`${session.id}  ${formatLocalTime(session.updatedAt)}  ${session.model ?? localize(language, "未知模型", "unknown model")}  ${sessionTitle(session, language, 80)}`);
   if (paged) io.log(localize(language, `会话 ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length}（offset ${offset}，limit ${limit}）`, `Sessions ${visible.length ? offset + 1 : 0}–${visible.length ? offset + visible.length : 0} / ${sessions.length} (offset ${offset}, limit ${limit})`));
-  const note = unreadableSessionsNote(unreadable, language, sessions);
+  const note = unreadableSessionsNote(unreadable, language, sessions, directoryIssues);
   if (note) io.log(note);
 }
 
@@ -186,9 +188,12 @@ export interface SessionChooserIo {
 
 /** Lists sessions in pages and restores only a selected session; navigation/cancel never loads history. */
 export async function chooseSession(workspace: string, language: UiLanguage, io: SessionChooserIo = { list: listSessionsWithIssues, select: selectTerminalOption, load: loadSession }): Promise<RestoredSession | undefined> {
-  const { sessions, unreadable } = await io.list(workspace);
-  const note = unreadableSessionsNote(unreadable, language, sessions);
+  const { sessions, unreadable, directoryIssues } = await io.list(workspace);
+  const note = unreadableSessionsNote(unreadable, language, sessions, directoryIssues);
   if (note) console.log(chalk.yellow(note));
+  if (directoryIssues?.length) throw Object.assign(new Error(localize(language,
+    "会话目录未能完整列出，已停止恢复；请运行 xiu doctor 检查。",
+    "Session directory listing is incomplete; resume stopped. Run xiu doctor for details.")), { code: directoryIssues[0]!.reason });
   if (!sessions.length) return undefined;
   let offset = 0;
   const limit = 20;
@@ -285,10 +290,12 @@ export async function handleSessionCommand(task: string, ctx: SessionCommandCont
     return true;
   }
   if (task === "/history sessions") {
-    const { sessions, unreadable } = await listSessionsWithIssues(config.cwd);
-    const note = unreadableSessionsNote(unreadable, language, sessions);
+    const { sessions, unreadable, directoryIssues } = await listSessionsWithIssues(config.cwd);
+    const note = unreadableSessionsNote(unreadable, language, sessions, directoryIssues);
     console.log([
-      sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : localize(language, "没有已保存会话。", "No saved sessions."),
+      sessions.length ? sessions.map((session) => `${session.id}  ${formatLocalTime(session.updatedAt)}  ${sessionTitle(session, language)}`).join("\n") : unreadable.length || directoryIssues?.length
+        ? localize(language, "未找到可读的 Xiu 会话。", "No readable Xiu sessions were found.")
+        : localize(language, "没有已保存会话。", "No saved sessions."),
       ...(note ? [chalk.yellow(note)] : []),
     ].join("\n") + "\n");
     return true;

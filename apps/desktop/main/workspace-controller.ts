@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listSessions } from "../../../src/session.js";
+import { listSessionsWithIssues, unreadableSessionsNote } from "../../../src/session.js";
 import { redactSecrets } from "../../../src/secret-redaction.js";
 import { TaskRunJournal } from "../../../src/task-run.js";
 import { isWorkspaceTrusted, trustWorkspace } from "../../../src/trust.js";
@@ -86,7 +86,9 @@ export class DesktopWorkspaceController {
 
     try {
       const journal = new TaskRunJournal(this.current.path, this.taskRunRoot);
-      const [runs, sessions, lock] = await Promise.all([journal.recent(100), listSessions(this.current.path), journal.lockStatus()]);
+      const [runs, listing, lock] = await Promise.all([journal.recent(100), listSessionsWithIssues(this.current.path), journal.lockStatus()]);
+      const { sessions, unreadable, directoryIssues } = listing;
+      const historyWarning = unreadableSessionsNote(unreadable, "zh-CN", sessions, directoryIssues);
       const sessionById = new Map(sessions.map((session) => [session.id, session]));
       const latestRunBySession = new Map<string, (typeof runs)[number]>();
       for (const run of runs) {
@@ -118,6 +120,7 @@ export class DesktopWorkspaceController {
         },
         recent,
         tasks,
+        ...(historyWarning ? { error: historyWarning } : {}),
       });
     } catch (error) {
       this.lastError = this.safeError(error);
