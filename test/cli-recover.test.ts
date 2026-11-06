@@ -219,3 +219,21 @@ test("a one-shot run paused by its budget blocks later runs until xiu recover ab
   assert.equal(run.exitCode, 0, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
   assert.match(run.stdout, /"outcome":"completed"/);
 });
+
+test("xiu recover exposes and abandons a paused task while its original process stays alive", { timeout: 90_000 }, async t => {
+  const { cwd, home } = await fixture(t, { trusted: true });
+  const root = path.join(home, ".xiu", "task-runs"), journal = new TaskRunJournal(cwd, root);
+  const run = await journal.begin({ sessionId: "paused-live-session", task: "paused fixture", providerId: "fake", model: "fake-model" });
+  await journal.beginOperation({ kind: "tool", name: "write_file", risk: "write", sideEffect: "workspace" });
+  await journal.pause("explicit pause");
+  const file = path.join(root, journal.workspaceId, `${run.runId}.json`), before = await fs.readFile(file, "utf8");
+  // runCli is a different process; the test process that owns this paused record remains alive.
+  const status = await runCli(["recover", "status"], cwd, home);
+  assert.equal(status.exitCode, 2, `stdout:\n${status.stdout}\nstderr:\n${status.stderr}`);
+  assert.match(status.stdout, /paused/);
+  assert.match(status.stdout, /side effects awaiting verification: 1/);
+  assert.equal(await fs.readFile(file, "utf8"), before);
+  const abandoned = await runCli(["recover", "abandon", run.runId], cwd, home);
+  assert.equal(abandoned.exitCode, 0, abandoned.stderr);
+  assert.equal(await recordStatus(file), "abandoned");
+});

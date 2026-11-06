@@ -276,9 +276,6 @@ export class TaskRunJournal {
       throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
     }
     if (existing && existing.runId !== options.resumedFrom) {
-      if (existing.ownerPid !== process.pid && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
-        throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);
-      }
       throw new Error("An interrupted task requires an explicit resume or abandon decision before starting another task.");
     }
     const now = new Date().toISOString();
@@ -416,7 +413,7 @@ export class TaskRunJournal {
   async interrupted(): Promise<InterruptedTaskRun | undefined> {
     const record = (await this.recoverableRecords())[0];
     if (!record) return undefined;
-    if (record.ownerPid !== process.pid && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) return undefined;
+    if (record.status === "running" && record.ownerPid !== process.pid && await this.ownerAlive(record.ownerPid, record.ownerStartedAt)) return undefined;
     const interruptedOperations = record.operations.filter((operation) => operation.status === "started" || operation.status === "unknown").map((operation) => ({ ...operation, status: "unknown" as const }));
     const pendingSideEffects = interruptedOperations.filter((operation) => operation.sideEffect !== "none");
     return {
