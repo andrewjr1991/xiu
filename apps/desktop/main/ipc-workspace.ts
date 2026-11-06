@@ -71,9 +71,9 @@ export function registerWorkspaceIpc<Event extends IpcSenderLike>(ctx: Workspace
     }
     return ctx.emitSnapshot(await ctx.workspaces.removeRecent(request, request.confirmed));
   }));
-  ctx.handleIpc(desktopChannels.trustWorkspace, async (event, request: TrustWorkspaceRequest) => {
+  ctx.handleIpc(desktopChannels.trustWorkspace, async (event, request: TrustWorkspaceRequest) => ctx.serializeWriterStart(async () => {
     ctx.assertTrustedSender(event);
     ctx.providerRecovery.invalidateContext();
     return ctx.emitSnapshot(await ctx.workspaces.trustCurrent(request));
-  });
+  }));
 }

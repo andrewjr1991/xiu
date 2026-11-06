@@ -36,7 +36,7 @@ export interface WorkspaceControllerOptions {
 }
 
 function workspaceId(value: string): string {
-  const normalized = value.replace(/\\/g, "/").toLowerCase();
+  const normalized = process.platform === "win32" ? value.replace(/\\/g, "/").toLowerCase() : value;
   return createHash("sha256").update(normalized).digest("hex").slice(0, 24);
 }
 
@@ -181,11 +181,13 @@ export class DesktopWorkspaceController {
 
   async trustCurrent(request: TrustWorkspaceRequest): Promise<DesktopWorkspaceSnapshot> {
     if (!request || request.acknowledged !== true || typeof request.workspaceId !== "string") throw new Error("Workspace trust requires explicit acknowledgement.");
-    if (!this.current || this.current.id !== request.workspaceId) throw new Error("Workspace trust request is unavailable or stale.");
-    const canonical = await fs.realpath(this.current.path);
-    if (workspaceId(canonical) !== this.current.id) throw new Error("Workspace identity changed before trust confirmation.");
+    const current = this.current;
+    if (!current || current.id !== request.workspaceId) throw new Error("Workspace trust request is unavailable or stale.");
+    const canonical = await fs.realpath(current.path);
+    if (current !== this.current || workspaceId(canonical) !== current.id) throw new Error("Workspace selection or identity changed before trust confirmation.");
     await trustWorkspace(canonical, this.trustStorePath);
-    this.current = { ...this.current, path: canonical, trusted: true };
+    if (current !== this.current) throw new Error("Workspace selection changed while trust was saved; the decision was not applied to the current selection.");
+    this.current = { ...current, path: canonical, trusted: true };
     await this.remember(canonical);
     return this.snapshot();
   }
@@ -206,7 +208,14 @@ export class DesktopWorkspaceController {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe desktop workspace history path.");
       const parsed = JSON.parse(await fs.readFile(this.recentStorePath, "utf8")) as unknown;
       if (!validRecentStore(parsed)) throw new Error("Unsupported or corrupt desktop workspace history.");
-      return parsed;
+      // Recent entries retain their canonical paths, so display identifiers can be
+      // upgraded without rewriting the store or reusing a case-folded POSIX ID.
+      const seen = new Set<string>();
+      return { version: 1, workspaces: parsed.workspaces.map((record) => ({ ...record, id: workspaceId(record.path) })).filter((record) => {
+        if (seen.has(record.id)) return false;
+        seen.add(record.id);
+        return true;
+      }) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, workspaces: [] };
       throw error;

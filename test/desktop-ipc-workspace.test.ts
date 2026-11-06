@@ -88,8 +88,8 @@ test("removing a recent workspace needs an existing entry and explicit confirmat
   assert.equal(busy.calls.includes("detach"), false);
 });
 
-test("trusting the current workspace invalidates the provider recovery context before emitting the new snapshot", async () => {
+test("trusting the current workspace serializes changes and invalidates recovery before emitting", async () => {
   const { calls, invoke } = harness({});
   assert.deepEqual(await invoke(desktopChannels.trustWorkspace, trusted, { trusted: true }), { ok: "trust-current" });
-  assert.deepEqual(calls, ["trust", "invalidate", 'trust-current:{"trusted":true}', "emit"]);
+  assert.deepEqual(calls, ["writer", "trust", "invalidate", 'trust-current:{"trusted":true}', "emit"]);
 });
