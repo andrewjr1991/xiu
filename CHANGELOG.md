@@ -2,6 +2,8 @@
 
 ## Unreleased (0.20.14)
 
+- Task-run file identity: validate run, recovery-reference and lock IDs using the existing bounded alphanumeric/hyphen form; require a loaded record’s ID to match its filename exactly. Reject redirected reads, event writes and abandonment before touching another record. Preserve malformed locks instead of clearing them to admit a new starter; matching legacy IDs keep their case. Workspace namespace migration remains separate.
+
 - Recovery guidance: keep the explicit “Never replay unknown operations automatically” warning alongside the new legacy inspection-only recommendation. Restore the offline evaluation’s safety contract while preserving all program-enforced tool restrictions and abandonment cleanup.
 
 - Legacy recovery: when an unresolved or successful side effect has no usable comparison signature, restrict tools in that recovery task to read-only inspection. Missing, empty and opaque legacy signatures remain readable; confirmation, automatic approval and Full Access cannot authorize an unidentified replay. Explain the restriction in recovery guidance, retain exact-signature guards, and clear the temporary restriction with explicit recovery reset or task termination. Serialize desktop abandonment with its original workspace and clear attached Agent/runtime recovery only after its journal decision succeeds; write failures retain the in-memory protection.

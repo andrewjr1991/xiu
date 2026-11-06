@@ -193,6 +193,10 @@ function unreadableRecordReason(error: unknown): TaskRunUnreadableReason {
   return typeof code === "string" && code ? code : "unreadable";
 }
 
+function isTaskRunId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9-]{1,160}$/.test(value);
+}
+
 const RUN_STATUSES = new Set(["running", "paused", "completed", "failed", "cancelled", "unverified", "abandoned", "waiting_user"]);
 const OPERATION_STATUSES = new Set(["planned", "started", "succeeded", "failed", "cancelled", "unknown"]);
 const OPERATION_KINDS = new Set(["model", "tool", "verification", "checkpoint", "steering"]);
@@ -216,7 +220,7 @@ function isRecord(value: unknown): value is TaskRunRecord {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<TaskRunRecord>;
   return item.version === TASK_RUN_SCHEMA_VERSION
-    && typeof item.runId === "string"
+    && isTaskRunId(item.runId)
     && typeof item.workspaceId === "string"
     && typeof item.sessionId === "string"
     && typeof item.status === "string" && RUN_STATUSES.has(item.status)
@@ -254,11 +258,15 @@ export class TaskRunJournal {
   }
 
   private directory(): string { return path.join(this.root, this.workspaceId); }
-  private runFile(runId: string): string { return path.join(this.directory(), `${runId}.json`); }
+  private runFile(runId: string): string {
+    if (!isTaskRunId(runId)) throw new Error("Unsupported or corrupt task-run identifier.");
+    return path.join(this.directory(), `${runId}.json`);
+  }
   private lockFile(): string { return path.join(this.directory(), ".active.lock"); }
 
   async begin(options: BeginRunOptions): Promise<TaskRunRecord> {
     if (this.current?.status === "running") throw new Error("A task run is already active in this Xiu process.");
+    if (options.resumedFrom !== undefined && !isTaskRunId(options.resumedFrom)) throw new Error("Unsupported or corrupt task-run recovery identifier.");
     const existing = (await this.recoverableRecords())[0];
     if (existing && existing.runId !== options.resumedFrom) {
       if (existing.ownerPid !== process.pid && await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt)) {
@@ -422,13 +430,14 @@ export class TaskRunJournal {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run journal entry: ${file}`);
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as unknown;
     if (!isRecord(parsed)) throw new Error(`Unsupported or corrupt task-run journal: ${file}`);
+    if (parsed.runId !== runId) throw new Error("Unsupported or corrupt task-run journal identity.");
     if (parsed.workspaceId !== this.workspaceId) throw new Error("Task-run journal belongs to another workspace.");
     return parsed;
   }
 
   /** Delete one exact inactive journal record. Workspace content and checkpoints are untouched. */
   async delete(runId: string): Promise<boolean> {
-    if (!/^[A-Za-z0-9-]{1,160}$/.test(runId)) throw new Error("Invalid task-run deletion request.");
+    if (!isTaskRunId(runId)) throw new Error("Invalid task-run deletion request.");
     if (this.current?.runId === runId) throw new Error("Cannot delete an active task run.");
     const file = this.runFile(runId);
     const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
@@ -450,7 +459,7 @@ export class TaskRunJournal {
   }
 
   async recordComputerAcceptance(runId: string, decision: "passed" | "rejected", confirmed: boolean): Promise<void> {
-    if (!confirmed || !/^[A-Za-z0-9-]{1,160}$/.test(runId) || !["passed", "rejected"].includes(decision)) throw new Error("Explicit human acceptance is required.");
+    if (!confirmed || !isTaskRunId(runId) || !["passed", "rejected"].includes(decision)) throw new Error("Explicit human acceptance is required.");
     const record = await this.read(runId);
     if (!record || !["completed", "unverified", "failed"].includes(record.status) || !record.operations.some(operation => operation.name === "computer_input" && operation.status === "succeeded")) throw new Error("Only a finished computer-operation result can be accepted.");
     record.manualAcceptance = { decision, at: new Date().toISOString(), scope: "computer-result" };
@@ -514,7 +523,7 @@ export class TaskRunJournal {
     catch { throw new Error(`Corrupt task-run lock: ${file}`); }
     if (lock.version !== TASK_RUN_SCHEMA_VERSION
       || lock.workspaceId !== this.workspaceId
-      || typeof lock.runId !== "string"
+      || !isTaskRunId(lock.runId)
       || !Number.isSafeInteger(lock.ownerPid)) {
       throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
     }
@@ -597,7 +606,7 @@ export class TaskRunJournal {
         catch { throw new Error(`Corrupt task-run lock: ${file}`); }
         const valid = existing.version === TASK_RUN_SCHEMA_VERSION
           && existing.workspaceId === this.workspaceId
-          && typeof existing.runId === "string"
+          && isTaskRunId(existing.runId)
           && Number.isSafeInteger(existing.ownerPid);
         if (!valid) throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
         const takeoverConfirmed = resumedFrom === existing.runId;
