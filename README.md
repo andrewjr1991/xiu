@@ -14,7 +14,9 @@ English | [简体中文](./README.zh-CN.md)
 
 </div>
 
-Development version **0.20.14** adds conversation copy, record navigation and Markdown tables to the Windows desktop preview. Latest published version **0.20.12** (2026-10-19) includes the maintainer-accepted Computer Use editor fixes: [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) · [npm package](https://www.npmjs.com/package/@xiu-ai/cli) · [Changelog](./CHANGELOG.md). The CLI runs on Windows, macOS and Linux; the desktop app currently ships only as an unsigned Windows x64 preview installer.
+Device-test candidate **0.20.14-beta.1** is being prepared for an unsigned Windows x64 GitHub prerelease. It will be downloadable after exact-commit CI and asset readback checks pass; npm latest remains 0.20.12. Close older Xiu/CLI clients before testing the same workspace.
+
+Development version **0.20.14-beta.1** adds conversation copy, record navigation and Markdown tables to the Windows desktop preview. Latest published version **0.20.12** (2026-10-19) includes the maintainer-accepted Computer Use editor fixes: [GitHub Release](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.12) · [npm package](https://www.npmjs.com/package/@xiu-ai/cli) · [Changelog](./CHANGELOG.md). The CLI runs on Windows, macOS and Linux; the desktop app currently ships only as an unsigned Windows x64 preview installer.
 
 ## Install
 

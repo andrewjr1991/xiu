@@ -342,6 +342,28 @@ jobs:
       - run: npm run test:ci
       - run: npm run build
 
+  device_test_release:
+    name: Publish authorized device test
+    needs: [verify, desktop, compat, audit]
+    if: ${{ github.event_name == 'push' && github.repository == 'andrewjr1991/xiu' && github.ref == 'refs/heads/codex/xiu-device-test-0.20.14-beta.1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: device-test-release-0.20.14-beta.1
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.12.0
+      - name: Verify exact candidates, stage draft, read back and publish prerelease
+        run: node .github/scripts/device-test-release.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   audit:
     # Known advisories in shipped (production) dependencies fail the build.
     name: Dependency audit

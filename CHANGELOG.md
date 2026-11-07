@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.14-beta.1 — Windows x64 device-test prerelease (preparing)
+
+- Packages the 0.20.14 conversation, history, provider and reliability work below as a distinct unsigned Windows x64 test candidate.
+- Release only original same-commit CI artifacts after all nine gates and draft download checks pass. No npm publication or stable latest change.
+- Workspace identity migration, complete lock protocol, ARM64/external-device and real paid-provider validation remain open.
+
 ## Unreleased (0.20.14)
 
 - Task-run owners: require positive individual PIDs within Node’s supported process-ID range in records and locks. Invalid/missing PIDs are corrupt metadata rather than evidence of a dead owner, so they cannot silently clear a lock. Start-time probes reject invalid PIDs and process-group identifiers before OS or injected probes; retain legacy records without owner start time.
