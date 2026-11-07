@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSecrets } from "./secret-redaction.js";
 import { compareStartTimes, currentProcessStartedAt, isProcessId, processStartTime } from "./process-identity.js";
-import type { RuntimeEvent } from "./runtime/protocol.js";
+import { XIU_RUNTIME_SCHEMA_VERSION, type RuntimeEvent } from "./runtime/protocol.js";
 
 export const TASK_RUN_SCHEMA_VERSION = 1 as const;
 
@@ -66,6 +67,8 @@ export interface TaskRunRecord {
   recoveryPoints: TaskRecoveryPoint[];
   events: TaskRunEvent[];
   runtimeEvents?: RuntimeEvent[];
+  /** Display-only failure marker, never recovery or execution authority. */
+  runtimeEventsUnavailable?: true;
   resumedFrom?: string;
   /** Human assessment only; never verification evidence, execution authority or recovery consent. */
   manualAcceptance?: { decision: "passed" | "rejected"; at: string; scope: "computer-result" };
@@ -248,11 +251,36 @@ async function atomicWrite(file: string, value: unknown): Promise<void> {
   }
 }
 
+export const MAX_TASK_EVENT_HISTORY_BYTES = 16 * 1024 * 1024;
+
+export class TaskRunHistoryPersistenceError extends Error {
+  readonly code = "XIU_HISTORY_PERSISTENCE";
+  constructor(readonly storageCode: string) {
+    super(`Task event history could not be saved (${storageCode}). Execution state was not changed.`);
+    this.name = "TaskRunHistoryPersistenceError";
+  }
+}
+
+function isRuntimeHistoryEvent(value: unknown): value is RuntimeEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const event = value as Partial<RuntimeEvent>;
+  return event.schemaVersion === XIU_RUNTIME_SCHEMA_VERSION
+    && typeof event.eventId === "string" && typeof event.taskId === "string"
+    && Number.isSafeInteger(event.sequence) && event.sequence! >= 0
+    && typeof event.timestamp === "string" && Number.isFinite(Date.parse(event.timestamp))
+    && typeof event.type === "string" && Boolean(event.payload) && typeof event.payload === "object" && !Array.isArray(event.payload);
+}
+
+function sameHistoryFile(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
 export class TaskRunJournal {
   readonly workspaceId: string;
   readonly instanceId = randomUUID();
   private current?: TaskRunRecord;
   private storageFailure?: string;
+  private readonly eventHistoryFailures = new Set<string>();
 
   constructor(
     private readonly workspace: string,
@@ -265,6 +293,10 @@ export class TaskRunJournal {
   private runFile(runId: string): string {
     if (!isTaskRunId(runId)) throw new Error("Unsupported or corrupt task-run identifier.");
     return path.join(this.directory(), `${runId}.json`);
+  }
+  private eventHistoryFile(runId: string): string {
+    this.runFile(runId); // Validate before deriving another storage path.
+    return path.join(this.directory(), `${runId}.events`);
   }
   private lockFile(): string { return path.join(this.directory(), ".active.lock"); }
 
@@ -411,7 +443,7 @@ export class TaskRunJournal {
   }
 
   async abandon(runId: string, evidence = "abandoned by user"): Promise<void> {
-    const record = await this.read(runId);
+    const record = await this.readRecord(runId);
     if (!record) return;
     await this.assertInactiveOwner(record);
     record.status = "abandoned";
@@ -450,6 +482,48 @@ export class TaskRunJournal {
   }
 
   async read(runId: string): Promise<TaskRunRecord | undefined> {
+    const record = await this.readRecord(runId);
+    if (!record) return undefined;
+    if (this.eventHistoryFailures.has(runId)) return { ...record, runtimeEvents: undefined, runtimeEventsUnavailable: true };
+    try {
+      const events = await this.readEventHistory(runId);
+      return events === undefined ? record : { ...record, runtimeEvents: events };
+    } catch {
+      // Presentation failures never hide or alter authoritative recovery state.
+      return { ...record, runtimeEvents: undefined, runtimeEventsUnavailable: true };
+    }
+  }
+
+  private async readEventHistory(runId: string): Promise<RuntimeEvent[] | undefined> {
+    const file = this.eventHistoryFile(runId);
+    const before = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!before) return undefined;
+    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_TASK_EVENT_HISTORY_BYTES) throw new Error("Unavailable task event history.");
+    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || !sameHistoryFile(before, opened)) throw new Error("Task event history changed.");
+      const buffer = Buffer.alloc(opened.size + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+        if (!bytesRead) break;
+        size += bytesRead;
+      }
+      const after = await handle.stat(), current = await fs.lstat(file);
+      if (size !== opened.size || !current.isFile() || current.isSymbolicLink()
+        || !sameHistoryFile(opened, after) || !sameHistoryFile(after, current)) throw new Error("Task event history changed.");
+      const parsed = JSON.parse(buffer.subarray(0, size).toString("utf8")) as Record<string, unknown>;
+      if (!parsed || parsed.version !== 1 || parsed.runId !== runId || parsed.workspaceId !== this.workspaceId
+        || !Array.isArray(parsed.events) || parsed.events.length > 1_000 || !parsed.events.every(isRuntimeHistoryEvent)) throw new Error("Unsupported task event history.");
+      return parsed.events;
+    } finally { await handle.close(); }
+  }
+
+  private async readRecord(runId: string): Promise<TaskRunRecord | undefined> {
     const file = this.runFile(runId);
     const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
@@ -475,24 +549,46 @@ export class TaskRunJournal {
     });
     if (!stat) return false;
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Unsafe task-run journal entry: ${file}`);
-    const record = await this.read(runId);
+    const record = await this.readRecord(runId);
     if (!record) throw new Error("Task-run journal changed before deletion.");
     await this.assertInactiveOwner(record);
+    const historyFile = this.eventHistoryFile(runId);
+    const history = await fs.lstat(historyFile).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (history && (!history.isFile() || history.isSymbolicLink())) throw new Error("Unsafe task event history entry.");
+    if (history) await fs.unlink(historyFile).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
     await fs.unlink(file);
+    this.eventHistoryFailures.delete(runId);
     return true;
   }
 
   /** Persist the sanitized desktop event stream after a run reaches a terminal state. */
   async saveRuntimeEvents(runId: string, events: RuntimeEvent[]): Promise<void> {
-    const record = await this.read(runId);
+    const record = await this.readRecord(runId);
     if (!record) throw new Error(`Task-run journal not found: ${runId}`);
-    record.runtimeEvents = structuredClone(events.slice(-1_000));
-    await this.writeRecord(record);
+    if (record.status === "running") throw new Error("Only a paused or finished task can save event history.");
+    try {
+      const retained = structuredClone(events.slice(-1_000));
+      if (!retained.every(isRuntimeHistoryEvent)) throw new Error("Invalid task event history.");
+      const history = { version: 1, workspaceId: this.workspaceId, runId, events: retained };
+      if (Buffer.byteLength(JSON.stringify(history)) + 1 > MAX_TASK_EVENT_HISTORY_BYTES) throw new Error("Task event history exceeds its limit.");
+      await atomicWrite(this.eventHistoryFile(runId), history);
+      this.eventHistoryFailures.delete(runId);
+    } catch (error) {
+      this.eventHistoryFailures.add(runId);
+      if (this.eventHistoryFailures.size > 1_000) this.eventHistoryFailures.delete(this.eventHistoryFailures.values().next().value!);
+      const code = (error as NodeJS.ErrnoException).code;
+      throw new TaskRunHistoryPersistenceError(typeof code === "string" && /^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : "UNKNOWN");
+    }
   }
 
   async recordComputerAcceptance(runId: string, decision: "passed" | "rejected", confirmed: boolean): Promise<void> {
     if (!confirmed || !isTaskRunId(runId) || !["passed", "rejected"].includes(decision)) throw new Error("Explicit human acceptance is required.");
-    const record = await this.read(runId);
+    const record = await this.readRecord(runId);
     if (!record || !["completed", "unverified", "failed"].includes(record.status) || !record.operations.some(operation => operation.name === "computer_input" && operation.status === "succeeded")) throw new Error("Only a finished computer-operation result can be accepted.");
     record.manualAcceptance = { decision, at: new Date().toISOString(), scope: "computer-result" };
     // Preserve program status, verification failures, timestamps, operations and recovery boundaries.
@@ -579,7 +675,7 @@ export class TaskRunJournal {
       if (error.code === "ENOENT") return [] as string[];
       throw error;
     });
-    return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.read(path.basename(name, ".json")))))
+    return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.readRecord(path.basename(name, ".json")))))
       .filter((record): record is TaskRunRecord => Boolean(record))
       .filter((record) => record.status === "running")
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -590,7 +686,7 @@ export class TaskRunJournal {
       if (error.code === "ENOENT") return [] as string[];
       throw error;
     });
-    return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.read(path.basename(name, ".json")))))
+    return (await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => this.readRecord(path.basename(name, ".json")))))
       .filter((record): record is TaskRunRecord => Boolean(record))
       .filter((record) => record.status === "running" || record.status === "paused")
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -647,7 +743,7 @@ export class TaskRunJournal {
           && isTaskRunId(existing.runId)
           && isProcessId(existing.ownerPid);
         if (!valid) throw new Error(`Unsupported or corrupt task-run lock: ${file}`);
-        const existingRecord = await this.read(existing.runId).catch(() => undefined);
+        const existingRecord = await this.readRecord(existing.runId).catch(() => undefined);
         const terminal = existingRecord && existingRecord.status !== "running";
         if (await this.ownerAlive(existing.ownerPid, existing.ownerStartedAt) && !terminal) {
           throw new Error(`Another Xiu process (${existing.ownerPid}) is already running a task in this workspace.`);

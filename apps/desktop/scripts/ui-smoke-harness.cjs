@@ -659,6 +659,7 @@ app.whenReady().then(async () => {
     await evaluate(window, `window.xiuSmoke.historyFixture()`);
     await clickText(window, "历史续接验收", ".history-row");
     await waitFor(window, `document.querySelector('.task-scroll').innerText.includes('old-snake-result-canary')`, "old history fixture loaded");
+    assert(await evaluate(window, `document.querySelector('.history-event-warning[role="status"]')?.textContent.includes('缺失过程不会补造')`), "Unavailable event history must show a fixed reconstruction notice.");
     await evaluate(window, `document.querySelector('.history-view .event-task-started .message-copy').click()`);
     await waitFor(window, `window.xiuSmoke.copiedMessage()==='历史续接验收'`, "history request copy uses the saved visible text");
     await evaluate(window, `document.querySelector('.history-view .event-assistant-message .message-copy').click()`);

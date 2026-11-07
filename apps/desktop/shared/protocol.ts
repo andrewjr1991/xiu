@@ -220,6 +220,7 @@ export interface DesktopTaskHistorySnapshot {
   attachmentReferences?: Record<string, string[]>;
   attachments?: Record<string, DesktopAttachment[]>;
   fidelity: "exact" | "reconstructed";
+  eventHistoryUnavailable?: true;
   changes?: TaskChangeReport;
   changeRounds?: DesktopChangeRound[];
   tools?: DesktopReviewOperation[];

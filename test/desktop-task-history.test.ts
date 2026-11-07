@@ -99,3 +99,11 @@ test("review operations carry duration and bounded, redacted evidence", () => {
   assert.equal("risk" in open, false);
   assert.equal("evidence" in open, false);
 });
+
+test("unavailable display history keeps the conversation and reports reconstruction explicitly", async () => {
+  const saved = run({ runId: "saved-run", sessionId: "saved-session", startedAt: "2026-11-07T00:00:00.000Z", runtimeEventsUnavailable: true });
+  const fake = io({ "saved-session": session({ id: "saved-session", replay: [{ task: "saved request", supplements: [], receipts: [], changes: [], exact: true, response: "saved answer" }] }) });
+  const history = await buildTaskHistorySnapshot(workspace, { taskId: "saved-run" }, { recent: async () => [saved] }, fake);
+  assert.equal(history.eventHistoryUnavailable, true); assert.equal(history.fidelity, "reconstructed");
+  assert.equal(history.status, "completed"); assert.ok(history.entries.some(entry => entry.text === "saved answer"));
+});

@@ -103,6 +103,7 @@ export async function buildTaskHistorySnapshot(workspace: string, request: Deskt
     events: historyEvents,
     attachmentReferences: historyAttachmentReferences(historyEvents, session.replay.flatMap(turn => [turn.task, ...turn.supplements]).map(text => redactSecrets(text))),
     fidelity: completeEventHistory ? "exact" : "reconstructed",
+    ...(runs.some(item => item.runtimeEventsUnavailable) ? { eventHistoryUnavailable: true as const } : {}),
     changeRounds,
     ...(changes ? { changes } : {}),
     tools: runs.flatMap((item) => item.operations.filter((operation) => operation.kind === "tool").map((operation) => reviewOperation(operation, "command"))).slice(-80),
