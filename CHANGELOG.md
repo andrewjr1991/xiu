@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.14-beta.1 — Windows x64 device-test prerelease (preparing)
+## 0.20.14-beta.1 — Windows x64 device-test prerelease (2026-11-07)
 
 - Packages the 0.20.14 conversation, history, provider and reliability work below as a distinct unsigned Windows x64 test candidate.
 - Release only original same-commit CI artifacts after all nine gates and draft download checks pass. No npm publication or stable latest change.

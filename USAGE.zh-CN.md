@@ -1,6 +1,6 @@
 # Xiu 使用指南
 
-真机测试候选 **0.20.14-beta.1** 正在准备：全部精确提交 CI 与附件回读通过后提供 Windows x64 未签名 GitHub 预发布安装包，npm latest 仍为 0.20.12。测试同一项目之前关闭旧版 Xiu/CLI；先备份现有用户数据，未知副作用先核验、不自动重放。
+Windows x64 真机测试版 **0.20.14-beta.1** [已可下载](https://github.com/andrewjr1991/xiu/releases/tag/v0.20.14-beta.1)：精确提交九项 CI 与独立发布作业通过，公开附件回读核验完成；安装器未签名，npm latest 仍为 0.20.12。测试同一项目之前关闭旧版 Xiu/CLI；先备份现有用户数据，未知副作用先核验、不自动重放。
 
 
 文档分三层：[README](./README.zh-CN.md) 回答“Xiu 是什么、能做什么、边界在哪”，[快速上手](./QUICKSTART.md) 带你在几分钟内完成安装、配置和第一个任务，本页是完整使用指南的目录，按功能拆成下面的篇章。英文读者请看精简版 [English guide](./docs/guide/en/README.md)。
